@@ -1,0 +1,123 @@
+#pragma once
+
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace comet {
+
+enum class InstanceRole {
+  Infer,
+  Worker,
+};
+
+enum class DiskKind {
+  PlaneShared,
+  InferPrivate,
+  WorkerPrivate,
+};
+
+struct DiskSpec {
+  std::string name;
+  DiskKind kind;
+  std::string plane_name;
+  std::string owner_name;
+  std::string node_name;
+  std::string host_path;
+  std::string container_path;
+  int size_gb = 0;
+};
+
+struct InstanceSpec {
+  std::string name;
+  InstanceRole role;
+  std::string plane_name;
+  std::string node_name;
+  std::string image;
+  std::string command;
+  std::string private_disk_name;
+  std::string shared_disk_name;
+  std::vector<std::string> depends_on;
+  std::map<std::string, std::string> environment;
+  std::map<std::string, std::string> labels;
+  std::optional<std::string> gpu_device;
+  double gpu_fraction = 0.0;
+  int private_disk_size_gb = 0;
+};
+
+struct NodeInventory {
+  std::string name;
+  std::string platform;
+  std::vector<std::string> gpu_devices;
+};
+
+struct RuntimeGpuNode {
+  std::string name;
+  std::string node_name;
+  std::string gpu_device;
+  double gpu_fraction = 0.0;
+  bool enabled = true;
+};
+
+struct InferenceRuntimeSettings {
+  std::string primary_infer_node;
+  std::string net_if = "eth0";
+  std::string models_root = "/comet/shared/models";
+  std::string gguf_cache_dir = "/comet/shared/models/gguf";
+  std::string infer_log_dir = "/comet/shared/logs/infer";
+  int llama_port = 8000;
+  int llama_ctx_size = 8192;
+  int llama_threads = 8;
+  int llama_gpu_layers = 99;
+  int inference_healthcheck_retries = 300;
+  int inference_healthcheck_interval_sec = 5;
+};
+
+struct GatewaySettings {
+  std::string listen_host = "0.0.0.0";
+  int listen_port = 80;
+  std::string server_name = "_";
+};
+
+struct DesiredState {
+  std::string plane_name;
+  std::string plane_shared_disk_name;
+  std::string control_root;
+  InferenceRuntimeSettings inference;
+  GatewaySettings gateway;
+  std::vector<RuntimeGpuNode> runtime_gpu_nodes;
+  std::vector<NodeInventory> nodes;
+  std::vector<DiskSpec> disks;
+  std::vector<InstanceSpec> instances;
+};
+
+struct ComposeVolume {
+  std::string source;
+  std::string target;
+  bool read_only = false;
+};
+
+struct ComposeService {
+  std::string name;
+  std::string image;
+  std::string command;
+  std::vector<std::string> depends_on;
+  std::map<std::string, std::string> environment;
+  std::map<std::string, std::string> labels;
+  std::vector<ComposeVolume> volumes;
+  std::optional<std::string> gpu_device;
+  std::string healthcheck;
+};
+
+struct NodeComposePlan {
+  std::string plane_name;
+  std::string node_name;
+  std::vector<DiskSpec> disks;
+  std::vector<ComposeService> services;
+};
+
+std::string ToString(InstanceRole role);
+std::string ToString(DiskKind kind);
+
+}  // namespace comet

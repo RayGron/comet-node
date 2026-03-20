@@ -1,0 +1,20 @@
+#pragma once
+
+#include <optional>
+#include <string>
+
+#include "comet/models.h"
+
+namespace comet {
+
+DesiredState SliceDesiredStateForNode(
+    const DesiredState& state,
+    const std::string& node_name);
+
+std::string SerializeDesiredStateJson(const DesiredState& state);
+DesiredState DeserializeDesiredStateJson(const std::string& json_text);
+
+std::optional<DesiredState> LoadDesiredStateJson(const std::string& path);
+void SaveDesiredStateJson(const DesiredState& state, const std::string& path);
+
+}  // namespace comet

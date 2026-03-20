@@ -1,0 +1,5 @@
+build/
+dist/
+var/
+vcpkg_installed/
+.tools/

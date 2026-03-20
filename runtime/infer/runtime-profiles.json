@@ -1,0 +1,29 @@
+{
+  "version": "2",
+  "profiles": {
+    "generic": {
+      "llama_args": [],
+      "ctx_size": 8192,
+      "batch_size": 512,
+      "gpu_layers": 99
+    },
+    "generic-ram-offload": {
+      "llama_args": [
+        "--no-mmap"
+      ],
+      "ctx_size": 8192,
+      "batch_size": 256,
+      "gpu_layers": 48
+    },
+    "qwen3_5": {
+      "llama_args": [
+        "--jinja",
+        "--ctx-size",
+        "16384"
+      ],
+      "ctx_size": 16384,
+      "batch_size": 1024,
+      "gpu_layers": 99
+    }
+  }
+}

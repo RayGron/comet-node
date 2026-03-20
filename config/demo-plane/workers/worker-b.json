@@ -1,0 +1,8 @@
+{
+  "name": "worker-b",
+  "node": "node-b",
+  "gpu_device": "0",
+  "gpu_fraction": 0.5,
+  "private_disk_gb": 40,
+  "image": "comet/worker-runtime:dev"
+}

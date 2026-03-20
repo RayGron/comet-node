@@ -1,0 +1,9 @@
+{
+  "name": "comet-node",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "llama-cpp",
+    "nlohmann-json",
+    "sqlite3"
+  ]
+}

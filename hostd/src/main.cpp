@@ -14,6 +14,7 @@
 #include <sstream>
 #include <set>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 #include <array>
 #include <algorithm>
@@ -359,7 +360,50 @@ bool IsUnderRoot(
   return path_text == root_text ||
          (path_text.size() > root_text.size() &&
           path_text.compare(0, root_text.size(), root_text) == 0 &&
-          path_text[root_text.size()] == '/');
+         path_text[root_text.size()] == '/');
+}
+
+std::string SanitizeDiskPathComponent(const std::string& value) {
+  std::string result;
+  result.reserve(value.size());
+  for (char ch : value) {
+    if (std::isalnum(static_cast<unsigned char>(ch)) != 0 || ch == '-' || ch == '_') {
+      result.push_back(ch);
+    } else {
+      result.push_back('_');
+    }
+  }
+  return result;
+}
+
+std::string ManagedDiskImagePath(
+    const comet::DiskSpec& disk,
+    const std::optional<std::string>& runtime_root) {
+  if (disk.kind == comet::DiskKind::PlaneShared) {
+    const std::filesystem::path base(
+        RebaseManagedPath("/var/lib/comet/disk-images", runtime_root, std::nullopt));
+    return (
+        base /
+        SanitizeDiskPathComponent(disk.plane_name) /
+        "shared" /
+        (SanitizeDiskPathComponent(disk.name) + ".img"))
+        .string();
+  }
+
+  const bool node_local_disk =
+      disk.kind == comet::DiskKind::InferPrivate ||
+      disk.kind == comet::DiskKind::WorkerPrivate;
+  const std::filesystem::path base(
+      RebaseManagedPath(
+          "/var/lib/comet/disk-images",
+          runtime_root,
+          node_local_disk ? std::optional<std::string>(disk.node_name) : std::nullopt));
+  return (
+      base /
+      SanitizeDiskPathComponent(disk.plane_name) /
+      SanitizeDiskPathComponent(disk.node_name) /
+      (SanitizeDiskPathComponent(disk.name) + ".img"))
+      .string();
 }
 
 void EnsureDiskDirectory(const std::string& path, const std::string& disk_key) {
@@ -585,6 +629,14 @@ void PrintLocalStateSummary(
   std::cout << "plane=" << state.plane_name << "\n";
   std::cout << "disks=" << state.disks.size() << "\n";
   std::cout << "instances=" << state.instances.size() << "\n";
+  for (const auto& disk : state.disks) {
+    std::cout << "  - disk=" << disk.name
+              << " kind=" << comet::ToString(disk.kind)
+              << " host_path=" << disk.host_path
+              << " realized=directory-backed"
+              << " exists=" << (std::filesystem::exists(disk.host_path) ? "yes" : "no")
+              << "\n";
+  }
   for (const auto& instance : state.instances) {
     std::cout << "  - " << instance.name << " role=" << comet::ToString(instance.role)
               << " image=" << instance.image << "\n";
@@ -656,6 +708,238 @@ std::string RunCommandCapture(const std::string& command) {
   }
   pclose(pipe);
   return output;
+}
+
+std::string ShellQuote(const std::string& value) {
+  std::string quoted = "'";
+  for (char ch : value) {
+    if (ch == '\'') {
+      quoted += "'\"'\"'";
+    } else {
+      quoted.push_back(ch);
+    }
+  }
+  quoted += "'";
+  return quoted;
+}
+
+bool RunCommandOk(const std::string& command) {
+  return std::system(command.c_str()) == 0;
+}
+
+bool HostCanManageRealDisks() {
+  return geteuid() == 0;
+}
+
+std::optional<std::string> DetectExistingLoopDevice(const std::string& image_path) {
+  const std::string output =
+      RunCommandCapture("/usr/sbin/losetup -j " + ShellQuote(image_path) + " 2>/dev/null || true");
+  const std::string trimmed = Trim(output);
+  if (trimmed.empty()) {
+    return std::nullopt;
+  }
+  const auto colon = trimmed.find(':');
+  if (colon == std::string::npos) {
+    return std::nullopt;
+  }
+  return trimmed.substr(0, colon);
+}
+
+std::string RequireLoopDeviceForImage(const std::string& image_path) {
+  if (const auto existing = DetectExistingLoopDevice(image_path); existing.has_value()) {
+    return *existing;
+  }
+  const std::string output =
+      RunCommandCapture(
+          "/usr/sbin/losetup --find --show " + ShellQuote(image_path) + " 2>/dev/null");
+  const std::string loop_device = Trim(output);
+  if (loop_device.empty()) {
+    throw std::runtime_error("failed to attach loop device for image '" + image_path + "'");
+  }
+  return loop_device;
+}
+
+std::string DetectFilesystemTypeForDevice(const std::string& device_path) {
+  return Trim(
+      RunCommandCapture(
+          "/usr/sbin/blkid -o value -s TYPE " + ShellQuote(device_path) + " 2>/dev/null || true"));
+}
+
+bool IsPathMounted(const std::string& mount_point) {
+  return RunCommandOk(
+      "/usr/bin/mountpoint -q " + ShellQuote(mount_point) + " >/dev/null 2>&1");
+}
+
+std::optional<std::string> CurrentMountSource(const std::string& mount_point) {
+  std::ifstream input("/proc/self/mounts");
+  if (!input.is_open()) {
+    return std::nullopt;
+  }
+
+  std::string source;
+  std::string target;
+  std::string fs_type;
+  while (input >> source >> target >> fs_type) {
+    std::string rest_of_line;
+    std::getline(input, rest_of_line);
+    if (target == mount_point) {
+      return source;
+    }
+  }
+  return std::nullopt;
+}
+
+void CreateSparseImageFile(const std::string& image_path, int size_gb) {
+  const auto parent = std::filesystem::path(image_path).parent_path();
+  if (!parent.empty()) {
+    std::filesystem::create_directories(parent);
+  }
+  if (!std::filesystem::exists(image_path)) {
+    std::ofstream create(image_path, std::ios::binary);
+    if (!create.is_open()) {
+      throw std::runtime_error("failed to create disk image '" + image_path + "'");
+    }
+  }
+
+  const std::uintmax_t size_bytes =
+      static_cast<std::uintmax_t>(std::max(size_gb, 1)) * 1024ULL * 1024ULL * 1024ULL;
+  std::filesystem::resize_file(image_path, size_bytes);
+}
+
+comet::DiskRuntimeState EnsureRealDiskMount(
+    const comet::DiskSpec& disk,
+    const std::optional<std::string>& runtime_root) {
+  comet::DiskRuntimeState runtime_state;
+  runtime_state.disk_name = disk.name;
+  runtime_state.plane_name = disk.plane_name;
+  runtime_state.node_name = disk.node_name;
+  runtime_state.image_path = ManagedDiskImagePath(disk, runtime_root);
+  runtime_state.mount_point = disk.host_path;
+
+  CreateSparseImageFile(runtime_state.image_path, disk.size_gb);
+  runtime_state.runtime_state = "image-created";
+
+  runtime_state.loop_device = RequireLoopDeviceForImage(runtime_state.image_path);
+  runtime_state.attached_at = "attached";
+  runtime_state.runtime_state = "attached";
+
+  runtime_state.filesystem_type = DetectFilesystemTypeForDevice(runtime_state.loop_device);
+  if (runtime_state.filesystem_type.empty()) {
+    if (!RunCommandOk(
+            "/usr/sbin/mkfs.ext4 -F " + ShellQuote(runtime_state.loop_device) +
+            " >/dev/null 2>&1")) {
+      throw std::runtime_error(
+          "failed to format disk image '" + runtime_state.image_path + "'");
+    }
+    runtime_state.filesystem_type = "ext4";
+  }
+  runtime_state.runtime_state = "formatted";
+
+  std::filesystem::create_directories(runtime_state.mount_point);
+  if (IsPathMounted(runtime_state.mount_point)) {
+    const auto current_source = CurrentMountSource(runtime_state.mount_point);
+    if (!current_source.has_value() || *current_source != runtime_state.loop_device) {
+      throw std::runtime_error(
+          "mount point '" + runtime_state.mount_point +
+          "' is already mounted by a different source");
+    }
+  } else {
+    const std::string mount_command =
+        "/usr/bin/mount " + ShellQuote(runtime_state.loop_device) + " " +
+        ShellQuote(runtime_state.mount_point) + " >/dev/null 2>&1";
+    bool mounted = false;
+    for (int attempt = 0; attempt < 5; ++attempt) {
+      if (RunCommandOk(mount_command)) {
+        mounted = true;
+        break;
+      }
+      const auto current_source = CurrentMountSource(runtime_state.mount_point);
+      if (IsPathMounted(runtime_state.mount_point) &&
+          current_source.has_value() &&
+          *current_source == runtime_state.loop_device) {
+        // Some WSL/DrvFs-backed mount paths can report a non-zero exit code even
+        // when the loop device is already mounted as requested. Trust the
+        // actual mount table in that case.
+        mounted = true;
+        break;
+      }
+      if (attempt < 4) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      }
+    }
+    if (!mounted) {
+      throw std::runtime_error(
+          "failed to mount loop device '" + runtime_state.loop_device +
+          "' at '" + runtime_state.mount_point + "'");
+    }
+  }
+
+  WriteTextFile(
+      (std::filesystem::path(runtime_state.mount_point) / ".comet-disk-info").string(),
+      "disk=" + disk.name + "@" + disk.node_name + "\nmanaged_by=comet-hostd\nrealized=mounted\n");
+  runtime_state.mounted_at = "mounted";
+  runtime_state.runtime_state = "mounted";
+  runtime_state.status_message = "real mounted disk lifecycle applied by hostd";
+  return runtime_state;
+}
+
+comet::DiskRuntimeState InspectRealDiskRuntime(
+    const comet::DiskSpec& disk,
+    const std::optional<std::string>& runtime_root) {
+  comet::DiskRuntimeState runtime_state;
+  runtime_state.disk_name = disk.name;
+  runtime_state.plane_name = disk.plane_name;
+  runtime_state.node_name = disk.node_name;
+  runtime_state.image_path = ManagedDiskImagePath(disk, runtime_root);
+  runtime_state.mount_point = disk.host_path;
+
+  const bool image_exists = std::filesystem::exists(runtime_state.image_path);
+  const auto loop_device =
+      image_exists ? DetectExistingLoopDevice(runtime_state.image_path) : std::nullopt;
+  const bool mounted = IsPathMounted(runtime_state.mount_point);
+  const auto mount_source =
+      mounted ? CurrentMountSource(runtime_state.mount_point) : std::nullopt;
+
+  if (loop_device.has_value()) {
+    runtime_state.loop_device = *loop_device;
+    runtime_state.filesystem_type = DetectFilesystemTypeForDevice(*loop_device);
+  }
+
+  if (mounted) {
+    runtime_state.mounted_at = "mounted";
+  }
+  if (loop_device.has_value()) {
+    runtime_state.attached_at = "attached";
+  }
+
+  if (mounted && (!loop_device.has_value() || !mount_source.has_value() || *mount_source != *loop_device)) {
+    runtime_state.runtime_state = "drifted";
+    runtime_state.status_message = "mount exists but does not match managed loop device";
+    return runtime_state;
+  }
+  if (mounted && loop_device.has_value()) {
+    runtime_state.runtime_state = "mounted";
+    runtime_state.status_message = "real mounted disk runtime verified by hostd";
+    return runtime_state;
+  }
+  if (loop_device.has_value() && !runtime_state.filesystem_type.empty()) {
+    runtime_state.runtime_state = "formatted";
+    runtime_state.status_message = "loop device attached but mount missing";
+    return runtime_state;
+  }
+  if (loop_device.has_value()) {
+    runtime_state.runtime_state = "attached";
+    runtime_state.status_message = "loop device attached";
+    return runtime_state;
+  }
+  if (image_exists) {
+    runtime_state.runtime_state = "image-created";
+    runtime_state.status_message = "disk image exists but is not attached";
+    return runtime_state;
+  }
+  runtime_state.runtime_state = "missing";
+  runtime_state.status_message = "managed disk artifacts missing";
+  return runtime_state;
 }
 
 std::string ResolvedDockerCommand() {
@@ -1236,27 +1520,104 @@ void ShowDesiredNodeOps(
     const std::string& source_label,
     const std::optional<int>& desired_generation);
 
+std::optional<comet::DiskSpec> FindDiskInStateByKey(
+    const std::optional<comet::DesiredState>& state,
+    const std::string& disk_key);
+
+comet::DiskRuntimeState BuildDiskRuntimeState(
+    const comet::DiskSpec& disk,
+    const std::string& runtime_state,
+    const std::string& status_message);
+
+comet::DiskRuntimeState EnsureDesiredDiskRuntimeState(
+    const comet::DiskSpec& disk,
+    const std::string& disk_key,
+    const std::optional<std::string>& runtime_root);
+
+std::pair<std::string, std::string> SplitDiskKey(const std::string& disk_key);
+
+void RemoveRealDiskMount(
+    const comet::DiskRuntimeState& runtime_state,
+    const std::optional<std::string>& runtime_root);
+
 void ApplyNodePlan(
     const comet::NodeExecutionPlan& plan,
     const comet::DesiredState& desired_node_state,
     const comet::NodeComposePlan& compose_plan,
     const std::optional<std::string>& runtime_root,
-    ComposeMode compose_mode) {
+    ComposeMode compose_mode,
+    comet::ControllerStore* store) {
   std::cout << "applying node=" << plan.node_name << "\n";
   std::cout << "compose=" << plan.compose_file_path << "\n";
 
-  for (const auto& operation : plan.operations) {
+  auto apply_operation = [&](const comet::HostOperation& operation) {
     switch (operation.kind) {
-      case comet::HostOperationKind::EnsureDisk:
-        EnsureDiskDirectory(operation.details, operation.target);
+      case comet::HostOperationKind::EnsureDisk: {
+        const auto disk =
+            FindDiskInStateByKey(std::optional<comet::DesiredState>(desired_node_state), operation.target);
+        if (!disk.has_value()) {
+          throw std::runtime_error(
+              "missing desired disk for ensure operation '" + operation.target + "'");
+        }
+        const auto realized_state =
+            EnsureDesiredDiskRuntimeState(*disk, operation.target, runtime_root);
+        if (store != nullptr) {
+          store->UpsertDiskRuntimeState(realized_state);
+        }
         PrintOperationApplied(operation, "applied");
         break;
-      case comet::HostOperationKind::RemoveDisk:
-        RemoveDiskDirectory(operation.details, runtime_root);
+      }
+      case comet::HostOperationKind::RemoveDisk: {
+        const auto [disk_name, disk_node_name] = SplitDiskKey(operation.target);
+        const auto runtime_state =
+            store == nullptr ? std::nullopt : store->LoadDiskRuntimeState(disk_name, disk_node_name);
+        bool removed = false;
+        const bool mounted_now = IsPathMounted(operation.details);
+        if (HostCanManageRealDisks() &&
+            (mounted_now ||
+             (runtime_state.has_value() &&
+              (runtime_state->runtime_state == "mounted" ||
+               !runtime_state->loop_device.empty() ||
+               !runtime_state->image_path.empty())))) {
+          comet::DiskRuntimeState effective_state;
+          if (runtime_state.has_value()) {
+            effective_state = *runtime_state;
+          } else {
+            effective_state.disk_name = disk_name;
+            effective_state.plane_name = plan.plane_name;
+            effective_state.node_name = disk_node_name;
+            effective_state.mount_point = operation.details;
+            effective_state.runtime_state = "mounted";
+            effective_state.status_message = "runtime state recovered from live mount";
+          }
+          if (effective_state.plane_name.empty()) {
+            effective_state.plane_name = plan.plane_name;
+          }
+          if (effective_state.node_name.empty()) {
+            effective_state.node_name = disk_node_name;
+          }
+          RemoveRealDiskMount(effective_state, runtime_root);
+          removed = true;
+          auto removed_state = effective_state;
+          removed_state.runtime_state = "removed";
+          removed_state.status_message = "managed disk detached and removed by hostd";
+          removed_state.loop_device.clear();
+          removed_state.mount_point = operation.details;
+          if (runtime_root.has_value()) {
+            removed_state.image_path.clear();
+          }
+          if (store != nullptr) {
+            store->UpsertDiskRuntimeState(removed_state);
+          }
+        } else {
+          RemoveDiskDirectory(operation.details, runtime_root);
+          removed = runtime_root.has_value();
+        }
         PrintOperationApplied(
             operation,
-            runtime_root.has_value() ? "applied" : "skipped");
+            removed ? "applied" : "skipped");
         break;
+      }
       case comet::HostOperationKind::EnsureService:
       case comet::HostOperationKind::RemoveService:
         PrintOperationApplied(operation, "planned");
@@ -1290,6 +1651,26 @@ void ApplyNodePlan(
             operation,
             compose_mode == ComposeMode::Exec ? "applied" : "skipped");
         break;
+    }
+  };
+
+  for (const auto& operation : plan.operations) {
+    if (operation.kind == comet::HostOperationKind::ComposeDown ||
+        operation.kind == comet::HostOperationKind::RemoveComposeFile) {
+      apply_operation(operation);
+    }
+  }
+  for (const auto& operation : plan.operations) {
+    if (operation.kind == comet::HostOperationKind::ComposeDown ||
+        operation.kind == comet::HostOperationKind::RemoveComposeFile ||
+        operation.kind == comet::HostOperationKind::ComposeUp) {
+      continue;
+    }
+    apply_operation(operation);
+  }
+  for (const auto& operation : plan.operations) {
+    if (operation.kind == comet::HostOperationKind::ComposeUp) {
+      apply_operation(operation);
     }
   }
 }
@@ -1479,6 +1860,165 @@ void ReportLocalObservedState(
       "hostd report-observed-state");
 }
 
+std::optional<comet::DiskSpec> FindDiskInStateByKey(
+    const std::optional<comet::DesiredState>& state,
+    const std::string& disk_key) {
+  if (!state.has_value()) {
+    return std::nullopt;
+  }
+  for (const auto& disk : state->disks) {
+    if (disk.name + "@" + disk.node_name == disk_key) {
+      return disk;
+    }
+  }
+  return std::nullopt;
+}
+
+std::pair<std::string, std::string> SplitDiskKey(const std::string& disk_key) {
+  const auto at = disk_key.find('@');
+  if (at == std::string::npos) {
+    return {disk_key, ""};
+  }
+  return {disk_key.substr(0, at), disk_key.substr(at + 1)};
+}
+
+comet::DiskRuntimeState BuildDiskRuntimeState(
+    const comet::DiskSpec& disk,
+    const std::string& runtime_state,
+    const std::string& status_message) {
+  comet::DiskRuntimeState state;
+  state.disk_name = disk.name;
+  state.plane_name = disk.plane_name;
+  state.node_name = disk.node_name;
+  state.filesystem_type = "directory";
+  state.mount_point = disk.host_path;
+  state.runtime_state = runtime_state;
+  state.status_message = status_message;
+  return state;
+}
+
+comet::DiskRuntimeState EnsureDesiredDiskRuntimeState(
+    const comet::DiskSpec& disk,
+    const std::string& disk_key,
+    const std::optional<std::string>& runtime_root) {
+  if (HostCanManageRealDisks()) {
+    const auto inspected_state = InspectRealDiskRuntime(disk, runtime_root);
+    if (inspected_state.runtime_state == "mounted") {
+      return inspected_state;
+    }
+    if (inspected_state.runtime_state == "drifted") {
+      throw std::runtime_error(
+          "managed disk drift detected for '" + disk_key + "': " + inspected_state.status_message);
+    }
+    return EnsureRealDiskMount(disk, runtime_root);
+  }
+
+  EnsureDiskDirectory(disk.host_path, disk_key);
+  return BuildDiskRuntimeState(
+      disk,
+      "directory-backed-fallback",
+      "real disk lifecycle unavailable; hostd is not running with root privileges");
+}
+
+void PersistDiskRuntimeStateForDesiredDisks(
+    comet::ControllerStore* store,
+    const comet::DesiredState& desired_node_state,
+    const std::optional<std::string>& runtime_root,
+    const std::string& status_message) {
+  if (store == nullptr) {
+    return;
+  }
+  for (const auto& disk : desired_node_state.disks) {
+    auto realized_state =
+        EnsureDesiredDiskRuntimeState(disk, disk.name + "@" + disk.node_name, runtime_root);
+    realized_state.status_message = status_message;
+    store->UpsertDiskRuntimeState(realized_state);
+  }
+}
+
+void PersistDiskRuntimeStateForRemovedDisks(
+    comet::ControllerStore* store,
+    const std::optional<comet::DesiredState>& previous_state,
+    const comet::NodeExecutionPlan& execution_plan) {
+  if (store == nullptr) {
+    return;
+  }
+  for (const auto& operation : execution_plan.operations) {
+    if (operation.kind != comet::HostOperationKind::RemoveDisk) {
+      continue;
+    }
+    const auto [disk_name, disk_node_name] = SplitDiskKey(operation.target);
+    const auto existing_state = store->LoadDiskRuntimeState(disk_name, disk_node_name);
+    if (existing_state.has_value() && existing_state->runtime_state == "removed") {
+      continue;
+    }
+    const auto removed_disk = FindDiskInStateByKey(previous_state, operation.target);
+    if (!removed_disk.has_value()) {
+      continue;
+    }
+    auto runtime_state =
+        BuildDiskRuntimeState(*removed_disk, "removed", "runtime path removed by hostd");
+    runtime_state.filesystem_type = "";
+    runtime_state.mount_point = operation.details;
+    store->UpsertDiskRuntimeState(runtime_state);
+  }
+}
+
+void RemoveRealDiskMount(
+    const comet::DiskRuntimeState& runtime_state,
+    const std::optional<std::string>& runtime_root) {
+  std::optional<std::string> mounted_source;
+  if (!runtime_state.mount_point.empty() && IsPathMounted(runtime_state.mount_point)) {
+    mounted_source = CurrentMountSource(runtime_state.mount_point);
+    if (!RunCommandOk(
+            "/usr/bin/umount " + ShellQuote(runtime_state.mount_point) + " >/dev/null 2>&1")) {
+      throw std::runtime_error(
+          "failed to unmount managed disk at '" + runtime_state.mount_point + "'");
+    }
+  }
+
+  std::optional<std::string> loop_device = runtime_state.loop_device;
+  if (!loop_device.has_value() || loop_device->empty()) {
+    if (mounted_source.has_value() &&
+        mounted_source->rfind("/dev/loop", 0) == 0) {
+      loop_device = mounted_source;
+    }
+  }
+
+  if (loop_device.has_value() && !loop_device->empty()) {
+    if (!runtime_state.image_path.empty()) {
+      const auto still_attached = DetectExistingLoopDevice(runtime_state.image_path);
+      if (still_attached.has_value()) {
+        loop_device = still_attached;
+      }
+    }
+    if (loop_device.has_value() && !loop_device->empty()) {
+      if (!RunCommandOk(
+              "/usr/sbin/losetup -d " + ShellQuote(*loop_device) + " >/dev/null 2>&1")) {
+        throw std::runtime_error(
+            "failed to detach loop device '" + *loop_device + "'");
+      }
+    }
+  }
+
+  if (!runtime_state.mount_point.empty()) {
+    RemoveDiskDirectory(runtime_state.mount_point, runtime_root);
+  }
+
+  if (!runtime_state.image_path.empty()) {
+    const std::filesystem::path image_path(runtime_state.image_path);
+    if (!runtime_root.has_value() || IsUnderRoot(image_path, runtime_root)) {
+      std::error_code error;
+      std::filesystem::remove(image_path, error);
+      if (error) {
+        throw std::runtime_error(
+            "failed to remove managed disk image '" + runtime_state.image_path +
+            "': " + error.message());
+      }
+    }
+  }
+}
+
 void ApplyDesiredNodeState(
     const comet::DesiredState& desired_node_state,
     const std::string& artifacts_root,
@@ -1486,7 +2026,8 @@ void ApplyDesiredNodeState(
     const std::string& state_root,
     ComposeMode compose_mode,
     const std::string& source_label,
-    const std::optional<int>& desired_generation) {
+    const std::optional<int>& desired_generation,
+    comet::ControllerStore* store) {
   const std::string node_name = RequireSingleNodeName(desired_node_state);
   const auto current_local_state = LoadLocalAppliedState(state_root, node_name);
   const auto applied_generation = LoadLocalAppliedGeneration(state_root, node_name);
@@ -1519,6 +2060,11 @@ void ApplyDesiredNodeState(
 
   if (execution_plan.operations.empty()) {
     std::cout << "no local changes for node=" << node_name << "\n";
+    PersistDiskRuntimeStateForDesiredDisks(
+        store,
+        desired_node_state,
+        runtime_root,
+        "disk runtime verified by hostd");
     if (IsDesiredNodeStateEmpty(desired_node_state)) {
       RemoveStateFileIfExists(LocalStatePath(state_root, node_name));
       RemoveStateFileIfExists(LocalGenerationPath(state_root, node_name));
@@ -1536,7 +2082,14 @@ void ApplyDesiredNodeState(
       desired_node_state,
       compose_plan,
       runtime_root,
-      compose_mode);
+      compose_mode,
+      store);
+  PersistDiskRuntimeStateForRemovedDisks(store, current_local_state, execution_plan);
+  PersistDiskRuntimeStateForDesiredDisks(
+      store,
+      desired_node_state,
+      runtime_root,
+      "disk runtime applied by hostd");
   if (IsDesiredNodeStateEmpty(desired_node_state)) {
     RemoveStateFileIfExists(LocalStatePath(state_root, node_name));
     RemoveStateFileIfExists(LocalGenerationPath(state_root, node_name));
@@ -1587,7 +2140,8 @@ void ApplyStateOps(
         state_root,
         compose_mode,
         "hostd apply-state-ops",
-        desired_generation);
+        desired_generation,
+        &store);
     ReportObservedState(
         db_path,
         BuildObservedStateSnapshot(
@@ -1680,7 +2234,8 @@ void ApplyNextAssignment(
             : (is_eviction_assignment
                    ? "hostd eviction-assignment-ops"
                    : "hostd apply-assignment-ops"),
-        assignment->desired_generation);
+        assignment->desired_generation,
+        &store);
     if (is_eviction_assignment &&
         compose_mode == ComposeMode::Exec &&
         !VerifyEvictionAssignment(

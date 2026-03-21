@@ -10,6 +10,8 @@ Plane / Infer / Worker orchestration flow.
 - `comet-hostd` prints the local disk and container actions it would execute on a node
 - `comet-hostd` now writes `infer-runtime.json` into the plane control path on the shared disk for infer nodes
 - shared C++ models describe planes, nodes, instances, disks, GPU leases, and compose services
+- controller SQLite now also keeps a separate runtime disk-state layer, so `show-state` can distinguish declared disks from realized host-side disk lifecycle
+- `hostd` now has a real Linux disk lifecycle path for managed disks (`image -> loop -> mkfs -> mount`) when running with root privileges, while local dev/smoke environments continue through an explicit directory-backed fallback
 - runtime entrypoint scripts and SQLite migrations are stubbed into the repository layout from day one
 
 This first slice intentionally focuses on:
@@ -70,6 +72,16 @@ best-effort worker on the same GPU, controller enqueues a real `evict-workers` a
 materializing `retry-placement` onto the same device. This is the live harness to use on a host
 with a single visible NVIDIA GPU.
 
+Run a live storage validation campaign for mounted volumes:
+
+```bash
+./scripts/check-live-storage.sh
+```
+
+That harness uses compact test disk sizes, mounts real managed disk images through `hostd`,
+verifies container visibility of mounted volumes, re-checks restart reconciliation, and then
+validates teardown on a reduced bundle.
+
 ## Dependencies
 
 External C/C++ dependencies are managed through `vcpkg` in manifest mode.
@@ -127,6 +139,11 @@ The repository ships VS Code build tasks similar to the `maglev` workflow:
 - `Comet Windows arm64: Package Release`
 - `Comet: Package Release`
 - `Comet: Check`
+
+Controller-side storage inspection now has two layers:
+
+- `show-state` prints both declared disks and realized runtime disk state
+- `show-disk-state` focuses just on storage and compares desired disk inventory with realized host lifecycle
 
 ## Run
 

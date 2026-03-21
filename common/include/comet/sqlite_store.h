@@ -85,6 +85,22 @@ struct RolloutActionRecord {
   std::string status_message;
 };
 
+struct DiskRuntimeState {
+  std::string disk_name;
+  std::string plane_name;
+  std::string node_name;
+  std::string image_path;
+  std::string filesystem_type;
+  std::string loop_device;
+  std::string mount_point;
+  std::string runtime_state;
+  std::string attached_at;
+  std::string mounted_at;
+  std::string last_verified_at;
+  std::string status_message;
+  std::string updated_at;
+};
+
 struct SchedulerPlaneRuntime {
   std::string plane_name;
   std::string active_action;
@@ -145,6 +161,13 @@ class ControllerStore {
   std::optional<NodeAvailabilityOverride> LoadNodeAvailabilityOverride(
       const std::string& node_name) const;
   std::vector<NodeAvailabilityOverride> LoadNodeAvailabilityOverrides(
+      const std::optional<std::string>& node_name = std::nullopt) const;
+  void UpsertDiskRuntimeState(const DiskRuntimeState& runtime_state);
+  std::optional<DiskRuntimeState> LoadDiskRuntimeState(
+      const std::string& disk_name,
+      const std::string& node_name) const;
+  std::vector<DiskRuntimeState> LoadDiskRuntimeStates(
+      const std::optional<std::string>& plane_name = std::nullopt,
       const std::optional<std::string>& node_name = std::nullopt) const;
   void ReplaceRolloutActions(
       int desired_generation,

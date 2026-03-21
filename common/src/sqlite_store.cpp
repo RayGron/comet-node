@@ -64,6 +64,24 @@ CREATE TABLE IF NOT EXISTS virtual_disks (
     FOREIGN KEY (node_name) REFERENCES nodes(name) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS disk_runtime_state (
+    disk_name TEXT NOT NULL,
+    plane_name TEXT NOT NULL,
+    node_name TEXT NOT NULL,
+    image_path TEXT NOT NULL DEFAULT '',
+    filesystem_type TEXT NOT NULL DEFAULT '',
+    loop_device TEXT NOT NULL DEFAULT '',
+    mount_point TEXT NOT NULL DEFAULT '',
+    runtime_state TEXT NOT NULL DEFAULT '',
+    attached_at TEXT NOT NULL DEFAULT '',
+    mounted_at TEXT NOT NULL DEFAULT '',
+    last_verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status_message TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (disk_name, node_name),
+    FOREIGN KEY (node_name) REFERENCES nodes(name) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS instances (
     name TEXT PRIMARY KEY,
     plane_name TEXT NOT NULL,
@@ -595,6 +613,24 @@ SchedulerNodeRuntime SchedulerNodeRuntimeFromStatement(sqlite3_stmt* statement) 
   return runtime;
 }
 
+DiskRuntimeState DiskRuntimeStateFromStatement(sqlite3_stmt* statement) {
+  DiskRuntimeState runtime_state;
+  runtime_state.disk_name = ToColumnText(statement, 0);
+  runtime_state.plane_name = ToColumnText(statement, 1);
+  runtime_state.node_name = ToColumnText(statement, 2);
+  runtime_state.image_path = ToColumnText(statement, 3);
+  runtime_state.filesystem_type = ToColumnText(statement, 4);
+  runtime_state.loop_device = ToColumnText(statement, 5);
+  runtime_state.mount_point = ToColumnText(statement, 6);
+  runtime_state.runtime_state = ToColumnText(statement, 7);
+  runtime_state.attached_at = ToColumnText(statement, 8);
+  runtime_state.mounted_at = ToColumnText(statement, 9);
+  runtime_state.last_verified_at = ToColumnText(statement, 10);
+  runtime_state.status_message = ToColumnText(statement, 11);
+  runtime_state.updated_at = ToColumnText(statement, 12);
+  return runtime_state;
+}
+
 }  // namespace
 
 ControllerStore::ControllerStore(std::string db_path) : db_path_(std::move(db_path)) {
@@ -1086,6 +1122,103 @@ std::vector<NodeAvailabilityOverride> ControllerStore::LoadNodeAvailabilityOverr
     overrides.push_back(AvailabilityOverrideFromStatement(statement.raw()));
   }
   return overrides;
+}
+
+void ControllerStore::UpsertDiskRuntimeState(const DiskRuntimeState& runtime_state) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "INSERT INTO disk_runtime_state("
+      "disk_name, plane_name, node_name, image_path, filesystem_type, loop_device, "
+      "mount_point, runtime_state, attached_at, mounted_at, last_verified_at, "
+      "status_message, updated_at"
+      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, "
+      "COALESCE(NULLIF(?11, ''), CURRENT_TIMESTAMP), ?12, CURRENT_TIMESTAMP) "
+      "ON CONFLICT(disk_name, node_name) DO UPDATE SET "
+      "plane_name = excluded.plane_name, "
+      "image_path = excluded.image_path, "
+      "filesystem_type = excluded.filesystem_type, "
+      "loop_device = excluded.loop_device, "
+      "mount_point = excluded.mount_point, "
+      "runtime_state = excluded.runtime_state, "
+      "attached_at = excluded.attached_at, "
+      "mounted_at = excluded.mounted_at, "
+      "last_verified_at = COALESCE(NULLIF(excluded.last_verified_at, ''), disk_runtime_state.last_verified_at, CURRENT_TIMESTAMP), "
+      "status_message = excluded.status_message, "
+      "updated_at = CURRENT_TIMESTAMP;");
+  statement.BindText(1, runtime_state.disk_name);
+  statement.BindText(2, runtime_state.plane_name);
+  statement.BindText(3, runtime_state.node_name);
+  statement.BindText(4, runtime_state.image_path);
+  statement.BindText(5, runtime_state.filesystem_type);
+  statement.BindText(6, runtime_state.loop_device);
+  statement.BindText(7, runtime_state.mount_point);
+  statement.BindText(8, runtime_state.runtime_state);
+  statement.BindText(9, runtime_state.attached_at);
+  statement.BindText(10, runtime_state.mounted_at);
+  statement.BindText(11, runtime_state.last_verified_at);
+  statement.BindText(12, runtime_state.status_message);
+  statement.StepDone();
+}
+
+std::optional<DiskRuntimeState> ControllerStore::LoadDiskRuntimeState(
+    const std::string& disk_name,
+    const std::string& node_name) const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT disk_name, plane_name, node_name, image_path, filesystem_type, loop_device, "
+      "mount_point, runtime_state, attached_at, mounted_at, last_verified_at, "
+      "status_message, updated_at "
+      "FROM disk_runtime_state WHERE disk_name = ?1 AND node_name = ?2;");
+  statement.BindText(1, disk_name);
+  statement.BindText(2, node_name);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return DiskRuntimeStateFromStatement(statement.raw());
+}
+
+std::vector<DiskRuntimeState> ControllerStore::LoadDiskRuntimeStates(
+    const std::optional<std::string>& plane_name,
+    const std::optional<std::string>& node_name) const {
+  sqlite3* db = AsSqlite(db_);
+  std::vector<DiskRuntimeState> runtime_states;
+  std::string sql =
+      "SELECT disk_name, plane_name, node_name, image_path, filesystem_type, loop_device, "
+      "mount_point, runtime_state, attached_at, mounted_at, last_verified_at, "
+      "status_message, updated_at "
+      "FROM disk_runtime_state";
+
+  int bind_index = 1;
+  if (plane_name.has_value() || node_name.has_value()) {
+    sql += " WHERE ";
+    bool wrote_condition = false;
+    if (plane_name.has_value()) {
+      sql += "plane_name = ?" + std::to_string(bind_index++);
+      wrote_condition = true;
+    }
+    if (node_name.has_value()) {
+      if (wrote_condition) {
+        sql += " AND ";
+      }
+      sql += "node_name = ?" + std::to_string(bind_index++);
+    }
+  }
+  sql += " ORDER BY plane_name ASC, node_name ASC, disk_name ASC;";
+
+  Statement statement(db, sql);
+  bind_index = 1;
+  if (plane_name.has_value()) {
+    statement.BindText(bind_index++, *plane_name);
+  }
+  if (node_name.has_value()) {
+    statement.BindText(bind_index++, *node_name);
+  }
+  while (statement.StepRow()) {
+    runtime_states.push_back(DiskRuntimeStateFromStatement(statement.raw()));
+  }
+  return runtime_states;
 }
 
 void ControllerStore::ReplaceRolloutActions(

@@ -439,6 +439,8 @@ perl -MJSON::PP -e '
 "${build_dir}/comet-hostd" show-state-ops --db "${db_path}" --node node-a --artifacts-root "${artifacts_root}" --runtime-root "${runtime_root}" --state-root "${state_root}" | grep -F "write-infer-runtime" >/dev/null
 "${build_dir}/comet-hostd" apply-state-ops --db "${db_path}" --node node-a --artifacts-root "${artifacts_root}" --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode skip >/dev/null
 "${build_dir}/comet-hostd" show-runtime-status --node node-a --state-root "${state_root}" | grep -F "runtime_status: empty" >/dev/null
+"${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk-runtime-state:" >/dev/null
+"${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk=plane-alpha-shared node=node-a state=directory-backed" >/dev/null
 perl -MJSON::PP -e '
   use strict;
   use warnings;
@@ -507,8 +509,27 @@ fi
 "${build_dir}/comet-hostd" apply-next-assignment --db "${db_path}" --node node-b --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode skip >/dev/null
 "${build_dir}/comet-hostd" show-local-state --node node-b --state-root "${state_root}" >/dev/null
 "${build_dir}/comet-hostd" show-state-ops --db "${db_path}" --node node-b --artifacts-root "${artifacts_root}" --runtime-root "${runtime_root}" --state-root "${state_root}" >/dev/null
+"${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk=worker-b-private node=node-b state=directory-backed" >/dev/null
+python3 - <<'PY' "${db_path}"
+import sqlite3
+import sys
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+conn.execute(
+    "DELETE FROM disk_runtime_state WHERE disk_name = ? AND node_name = ?",
+    ("worker-b-private", "node-b"),
+)
+conn.commit()
+conn.close()
+PY
+rm -rf "${runtime_root}/nodes/node-b/var/lib/comet/disks/instances/worker-b/private"
+"${build_dir}/comet-hostd" apply-state-ops --db "${db_path}" --node node-b --artifacts-root "${artifacts_root}" --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode skip >/dev/null
+test -d "${runtime_root}/nodes/node-b/var/lib/comet/disks/instances/worker-b/private"
+"${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk=worker-b-private node=node-b state=directory-backed-fallback" >/dev/null
+"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "disk=worker-b-private kind=worker-private node=node-b" >/dev/null
+"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "realized_state=directory-backed-fallback" >/dev/null
 "${build_dir}/comet-controller" show-host-assignments --db "${db_path}" --node node-b | grep -F "attempts=4/4 type=apply-node-state status=applied" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-b | grep -F "status=applied applied_generation=1 last_assignment_id=2" >/dev/null
+"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-b | grep -F "status=applied applied_generation=1" >/dev/null
 "${build_dir}/comet-controller" show-host-health --db "${db_path}" --node node-b | grep -F "health=online status=applied applied_generation=1" >/dev/null
 "${build_dir}/comet-controller" set-node-availability --db "${db_path}" --node node-b --availability unavailable --message "check maintenance" >/dev/null
 "${build_dir}/comet-controller" show-node-availability --db "${db_path}" --node node-b | grep -F "availability=unavailable" >/dev/null

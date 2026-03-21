@@ -4,6 +4,9 @@
 
 - `comet-controller` owns desired state, scheduling decisions, reconciliation, and API surface
 - `comet-hostd` owns local execution on one node: disks, mounts, compose artifacts, container lifecycle, telemetry
+- disk declarations and realized disk runtime state are now stored separately, so controller/hostd can compare the desired disk inventory with the current realized host-side lifecycle instead of overloading one state model for both
+- the host agent now has a privileged Linux disk lifecycle path (`image -> loop -> mkfs -> mount`) plus an explicit unprivileged directory-backed fallback for local development and smoke scenarios
+- controller reporting can now show both declared disk inventory and realized disk lifecycle separately, including node-scoped disk views for operator inspection
 
 ## Current Implementation Boundary
 

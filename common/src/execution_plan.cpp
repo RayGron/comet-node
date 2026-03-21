@@ -20,7 +20,8 @@ std::string DiskKey(const DiskSpec& disk) {
 }
 
 std::string DiskSignature(const DiskSpec& disk) {
-  return disk.host_path + "|" + disk.container_path + "|" + std::to_string(disk.size_gb) + "|" +
+  return disk.plane_name + "|" + disk.owner_name + "|" + disk.host_path + "|" +
+         disk.container_path + "|" + std::to_string(disk.size_gb) + "|" +
          ToString(disk.kind);
 }
 
@@ -210,8 +211,14 @@ std::vector<NodeExecutionPlan> BuildNodeExecutionPlans(
 
     for (const auto& [key, disk] : desired_disks) {
       const auto current_it = current_disks.find(key);
-      if (current_it == current_disks.end() ||
-          DiskSignature(current_it->second) != DiskSignature(disk)) {
+      if (current_it == current_disks.end()) {
+        plan.operations.push_back(
+            HostOperation{HostOperationKind::EnsureDisk, key, disk.host_path});
+        continue;
+      }
+      if (DiskSignature(current_it->second) != DiskSignature(disk)) {
+        plan.operations.push_back(
+            HostOperation{HostOperationKind::RemoveDisk, key, current_it->second.host_path});
         plan.operations.push_back(
             HostOperation{HostOperationKind::EnsureDisk, key, disk.host_path});
       }

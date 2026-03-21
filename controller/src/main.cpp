@@ -81,6 +81,7 @@ void PrintUsage() {
       << "  comet-controller show-host-assignments [--db <path>] [--node <node-name>]\n"
       << "  comet-controller show-host-observations [--db <path>] [--node <node-name>] [--stale-after <seconds>]\n"
       << "  comet-controller show-host-health [--db <path>] [--node <node-name>] [--stale-after <seconds>]\n"
+      << "  comet-controller show-disk-state [--db <path>] [--node <node-name>]\n"
       << "  comet-controller show-rollout-actions [--db <path>] [--node <node-name>]\n"
       << "  comet-controller show-rebalance-plan [--db <path>] [--node <node-name>]\n"
       << "  comet-controller apply-rebalance-proposal --worker <worker-name> [--db <path>] [--artifacts-root <path>]\n"
@@ -288,6 +289,17 @@ void PrintStateSummary(const comet::DesiredState& state) {
     std::cout << "\n";
   }
 
+  std::cout << "disks:\n";
+  for (const auto& disk : state.disks) {
+    std::cout << "  - " << disk.name
+              << " kind=" << comet::ToString(disk.kind)
+              << " node=" << disk.node_name
+              << " host_path=" << disk.host_path
+              << " container_path=" << disk.container_path
+              << " size_gb=" << disk.size_gb
+              << "\n";
+  }
+
   std::cout << "instances:\n";
   for (const auto& instance : state.instances) {
     std::cout << "  - " << instance.name
@@ -337,6 +349,134 @@ void PrintStateSummary(const comet::DesiredState& state) {
       }
     }
     std::cout << "\n";
+  }
+}
+
+void PrintDiskRuntimeStates(const std::vector<comet::DiskRuntimeState>& runtime_states) {
+  std::cout << "disk-runtime-state:\n";
+  if (runtime_states.empty()) {
+    std::cout << "  (empty)\n";
+    return;
+  }
+
+  for (const auto& runtime_state : runtime_states) {
+    std::cout << "  - disk=" << runtime_state.disk_name
+              << " node=" << runtime_state.node_name
+              << " state="
+              << (runtime_state.runtime_state.empty() ? "(empty)" : runtime_state.runtime_state);
+    if (!runtime_state.mount_point.empty()) {
+      std::cout << " mount_point=" << runtime_state.mount_point;
+    }
+    if (!runtime_state.filesystem_type.empty()) {
+      std::cout << " filesystem=" << runtime_state.filesystem_type;
+    }
+    if (!runtime_state.image_path.empty()) {
+      std::cout << " image=" << runtime_state.image_path;
+    }
+    if (!runtime_state.loop_device.empty()) {
+      std::cout << " loop_device=" << runtime_state.loop_device;
+    }
+    if (!runtime_state.last_verified_at.empty()) {
+      std::cout << " last_verified_at=" << runtime_state.last_verified_at;
+    }
+    std::cout << "\n";
+    if (!runtime_state.status_message.empty()) {
+      std::cout << "    message=" << runtime_state.status_message << "\n";
+    }
+  }
+}
+
+void PrintDetailedDiskState(
+    const comet::DesiredState& state,
+    const std::vector<comet::DiskRuntimeState>& runtime_states,
+    const std::optional<std::string>& node_name = std::nullopt) {
+  std::map<std::string, comet::DiskRuntimeState> runtime_by_key;
+  for (const auto& runtime_state : runtime_states) {
+    runtime_by_key.emplace(runtime_state.disk_name + "@" + runtime_state.node_name, runtime_state);
+  }
+
+  std::cout << "disk-state:\n";
+  bool printed = false;
+  for (const auto& disk : state.disks) {
+    if (node_name.has_value() && disk.node_name != *node_name) {
+      continue;
+    }
+    printed = true;
+    const std::string key = disk.name + "@" + disk.node_name;
+    const auto runtime_it = runtime_by_key.find(key);
+    std::cout << "  - disk=" << disk.name
+              << " kind=" << comet::ToString(disk.kind)
+              << " node=" << disk.node_name
+              << " size_gb=" << disk.size_gb
+              << " desired_host_path=" << disk.host_path
+              << " desired_container_path=" << disk.container_path;
+    if (runtime_it == runtime_by_key.end()) {
+      std::cout << " realized_state=missing-runtime-state\n";
+      continue;
+    }
+
+    const auto& runtime_state = runtime_it->second;
+    std::cout << " realized_state="
+              << (runtime_state.runtime_state.empty() ? "(empty)" : runtime_state.runtime_state);
+    if (!runtime_state.mount_point.empty()) {
+      std::cout << " mount_point=" << runtime_state.mount_point;
+    }
+    if (!runtime_state.filesystem_type.empty()) {
+      std::cout << " filesystem=" << runtime_state.filesystem_type;
+    }
+    if (!runtime_state.image_path.empty()) {
+      std::cout << " image=" << runtime_state.image_path;
+    }
+    if (!runtime_state.loop_device.empty()) {
+      std::cout << " loop_device=" << runtime_state.loop_device;
+    }
+    if (!runtime_state.last_verified_at.empty()) {
+      std::cout << " last_verified_at=" << runtime_state.last_verified_at;
+    }
+    std::cout << "\n";
+    if (!runtime_state.status_message.empty()) {
+      std::cout << "    message=" << runtime_state.status_message << "\n";
+    }
+  }
+
+  for (const auto& runtime_state : runtime_states) {
+    if (node_name.has_value() && runtime_state.node_name != *node_name) {
+      continue;
+    }
+    const std::string key = runtime_state.disk_name + "@" + runtime_state.node_name;
+    bool found_in_desired = false;
+    for (const auto& disk : state.disks) {
+      if (disk.name + "@" + disk.node_name == key) {
+        found_in_desired = true;
+        break;
+      }
+    }
+    if (found_in_desired) {
+      continue;
+    }
+    printed = true;
+    std::cout << "  - disk=" << runtime_state.disk_name
+              << " node=" << runtime_state.node_name
+              << " realized_state="
+              << (runtime_state.runtime_state.empty() ? "(empty)" : runtime_state.runtime_state)
+              << " desired_state=(orphan-runtime-state)";
+    if (!runtime_state.mount_point.empty()) {
+      std::cout << " mount_point=" << runtime_state.mount_point;
+    }
+    if (!runtime_state.image_path.empty()) {
+      std::cout << " image=" << runtime_state.image_path;
+    }
+    if (!runtime_state.loop_device.empty()) {
+      std::cout << " loop_device=" << runtime_state.loop_device;
+    }
+    std::cout << "\n";
+    if (!runtime_state.status_message.empty()) {
+      std::cout << "    message=" << runtime_state.status_message << "\n";
+    }
+  }
+
+  if (!printed) {
+    std::cout << "  (empty)\n";
   }
 }
 
@@ -4002,11 +4142,14 @@ int ShowState(const std::string& db_path) {
   }
 
   std::cout << "db: " << db_path << "\n";
+  const auto disk_runtime_states = store.LoadDiskRuntimeStates(state->plane_name);
   const auto generation = store.LoadDesiredGeneration();
   if (generation.has_value()) {
     std::cout << "desired generation: " << *generation << "\n";
   }
   PrintStateSummary(*state);
+  PrintDiskRuntimeStates(disk_runtime_states);
+  PrintDetailedDiskState(*state, disk_runtime_states);
   const comet::SchedulingPolicyReport scheduling_report =
       comet::EvaluateSchedulingPolicy(*state);
   const auto observations = store.LoadHostObservations();
@@ -4072,6 +4215,25 @@ int ShowState(const std::string& db_path) {
       store.LoadNodeAvailabilityOverrides(),
       std::nullopt,
       DefaultStaleAfterSeconds());
+  return 0;
+}
+
+int ShowDiskState(const std::string& db_path, const std::optional<std::string>& node_name) {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  const auto state = store.LoadDesiredState();
+  if (!state.has_value()) {
+    std::cout << "disk-state:\n";
+    std::cout << "  (empty)\n";
+    return 0;
+  }
+
+  std::cout << "db: " << db_path << "\n";
+  if (node_name.has_value()) {
+    std::cout << "node_filter: " << *node_name << "\n";
+  }
+  const auto runtime_states = store.LoadDiskRuntimeStates(state->plane_name, node_name);
+  PrintDetailedDiskState(*state, runtime_states, node_name);
   return 0;
 }
 
@@ -4199,6 +4361,10 @@ int main(int argc, char** argv) {
           db_path,
           ParseNodeArg(argc, argv),
           ParseStaleAfterArg(argc, argv).value_or(DefaultStaleAfterSeconds()));
+    }
+
+    if (command == "show-disk-state") {
+      return ShowDiskState(db_path, ParseNodeArg(argc, argv));
     }
 
     if (command == "show-rollout-actions") {

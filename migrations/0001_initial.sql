@@ -46,6 +46,24 @@ CREATE TABLE virtual_disks (
     FOREIGN KEY (node_name) REFERENCES nodes(name) ON DELETE CASCADE
 );
 
+CREATE TABLE disk_runtime_state (
+    disk_name TEXT NOT NULL,
+    plane_name TEXT NOT NULL,
+    node_name TEXT NOT NULL,
+    image_path TEXT NOT NULL DEFAULT '',
+    filesystem_type TEXT NOT NULL DEFAULT '',
+    loop_device TEXT NOT NULL DEFAULT '',
+    mount_point TEXT NOT NULL DEFAULT '',
+    runtime_state TEXT NOT NULL DEFAULT '',
+    attached_at TEXT NOT NULL DEFAULT '',
+    mounted_at TEXT NOT NULL DEFAULT '',
+    last_verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status_message TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (disk_name, node_name),
+    FOREIGN KEY (node_name) REFERENCES nodes(name) ON DELETE CASCADE
+);
+
 CREATE TABLE instances (
     name TEXT PRIMARY KEY,
     plane_name TEXT NOT NULL,

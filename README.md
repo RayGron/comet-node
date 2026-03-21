@@ -83,6 +83,21 @@ That harness uses compact test disk sizes, mounts real managed disk images throu
 verifies container visibility of mounted volumes, re-checks restart reconciliation, and then
 validates teardown on a reduced bundle.
 
+Phase G telemetry now also includes block-level disk IO counters for mounted disks:
+
+- filesystem usage/capacity through `statvfs`
+- block IO counters from `/sys/class/block/<device>/stat` when the realized mount source resolves
+  to a block device
+- normalized disk fault counters and availability markers:
+  - `fault_count`
+  - `warning_count`
+  - `perf_counters_available`
+  - `io_error_counters_available`
+  - `io_error_count` when a device-specific sysfs counter exists
+- controller-visible `read_bytes`, `write_bytes`, `read_ios`, `write_ios`, and `io_time_ms`
+  through `show-host-observations`, `show-disk-state`, `/api/v1/host-observations`, and
+  `/api/v1/disk-state`
+
 ## Dependencies
 
 External C/C++ dependencies are managed through `vcpkg` in manifest mode.
@@ -269,6 +284,15 @@ The controller now also uses observed GPU telemetry directly when evaluating a t
 - a candidate can be held with `gate_reason=observed-insufficient-vram` when observed free VRAM is
   lower than the worker memory budget plus reserve
 
+Phase G telemetry now also extends beyond GPU/runtime snapshots:
+
+- `hostd` persists per-disk filesystem usage and mount health
+- `hostd` persists per-interface network telemetry from `/sys/class/net`
+- the controller now keeps a structured `event_log` in SQLite for important host and scheduler
+  transitions
+- operators can inspect that event stream with `comet-controller show-events --db ...` or
+  `GET /api/v1/events`
+
 Drain state is now also a placement input, not only a host lifecycle input:
 
 - when a worker currently sits on a `draining` node, same-node rebalance targets on that node are
@@ -428,6 +452,7 @@ curl http://127.0.0.1:18080/api/v1/node-availability
 curl http://127.0.0.1:18080/api/v1/disk-state
 curl http://127.0.0.1:18080/api/v1/rollout-actions
 curl http://127.0.0.1:18080/api/v1/rebalance-plan
+curl http://127.0.0.1:18080/api/v1/events
 curl -X POST "http://127.0.0.1:18080/api/v1/scheduler-tick?artifacts_root=$(pwd)/var/artifacts"
 curl -X POST "http://127.0.0.1:18080/api/v1/reconcile-rebalance-proposals?artifacts_root=$(pwd)/var/artifacts"
 curl -X POST "http://127.0.0.1:18080/api/v1/reconcile-rollout-actions?artifacts_root=$(pwd)/var/artifacts"
@@ -488,6 +513,18 @@ Inspect the last observed heartbeat and applied state summary reported by each h
 
 ```bash
 ./build/linux/x64/comet-controller show-host-observations --db var/controller.sqlite
+```
+
+Inspect the persisted structured event log for recent host and scheduler transitions:
+
+```bash
+./build/linux/x64/comet-controller show-events --db var/controller.sqlite --limit 20
+```
+
+There is also a dedicated live validation harness for Phase G telemetry and events:
+
+```bash
+./scripts/check-live-phase-g.sh --skip-build
 ```
 
 Show controller-side host health, including stale-heartbeat detection:

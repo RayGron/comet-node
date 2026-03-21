@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+wait_for_http() {
+  local url="$1"
+  local attempts="${2:-100}"
+  local log_path="${3:-}"
+  for _ in $(seq 1 "${attempts}"); do
+    if curl -fsS "${url}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  if [[ -n "${log_path}" && -f "${log_path}" ]]; then
+    echo "check: HTTP endpoint did not become ready: ${url}" >&2
+    echo "check: server log (${log_path}):" >&2
+    tail -n 40 "${log_path}" >&2 || true
+  fi
+  return 1
+}
+
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 read -r host_os host_arch < <("${script_dir}/detect-host-target.sh")
 build_dir="$("${script_dir}/print-build-dir.sh" "${host_os}" "${host_arch}")"
@@ -109,6 +127,7 @@ for _ in $(seq 1 50); do
   fi
   sleep 0.1
 done
+wait_for_http "http://127.0.0.1:${http_port}/health" 100 "/tmp/comet-controller-serve.log"
 curl -fsS "http://127.0.0.1:${http_port}/health" | grep -F '"service":"comet-controller"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/health" | grep -F '"status":"ok"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/state" | grep -F '"desired_generation":null' >/dev/null
@@ -119,6 +138,7 @@ curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-health" | grep -F '"items":
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state" | grep -F '"items":[]' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/rollout-actions" | grep -F '"actions":[]' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan" | grep -F '"rebalance_plan":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/events" | grep -F '"events":[]' >/dev/null
 kill "${http_server_pid}" >/dev/null 2>&1 || true
 wait "${http_server_pid}" >/dev/null 2>&1 || true
 http_server_pid=""
@@ -139,6 +159,7 @@ for _ in $(seq 1 50); do
   fi
   sleep 0.1
 done
+wait_for_http "http://127.0.0.1:${http_api_port}/health" 100 "/tmp/comet-controller-api-mutations.log"
 api_validate_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/bundles/validate?bundle=${PWD}/config/demo-plane")"
 printf '%s' "${api_validate_output}" | grep -F '"action":"validate-bundle"' >/dev/null
 printf '%s' "${api_validate_output}" | grep -F 'bundle validation: OK' >/dev/null
@@ -249,6 +270,7 @@ for _ in $(seq 1 50); do
   fi
   sleep 0.1
 done
+wait_for_http "http://127.0.0.1:${http_preemption_port}/api/v1/rollout-actions?node=node-a" 100 "/tmp/comet-controller-preemption-serve.log"
 preemption_set_output="$(curl -fsS -X POST "http://127.0.0.1:${http_preemption_port}/api/v1/set-rollout-action-status?id=${first_rollout_action_id}&status=acknowledged&message=api-http")"
 printf '%s' "${preemption_set_output}" | grep -F '"action":"set-rollout-action-status"' >/dev/null
 printf '%s' "${preemption_set_output}" | grep -F 'updated rollout action id='"${first_rollout_action_id}" >/dev/null
@@ -313,6 +335,7 @@ for _ in $(seq 1 50); do
   fi
   sleep 0.1
 done
+wait_for_http "http://127.0.0.1:${http_rebalance_port}/api/v1/rebalance-plan" 100 "/tmp/comet-controller-rebalance-serve.log"
 rebalance_apply_output="$(curl -fsS -X POST "http://127.0.0.1:${http_rebalance_port}/api/v1/apply-rebalance-proposal?worker=worker-b&artifacts_root=${rebalance_artifacts_root}")"
 printf '%s' "${rebalance_apply_output}" | grep -F '"action":"apply-rebalance-proposal"' >/dev/null
 printf '%s' "${rebalance_apply_output}" | grep -F "applied rebalance proposal for worker 'worker-b'" >/dev/null
@@ -542,6 +565,7 @@ for _ in $(seq 1 50); do
   fi
   sleep 0.1
 done
+wait_for_http "http://127.0.0.1:${http_port}/api/v1/host-assignments?node=node-a" 100 "/tmp/comet-controller-serve.log"
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-assignments?node=node-a" | grep -F '"node_name":"node-a"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"node_name":"node-a"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"observations":[]' >/dev/null
@@ -660,6 +684,27 @@ perl -MJSON::PP -e '
 "${build_dir}/comet-hostd" show-runtime-status --node node-a --state-root "${state_root}" | grep -F "launch_ready=no" >/dev/null
 "${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "runtime_launch_ready=no runtime_model=Qwen/Qwen3.5-7B-Instruct" >/dev/null
+"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_telemetry_source=statvfs" >/dev/null
+"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_read_bytes=" >/dev/null
+"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_faults=" >/dev/null
+"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "network_telemetry_source=sysfs" >/dev/null
+"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "net iface=eth0" >/dev/null
+"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "read_bytes=" >/dev/null
+"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "fault_count=" >/dev/null
+"${build_dir}/comet-controller" show-events --db "${db_path}" --node node-a | grep -F "category=host-observation type=reported" >/dev/null
+"${build_dir}/comet-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${http_port}" >/tmp/comet-controller-serve.log 2>&1 &
+http_server_pid="$!"
+wait_for_http "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" 100 "/tmp/comet-controller-serve.log"
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"network_telemetry"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"read_bytes"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"fault_count"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"interface_name":"eth0"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state?node=node-a" | grep -F '"io_bytes"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state?node=node-a" | grep -F '"perf_counters_available"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/events?node=node-a" | grep -F '"category":"host-observation"' >/dev/null
+kill "${http_server_pid}" >/dev/null 2>&1 || true
+wait "${http_server_pid}" >/dev/null 2>&1 || true
+http_server_pid=""
 /mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh stop --config "${runtime_infer_config}" --apply | grep -F "launch_ready=no" >/dev/null
 "${build_dir}/comet-hostd" show-runtime-status --node node-a --state-root "${state_root}" | grep -F "launch_ready=no" >/dev/null
 "${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
@@ -673,6 +718,7 @@ if "${build_dir}/comet-hostd" apply-next-assignment --db "${db_path}" --node nod
 fi
 "${build_dir}/comet-controller" show-host-assignments --db "${db_path}" --node node-b | grep -F "attempts=1/3 type=apply-node-state status=pending" >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-b | grep -F "status=failed" >/dev/null
+"${build_dir}/comet-controller" show-events --db "${db_path}" --node node-b | grep -F "category=host-assignment type=failed" >/dev/null
 "${build_dir}/comet-controller" plan-bundle --bundle "${PWD}/config/demo-plane" --db "${db_path}" | grep -F "skipped_nodes=node-b(failed)" >/dev/null
 if "${build_dir}/comet-hostd" apply-next-assignment --db "${db_path}" --node node-b --runtime-root "${runtime_root}" --state-root "${bad_state_root}" --compose-mode skip >/dev/null 2>&1; then
   echo "check: expected second blocked assignment attempt to fail" >&2
@@ -708,6 +754,9 @@ test -d "${runtime_root}/nodes/node-b/var/lib/comet/disks/instances/worker-b/pri
 "${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk=worker-b-private node=node-b state=directory-backed-fallback" >/dev/null
 "${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "disk=worker-b-private kind=worker-private node=node-b" >/dev/null
 "${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "realized_state=directory-backed-fallback" >/dev/null
+"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "worker-b-private" | grep -F "usage_bytes" >/dev/null
+"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "worker-b-private" | grep -F "read_bytes=" >/dev/null
+"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "worker-b-private" | grep -F "perf_counters=no" >/dev/null
 "${build_dir}/comet-controller" show-host-assignments --db "${db_path}" --node node-b | grep -F "attempts=4/4 type=apply-node-state status=applied" >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-b | grep -F "status=applied applied_generation=1" >/dev/null
 "${build_dir}/comet-controller" show-host-health --db "${db_path}" --node node-b | grep -F "health=online status=applied applied_generation=1" >/dev/null

@@ -96,19 +96,170 @@ json ToJson(const GpuTelemetrySnapshot& snapshot) {
     devices.push_back(ToJson(device));
   }
   return json{
+      {"contract_version", snapshot.contract_version},
       {"degraded", snapshot.degraded},
       {"source", snapshot.source},
+      {"collected_at", snapshot.collected_at},
       {"devices", std::move(devices)},
   };
 }
 
 GpuTelemetrySnapshot GpuTelemetrySnapshotFromJson(const json& value) {
   GpuTelemetrySnapshot snapshot;
+  snapshot.contract_version = value.value("contract_version", 1);
   snapshot.degraded = value.value("degraded", false);
   snapshot.source = value.value("source", std::string{});
+  snapshot.collected_at = value.value("collected_at", std::string{});
   for (const auto& device : value.value("devices", json::array())) {
     if (device.is_object()) {
       snapshot.devices.push_back(GpuDeviceTelemetryFromJson(device));
+    }
+  }
+  return snapshot;
+}
+
+json ToJson(const DiskTelemetryRecord& record) {
+  return json{
+      {"disk_name", record.disk_name},
+      {"plane_name", record.plane_name},
+      {"node_name", record.node_name},
+      {"mount_point", record.mount_point},
+      {"mount_source", record.mount_source},
+      {"filesystem_type", record.filesystem_type},
+      {"runtime_state", record.runtime_state},
+      {"health", record.health},
+      {"status_message", record.status_message},
+      {"total_bytes", record.total_bytes},
+      {"used_bytes", record.used_bytes},
+      {"free_bytes", record.free_bytes},
+      {"read_ios", record.read_ios},
+      {"write_ios", record.write_ios},
+      {"read_bytes", record.read_bytes},
+      {"write_bytes", record.write_bytes},
+      {"io_time_ms", record.io_time_ms},
+      {"weighted_io_time_ms", record.weighted_io_time_ms},
+      {"io_error_count", record.io_error_count},
+      {"io_in_progress", record.io_in_progress},
+      {"warning_count", record.warning_count},
+      {"fault_count", record.fault_count},
+      {"read_only", record.read_only},
+      {"mounted", record.mounted},
+      {"perf_counters_available", record.perf_counters_available},
+      {"io_error_counters_available", record.io_error_counters_available},
+      {"fault_reasons", record.fault_reasons},
+  };
+}
+
+DiskTelemetryRecord DiskTelemetryRecordFromJson(const json& value) {
+  DiskTelemetryRecord record;
+  record.disk_name = value.value("disk_name", std::string{});
+  record.plane_name = value.value("plane_name", std::string{});
+  record.node_name = value.value("node_name", std::string{});
+  record.mount_point = value.value("mount_point", std::string{});
+  record.mount_source = value.value("mount_source", std::string{});
+  record.filesystem_type = value.value("filesystem_type", std::string{});
+  record.runtime_state = value.value("runtime_state", std::string{});
+  record.health = value.value("health", std::string{});
+  record.status_message = value.value("status_message", std::string{});
+  record.total_bytes = value.value("total_bytes", static_cast<std::uint64_t>(0));
+  record.used_bytes = value.value("used_bytes", static_cast<std::uint64_t>(0));
+  record.free_bytes = value.value("free_bytes", static_cast<std::uint64_t>(0));
+  record.read_ios = value.value("read_ios", static_cast<std::uint64_t>(0));
+  record.write_ios = value.value("write_ios", static_cast<std::uint64_t>(0));
+  record.read_bytes = value.value("read_bytes", static_cast<std::uint64_t>(0));
+  record.write_bytes = value.value("write_bytes", static_cast<std::uint64_t>(0));
+  record.io_time_ms = value.value("io_time_ms", static_cast<std::uint64_t>(0));
+  record.weighted_io_time_ms =
+      value.value("weighted_io_time_ms", static_cast<std::uint64_t>(0));
+  record.io_error_count = value.value("io_error_count", static_cast<std::uint64_t>(0));
+  record.io_in_progress = value.value("io_in_progress", 0);
+  record.warning_count = value.value("warning_count", 0);
+  record.fault_count = value.value("fault_count", 0);
+  record.read_only = value.value("read_only", false);
+  record.mounted = value.value("mounted", false);
+  record.perf_counters_available = value.value("perf_counters_available", false);
+  record.io_error_counters_available = value.value("io_error_counters_available", false);
+  for (const auto& item : value.value("fault_reasons", json::array())) {
+    if (item.is_string()) {
+      record.fault_reasons.push_back(item.get<std::string>());
+    }
+  }
+  return record;
+}
+
+json ToJson(const DiskTelemetrySnapshot& snapshot) {
+  json items = json::array();
+  for (const auto& item : snapshot.items) {
+    items.push_back(ToJson(item));
+  }
+  return json{
+      {"contract_version", snapshot.contract_version},
+      {"degraded", snapshot.degraded},
+      {"source", snapshot.source},
+      {"collected_at", snapshot.collected_at},
+      {"items", std::move(items)},
+  };
+}
+
+DiskTelemetrySnapshot DiskTelemetrySnapshotFromJson(const json& value) {
+  DiskTelemetrySnapshot snapshot;
+  snapshot.contract_version = value.value("contract_version", 1);
+  snapshot.degraded = value.value("degraded", false);
+  snapshot.source = value.value("source", std::string{});
+  snapshot.collected_at = value.value("collected_at", std::string{});
+  for (const auto& item : value.value("items", json::array())) {
+    if (item.is_object()) {
+      snapshot.items.push_back(DiskTelemetryRecordFromJson(item));
+    }
+  }
+  return snapshot;
+}
+
+json ToJson(const NetworkInterfaceTelemetry& interface) {
+  return json{
+      {"interface_name", interface.interface_name},
+      {"oper_state", interface.oper_state},
+      {"link_state", interface.link_state},
+      {"rx_bytes", interface.rx_bytes},
+      {"tx_bytes", interface.tx_bytes},
+      {"loopback", interface.loopback},
+  };
+}
+
+NetworkInterfaceTelemetry NetworkInterfaceTelemetryFromJson(const json& value) {
+  NetworkInterfaceTelemetry interface;
+  interface.interface_name = value.value("interface_name", std::string{});
+  interface.oper_state = value.value("oper_state", std::string{});
+  interface.link_state = value.value("link_state", std::string{});
+  interface.rx_bytes = value.value("rx_bytes", static_cast<std::uint64_t>(0));
+  interface.tx_bytes = value.value("tx_bytes", static_cast<std::uint64_t>(0));
+  interface.loopback = value.value("loopback", false);
+  return interface;
+}
+
+json ToJson(const NetworkTelemetrySnapshot& snapshot) {
+  json interfaces = json::array();
+  for (const auto& interface : snapshot.interfaces) {
+    interfaces.push_back(ToJson(interface));
+  }
+  return json{
+      {"contract_version", snapshot.contract_version},
+      {"degraded", snapshot.degraded},
+      {"source", snapshot.source},
+      {"collected_at", snapshot.collected_at},
+      {"interfaces", std::move(interfaces)},
+  };
+}
+
+NetworkTelemetrySnapshot NetworkTelemetrySnapshotFromJson(const json& value) {
+  NetworkTelemetrySnapshot snapshot;
+  snapshot.contract_version = value.value("contract_version", 1);
+  snapshot.degraded = value.value("degraded", false);
+  snapshot.source = value.value("source", std::string{});
+  snapshot.collected_at = value.value("collected_at", std::string{});
+  for (const auto& interface : value.value("interfaces", json::array())) {
+    if (interface.is_object()) {
+      snapshot.interfaces.push_back(NetworkInterfaceTelemetryFromJson(interface));
     }
   }
   return snapshot;
@@ -225,6 +376,22 @@ std::string SerializeGpuTelemetryJson(const GpuTelemetrySnapshot& snapshot) {
 
 GpuTelemetrySnapshot DeserializeGpuTelemetryJson(const std::string& json_text) {
   return GpuTelemetrySnapshotFromJson(json::parse(json_text));
+}
+
+std::string SerializeDiskTelemetryJson(const DiskTelemetrySnapshot& snapshot) {
+  return ToJson(snapshot).dump(2);
+}
+
+DiskTelemetrySnapshot DeserializeDiskTelemetryJson(const std::string& json_text) {
+  return DiskTelemetrySnapshotFromJson(json::parse(json_text));
+}
+
+std::string SerializeNetworkTelemetryJson(const NetworkTelemetrySnapshot& snapshot) {
+  return ToJson(snapshot).dump(2);
+}
+
+NetworkTelemetrySnapshot DeserializeNetworkTelemetryJson(const std::string& json_text) {
+  return NetworkTelemetrySnapshotFromJson(json::parse(json_text));
 }
 
 std::optional<RuntimeStatus> LoadRuntimeStatusJson(const std::string& path) {

@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <set>
+#include <sys/statvfs.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -958,6 +959,339 @@ std::string ResolvedDockerCommand() {
   return resolved;
 }
 
+std::string CurrentTimestampString() {
+  const std::time_t now = std::time(nullptr);
+  std::tm tm{};
+#if defined(_WIN32)
+  localtime_s(&tm, &now);
+#else
+  localtime_r(&now, &tm);
+#endif
+  char buffer[32];
+  if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm) == 0) {
+    return {};
+  }
+  return buffer;
+}
+
+std::string SerializeEventPayload(const json& payload) {
+  return payload.dump();
+}
+
+void AppendHostdEvent(
+    comet::ControllerStore& store,
+    const std::string& category,
+    const std::string& event_type,
+    const std::string& message,
+    const json& payload = json::object(),
+    const std::string& plane_name = "",
+    const std::string& node_name = "",
+    const std::string& worker_name = "",
+    const std::optional<int>& assignment_id = std::nullopt,
+    const std::optional<int>& rollout_action_id = std::nullopt,
+    const std::string& severity = "info") {
+  store.AppendEvent(comet::EventRecord{
+      0,
+      plane_name,
+      node_name,
+      worker_name,
+      assignment_id,
+      rollout_action_id,
+      category,
+      event_type,
+      severity,
+      message,
+      SerializeEventPayload(payload),
+      "",
+  });
+}
+
+std::optional<std::string> CurrentMountFilesystemType(const std::string& mount_point) {
+  std::ifstream input("/proc/mounts");
+  if (!input.is_open()) {
+    return std::nullopt;
+  }
+
+  std::string source;
+  std::string target;
+  std::string fs_type;
+  while (input >> source >> target >> fs_type) {
+    std::string rest_of_line;
+    std::getline(input, rest_of_line);
+    if (target == mount_point) {
+      return fs_type;
+    }
+  }
+  return std::nullopt;
+}
+
+struct BlockDeviceIoStats {
+  std::uint64_t read_ios = 0;
+  std::uint64_t read_sectors = 0;
+  std::uint64_t write_ios = 0;
+  std::uint64_t write_sectors = 0;
+  std::uint64_t io_in_progress = 0;
+  std::uint64_t io_time_ms = 0;
+  std::uint64_t weighted_io_time_ms = 0;
+};
+
+std::optional<std::string> BlockDeviceNameFromPath(const std::string& device_path) {
+  if (device_path.empty()) {
+    return std::nullopt;
+  }
+  const auto device_name = std::filesystem::path(device_path).filename().string();
+  if (device_name.empty()) {
+    return std::nullopt;
+  }
+  return device_name;
+}
+
+std::optional<bool> ReadBlockDeviceReadOnly(const std::string& device_path) {
+  const auto device_name = BlockDeviceNameFromPath(device_path);
+  if (!device_name.has_value()) {
+    return std::nullopt;
+  }
+  std::ifstream input("/sys/class/block/" + *device_name + "/ro");
+  if (!input.is_open()) {
+    return std::nullopt;
+  }
+  int value = 0;
+  if (!(input >> value)) {
+    return std::nullopt;
+  }
+  return value != 0;
+}
+
+std::optional<std::uint64_t> ReadBlockDeviceIoErrorCount(const std::string& device_path) {
+  const auto device_name = BlockDeviceNameFromPath(device_path);
+  if (!device_name.has_value()) {
+    return std::nullopt;
+  }
+  const std::array<std::filesystem::path, 2> candidates{
+      std::filesystem::path("/sys/class/block") / *device_name / "ioerr_cnt",
+      std::filesystem::path("/sys/class/block") / *device_name / "device" / "ioerr_cnt",
+  };
+  for (const auto& candidate : candidates) {
+    std::ifstream input(candidate);
+    if (!input.is_open()) {
+      continue;
+    }
+    std::uint64_t value = 0;
+    if (input >> value) {
+      return value;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<BlockDeviceIoStats> ReadBlockDeviceIoStats(
+    const std::string& device_path) {
+  const auto device_name = BlockDeviceNameFromPath(device_path);
+  if (!device_name.has_value()) {
+    return std::nullopt;
+  }
+  std::ifstream input("/sys/class/block/" + *device_name + "/stat");
+  if (!input.is_open()) {
+    return std::nullopt;
+  }
+
+  BlockDeviceIoStats stats;
+  std::uint64_t reads_merged = 0;
+  std::uint64_t read_time_ms = 0;
+  std::uint64_t writes_merged = 0;
+  std::uint64_t write_time_ms = 0;
+  if (!(input >> stats.read_ios >> reads_merged >> stats.read_sectors >> read_time_ms >>
+        stats.write_ios >> writes_merged >> stats.write_sectors >> write_time_ms >>
+        stats.io_in_progress >> stats.io_time_ms >> stats.weighted_io_time_ms)) {
+    return std::nullopt;
+  }
+  return stats;
+}
+
+comet::DiskTelemetrySnapshot CollectDiskTelemetry(
+    const comet::DesiredState& state,
+    const std::string& node_name) {
+  comet::DiskTelemetrySnapshot snapshot;
+  snapshot.contract_version = 1;
+  snapshot.source = "statvfs";
+  snapshot.collected_at = CurrentTimestampString();
+
+  for (const auto& disk : state.disks) {
+    if (disk.node_name != node_name) {
+      continue;
+    }
+
+    comet::DiskTelemetryRecord record;
+    record.disk_name = disk.name;
+    record.plane_name = disk.plane_name;
+    record.node_name = disk.node_name;
+    record.mount_point = disk.host_path;
+    record.runtime_state = std::filesystem::exists(disk.host_path) ? "present" : "missing";
+    record.health = std::filesystem::exists(disk.host_path) ? "ok" : "missing";
+    if (record.health == "missing") {
+      record.fault_count += 1;
+      record.fault_reasons.push_back("host-path-missing");
+    }
+
+    if (IsPathMounted(disk.host_path)) {
+      record.mounted = true;
+      record.runtime_state = "mounted";
+      const auto mount_fs = CurrentMountFilesystemType(disk.host_path);
+      if (mount_fs.has_value()) {
+        record.filesystem_type = *mount_fs;
+      }
+      const auto mount_source = CurrentMountSource(disk.host_path);
+      if (mount_source.has_value()) {
+        record.mount_source = *mount_source;
+      } else {
+        record.warning_count += 1;
+        record.fault_reasons.push_back("mount-source-unavailable");
+        if (record.health == "ok") {
+          record.health = "degraded";
+        }
+      }
+      if (mount_source.has_value() && mount_source->rfind("/dev/", 0) == 0) {
+        if (const auto read_only = ReadBlockDeviceReadOnly(*mount_source);
+            read_only.has_value()) {
+          record.read_only = *read_only;
+          if (*read_only) {
+            record.warning_count += 1;
+            record.fault_reasons.push_back("read-only-device");
+            if (record.health == "ok") {
+              record.health = "degraded";
+            }
+          }
+        }
+        if (const auto io_stats = ReadBlockDeviceIoStats(*mount_source);
+            io_stats.has_value()) {
+          record.perf_counters_available = true;
+          record.read_ios = io_stats->read_ios;
+          record.write_ios = io_stats->write_ios;
+          record.read_bytes = io_stats->read_sectors * 512ULL;
+          record.write_bytes = io_stats->write_sectors * 512ULL;
+          record.io_in_progress = static_cast<int>(io_stats->io_in_progress);
+          record.io_time_ms = io_stats->io_time_ms;
+          record.weighted_io_time_ms = io_stats->weighted_io_time_ms;
+        } else {
+          record.status_message =
+              record.status_message.empty()
+                  ? "block io stats unavailable"
+                  : record.status_message + "; block io stats unavailable";
+          record.warning_count += 1;
+          record.fault_reasons.push_back("block-io-stats-unavailable");
+          if (record.health == "ok") {
+            record.health = "degraded";
+          }
+        }
+        if (const auto io_error_count = ReadBlockDeviceIoErrorCount(*mount_source);
+            io_error_count.has_value()) {
+          record.io_error_counters_available = true;
+          record.io_error_count = *io_error_count;
+          if (*io_error_count > 0) {
+            record.fault_count += 1;
+            record.fault_reasons.push_back("io-error-count-nonzero");
+            if (record.health == "ok") {
+              record.health = "degraded";
+            }
+          }
+        }
+      }
+    }
+
+    struct statvfs stats {};
+    if (statvfs(disk.host_path.c_str(), &stats) == 0) {
+      const std::uint64_t block_size = static_cast<std::uint64_t>(stats.f_frsize);
+      record.total_bytes = static_cast<std::uint64_t>(stats.f_blocks) * block_size;
+      record.free_bytes = static_cast<std::uint64_t>(stats.f_bavail) * block_size;
+      record.used_bytes =
+          record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
+      if (record.health == "missing") {
+        record.health = "ok";
+      }
+      if (record.runtime_state == "missing") {
+        record.runtime_state = "available";
+      }
+    } else {
+      record.status_message =
+          record.status_message.empty()
+              ? "statvfs unavailable"
+              : record.status_message + "; statvfs unavailable";
+      record.fault_count += 1;
+      record.fault_reasons.push_back("statvfs-unavailable");
+      if (record.health == "ok") {
+        record.health = "degraded";
+      }
+    }
+
+    snapshot.items.push_back(std::move(record));
+  }
+
+  return snapshot;
+}
+
+std::optional<std::string> ReadTrimmedFile(const std::filesystem::path& path) {
+  std::ifstream input(path);
+  if (!input.is_open()) {
+    return std::nullopt;
+  }
+  std::string value;
+  std::getline(input, value);
+  while (!value.empty() && (value.back() == '\n' || value.back() == '\r' || value.back() == ' ')) {
+    value.pop_back();
+  }
+  return value;
+}
+
+std::uint64_t ReadUint64FileOrZero(const std::filesystem::path& path) {
+  std::ifstream input(path);
+  std::uint64_t value = 0;
+  if (!input.is_open()) {
+    return 0;
+  }
+  input >> value;
+  return value;
+}
+
+comet::NetworkTelemetrySnapshot CollectNetworkTelemetry() {
+  comet::NetworkTelemetrySnapshot snapshot;
+  snapshot.contract_version = 1;
+  snapshot.source = "sysfs";
+  snapshot.collected_at = CurrentTimestampString();
+
+  const std::filesystem::path net_root("/sys/class/net");
+  if (!std::filesystem::exists(net_root)) {
+    snapshot.degraded = true;
+    snapshot.source = "unavailable";
+    return snapshot;
+  }
+
+  for (const auto& entry : std::filesystem::directory_iterator(net_root)) {
+    if (!entry.is_directory() && !entry.is_symlink()) {
+      continue;
+    }
+    comet::NetworkInterfaceTelemetry interface;
+    interface.interface_name = entry.path().filename().string();
+    interface.oper_state =
+        ReadTrimmedFile(entry.path() / "operstate").value_or(std::string{"unknown"});
+    const auto carrier = ReadTrimmedFile(entry.path() / "carrier");
+    if (carrier.has_value()) {
+      interface.link_state = (*carrier == "1") ? "up" : "down";
+    } else {
+      interface.link_state = interface.oper_state;
+    }
+    interface.rx_bytes = ReadUint64FileOrZero(entry.path() / "statistics" / "rx_bytes");
+    interface.tx_bytes = ReadUint64FileOrZero(entry.path() / "statistics" / "tx_bytes");
+    interface.loopback = interface.interface_name == "lo";
+    snapshot.interfaces.push_back(std::move(interface));
+  }
+
+  std::sort(
+      snapshot.interfaces.begin(),
+      snapshot.interfaces.end(),
+      [](const auto& left, const auto& right) { return left.interface_name < right.interface_name; });
+  return snapshot;
+}
+
 std::optional<std::string> WorkerRuntimeStatusPathForInstance(
     const comet::DesiredState& state,
     const comet::InstanceSpec& instance) {
@@ -1359,20 +1693,32 @@ comet::GpuTelemetrySnapshot CollectGpuTelemetry(
     const comet::DesiredState& state,
     const std::string& node_name,
     const std::vector<comet::RuntimeProcessStatus>& instance_statuses) {
-  if (const auto nvml_snapshot = TryCollectGpuTelemetryWithNvml(state, node_name);
-      nvml_snapshot.has_value()) {
-    comet::GpuTelemetrySnapshot snapshot = *nvml_snapshot;
-    PopulateGpuProcessesFromNvidiaSmi(&snapshot, instance_statuses);
-    return snapshot;
+  const bool disable_nvml =
+      std::getenv("COMET_DISABLE_NVML") != nullptr &&
+      std::string(std::getenv("COMET_DISABLE_NVML")) != "0";
+  if (!disable_nvml) {
+    if (const auto nvml_snapshot = TryCollectGpuTelemetryWithNvml(state, node_name);
+        nvml_snapshot.has_value()) {
+      comet::GpuTelemetrySnapshot snapshot = *nvml_snapshot;
+      PopulateGpuProcessesFromNvidiaSmi(&snapshot, instance_statuses);
+      snapshot.contract_version = 1;
+      snapshot.collected_at = CurrentTimestampString();
+      return snapshot;
+    }
   }
   if (const auto smi_snapshot =
           TryCollectGpuTelemetryWithNvidiaSmi(state, node_name, instance_statuses);
       smi_snapshot.has_value()) {
-    return *smi_snapshot;
+    comet::GpuTelemetrySnapshot snapshot = *smi_snapshot;
+    snapshot.contract_version = 1;
+    snapshot.collected_at = CurrentTimestampString();
+    return snapshot;
   }
   comet::GpuTelemetrySnapshot snapshot;
+  snapshot.contract_version = 1;
   snapshot.degraded = true;
   snapshot.source = "unavailable";
+  snapshot.collected_at = CurrentTimestampString();
   return snapshot;
 }
 
@@ -1477,7 +1823,11 @@ comet::HostObservation BuildObservedStateSnapshot(
     observation.gpu_telemetry_json =
         comet::SerializeGpuTelemetryJson(
             CollectGpuTelemetry(*local_state, node_name, instance_statuses));
+    observation.disk_telemetry_json =
+        comet::SerializeDiskTelemetryJson(CollectDiskTelemetry(*local_state, node_name));
   }
+  observation.network_telemetry_json =
+      comet::SerializeNetworkTelemetryJson(CollectNetworkTelemetry());
 
   return observation;
 }
@@ -1489,6 +1839,26 @@ void ReportObservedState(
   comet::ControllerStore store(db_path);
   store.Initialize();
   store.UpsertHostObservation(observation);
+  AppendHostdEvent(
+      store,
+      "host-observation",
+      "reported",
+      source_label,
+      json{
+          {"status", comet::ToString(observation.status)},
+          {"applied_generation",
+           observation.applied_generation.has_value()
+               ? json(*observation.applied_generation)
+               : json(nullptr)},
+          {"last_assignment_id",
+           observation.last_assignment_id.has_value()
+               ? json(*observation.last_assignment_id)
+               : json(nullptr)},
+      },
+      observation.plane_name,
+      observation.node_name,
+      "",
+      observation.last_assignment_id);
 
   std::cout << source_label << "\n";
   std::cout << "db=" << db_path << "\n";
@@ -2274,6 +2644,21 @@ void ApplyNextAssignment(
       std::cout << "assignment transition skipped for id=" << assignment->id
                 << " because it is no longer claimed\n";
     }
+    AppendHostdEvent(
+        store,
+        "host-assignment",
+        "applied",
+        "applied assignment on node " + node_name,
+        json{
+            {"assignment_type", assignment->assignment_type},
+            {"desired_generation", assignment->desired_generation},
+            {"attempt_count", assignment->attempt_count},
+            {"max_attempts", assignment->max_attempts},
+        },
+        assignment->plane_name,
+        node_name,
+        "",
+        assignment->id);
   } catch (const std::exception& error) {
     const std::string error_message = error.what();
     ReportObservedState(
@@ -2306,6 +2691,23 @@ void ApplyNextAssignment(
                   << " because it is no longer claimed\n";
       }
     }
+    AppendHostdEvent(
+        store,
+        "host-assignment",
+        "failed",
+        error_message,
+        json{
+            {"assignment_type", assignment->assignment_type},
+            {"desired_generation", assignment->desired_generation},
+            {"attempt_count", assignment->attempt_count},
+            {"max_attempts", assignment->max_attempts},
+        },
+        assignment->plane_name,
+        node_name,
+        "",
+        assignment->id,
+        std::nullopt,
+        "error");
     throw;
   }
 }

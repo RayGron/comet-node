@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -36,9 +37,66 @@ struct GpuDeviceTelemetry {
 };
 
 struct GpuTelemetrySnapshot {
+  int contract_version = 1;
   bool degraded = false;
   std::string source;
+  std::string collected_at;
   std::vector<GpuDeviceTelemetry> devices;
+};
+
+struct DiskTelemetryRecord {
+  std::string disk_name;
+  std::string plane_name;
+  std::string node_name;
+  std::string mount_point;
+  std::string mount_source;
+  std::string filesystem_type;
+  std::string runtime_state;
+  std::string health;
+  std::string status_message;
+  std::uint64_t total_bytes = 0;
+  std::uint64_t used_bytes = 0;
+  std::uint64_t free_bytes = 0;
+  std::uint64_t read_ios = 0;
+  std::uint64_t write_ios = 0;
+  std::uint64_t read_bytes = 0;
+  std::uint64_t write_bytes = 0;
+  std::uint64_t io_time_ms = 0;
+  std::uint64_t weighted_io_time_ms = 0;
+  std::uint64_t io_error_count = 0;
+  int io_in_progress = 0;
+  int warning_count = 0;
+  int fault_count = 0;
+  bool read_only = false;
+  bool mounted = false;
+  bool perf_counters_available = false;
+  bool io_error_counters_available = false;
+  std::vector<std::string> fault_reasons;
+};
+
+struct DiskTelemetrySnapshot {
+  int contract_version = 1;
+  bool degraded = false;
+  std::string source;
+  std::string collected_at;
+  std::vector<DiskTelemetryRecord> items;
+};
+
+struct NetworkInterfaceTelemetry {
+  std::string interface_name;
+  std::string oper_state;
+  std::string link_state;
+  std::uint64_t rx_bytes = 0;
+  std::uint64_t tx_bytes = 0;
+  bool loopback = false;
+};
+
+struct NetworkTelemetrySnapshot {
+  int contract_version = 1;
+  bool degraded = false;
+  std::string source;
+  std::string collected_at;
+  std::vector<NetworkInterfaceTelemetry> interfaces;
 };
 
 struct RuntimeStatus {
@@ -83,6 +141,10 @@ std::string SerializeRuntimeStatusListJson(const std::vector<RuntimeProcessStatu
 std::vector<RuntimeProcessStatus> DeserializeRuntimeStatusListJson(const std::string& json_text);
 std::string SerializeGpuTelemetryJson(const GpuTelemetrySnapshot& snapshot);
 GpuTelemetrySnapshot DeserializeGpuTelemetryJson(const std::string& json_text);
+std::string SerializeDiskTelemetryJson(const DiskTelemetrySnapshot& snapshot);
+DiskTelemetrySnapshot DeserializeDiskTelemetryJson(const std::string& json_text);
+std::string SerializeNetworkTelemetryJson(const NetworkTelemetrySnapshot& snapshot);
+NetworkTelemetrySnapshot DeserializeNetworkTelemetryJson(const std::string& json_text);
 
 std::optional<RuntimeStatus> LoadRuntimeStatusJson(const std::string& path);
 void SaveRuntimeStatusJson(const RuntimeStatus& status, const std::string& path);

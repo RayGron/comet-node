@@ -63,6 +63,13 @@ The first implementation slice is intentionally narrow:
 - the controller can also reconcile those direct-fit proposals automatically through `reconcile-rebalance-proposals`, selecting the highest-scoring actionable move after rollout and in-flight assignment gates clear
 - controller-side rebalance now has an explicit cluster gate summary, so active rollout lifecycle, pending/claimed host assignments, and unconverged schedulable nodes can block new rebalance iterations until the cluster is stable again
 - observed GPU telemetry now also participates in target admission: the scheduler can hold a candidate on `compute-pressure` or `observed-insufficient-vram` instead of trusting only static fractions
+- host observations now also carry disk telemetry and network telemetry in normalized controller-visible envelopes
+- disk telemetry now covers both filesystem usage/capacity and block-device IO counters when a
+  realized disk resolves to a mounted block device, so controller views can inspect `read_bytes`,
+  `write_bytes`, `read_ios`, `write_ios`, accumulated IO time, and normalized disk fault counters
+  (`fault_count`, `warning_count`, `perf_counters_available`, `io_error_counters_available`) in
+  addition to mount health
+- controller SQLite now also stores a structured event log for host-observation, host-assignment, rollout, bundle, node-availability, and scheduler transitions
 - drain state now feeds placement itself: when a worker currently lives on a `draining` node, controller-side rebalance prefers an active off-node target and can emit `ready-drain-move` instead of keeping same-node upgrades on the draining host
 - the controller now persists scheduler runtime state of its own: plane-level active scheduler action, per-worker move/eviction bookkeeping, and per-node verification bookkeeping
 - that runtime state now feeds controller-side anti-flap holds such as `min-residency`, `cooldown`, `active-scheduler-action`, and `manual-intervention-required`

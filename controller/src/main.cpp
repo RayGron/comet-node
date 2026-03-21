@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <cstdlib>
+#include <cstdint>
 #include <ctime>
 #include <cstddef>
 #include <cstring>
@@ -148,6 +149,27 @@ std::vector<comet::RuntimeProcessStatus> ParseInstanceRuntimeStatuses(
 std::optional<comet::GpuTelemetrySnapshot> ParseGpuTelemetry(
     const comet::HostObservation& observation);
 
+std::optional<comet::DiskTelemetrySnapshot> ParseDiskTelemetry(
+    const comet::HostObservation& observation);
+
+std::optional<comet::NetworkTelemetrySnapshot> ParseNetworkTelemetry(
+    const comet::HostObservation& observation);
+
+std::string SerializeEventPayload(const json& payload);
+
+void AppendControllerEvent(
+    comet::ControllerStore& store,
+    const std::string& category,
+    const std::string& event_type,
+    const std::string& message,
+    const json& payload = json::object(),
+    const std::string& plane_name = "",
+    const std::string& node_name = "",
+    const std::string& worker_name = "",
+    const std::optional<int>& assignment_id = std::nullopt,
+    const std::optional<int>& rollout_action_id = std::nullopt,
+    const std::string& severity = "info");
+
 SchedulerRuntimeView LoadSchedulerRuntimeView(
     comet::ControllerStore& store,
     const std::optional<comet::DesiredState>& desired_state);
@@ -171,6 +193,7 @@ void PrintUsage() {
       << "  comet-controller show-disk-state [--db <path>] [--node <node-name>]\n"
       << "  comet-controller show-rollout-actions [--db <path>] [--node <node-name>]\n"
       << "  comet-controller show-rebalance-plan [--db <path>] [--node <node-name>]\n"
+      << "  comet-controller show-events [--db <path>] [--node <node-name>] [--worker <worker-name>] [--category <category>] [--limit <count>]\n"
       << "  comet-controller apply-rebalance-proposal --worker <worker-name> [--db <path>] [--artifacts-root <path>]\n"
       << "  comet-controller reconcile-rebalance-proposals [--db <path>] [--artifacts-root <path>]\n"
       << "  comet-controller scheduler-tick [--db <path>] [--artifacts-root <path>]\n"
@@ -282,6 +305,16 @@ std::optional<int> ParseStaleAfterArg(int argc, char** argv) {
   return std::nullopt;
 }
 
+std::optional<int> ParseLimitArg(int argc, char** argv) {
+  for (int index = 2; index < argc; ++index) {
+    const std::string arg = argv[index];
+    if (arg == "--limit" && index + 1 < argc) {
+      return std::stoi(argv[index + 1]);
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<std::string> ParseAvailabilityArg(int argc, char** argv) {
   for (int index = 2; index < argc; ++index) {
     const std::string arg = argv[index];
@@ -316,6 +349,16 @@ std::optional<std::string> ParseWorkerArg(int argc, char** argv) {
   for (int index = 2; index < argc; ++index) {
     const std::string arg = argv[index];
     if (arg == "--worker" && index + 1 < argc) {
+      return std::string(argv[index + 1]);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> ParseCategoryArg(int argc, char** argv) {
+  for (int index = 2; index < argc; ++index) {
+    const std::string arg = argv[index];
+    if (arg == "--category" && index + 1 < argc) {
       return std::string(argv[index + 1]);
     }
   }
@@ -834,7 +877,50 @@ struct DiskStateViewData {
   std::optional<std::string> node_name;
   std::optional<comet::DesiredState> desired_state;
   std::vector<comet::DiskRuntimeState> runtime_states;
+  std::vector<comet::HostObservation> observations;
 };
+
+struct EventsViewData {
+  std::string db_path;
+  std::optional<std::string> plane_name;
+  std::optional<std::string> node_name;
+  std::optional<std::string> worker_name;
+  std::optional<std::string> category;
+  int limit = 100;
+  std::vector<comet::EventRecord> events;
+};
+
+std::string SerializeEventPayload(const json& payload) {
+  return payload.dump();
+}
+
+void AppendControllerEvent(
+    comet::ControllerStore& store,
+    const std::string& category,
+    const std::string& event_type,
+    const std::string& message,
+    const json& payload,
+    const std::string& plane_name,
+    const std::string& node_name,
+    const std::string& worker_name,
+    const std::optional<int>& assignment_id,
+    const std::optional<int>& rollout_action_id,
+    const std::string& severity) {
+  store.AppendEvent(comet::EventRecord{
+      0,
+      plane_name,
+      node_name,
+      worker_name,
+      assignment_id,
+      rollout_action_id,
+      category,
+      event_type,
+      severity,
+      message,
+      SerializeEventPayload(payload),
+      "",
+  });
+}
 
 HostAssignmentsViewData LoadHostAssignmentsViewData(
     const std::string& db_path,
@@ -891,6 +977,33 @@ DiskStateViewData LoadDiskStateViewData(
       desired_state.has_value()
           ? store.LoadDiskRuntimeStates(desired_state->plane_name, node_name)
           : std::vector<comet::DiskRuntimeState>{},
+      store.LoadHostObservations(node_name),
+  };
+}
+
+EventsViewData LoadEventsViewData(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& worker_name,
+    const std::optional<std::string>& category,
+    int limit) {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  const auto desired_state = store.LoadDesiredState();
+  return EventsViewData{
+      db_path,
+      desired_state.has_value() ? std::optional<std::string>(desired_state->plane_name)
+                                : std::nullopt,
+      node_name,
+      worker_name,
+      category,
+      limit,
+      store.LoadEvents(
+          std::nullopt,
+          node_name,
+          worker_name,
+          category,
+          limit),
   };
 }
 
@@ -934,6 +1047,273 @@ json BuildHostObservationsPayload(
 
   json observations = json::array();
   for (const auto& observation : view.observations) {
+    const auto runtime_status = ParseRuntimeStatus(observation);
+    const auto telemetry = ParseGpuTelemetry(observation);
+    const auto instance_statuses = ParseInstanceRuntimeStatuses(observation);
+    const auto disk_telemetry = ParseDiskTelemetry(observation);
+    const auto network_telemetry = ParseNetworkTelemetry(observation);
+
+    const auto build_runtime_status_payload =
+        [&](const std::optional<comet::RuntimeStatus>& status) -> json {
+      if (!status.has_value()) {
+        return json{
+            {"contract_version", 1},
+            {"available", false},
+            {"runtime", nullptr},
+        };
+      }
+      return json{
+          {"contract_version", 1},
+          {"available", true},
+          {"runtime", json::parse(comet::SerializeRuntimeStatusJson(*status))},
+      };
+    };
+
+    const auto build_instance_runtime_payload =
+        [&](const std::vector<comet::RuntimeProcessStatus>& statuses) -> json {
+      int ready_count = 0;
+      int gpu_bound_count = 0;
+      int running_count = 0;
+      for (const auto& status : statuses) {
+        if (status.ready) {
+          ++ready_count;
+        }
+        if (!status.gpu_device.empty()) {
+          ++gpu_bound_count;
+        }
+        if (!status.runtime_phase.empty() && status.runtime_phase != "stopped") {
+          ++running_count;
+        }
+      }
+      return json{
+          {"contract_version", 1},
+          {"available", !statuses.empty()},
+          {"summary",
+           {
+               {"count", statuses.size()},
+               {"ready_count", ready_count},
+               {"running_count", running_count},
+               {"gpu_bound_count", gpu_bound_count},
+           }},
+          {"items",
+           statuses.empty() ? json::array()
+                            : json::parse(comet::SerializeRuntimeStatusListJson(statuses))},
+      };
+    };
+
+    const auto build_gpu_telemetry_payload =
+        [&](const std::optional<comet::GpuTelemetrySnapshot>& snapshot) -> json {
+      if (!snapshot.has_value()) {
+        return json{
+            {"contract_version", 1},
+            {"available", false},
+            {"degraded", true},
+            {"source", nullptr},
+            {"collected_at", nullptr},
+            {"summary",
+             {
+                 {"device_count", 0},
+                 {"owned_process_count", 0},
+                 {"unknown_process_count", 0},
+                 {"total_vram_mb", 0},
+                 {"used_vram_mb", 0},
+                 {"free_vram_mb", 0},
+             }},
+            {"devices", json::array()},
+        };
+      }
+
+      int owned_process_count = 0;
+      int unknown_process_count = 0;
+      int total_vram_mb = 0;
+      int used_vram_mb = 0;
+      int free_vram_mb = 0;
+      for (const auto& device : snapshot->devices) {
+        total_vram_mb += device.total_vram_mb;
+        used_vram_mb += device.used_vram_mb;
+        free_vram_mb += device.free_vram_mb;
+        for (const auto& process : device.processes) {
+          if (process.instance_name == "unknown") {
+            ++unknown_process_count;
+          } else {
+            ++owned_process_count;
+          }
+        }
+      }
+
+      return json{
+          {"contract_version", snapshot->contract_version},
+          {"available", true},
+          {"degraded", snapshot->degraded},
+          {"source", snapshot->source.empty() ? json(nullptr) : json(snapshot->source)},
+          {"collected_at", snapshot->collected_at.empty() ? json(nullptr) : json(snapshot->collected_at)},
+          {"summary",
+           {
+               {"device_count", snapshot->devices.size()},
+               {"owned_process_count", owned_process_count},
+               {"unknown_process_count", unknown_process_count},
+               {"total_vram_mb", total_vram_mb},
+               {"used_vram_mb", used_vram_mb},
+               {"free_vram_mb", free_vram_mb},
+           }},
+          {"devices", json::parse(comet::SerializeGpuTelemetryJson(*snapshot)).at("devices")},
+      };
+    };
+
+    const auto build_disk_telemetry_payload =
+        [&](const std::optional<comet::DiskTelemetrySnapshot>& snapshot) -> json {
+      if (!snapshot.has_value()) {
+        return json{
+            {"contract_version", 1},
+            {"available", false},
+            {"degraded", true},
+            {"source", nullptr},
+            {"collected_at", nullptr},
+            {"summary",
+             {
+                 {"disk_count", 0},
+                 {"mounted_count", 0},
+                 {"healthy_count", 0},
+                 {"total_bytes", 0},
+                 {"used_bytes", 0},
+                 {"free_bytes", 0},
+             }},
+            {"items", json::array()},
+        };
+      }
+
+      int mounted_count = 0;
+      int healthy_count = 0;
+      std::uint64_t total_bytes = 0;
+      std::uint64_t used_bytes = 0;
+      std::uint64_t free_bytes = 0;
+      std::uint64_t read_ios = 0;
+      std::uint64_t write_ios = 0;
+      std::uint64_t read_bytes = 0;
+      std::uint64_t write_bytes = 0;
+      std::uint64_t io_time_ms = 0;
+      std::uint64_t weighted_io_time_ms = 0;
+      int io_in_progress = 0;
+      int warning_count = 0;
+      int fault_count = 0;
+      int read_only_count = 0;
+      int perf_counters_count = 0;
+      int io_error_counter_count = 0;
+      for (const auto& item : snapshot->items) {
+        if (item.mounted) {
+          ++mounted_count;
+        }
+        if (item.health == "ok") {
+          ++healthy_count;
+        }
+        total_bytes += item.total_bytes;
+        used_bytes += item.used_bytes;
+        free_bytes += item.free_bytes;
+        read_ios += item.read_ios;
+        write_ios += item.write_ios;
+        read_bytes += item.read_bytes;
+        write_bytes += item.write_bytes;
+        io_time_ms += item.io_time_ms;
+        weighted_io_time_ms += item.weighted_io_time_ms;
+        io_in_progress += item.io_in_progress;
+        warning_count += item.warning_count;
+        fault_count += item.fault_count;
+        if (item.read_only) {
+          ++read_only_count;
+        }
+        if (item.perf_counters_available) {
+          ++perf_counters_count;
+        }
+        if (item.io_error_counters_available) {
+          ++io_error_counter_count;
+        }
+      }
+
+      return json{
+          {"contract_version", snapshot->contract_version},
+          {"available", true},
+          {"degraded", snapshot->degraded},
+          {"source", snapshot->source.empty() ? json(nullptr) : json(snapshot->source)},
+          {"collected_at", snapshot->collected_at.empty() ? json(nullptr) : json(snapshot->collected_at)},
+          {"summary",
+           {
+               {"disk_count", snapshot->items.size()},
+               {"mounted_count", mounted_count},
+               {"healthy_count", healthy_count},
+               {"total_bytes", total_bytes},
+               {"used_bytes", used_bytes},
+               {"free_bytes", free_bytes},
+               {"read_ios", read_ios},
+               {"write_ios", write_ios},
+               {"read_bytes", read_bytes},
+               {"write_bytes", write_bytes},
+               {"io_time_ms", io_time_ms},
+               {"weighted_io_time_ms", weighted_io_time_ms},
+               {"io_in_progress", io_in_progress},
+               {"warning_count", warning_count},
+               {"fault_count", fault_count},
+               {"read_only_count", read_only_count},
+               {"perf_counters_count", perf_counters_count},
+               {"io_error_counter_count", io_error_counter_count},
+           }},
+          {"items", json::parse(comet::SerializeDiskTelemetryJson(*snapshot)).at("items")},
+      };
+    };
+
+    const auto build_network_telemetry_payload =
+        [&](const std::optional<comet::NetworkTelemetrySnapshot>& snapshot) -> json {
+      if (!snapshot.has_value()) {
+        return json{
+            {"contract_version", 1},
+            {"available", false},
+            {"degraded", true},
+            {"source", nullptr},
+            {"collected_at", nullptr},
+            {"summary",
+             {
+                 {"interface_count", 0},
+                 {"up_count", 0},
+                 {"loopback_count", 0},
+                 {"rx_bytes", 0},
+                 {"tx_bytes", 0},
+             }},
+            {"interfaces", json::array()},
+        };
+      }
+
+      int up_count = 0;
+      int loopback_count = 0;
+      std::uint64_t rx_bytes = 0;
+      std::uint64_t tx_bytes = 0;
+      for (const auto& interface : snapshot->interfaces) {
+        if (interface.link_state == "up" || interface.oper_state == "up") {
+          ++up_count;
+        }
+        if (interface.loopback) {
+          ++loopback_count;
+        }
+        rx_bytes += interface.rx_bytes;
+        tx_bytes += interface.tx_bytes;
+      }
+
+      return json{
+          {"contract_version", snapshot->contract_version},
+          {"available", true},
+          {"degraded", snapshot->degraded},
+          {"source", snapshot->source.empty() ? json(nullptr) : json(snapshot->source)},
+          {"collected_at", snapshot->collected_at.empty() ? json(nullptr) : json(snapshot->collected_at)},
+          {"summary",
+           {
+               {"interface_count", snapshot->interfaces.size()},
+               {"up_count", up_count},
+               {"loopback_count", loopback_count},
+               {"rx_bytes", rx_bytes},
+               {"tx_bytes", tx_bytes},
+           }},
+          {"interfaces", json::parse(comet::SerializeNetworkTelemetryJson(*snapshot)).at("interfaces")},
+      };
+    };
+
     json entry{
         {"node_name", observation.node_name},
         {"plane_name", observation.plane_name.empty() ? json(nullptr) : json(observation.plane_name)},
@@ -960,21 +1340,11 @@ json BuildHostObservationsPayload(
     } else {
       entry["observed_state"] = nullptr;
     }
-    if (const auto runtime_status = ParseRuntimeStatus(observation); runtime_status.has_value()) {
-      entry["runtime_status"] = json::parse(comet::SerializeRuntimeStatusJson(*runtime_status));
-    } else {
-      entry["runtime_status"] = nullptr;
-    }
-    if (const auto telemetry = ParseGpuTelemetry(observation); telemetry.has_value()) {
-      entry["gpu_telemetry"] = json::parse(comet::SerializeGpuTelemetryJson(*telemetry));
-    } else {
-      entry["gpu_telemetry"] = nullptr;
-    }
-    if (const auto statuses = ParseInstanceRuntimeStatuses(observation); !statuses.empty()) {
-      entry["instance_runtimes"] = json::parse(comet::SerializeRuntimeStatusListJson(statuses));
-    } else {
-      entry["instance_runtimes"] = json::array();
-    }
+    entry["runtime_status"] = build_runtime_status_payload(runtime_status);
+    entry["gpu_telemetry"] = build_gpu_telemetry_payload(telemetry);
+    entry["disk_telemetry"] = build_disk_telemetry_payload(disk_telemetry);
+    entry["network_telemetry"] = build_network_telemetry_payload(network_telemetry);
+    entry["instance_runtimes"] = build_instance_runtime_payload(instance_statuses);
 
     observations.push_back(std::move(entry));
   }
@@ -1103,6 +1473,13 @@ json BuildRebalancePlanPayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     int stale_after_seconds);
+
+json BuildEventsPayload(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& worker_name,
+    const std::optional<std::string>& category,
+    int limit);
 
 std::string ResolveArtifactsRoot(const std::optional<std::string>& artifacts_root_arg);
 
@@ -1377,6 +1754,8 @@ int ExecuteRemoteControllerCommand(
   const auto artifacts_root = ParseArtifactsRootArg(argc, argv);
   const auto action_id = ParseIdArg(argc, argv);
   const auto worker_name = ParseWorkerArg(argc, argv);
+  const auto limit = ParseLimitArg(argc, argv);
+  const auto category = ParseCategoryArg(argc, argv);
   const auto message = ParseMessageArg(argc, argv);
   const auto status = ParseStatusArg(argc, argv);
   const auto availability = ParseAvailabilityArg(argc, argv);
@@ -1435,6 +1814,17 @@ int ExecuteRemoteControllerCommand(
             "/api/v1/rebalance-plan",
             {{"node", node_name.value_or("")},
              {"stale_after", stale_after.has_value() ? std::to_string(*stale_after) : ""}}));
+  }
+  if (command == "show-events") {
+    return EmitRemoteJsonPayload(
+        SendControllerJsonRequest(
+            target,
+            "GET",
+            "/api/v1/events",
+            {{"node", node_name.value_or("")},
+             {"worker", worker_name.value_or("")},
+             {"category", category.value_or("")},
+             {"limit", limit.has_value() ? std::to_string(*limit) : ""}}));
   }
   if (command == "show-node-availability") {
     return EmitRemoteJsonPayload(
@@ -1853,6 +2243,25 @@ HttpResponse HandleControllerRequest(
           json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
     }
   }
+  if (request.path == "/api/v1/events") {
+    if (request.method != "GET") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      return BuildJsonResponse(
+          200,
+          BuildEventsPayload(
+              db_path,
+              FindQueryString(request, "node"),
+              FindQueryString(request, "worker"),
+              FindQueryString(request, "category"),
+              FindQueryInt(request, "limit").value_or(100)));
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
   if (request.path == "/api/v1/scheduler-tick") {
     if (request.method != "POST") {
       return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
@@ -2046,7 +2455,7 @@ int ServeControllerApi(const std::string& db_path, const std::string& listen_hos
   std::cout << "comet-controller serve\n";
   std::cout << "listen=" << listen_host << ":" << listen_port << "\n";
   std::cout << "db=" << db_path << "\n";
-  std::cout << "routes=/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/state,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment\n";
+  std::cout << "routes=/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/state,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment\n";
   std::cout.flush();
 
   while (!g_stop_requested.load()) {
@@ -2303,10 +2712,21 @@ void PrintDiskRuntimeStates(const std::vector<comet::DiskRuntimeState>& runtime_
 void PrintDetailedDiskState(
     const comet::DesiredState& state,
     const std::vector<comet::DiskRuntimeState>& runtime_states,
+    const std::vector<comet::HostObservation>& observations,
     const std::optional<std::string>& node_name = std::nullopt) {
   std::map<std::string, comet::DiskRuntimeState> runtime_by_key;
   for (const auto& runtime_state : runtime_states) {
     runtime_by_key.emplace(runtime_state.disk_name + "@" + runtime_state.node_name, runtime_state);
+  }
+  std::map<std::string, comet::DiskTelemetryRecord> telemetry_by_key;
+  for (const auto& observation : observations) {
+    const auto disk_telemetry = ParseDiskTelemetry(observation);
+    if (!disk_telemetry.has_value()) {
+      continue;
+    }
+    for (const auto& item : disk_telemetry->items) {
+      telemetry_by_key[item.disk_name + "@" + item.node_name] = item;
+    }
   }
 
   std::cout << "disk-state:\n";
@@ -2347,6 +2767,24 @@ void PrintDetailedDiskState(
     if (!runtime_state.last_verified_at.empty()) {
       std::cout << " last_verified_at=" << runtime_state.last_verified_at;
     }
+    const auto telemetry_it = telemetry_by_key.find(key);
+    if (telemetry_it != telemetry_by_key.end()) {
+      std::cout << " usage_bytes=" << telemetry_it->second.used_bytes
+                << "/" << telemetry_it->second.total_bytes
+                << " free_bytes=" << telemetry_it->second.free_bytes
+                << " read_bytes=" << telemetry_it->second.read_bytes
+                << " write_bytes=" << telemetry_it->second.write_bytes
+                << " read_ios=" << telemetry_it->second.read_ios
+                << " write_ios=" << telemetry_it->second.write_ios
+                << " io_time_ms=" << telemetry_it->second.io_time_ms
+                << " fault_count=" << telemetry_it->second.fault_count
+                << " warning_count=" << telemetry_it->second.warning_count
+                << " perf_counters=" << (telemetry_it->second.perf_counters_available ? "yes" : "no")
+                << " io_error_counters="
+                << (telemetry_it->second.io_error_counters_available ? "yes" : "no")
+                << " mount_health="
+                << (telemetry_it->second.health.empty() ? "(empty)" : telemetry_it->second.health);
+    }
     std::cout << "\n";
     if (!runtime_state.status_message.empty()) {
       std::cout << "    message=" << runtime_state.status_message << "\n";
@@ -2382,6 +2820,24 @@ void PrintDetailedDiskState(
     }
     if (!runtime_state.loop_device.empty()) {
       std::cout << " loop_device=" << runtime_state.loop_device;
+    }
+    const auto telemetry_it = telemetry_by_key.find(key);
+    if (telemetry_it != telemetry_by_key.end()) {
+      std::cout << " usage_bytes=" << telemetry_it->second.used_bytes
+                << "/" << telemetry_it->second.total_bytes
+                << " free_bytes=" << telemetry_it->second.free_bytes
+                << " read_bytes=" << telemetry_it->second.read_bytes
+                << " write_bytes=" << telemetry_it->second.write_bytes
+                << " read_ios=" << telemetry_it->second.read_ios
+                << " write_ios=" << telemetry_it->second.write_ios
+                << " io_time_ms=" << telemetry_it->second.io_time_ms
+                << " fault_count=" << telemetry_it->second.fault_count
+                << " warning_count=" << telemetry_it->second.warning_count
+                << " perf_counters=" << (telemetry_it->second.perf_counters_available ? "yes" : "no")
+                << " io_error_counters="
+                << (telemetry_it->second.io_error_counters_available ? "yes" : "no")
+                << " mount_health="
+                << (telemetry_it->second.health.empty() ? "(empty)" : telemetry_it->second.health);
     }
     std::cout << "\n";
     if (!runtime_state.status_message.empty()) {
@@ -4065,9 +4521,10 @@ StateAggregateViewData LoadStateAggregateViewData(
 json BuildDiskStatePayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name) {
+  const auto view = LoadDiskStateViewData(db_path, node_name);
   comet::ControllerStore store(db_path);
   store.Initialize();
-  const auto state = store.LoadDesiredState();
+  const auto state = view.desired_state;
 
   json payload{
       {"service", "comet-controller"},
@@ -4080,7 +4537,8 @@ json BuildDiskStatePayload(
     return payload;
   }
 
-  const auto runtime_states = store.LoadDiskRuntimeStates(state->plane_name, node_name);
+  const auto runtime_states = view.runtime_states;
+  const auto observations = view.observations;
   payload["plane_name"] = state->plane_name;
   payload["desired_generation"] =
       store.LoadDesiredGeneration().has_value()
@@ -4090,6 +4548,16 @@ json BuildDiskStatePayload(
   std::map<std::string, comet::DiskRuntimeState> runtime_by_key;
   for (const auto& runtime_state : runtime_states) {
     runtime_by_key.emplace(runtime_state.disk_name + "@" + runtime_state.node_name, runtime_state);
+  }
+  std::map<std::string, comet::DiskTelemetryRecord> telemetry_by_key;
+  for (const auto& observation : observations) {
+    const auto disk_telemetry = ParseDiskTelemetry(observation);
+    if (!disk_telemetry.has_value()) {
+      continue;
+    }
+    for (const auto& item : disk_telemetry->items) {
+      telemetry_by_key[item.disk_name + "@" + item.node_name] = item;
+    }
   }
 
   json items = json::array();
@@ -4124,6 +4592,39 @@ json BuildDiskStatePayload(
           runtime_state.last_verified_at.empty() ? json(nullptr) : json(runtime_state.last_verified_at);
       item["status_message"] =
           runtime_state.status_message.empty() ? json(nullptr) : json(runtime_state.status_message);
+    }
+    const auto telemetry_it = telemetry_by_key.find(key);
+    if (telemetry_it != telemetry_by_key.end()) {
+      const auto& telemetry = telemetry_it->second;
+      item["usage_bytes"] = {
+          {"total_bytes", telemetry.total_bytes},
+          {"used_bytes", telemetry.used_bytes},
+          {"free_bytes", telemetry.free_bytes},
+      };
+      item["io_bytes"] = {
+          {"read_bytes", telemetry.read_bytes},
+          {"write_bytes", telemetry.write_bytes},
+      };
+      item["io_ops"] = {
+          {"read_ios", telemetry.read_ios},
+          {"write_ios", telemetry.write_ios},
+      };
+      item["io_time_ms"] = telemetry.io_time_ms;
+      item["weighted_io_time_ms"] = telemetry.weighted_io_time_ms;
+      item["io_error_count"] = telemetry.io_error_count;
+      item["io_in_progress"] = telemetry.io_in_progress;
+      item["warning_count"] = telemetry.warning_count;
+      item["fault_count"] = telemetry.fault_count;
+      item["read_only"] = telemetry.read_only;
+      item["perf_counters_available"] = telemetry.perf_counters_available;
+      item["io_error_counters_available"] = telemetry.io_error_counters_available;
+      item["mount_source"] =
+          telemetry.mount_source.empty() ? json(nullptr) : json(telemetry.mount_source);
+      item["fault_reasons"] = telemetry.fault_reasons;
+      item["mount_health"] = telemetry.health.empty() ? json(nullptr) : json(telemetry.health);
+      item["mounted"] = telemetry.mounted;
+      item["telemetry_status_message"] =
+          telemetry.status_message.empty() ? json(nullptr) : json(telemetry.status_message);
     }
     items.push_back(std::move(item));
   }
@@ -4246,6 +4747,54 @@ json BuildRolloutActionsPayload(
   }
 
   return payload;
+}
+
+json BuildEventsPayload(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& worker_name,
+    const std::optional<std::string>& category,
+    int limit) {
+  const auto view = LoadEventsViewData(db_path, node_name, worker_name, category, limit);
+  json items = json::array();
+  for (const auto& event : view.events) {
+    json payload = json::object();
+    if (!event.payload_json.empty()) {
+      try {
+        payload = json::parse(event.payload_json);
+      } catch (...) {
+        payload = json{
+            {"raw", event.payload_json},
+        };
+      }
+    }
+    items.push_back(json{
+        {"id", event.id},
+        {"plane_name", event.plane_name.empty() ? json(nullptr) : json(event.plane_name)},
+        {"node_name", event.node_name.empty() ? json(nullptr) : json(event.node_name)},
+        {"worker_name", event.worker_name.empty() ? json(nullptr) : json(event.worker_name)},
+        {"assignment_id", event.assignment_id.has_value() ? json(*event.assignment_id) : json(nullptr)},
+        {"rollout_action_id",
+         event.rollout_action_id.has_value() ? json(*event.rollout_action_id) : json(nullptr)},
+        {"category", event.category},
+        {"event_type", event.event_type},
+        {"severity", event.severity},
+        {"message", event.message},
+        {"payload", payload},
+        {"created_at", event.created_at},
+    });
+  }
+
+  return json{
+      {"service", "comet-controller"},
+      {"db_path", view.db_path},
+      {"plane_name", view.plane_name.has_value() ? json(*view.plane_name) : json(nullptr)},
+      {"node_name", view.node_name.has_value() ? json(*view.node_name) : json(nullptr)},
+      {"worker_name", view.worker_name.has_value() ? json(*view.worker_name) : json(nullptr)},
+      {"category", view.category.has_value() ? json(*view.category) : json(nullptr)},
+      {"limit", view.limit},
+      {"events", std::move(items)},
+  };
 }
 
 json BuildRebalancePlanPayload(
@@ -5252,6 +5801,22 @@ std::optional<comet::GpuTelemetrySnapshot> ParseGpuTelemetry(
   return comet::DeserializeGpuTelemetryJson(observation.gpu_telemetry_json);
 }
 
+std::optional<comet::DiskTelemetrySnapshot> ParseDiskTelemetry(
+    const comet::HostObservation& observation) {
+  if (observation.disk_telemetry_json.empty()) {
+    return std::nullopt;
+  }
+  return comet::DeserializeDiskTelemetryJson(observation.disk_telemetry_json);
+}
+
+std::optional<comet::NetworkTelemetrySnapshot> ParseNetworkTelemetry(
+    const comet::HostObservation& observation) {
+  if (observation.network_telemetry_json.empty()) {
+    return std::nullopt;
+  }
+  return comet::DeserializeNetworkTelemetryJson(observation.network_telemetry_json);
+}
+
 void PrintHostObservations(
     const std::vector<comet::HostObservation>& observations,
     int stale_after_seconds) {
@@ -5273,6 +5838,8 @@ void PrintHostObservations(
     const auto runtime_status = ParseRuntimeStatus(observation);
     const auto instance_statuses = ParseInstanceRuntimeStatuses(observation);
     const auto gpu_telemetry = ParseGpuTelemetry(observation);
+    const auto disk_telemetry = ParseDiskTelemetry(observation);
+    const auto network_telemetry = ParseNetworkTelemetry(observation);
     const auto age_seconds = HeartbeatAgeSeconds(observation.heartbeat_at);
 
     std::cout << "  - node=" << observation.node_name
@@ -5316,6 +5883,30 @@ void PrintHostObservations(
                 << (gpu_telemetry->source.empty() ? "(empty)" : gpu_telemetry->source)
                 << " telemetry_degraded=" << (gpu_telemetry->degraded ? "yes" : "no")
                 << " gpu_devices=" << gpu_telemetry->devices.size();
+    }
+    if (disk_telemetry.has_value()) {
+      std::cout << " disk_telemetry_source="
+                << (disk_telemetry->source.empty() ? "(empty)" : disk_telemetry->source)
+                << " disk_count=" << disk_telemetry->items.size();
+      std::uint64_t total_read_bytes = 0;
+      std::uint64_t total_write_bytes = 0;
+      int total_fault_count = 0;
+      int total_warning_count = 0;
+      for (const auto& disk : disk_telemetry->items) {
+        total_read_bytes += disk.read_bytes;
+        total_write_bytes += disk.write_bytes;
+        total_fault_count += disk.fault_count;
+        total_warning_count += disk.warning_count;
+      }
+      std::cout << " disk_read_bytes=" << total_read_bytes
+                << " disk_write_bytes=" << total_write_bytes
+                << " disk_faults=" << total_fault_count
+                << " disk_warnings=" << total_warning_count;
+    }
+    if (network_telemetry.has_value()) {
+      std::cout << " network_telemetry_source="
+                << (network_telemetry->source.empty() ? "(empty)" : network_telemetry->source)
+                << " net_ifaces=" << network_telemetry->interfaces.size();
     }
     if (!instance_statuses.empty()) {
       std::cout << " instance_runtimes=" << instance_statuses.size();
@@ -5363,6 +5954,57 @@ void PrintHostObservations(
           }
         }
         std::cout << "\n";
+      }
+    }
+    if (disk_telemetry.has_value()) {
+      for (const auto& disk : disk_telemetry->items) {
+        std::cout << "    disk name=" << disk.disk_name
+                  << " phase=" << (disk.runtime_state.empty() ? "(empty)" : disk.runtime_state)
+                  << " mounted=" << (disk.mounted ? "yes" : "no")
+                  << " health=" << (disk.health.empty() ? "(empty)" : disk.health)
+                  << " used_bytes=" << disk.used_bytes
+                  << " free_bytes=" << disk.free_bytes
+                  << " read_bytes=" << disk.read_bytes
+                  << " write_bytes=" << disk.write_bytes
+                  << " read_ios=" << disk.read_ios
+                  << " write_ios=" << disk.write_ios
+                  << " io_time_ms=" << disk.io_time_ms
+                  << " io_in_progress=" << disk.io_in_progress
+                  << " fault_count=" << disk.fault_count
+                  << " warning_count=" << disk.warning_count
+                  << " perf_counters=" << (disk.perf_counters_available ? "yes" : "no")
+                  << " io_error_counters=" << (disk.io_error_counters_available ? "yes" : "no")
+                  << " read_only=" << (disk.read_only ? "yes" : "no");
+        if (!disk.mount_point.empty()) {
+          std::cout << " mount_point=" << disk.mount_point;
+        }
+        if (!disk.mount_source.empty()) {
+          std::cout << " mount_source=" << disk.mount_source;
+        }
+        if (!disk.filesystem_type.empty()) {
+          std::cout << " filesystem=" << disk.filesystem_type;
+        }
+        if (!disk.fault_reasons.empty()) {
+          std::cout << " faults=";
+          for (std::size_t index = 0; index < disk.fault_reasons.size(); ++index) {
+            if (index > 0) {
+              std::cout << ",";
+            }
+            std::cout << disk.fault_reasons[index];
+          }
+        }
+        std::cout << "\n";
+      }
+    }
+    if (network_telemetry.has_value()) {
+      for (const auto& interface : network_telemetry->interfaces) {
+        std::cout << "    net iface=" << interface.interface_name
+                  << " oper_state=" << (interface.oper_state.empty() ? "(empty)" : interface.oper_state)
+                  << " link_state=" << (interface.link_state.empty() ? "(empty)" : interface.link_state)
+                  << " rx_bytes=" << interface.rx_bytes
+                  << " tx_bytes=" << interface.tx_bytes
+                  << " loopback=" << (interface.loopback ? "yes" : "no")
+                  << "\n";
       }
     }
     if (!instance_statuses.empty()) {
@@ -5578,6 +6220,18 @@ int ImportBundle(const std::string& db_path, const std::string& bundle_dir) {
           availability_overrides,
           observations,
           scheduling_report));
+  AppendControllerEvent(
+      store,
+      "bundle",
+      "imported",
+      "imported bundle into desired state",
+      json{
+          {"bundle_dir", bundle_dir},
+          {"desired_generation", desired_generation},
+          {"worker_count", desired_state.instances.size()},
+          {"disk_count", desired_state.disks.size()},
+      },
+      desired_state.plane_name);
   std::cout << "imported bundle '" << bundle_dir << "' into: " << db_path << "\n";
   std::cout << "desired generation: " << desired_generation << "\n";
   PrintSchedulerDecisionSummary(desired_state);
@@ -5629,6 +6283,19 @@ int ApplyBundle(
           availability_overrides,
           observations,
           scheduling_report));
+  AppendControllerEvent(
+      store,
+      "bundle",
+      "applied",
+      "applied bundle into desired state",
+      json{
+          {"bundle_dir", bundle_dir},
+          {"artifacts_root", artifacts_root},
+          {"desired_generation", desired_generation},
+          {"worker_count", desired_state.instances.size()},
+          {"disk_count", desired_state.disks.size()},
+      },
+      desired_state.plane_name);
   std::cout << "applied bundle '" << bundle_dir << "' into: " << db_path << "\n";
   std::cout << "desired generation: " << desired_generation << "\n";
   std::cout << "artifacts written under: " << artifacts_root << "\n";
@@ -5735,6 +6402,61 @@ int ShowRebalancePlan(
   return 0;
 }
 
+void PrintEvents(const std::vector<comet::EventRecord>& events) {
+  std::cout << "events:\n";
+  if (events.empty()) {
+    std::cout << "  (empty)\n";
+    return;
+  }
+  for (const auto& event : events) {
+    std::cout << "  - id=" << event.id
+              << " category=" << event.category
+              << " type=" << event.event_type
+              << " severity=" << event.severity;
+    if (!event.plane_name.empty()) {
+      std::cout << " plane=" << event.plane_name;
+    }
+    if (!event.node_name.empty()) {
+      std::cout << " node=" << event.node_name;
+    }
+    if (!event.worker_name.empty()) {
+      std::cout << " worker=" << event.worker_name;
+    }
+    if (event.assignment_id.has_value()) {
+      std::cout << " assignment_id=" << *event.assignment_id;
+    }
+    if (event.rollout_action_id.has_value()) {
+      std::cout << " rollout_action_id=" << *event.rollout_action_id;
+    }
+    std::cout << " at=" << (event.created_at.empty() ? "(empty)" : event.created_at)
+              << " message="
+              << (event.message.empty() ? "(empty)" : event.message)
+              << "\n";
+  }
+}
+
+int ShowEvents(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& worker_name,
+    const std::optional<std::string>& category,
+    int limit) {
+  const auto view = LoadEventsViewData(db_path, node_name, worker_name, category, limit);
+  std::cout << "db: " << view.db_path << "\n";
+  std::cout << "limit: " << view.limit << "\n";
+  if (view.node_name.has_value()) {
+    std::cout << "node: " << *view.node_name << "\n";
+  }
+  if (view.worker_name.has_value()) {
+    std::cout << "worker: " << *view.worker_name << "\n";
+  }
+  if (view.category.has_value()) {
+    std::cout << "category: " << *view.category << "\n";
+  }
+  PrintEvents(view.events);
+  return 0;
+}
+
 int SetRolloutActionStatus(
     const std::string& db_path,
     int action_id,
@@ -5745,6 +6467,25 @@ int SetRolloutActionStatus(
   if (!store.UpdateRolloutActionStatus(action_id, status, status_message.value_or(""))) {
     throw std::runtime_error(
         "rollout action id=" + std::to_string(action_id) + " not found");
+  }
+  if (const auto updated_action = FindRolloutActionById(store.LoadRolloutActions(), action_id);
+      updated_action.has_value()) {
+    AppendControllerEvent(
+        store,
+        "rollout-action",
+        "status-updated",
+        "updated rollout action status",
+        json{
+            {"status", comet::ToString(status)},
+            {"status_message", status_message.value_or("")},
+            {"action", updated_action->action},
+            {"step", updated_action->step},
+        },
+        "",
+        updated_action->target_node_name,
+        updated_action->worker_name,
+        std::nullopt,
+        action_id);
   }
   std::cout << "updated rollout action id=" << action_id
             << " status=" << comet::ToString(status) << "\n";
@@ -5817,6 +6558,21 @@ int EnqueueRolloutEviction(
       action_id,
       comet::RolloutActionStatus::Acknowledged,
       message.str());
+  AppendControllerEvent(
+      store,
+      "rollout-action",
+      "eviction-enqueued",
+      message.str(),
+      json{
+          {"victims", action->victim_worker_names},
+          {"target_node", action->target_node_name},
+          {"target_gpu", action->target_gpu_device},
+      },
+      desired_state->plane_name,
+      action->target_node_name,
+      action->worker_name,
+      std::nullopt,
+      action_id);
 
   std::cout << "enqueued rollout eviction action id=" << action_id << "\n";
   PrintPersistedRolloutActions(store.LoadRolloutActions());
@@ -5894,6 +6650,22 @@ int ApplyReadyRolloutAction(
           availability_overrides,
           observations,
           scheduling_report));
+  AppendControllerEvent(
+      store,
+      "rollout-action",
+      "retry-placement-applied",
+      "materialized ready rollout action",
+      json{
+          {"desired_generation", next_generation},
+          {"target_node", action->target_node_name},
+          {"target_gpu", action->target_gpu_device},
+          {"victims", victim_worker_names},
+      },
+      updated_state.plane_name,
+      action->target_node_name,
+      action->worker_name,
+      std::nullopt,
+      action_id);
 
   std::cout << "applied ready rollout action id=" << action_id << "\n";
   std::cout << "desired generation: " << next_generation << "\n";
@@ -6003,6 +6775,23 @@ int ApplyRebalanceProposal(
   plane_runtime.previous_state_json = comet::SerializeDesiredStateJson(*desired_state);
   plane_runtime.status_message = "awaiting post-move verification";
   store.UpsertSchedulerPlaneRuntime(plane_runtime);
+  AppendControllerEvent(
+      store,
+      "scheduler",
+      "rebalance-materialized",
+      "materialized safe-direct rebalance proposal",
+      json{
+          {"desired_generation", next_generation},
+          {"source_node", rebalance_it->current_node_name},
+          {"source_gpu", rebalance_it->current_gpu_device},
+          {"target_node", rebalance_it->target_node_name},
+          {"target_gpu", rebalance_it->target_gpu_device},
+          {"action", rebalance_it->action},
+          {"score", rebalance_it->score},
+      },
+      updated_state.plane_name,
+      rebalance_it->target_node_name,
+      rebalance_it->worker_name);
 
   std::cout << "applied rebalance proposal for worker '" << worker_name << "'\n";
   std::cout << "desired generation: " << next_generation << "\n";
@@ -6166,6 +6955,19 @@ int AdvanceActiveSchedulerAction(
     updated_runtime.started_at = UtcNowSqlTimestamp();
     updated_runtime.status_message = "rollback materialized after verification timeout";
     store.UpsertSchedulerPlaneRuntime(updated_runtime);
+    AppendControllerEvent(
+        store,
+        "scheduler",
+        "rollback-applied",
+        updated_runtime.status_message,
+        json{
+            {"worker", updated_runtime.active_worker_name},
+            {"generation", rollback_generation},
+            {"phase", updated_runtime.phase},
+        },
+        rollback_state.plane_name,
+        updated_runtime.target_node_name,
+        updated_runtime.active_worker_name);
     std::cout << "scheduler active-action: rollback-applied worker="
               << updated_runtime.active_worker_name
               << " generation=" << rollback_generation << "\n";
@@ -6180,6 +6982,20 @@ int AdvanceActiveSchedulerAction(
 
   if (verification.stable) {
     MarkWorkerMoveVerified(&store, updated_runtime);
+    AppendControllerEvent(
+        store,
+        "scheduler",
+        "move-verified",
+        verification.detail,
+        json{
+            {"worker", updated_runtime.active_worker_name},
+            {"generation", updated_runtime.action_generation},
+            {"phase", updated_runtime.phase},
+            {"stable_samples", updated_runtime.stable_samples},
+        },
+        updated_runtime.plane_name,
+        updated_runtime.target_node_name,
+        updated_runtime.active_worker_name);
     store.ClearSchedulerPlaneRuntime(updated_runtime.plane_name);
     std::cout << "scheduler active-action: verified worker="
               << updated_runtime.active_worker_name
@@ -6216,6 +7032,22 @@ int AdvanceActiveSchedulerAction(
     updated_runtime.started_at = UtcNowSqlTimestamp();
     updated_runtime.status_message = "verification timed out; rollback planned";
     store.UpsertSchedulerPlaneRuntime(updated_runtime);
+    AppendControllerEvent(
+        store,
+        "scheduler",
+        "rollback-planned",
+        verification.detail,
+        json{
+            {"worker", updated_runtime.active_worker_name},
+            {"generation", updated_runtime.action_generation},
+            {"phase", updated_runtime.phase},
+        },
+        updated_runtime.plane_name,
+        updated_runtime.target_node_name,
+        updated_runtime.active_worker_name,
+        std::nullopt,
+        std::nullopt,
+        "warning");
     std::cout << "scheduler active-action: rollback-planned worker="
               << updated_runtime.active_worker_name
               << " generation=" << updated_runtime.action_generation << "\n";
@@ -6233,6 +7065,22 @@ int AdvanceActiveSchedulerAction(
   worker_runtime.last_status_message = verification.detail;
   worker_runtime.manual_intervention_required = true;
   store.UpsertSchedulerWorkerRuntime(worker_runtime);
+  AppendControllerEvent(
+      store,
+      "scheduler",
+      "manual-intervention-required",
+      verification.detail,
+      json{
+          {"worker", updated_runtime.active_worker_name},
+          {"generation", updated_runtime.action_generation},
+          {"phase", updated_runtime.phase},
+      },
+      updated_runtime.plane_name,
+      updated_runtime.target_node_name,
+      updated_runtime.active_worker_name,
+      std::nullopt,
+      std::nullopt,
+      "error");
   store.ClearSchedulerPlaneRuntime(updated_runtime.plane_name);
   std::cout << "scheduler active-action: manual-intervention-required worker="
             << updated_runtime.active_worker_name
@@ -6413,6 +7261,18 @@ int SetNodeAvailability(
   availability_override.availability = availability;
   availability_override.status_message = status_message.value_or("");
   store.UpsertNodeAvailabilityOverride(availability_override);
+  AppendControllerEvent(
+      store,
+      "node-availability",
+      "updated",
+      "updated node availability override",
+      json{
+          {"availability", comet::ToString(availability)},
+          {"previous_availability", comet::ToString(previous_availability)},
+          {"status_message", status_message.value_or("")},
+      },
+      "",
+      node_name);
 
   std::cout << "updated node availability for " << node_name << "\n";
   PrintNodeAvailabilityOverrides(store.LoadNodeAvailabilityOverrides(node_name));
@@ -6494,6 +7354,20 @@ int RetryHostAssignment(const std::string& db_path, int assignment_id) {
     throw std::runtime_error(
         "failed to requeue host assignment id=" + std::to_string(assignment_id));
   }
+  AppendControllerEvent(
+      store,
+      "host-assignment",
+      "retried",
+      "requeued failed host assignment",
+      json{
+          {"desired_generation", assignment->desired_generation},
+          {"assignment_type", assignment->assignment_type},
+          {"attempt_count", assignment->attempt_count},
+      },
+      assignment->plane_name,
+      assignment->node_name,
+      "",
+      assignment_id);
 
   const auto updated_assignment = store.LoadHostAssignment(assignment_id);
   std::cout << "requeued host assignment id=" << assignment_id << "\n";
@@ -6516,7 +7390,7 @@ int ShowState(const std::string& db_path) {
   }
   PrintStateSummary(*view.desired_state);
   PrintDiskRuntimeStates(view.disk_runtime_states);
-  PrintDetailedDiskState(*view.desired_state, view.disk_runtime_states);
+  PrintDetailedDiskState(*view.desired_state, view.disk_runtime_states, view.observations);
   std::cout << comet::RenderSchedulingPolicyReport(view.scheduling_report);
   PrintSchedulerDecisionSummary(*view.desired_state);
   PrintRolloutGateSummary(view.scheduling_report);
@@ -6555,7 +7429,7 @@ int ShowDiskState(const std::string& db_path, const std::optional<std::string>& 
   if (view.node_name.has_value()) {
     std::cout << "node_filter: " << *view.node_name << "\n";
   }
-  PrintDetailedDiskState(*view.desired_state, view.runtime_states, view.node_name);
+  PrintDetailedDiskState(*view.desired_state, view.runtime_states, view.observations, view.node_name);
   return 0;
 }
 
@@ -6711,6 +7585,15 @@ int main(int argc, char** argv) {
       return ShowRebalancePlan(
           db_path,
           ParseNodeArg(argc, argv));
+    }
+
+    if (command == "show-events") {
+      return ShowEvents(
+          db_path,
+          ParseNodeArg(argc, argv),
+          ParseWorkerArg(argc, argv),
+          ParseCategoryArg(argc, argv),
+          ParseLimitArg(argc, argv).value_or(100));
     }
 
     if (command == "apply-rebalance-proposal") {

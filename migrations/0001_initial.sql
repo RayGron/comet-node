@@ -160,9 +160,37 @@ CREATE TABLE host_observations (
     runtime_status_json TEXT NOT NULL DEFAULT '',
     instance_runtime_json TEXT NOT NULL DEFAULT '',
     gpu_telemetry_json TEXT NOT NULL DEFAULT '',
+    disk_telemetry_json TEXT NOT NULL DEFAULT '',
+    network_telemetry_json TEXT NOT NULL DEFAULT '',
     heartbeat_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE event_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plane_name TEXT NOT NULL DEFAULT '',
+    node_name TEXT NOT NULL DEFAULT '',
+    worker_name TEXT NOT NULL DEFAULT '',
+    assignment_id INTEGER,
+    rollout_action_id INTEGER,
+    category TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'info',
+    message TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_event_log_created_at
+    ON event_log(created_at DESC, id DESC);
+CREATE INDEX idx_event_log_plane_name
+    ON event_log(plane_name);
+CREATE INDEX idx_event_log_node_name
+    ON event_log(node_name);
+CREATE INDEX idx_event_log_worker_name
+    ON event_log(worker_name);
+CREATE INDEX idx_event_log_category
+    ON event_log(category);
 
 CREATE TABLE scheduler_plane_runtime (
     plane_name TEXT PRIMARY KEY,

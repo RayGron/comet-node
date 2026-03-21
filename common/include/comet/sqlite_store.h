@@ -61,6 +61,8 @@ struct HostObservation {
   std::string runtime_status_json;
   std::string instance_runtime_json;
   std::string gpu_telemetry_json;
+  std::string disk_telemetry_json;
+  std::string network_telemetry_json;
   std::string heartbeat_at;
 };
 
@@ -139,6 +141,21 @@ struct SchedulerNodeRuntime {
   std::string updated_at;
 };
 
+struct EventRecord {
+  int id = 0;
+  std::string plane_name;
+  std::string node_name;
+  std::string worker_name;
+  std::optional<int> assignment_id;
+  std::optional<int> rollout_action_id;
+  std::string category;
+  std::string event_type;
+  std::string severity = "info";
+  std::string message;
+  std::string payload_json = "{}";
+  std::string created_at;
+};
+
 class ControllerStore {
  public:
   explicit ControllerStore(std::string db_path);
@@ -183,6 +200,13 @@ class ControllerStore {
   std::optional<HostObservation> LoadHostObservation(const std::string& node_name) const;
   std::vector<HostObservation> LoadHostObservations(
       const std::optional<std::string>& node_name = std::nullopt) const;
+  void AppendEvent(const EventRecord& event);
+  std::vector<EventRecord> LoadEvents(
+      const std::optional<std::string>& plane_name = std::nullopt,
+      const std::optional<std::string>& node_name = std::nullopt,
+      const std::optional<std::string>& worker_name = std::nullopt,
+      const std::optional<std::string>& category = std::nullopt,
+      int limit = 100) const;
   void UpsertSchedulerPlaneRuntime(const SchedulerPlaneRuntime& runtime);
   std::optional<SchedulerPlaneRuntime> LoadSchedulerPlaneRuntime(
       const std::string& plane_name) const;

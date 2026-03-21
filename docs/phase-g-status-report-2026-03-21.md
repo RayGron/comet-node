@@ -15,7 +15,7 @@ Phase G goal:
 
 ## Executive Summary
 
-Phase G is `in progress`, but unevenly.
+Phase G is `completed`.
 
 The current codebase already has a meaningful telemetry layer around host observations:
 
@@ -25,13 +25,13 @@ The current codebase already has a meaningful telemetry layer around host observ
 - scheduler consumption of observed GPU pressure
 - controller-side inspection surfaces for those signals
 
-That means the phase is no longer hypothetical. The gap is that the implementation is still
-focused mostly on GPU/runtime readiness. The broader "extended telemetry and event stream" scope is
-not complete yet:
+That means the phase is no longer hypothetical. The implementation now covers richer
+host/runtime telemetry, normalized disk/network/device diagnostics, and a persisted event stream:
 
-- disk telemetry is lifecycle-oriented, not yet usage/performance-oriented
-- network telemetry is not implemented
-- there is no structured event stream or persisted event log
+- disk telemetry includes filesystem usage/capacity, mount health, block IO/perf counters, and
+  normalized disk fault / availability counters
+- network telemetry is implemented as a normalized inventory/link/byte-counter slice
+- a structured event stream exists in SQLite and is queryable through CLI and HTTP
 
 ## What Is Already Implemented
 
@@ -93,65 +93,123 @@ Assessment:
 
 - `completed`
 
-### 4. Disk visibility exists, but as runtime lifecycle reporting, not full telemetry
+### 4. Disk telemetry now goes beyond lifecycle reporting
 
 Implemented:
 
 - desired vs realized disk state is persisted
 - controller can inspect realized disk lifecycle
+- `hostd` samples per-disk filesystem capacity / used / free bytes through `statvfs`
+- `hostd` also samples block-device IO counters through `/sys/class/block/<device>/stat` when the
+  realized mount source resolves to a block device
+- disk telemetry now also tracks normalized fault and availability counters:
+  - `fault_count`
+  - `warning_count`
+  - `perf_counters_available`
+  - `io_error_counters_available`
+  - `io_error_count` when a device-specific sysfs counter exists
+- host observations persist normalized disk telemetry snapshots
+- controller inspection surfaces expose disk telemetry through:
+  - `show-host-observations`
+  - `show-disk-state`
+  - `/api/v1/host-observations`
+  - `/api/v1/disk-state`
 - live validation exists for ensure / teardown / restart reconciliation
 
 Relevant files:
 
 - [sqlite_store.h](/mnt/e/dev/Repos/comet-node/common/include/comet/sqlite_store.h)
 - [sqlite_store.cpp](/mnt/e/dev/Repos/comet-node/common/src/sqlite_store.cpp)
+- [runtime_status.h](/mnt/e/dev/Repos/comet-node/common/include/comet/runtime_status.h)
+- [runtime_status.cpp](/mnt/e/dev/Repos/comet-node/common/src/runtime_status.cpp)
 - [main.cpp](/mnt/e/dev/Repos/comet-node/hostd/src/main.cpp)
 - [main.cpp](/mnt/e/dev/Repos/comet-node/controller/src/main.cpp)
 
 Assessment:
 
-- `partial`
-- this is operational lifecycle visibility, not yet filesystem usage / capacity / performance telemetry
+- `completed`
+- this now covers usage/capacity, mount health, and block IO/perf counters
 
-## What Is Not Implemented Yet
+### 5. Validation now covers telemetry and event flow, not only static rendering
 
-### 1. No network telemetry layer
+Implemented:
 
-Missing:
+- smoke coverage in [check.sh](/mnt/e/dev/Repos/comet-node/scripts/check.sh) for:
+  - telemetry serialization and persistence
+  - controller CLI / HTTP envelopes for disk and network telemetry
+  - persisted event log rendering through CLI and HTTP
+- live validation in [check-live-phase-g.sh](/mnt/e/dev/Repos/comet-node/scripts/check-live-phase-g.sh) for:
+  - GPU telemetry visibility
+  - degraded GPU telemetry fallback via forced NVML disable
+  - bundle event visibility
+  - host observation telemetry visibility
+  - controller-side availability event visibility
+  - host assignment failure event visibility
 
-- interface inventory
-- link status
+Assessment:
+
+- `completed`
+
+## Final Remaining-Gap Audit
+
+### 1. Network telemetry now exists as a normalized host-observation slice
+
+Implemented:
+
+- per-interface inventory from `/sys/class/net`
+- link / oper-state visibility
 - RX/TX byte counters
-- controller-visible network diagnostics
+- controller-visible network diagnostics in:
+  - `show-host-observations`
+  - `/api/v1/host-observations`
 
 Assessment:
 
-- `not completed`
+- `completed`
 
-### 2. No structured event stream
+### 2. Structured event stream now exists in SQLite
 
-Missing:
+Implemented:
 
-- controller event log
-- hostd event log
-- persisted event records for important state transitions
-- typed event payloads for later SSE / UI use
-
-Assessment:
-
-- `not completed`
-
-### 3. No disk usage / performance telemetry
-
-Missing:
-
-- filesystem usage for mounted disks
-- free/used space reporting
-- mount health / IO error telemetry
+- persisted `event_log`
+- hostd-emitted events for:
+  - host observations
+  - host assignment apply/fail transitions
+- controller-emitted events for:
+  - bundle import/apply
+  - rollout action status / eviction enqueue / retry placement materialization
+  - safe-direct rebalance materialization
+  - scheduler verification / rollback / manual-intervention transitions
+  - node availability changes
+  - host assignment retry
+- inspection surfaces:
+  - `comet-controller show-events`
+  - `GET /api/v1/events`
 
 Assessment:
 
-- `not completed`
+- `completed`
+
+### 3. Disk performance and fault telemetry now exist
+
+Implemented:
+
+- `read_ios`
+- `write_ios`
+- `read_bytes`
+- `write_bytes`
+- `io_time_ms`
+- `weighted_io_time_ms`
+- `io_in_progress`
+- `fault_count`
+- `warning_count`
+- `perf_counters_available`
+- `io_error_counters_available`
+- `io_error_count` when available from sysfs
+
+Assessment:
+
+- `completed`
 
 ## Acceptance Audit
 
@@ -164,7 +222,8 @@ Status:
 Reason:
 
 - runtime status, instance runtime state, GPU device telemetry, and degraded telemetry state are
-  already visible in controller views
+  already visible in controller views, and disk/network telemetry now also includes IO/perf and
+  disk fault/availability counters
 
 ### Acceptance: scheduling can consume actual telemetry rather than only static config
 
@@ -177,16 +236,28 @@ Reason:
 - scheduler and move verification already use observed GPU pressure, observed free VRAM, telemetry
   degradation, runtime readiness, and GPU ownership signals
 
+### Acceptance: telemetry and event flow are validated through both smoke and live campaigns
+
+Status:
+
+- `completed`
+
+Reason:
+
+- `check.sh` validates persistence and rendering contracts
+- `check-live-phase-g.sh` validates live host observation telemetry, degraded GPU fallback, and
+  event emission through both CLI and HTTP
+
 ### Acceptance: telemetry is shaped for API and SSE use later
 
 Status:
 
-- `partial`
+- `completed`
 
 Reason:
 
-- telemetry is already serialized and Phase F HTTP endpoints can surface it, but there is still no
-  structured event stream and no broader telemetry contract for later SSE/UI layers
+- runtime status, per-instance runtime status, GPU telemetry, degraded telemetry state, and disk
+  telemetry now have stable controller-facing envelopes across CLI and HTTP inspection surfaces
 
 ## Practical Status
 
@@ -194,9 +265,9 @@ Current Phase G status:
 
 - GPU/runtime telemetry: strong
 - scheduler telemetry integration: strong
-- disk telemetry: partial
-- network telemetry: missing
-- event stream: missing
+- disk telemetry: strong
+- network telemetry: strong
+- event stream: strong
 
 Suggested GitHub issue status:
 

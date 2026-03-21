@@ -178,9 +178,37 @@ CREATE TABLE IF NOT EXISTS host_observations (
     runtime_status_json TEXT NOT NULL DEFAULT '',
     instance_runtime_json TEXT NOT NULL DEFAULT '',
     gpu_telemetry_json TEXT NOT NULL DEFAULT '',
+    disk_telemetry_json TEXT NOT NULL DEFAULT '',
+    network_telemetry_json TEXT NOT NULL DEFAULT '',
     heartbeat_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS event_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plane_name TEXT NOT NULL DEFAULT '',
+    node_name TEXT NOT NULL DEFAULT '',
+    worker_name TEXT NOT NULL DEFAULT '',
+    assignment_id INTEGER,
+    rollout_action_id INTEGER,
+    category TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'info',
+    message TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_log_created_at
+    ON event_log(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_event_log_plane_name
+    ON event_log(plane_name);
+CREATE INDEX IF NOT EXISTS idx_event_log_node_name
+    ON event_log(node_name);
+CREATE INDEX IF NOT EXISTS idx_event_log_worker_name
+    ON event_log(worker_name);
+CREATE INDEX IF NOT EXISTS idx_event_log_category
+    ON event_log(category);
 
 CREATE TABLE IF NOT EXISTS scheduler_plane_runtime (
     plane_name TEXT PRIMARY KEY,
@@ -556,7 +584,9 @@ HostObservation ObservationFromStatement(sqlite3_stmt* statement) {
   observation.runtime_status_json = ToColumnText(statement, 7);
   observation.instance_runtime_json = ToColumnText(statement, 8);
   observation.gpu_telemetry_json = ToColumnText(statement, 9);
-  observation.heartbeat_at = ToColumnText(statement, 10);
+  observation.disk_telemetry_json = ToColumnText(statement, 10);
+  observation.network_telemetry_json = ToColumnText(statement, 11);
+  observation.heartbeat_at = ToColumnText(statement, 12);
   return observation;
 }
 
@@ -611,6 +641,23 @@ SchedulerNodeRuntime SchedulerNodeRuntimeFromStatement(sqlite3_stmt* statement) 
   runtime.last_verified_generation = ToOptionalColumnInt(statement, 3);
   runtime.updated_at = ToColumnText(statement, 4);
   return runtime;
+}
+
+EventRecord EventFromStatement(sqlite3_stmt* statement) {
+  EventRecord event;
+  event.id = sqlite3_column_int(statement, 0);
+  event.plane_name = ToColumnText(statement, 1);
+  event.node_name = ToColumnText(statement, 2);
+  event.worker_name = ToColumnText(statement, 3);
+  event.assignment_id = ToOptionalColumnInt(statement, 4);
+  event.rollout_action_id = ToOptionalColumnInt(statement, 5);
+  event.category = ToColumnText(statement, 6);
+  event.event_type = ToColumnText(statement, 7);
+  event.severity = ToColumnText(statement, 8);
+  event.message = ToColumnText(statement, 9);
+  event.payload_json = ToColumnText(statement, 10);
+  event.created_at = ToColumnText(statement, 11);
+  return event;
 }
 
 DiskRuntimeState DiskRuntimeStateFromStatement(sqlite3_stmt* statement) {
@@ -707,6 +754,16 @@ void ControllerStore::Initialize() {
       "host_observations",
       "gpu_telemetry_json",
       "gpu_telemetry_json TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "host_observations",
+      "disk_telemetry_json",
+      "disk_telemetry_json TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "host_observations",
+      "network_telemetry_json",
+      "network_telemetry_json TEXT NOT NULL DEFAULT ''");
   EnsureColumn(
       db,
       "scheduler_worker_runtime",
@@ -1320,8 +1377,9 @@ void ControllerStore::UpsertHostObservation(const HostObservation& observation) 
       "INSERT INTO host_observations("
       "node_name, plane_name, applied_generation, last_assignment_id, status, "
       "status_message, observed_state_json, runtime_status_json, "
-      "instance_runtime_json, gpu_telemetry_json, heartbeat_at, updated_at"
-      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+      "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, "
+      "network_telemetry_json, heartbeat_at, updated_at"
+      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
       "ON CONFLICT(node_name) DO UPDATE SET "
       "plane_name = excluded.plane_name, "
       "applied_generation = excluded.applied_generation, "
@@ -1332,6 +1390,8 @@ void ControllerStore::UpsertHostObservation(const HostObservation& observation) 
       "runtime_status_json = excluded.runtime_status_json, "
       "instance_runtime_json = excluded.instance_runtime_json, "
       "gpu_telemetry_json = excluded.gpu_telemetry_json, "
+      "disk_telemetry_json = excluded.disk_telemetry_json, "
+      "network_telemetry_json = excluded.network_telemetry_json, "
       "heartbeat_at = CURRENT_TIMESTAMP, "
       "updated_at = CURRENT_TIMESTAMP;");
   statement.BindText(1, observation.node_name);
@@ -1344,6 +1404,8 @@ void ControllerStore::UpsertHostObservation(const HostObservation& observation) 
   statement.BindText(8, observation.runtime_status_json);
   statement.BindText(9, observation.instance_runtime_json);
   statement.BindText(10, observation.gpu_telemetry_json);
+  statement.BindText(11, observation.disk_telemetry_json);
+  statement.BindText(12, observation.network_telemetry_json);
   statement.StepDone();
 }
 
@@ -1354,7 +1416,7 @@ std::optional<HostObservation> ControllerStore::LoadHostObservation(
       db,
       "SELECT node_name, plane_name, applied_generation, last_assignment_id, status, "
       "status_message, observed_state_json, runtime_status_json, "
-      "instance_runtime_json, gpu_telemetry_json, heartbeat_at "
+      "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, network_telemetry_json, heartbeat_at "
       "FROM host_observations WHERE node_name = ?1;");
   statement.BindText(1, node_name);
   if (!statement.StepRow()) {
@@ -1371,7 +1433,7 @@ std::vector<HostObservation> ControllerStore::LoadHostObservations(
   std::string sql =
       "SELECT node_name, plane_name, applied_generation, last_assignment_id, status, "
       "status_message, observed_state_json, runtime_status_json, "
-      "instance_runtime_json, gpu_telemetry_json, heartbeat_at "
+      "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, network_telemetry_json, heartbeat_at "
       "FROM host_observations";
   if (node_name.has_value()) {
     sql += " WHERE node_name = ?1";
@@ -1388,6 +1450,86 @@ std::vector<HostObservation> ControllerStore::LoadHostObservations(
   }
 
   return observations;
+}
+
+void ControllerStore::AppendEvent(const EventRecord& event) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "INSERT INTO event_log("
+      "plane_name, node_name, worker_name, assignment_id, rollout_action_id, "
+      "category, event_type, severity, message, payload_json"
+      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);");
+  statement.BindText(1, event.plane_name);
+  statement.BindText(2, event.node_name);
+  statement.BindText(3, event.worker_name);
+  statement.BindOptionalInt(4, event.assignment_id);
+  statement.BindOptionalInt(5, event.rollout_action_id);
+  statement.BindText(6, event.category);
+  statement.BindText(7, event.event_type);
+  statement.BindText(8, event.severity);
+  statement.BindText(9, event.message);
+  statement.BindText(10, event.payload_json);
+  statement.StepDone();
+}
+
+std::vector<EventRecord> ControllerStore::LoadEvents(
+    const std::optional<std::string>& plane_name,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& worker_name,
+    const std::optional<std::string>& category,
+    int limit) const {
+  sqlite3* db = AsSqlite(db_);
+  std::vector<std::string> clauses;
+  if (plane_name.has_value()) {
+    clauses.push_back("plane_name = ?" + std::to_string(clauses.size() + 1));
+  }
+  if (node_name.has_value()) {
+    clauses.push_back("node_name = ?" + std::to_string(clauses.size() + 1));
+  }
+  if (worker_name.has_value()) {
+    clauses.push_back("worker_name = ?" + std::to_string(clauses.size() + 1));
+  }
+  if (category.has_value()) {
+    clauses.push_back("category = ?" + std::to_string(clauses.size() + 1));
+  }
+
+  std::string sql =
+      "SELECT id, plane_name, node_name, worker_name, assignment_id, rollout_action_id, "
+      "category, event_type, severity, message, payload_json, created_at "
+      "FROM event_log";
+  if (!clauses.empty()) {
+    sql += " WHERE ";
+    for (std::size_t index = 0; index < clauses.size(); ++index) {
+      if (index > 0) {
+        sql += " AND ";
+      }
+      sql += clauses[index];
+    }
+  }
+  sql += " ORDER BY id DESC LIMIT ?" + std::to_string(clauses.size() + 1) + ";";
+
+  Statement statement(db, sql);
+  int bind_index = 1;
+  if (plane_name.has_value()) {
+    statement.BindText(bind_index++, *plane_name);
+  }
+  if (node_name.has_value()) {
+    statement.BindText(bind_index++, *node_name);
+  }
+  if (worker_name.has_value()) {
+    statement.BindText(bind_index++, *worker_name);
+  }
+  if (category.has_value()) {
+    statement.BindText(bind_index++, *category);
+  }
+  statement.BindInt(bind_index, limit > 0 ? limit : 100);
+
+  std::vector<EventRecord> events;
+  while (statement.StepRow()) {
+    events.push_back(EventFromStatement(statement.raw()));
+  }
+  return events;
 }
 
 void ControllerStore::UpsertSchedulerPlaneRuntime(const SchedulerPlaneRuntime& runtime) {

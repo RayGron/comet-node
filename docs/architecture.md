@@ -24,6 +24,39 @@
   - `comet-web-ui` serves UI assets and reverse-proxies `/api/*` and `/api/v1/events/stream` to `comet-controller`
 - React is now an accepted UI technology for Phase H, but `Node.js` remains build-time only and is not part of the shipped runtime path
 - `comet-controller` can now also operate as a thin remote operator CLI for the common controller workflows through `--controller`, `COMET_CONTROLLER`, and `~/.config/comet/controller`, so the first Phase F bridge now covers both REST and CLI-over-HTTP
+- `comet-node` is now the production-facing launcher binary for installation and service lifecycle:
+  - `controller`
+  - `hostd`
+  - `controller + local hostd`
+- public startup is now intentionally split into two surfaces:
+  - `user flow`
+    - `comet-node install controller --with-hostd --with-web-ui`
+    - `comet-node run controller`
+    - open Web UI
+    - load plane from the browser path
+  - `service flow`
+    - launcher install/run/service commands
+    - controller CLI/API automation
+    - host registry inspection and remote-hostd onboarding
+- remote execution no longer needs runtime shared SQLite access between controller and hostd:
+  - controller owns the SQLite state
+  - remote `hostd` uses controller-owned host-agent HTTP APIs
+  - default deployment mode is `hostd dials out`
+- `comet-node run controller` now passes the installed `artifacts_root` through to the HTTP server,
+  so browser-side bundle apply uses the same installed layout as launcher-driven startup instead of
+  falling back to `var/artifacts`
+- `comet-node run controller` also supports `--hostd-compose-mode exec|skip` so first-use startup
+  and UI onboarding can be validated independently from full infer/worker runtime image builds
+- inner controller↔hostd security now includes:
+  - long-lived host identity keys
+  - signed session open
+  - encrypted host-agent envelopes
+  - sequence-based replay protection
+  - session TTL and rekey threshold
+  - host revoke and host-key rotation
+- service deployment is Linux/WSL2 oriented:
+  - rendered `systemd` units for controller and hostd
+  - unit verification through `systemd-analyze verify`
 - the current Phase F API contract also injects `api_version` plus `request.path` / `request.method` into JSON responses and normalizes API errors under `status=error` with `error.code` / `error.message`
 
 ## Current Implementation Boundary

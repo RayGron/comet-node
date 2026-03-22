@@ -1,19 +1,28 @@
+#include <arpa/inet.h>
 #include <chrono>
+#include <ctime>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <dlfcn.h>
+#include <errno.h>
 #include <filesystem>
 #include <fstream>
 #include <exception>
 #include <iostream>
 #include <map>
+#include <memory>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <cstdlib>
 #include <sstream>
+#include <sys/socket.h>
 #include <set>
 #include <sys/statvfs.h>
+#include <sys/types.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -23,6 +32,7 @@
 #include <nlohmann/json.hpp>
 
 #include "comet/compose_renderer.h"
+#include "comet/crypto_utils.h"
 #include "comet/demo_state.h"
 #include "comet/execution_plan.h"
 #include "comet/infer_runtime_config.h"
@@ -66,9 +76,9 @@ void PrintUsage() {
       << "  comet-hostd show-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>]\n"
       << "  comet-hostd show-local-state --node <node-name> [--state-root <path>]\n"
       << "  comet-hostd show-runtime-status --node <node-name> [--state-root <path>]\n"
-      << "  comet-hostd report-observed-state --node <node-name> [--db <path>] [--state-root <path>]\n"
+      << "  comet-hostd report-observed-state --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--state-root <path>]\n"
       << "  comet-hostd apply-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec]\n"
-      << "  comet-hostd apply-next-assignment --node <node-name> [--db <path>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec]\n";
+      << "  comet-hostd apply-next-assignment --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec]\n";
 }
 
 std::optional<std::string> ParseNodeArg(int argc, char** argv) {
@@ -85,6 +95,16 @@ std::optional<std::string> ParseDbArg(int argc, char** argv) {
   for (int index = 2; index < argc; ++index) {
     const std::string arg = argv[index];
     if (arg == "--db" && index + 1 < argc) {
+      return std::string(argv[index + 1]);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> ParseControllerArg(int argc, char** argv) {
+  for (int index = 2; index < argc; ++index) {
+    const std::string arg = argv[index];
+    if (arg == "--controller" && index + 1 < argc) {
       return std::string(argv[index + 1]);
     }
   }
@@ -125,6 +145,26 @@ std::optional<std::string> ParseStateRootArg(int argc, char** argv) {
   for (int index = 2; index < argc; ++index) {
     const std::string arg = argv[index];
     if (arg == "--state-root" && index + 1 < argc) {
+      return std::string(argv[index + 1]);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> ParseHostPrivateKeyArg(int argc, char** argv) {
+  for (int index = 2; index < argc; ++index) {
+    const std::string arg = argv[index];
+    if (arg == "--host-private-key" && index + 1 < argc) {
+      return std::string(argv[index + 1]);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> ParseControllerFingerprintArg(int argc, char** argv) {
+  for (int index = 2; index < argc; ++index) {
+    const std::string arg = argv[index];
+    if (arg == "--controller-fingerprint" && index + 1 < argc) {
       return std::string(argv[index + 1]);
     }
   }
@@ -1191,8 +1231,619 @@ std::string SerializeEventPayload(const json& payload) {
   return payload.dump();
 }
 
+class HostdBackend {
+ public:
+  virtual ~HostdBackend() = default;
+
+  virtual std::optional<comet::HostAssignment> ClaimNextHostAssignment(
+      const std::string& node_name) = 0;
+  virtual bool TransitionClaimedHostAssignment(
+      int assignment_id,
+      comet::HostAssignmentStatus status,
+      const std::string& status_message) = 0;
+  virtual void UpsertHostObservation(const comet::HostObservation& observation) = 0;
+  virtual void AppendEvent(const comet::EventRecord& event) = 0;
+  virtual void UpsertDiskRuntimeState(const comet::DiskRuntimeState& state) = 0;
+  virtual std::optional<comet::DiskRuntimeState> LoadDiskRuntimeState(
+      const std::string& disk_name,
+      const std::string& node_name) = 0;
+};
+
+struct HttpResponse {
+  int status_code = 200;
+  std::string content_type = "application/json";
+  std::string body;
+};
+
+struct ControllerEndpointTarget {
+  std::string raw;
+  std::string host;
+  int port = 18080;
+  std::string base_path;
+};
+
+std::string Trim(const std::string& text);
+
+std::string Lowercase(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
+}
+
+std::string UrlEncode(const std::string& value) {
+  std::ostringstream out;
+  out.fill('0');
+  out << std::hex << std::uppercase;
+  for (const unsigned char ch : value) {
+    if (std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.' || ch == '~') {
+      out << static_cast<char>(ch);
+    } else {
+      out << '%' << std::setw(2) << static_cast<int>(ch);
+    }
+  }
+  return out.str();
+}
+
+ControllerEndpointTarget ParseControllerTarget(const std::string& raw_target) {
+  std::string target = Trim(raw_target);
+  if (target.empty()) {
+    throw std::runtime_error("empty controller target");
+  }
+
+  ControllerEndpointTarget parsed;
+  parsed.raw = target;
+  if (target.rfind("http://", 0) == 0) {
+    target = target.substr(7);
+  } else if (target.rfind("https://", 0) == 0) {
+    throw std::runtime_error("https controller targets are not supported yet");
+  }
+
+  const std::size_t slash = target.find('/');
+  if (slash != std::string::npos) {
+    parsed.base_path = target.substr(slash);
+    target = target.substr(0, slash);
+    if (parsed.base_path == "/") {
+      parsed.base_path.clear();
+    }
+  }
+
+  const std::size_t colon = target.rfind(':');
+  if (colon != std::string::npos) {
+    parsed.host = target.substr(0, colon);
+    parsed.port = std::stoi(target.substr(colon + 1));
+  } else {
+    parsed.host = target;
+  }
+  if (parsed.host.empty()) {
+    throw std::runtime_error("invalid controller target '" + raw_target + "'");
+  }
+  return parsed;
+}
+
+HttpResponse ParseHttpResponse(const std::string& response_text) {
+  HttpResponse response;
+  const std::size_t headers_end = response_text.find("\r\n\r\n");
+  const std::string header_text =
+      headers_end == std::string::npos ? response_text : response_text.substr(0, headers_end);
+  response.body =
+      headers_end == std::string::npos ? std::string{} : response_text.substr(headers_end + 4);
+
+  const std::size_t line_end = header_text.find("\r\n");
+  const std::string first_line =
+      line_end == std::string::npos ? header_text : header_text.substr(0, line_end);
+  std::stringstream stream(first_line);
+  std::string http_version;
+  stream >> http_version >> response.status_code;
+
+  std::size_t offset = line_end == std::string::npos ? header_text.size() : line_end + 2;
+  while (offset < header_text.size()) {
+    const std::size_t next = header_text.find("\r\n", offset);
+    const std::string line = header_text.substr(
+        offset,
+        next == std::string::npos ? std::string::npos : next - offset);
+    const std::size_t colon = line.find(':');
+    if (colon != std::string::npos) {
+      const std::string key = Lowercase(Trim(line.substr(0, colon)));
+      const std::string value = Trim(line.substr(colon + 1));
+      if (key == "content-type") {
+        response.content_type = value;
+      }
+    }
+    if (next == std::string::npos) {
+      break;
+    }
+    offset = next + 2;
+  }
+  return response;
+}
+
+HttpResponse SendControllerHttpRequest(
+    const ControllerEndpointTarget& target,
+    const std::string& method,
+    const std::string& path_and_query,
+    const std::string& body = "",
+    const std::map<std::string, std::string>& headers = {}) {
+  addrinfo hints{};
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* results = nullptr;
+  const std::string port_text = std::to_string(target.port);
+  const int lookup = getaddrinfo(target.host.c_str(), port_text.c_str(), &hints, &results);
+  if (lookup != 0) {
+    throw std::runtime_error(
+        "failed to resolve controller target '" + target.raw + "': " + gai_strerror(lookup));
+  }
+
+  int fd = -1;
+  for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
+    fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
+    if (fd < 0) {
+      continue;
+    }
+    if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
+      break;
+    }
+    close(fd);
+    fd = -1;
+  }
+  freeaddrinfo(results);
+  if (fd < 0) {
+    throw std::runtime_error("failed to connect to controller target '" + target.raw + "'");
+  }
+
+  const std::string request_path = target.base_path + path_and_query;
+  std::ostringstream request;
+  request << method << " " << request_path << " HTTP/1.1\r\n";
+  request << "Host: " << target.host << ":" << target.port << "\r\n";
+  request << "Connection: close\r\n";
+  for (const auto& [key, value] : headers) {
+    request << key << ": " << value << "\r\n";
+  }
+  if (!body.empty()) {
+    request << "Content-Type: application/json\r\n";
+    request << "Content-Length: " << body.size() << "\r\n";
+  }
+  request << "\r\n";
+  request << body;
+
+  const std::string request_text = request.str();
+  const char* data = request_text.c_str();
+  std::size_t remaining = request_text.size();
+  while (remaining > 0) {
+    const ssize_t written = send(fd, data, remaining, 0);
+    if (written <= 0) {
+      const std::string error = std::strerror(errno);
+      close(fd);
+      throw std::runtime_error("failed to write HTTP request: " + error);
+    }
+    data += written;
+    remaining -= static_cast<std::size_t>(written);
+  }
+
+  std::string response_text;
+  std::array<char, 8192> buffer{};
+  while (true) {
+    const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
+    if (read_count < 0) {
+      const std::string error = std::strerror(errno);
+      close(fd);
+      throw std::runtime_error("failed to read HTTP response: " + error);
+    }
+    if (read_count == 0) {
+      break;
+    }
+    response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
+  }
+  close(fd);
+  return ParseHttpResponse(response_text);
+}
+
+json SendControllerJsonRequest(
+    const ControllerEndpointTarget& target,
+    const std::string& method,
+    const std::string& path_and_query,
+    const json& body = json(),
+    const std::map<std::string, std::string>& headers = {}) {
+  const HttpResponse response =
+      SendControllerHttpRequest(
+          target,
+          method,
+          path_and_query,
+          body.is_null() ? "" : body.dump(),
+          headers);
+  const json payload = response.body.empty() ? json::object() : json::parse(response.body);
+  if (response.status_code >= 400) {
+    throw std::runtime_error(
+        payload.contains("error") && payload["error"].is_object()
+            ? payload["error"].value("message", "controller request failed")
+            : "controller request failed with status " + std::to_string(response.status_code));
+  }
+  return payload;
+}
+
+comet::HostAssignment ParseAssignmentPayload(const json& payload) {
+  comet::HostAssignment assignment;
+  assignment.id = payload.value("id", 0);
+  assignment.node_name = payload.value("node_name", std::string{});
+  assignment.plane_name = payload.value("plane_name", std::string{});
+  assignment.desired_generation = payload.value("desired_generation", 0);
+  assignment.attempt_count = payload.value("attempt_count", 0);
+  assignment.max_attempts = payload.value("max_attempts", 3);
+  assignment.assignment_type = payload.value("assignment_type", std::string{});
+  assignment.desired_state_json = payload.value("desired_state_json", std::string{});
+  assignment.artifacts_root = payload.value("artifacts_root", std::string{});
+  assignment.status =
+      comet::ParseHostAssignmentStatus(payload.value("status", std::string("pending")));
+  assignment.status_message = payload.value("status_message", std::string{});
+  return assignment;
+}
+
+json BuildHostObservationPayload(const comet::HostObservation& observation) {
+  return json{
+      {"node_name", observation.node_name},
+      {"plane_name", observation.plane_name},
+      {"applied_generation",
+       observation.applied_generation.has_value() ? json(*observation.applied_generation)
+                                                  : json(nullptr)},
+      {"last_assignment_id",
+       observation.last_assignment_id.has_value() ? json(*observation.last_assignment_id)
+                                                  : json(nullptr)},
+      {"status", comet::ToString(observation.status)},
+      {"status_message", observation.status_message},
+      {"observed_state_json", observation.observed_state_json},
+      {"runtime_status_json", observation.runtime_status_json},
+      {"instance_runtime_json", observation.instance_runtime_json},
+      {"gpu_telemetry_json", observation.gpu_telemetry_json},
+      {"disk_telemetry_json", observation.disk_telemetry_json},
+      {"network_telemetry_json", observation.network_telemetry_json},
+      {"cpu_telemetry_json", observation.cpu_telemetry_json},
+      {"heartbeat_at", observation.heartbeat_at},
+  };
+}
+
+json BuildDiskRuntimeStatePayload(const comet::DiskRuntimeState& state) {
+  return json{
+      {"disk_name", state.disk_name},
+      {"plane_name", state.plane_name},
+      {"node_name", state.node_name},
+      {"image_path", state.image_path},
+      {"filesystem_type", state.filesystem_type},
+      {"loop_device", state.loop_device},
+      {"mount_point", state.mount_point},
+      {"runtime_state", state.runtime_state},
+      {"attached_at", state.attached_at},
+      {"mounted_at", state.mounted_at},
+      {"last_verified_at", state.last_verified_at},
+      {"status_message", state.status_message},
+      {"updated_at", state.updated_at},
+  };
+}
+
+comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const json& payload) {
+  comet::DiskRuntimeState state;
+  state.disk_name = payload.value("disk_name", std::string{});
+  state.plane_name = payload.value("plane_name", std::string{});
+  state.node_name = payload.value("node_name", std::string{});
+  state.image_path = payload.value("image_path", std::string{});
+  state.filesystem_type = payload.value("filesystem_type", std::string{});
+  state.loop_device = payload.value("loop_device", std::string{});
+  state.mount_point = payload.value("mount_point", std::string{});
+  state.runtime_state = payload.value("runtime_state", std::string{});
+  state.attached_at = payload.value("attached_at", std::string{});
+  state.mounted_at = payload.value("mounted_at", std::string{});
+  state.last_verified_at = payload.value("last_verified_at", std::string{});
+  state.status_message = payload.value("status_message", std::string{});
+  state.updated_at = payload.value("updated_at", std::string{});
+  return state;
+}
+
+class LocalDbHostdBackend final : public HostdBackend {
+ public:
+  explicit LocalDbHostdBackend(std::string db_path) : store_(std::move(db_path)) {
+    store_.Initialize();
+  }
+
+  std::optional<comet::HostAssignment> ClaimNextHostAssignment(
+      const std::string& node_name) override {
+    return store_.ClaimNextHostAssignment(node_name);
+  }
+
+  bool TransitionClaimedHostAssignment(
+      int assignment_id,
+      comet::HostAssignmentStatus status,
+      const std::string& status_message) override {
+    return store_.TransitionClaimedHostAssignment(assignment_id, status, status_message);
+  }
+
+  void UpsertHostObservation(const comet::HostObservation& observation) override {
+    store_.UpsertHostObservation(observation);
+  }
+
+  void AppendEvent(const comet::EventRecord& event) override {
+    store_.AppendEvent(event);
+  }
+
+  void UpsertDiskRuntimeState(const comet::DiskRuntimeState& state) override {
+    store_.UpsertDiskRuntimeState(state);
+  }
+
+  std::optional<comet::DiskRuntimeState> LoadDiskRuntimeState(
+      const std::string& disk_name,
+      const std::string& node_name) override {
+    return store_.LoadDiskRuntimeState(disk_name, node_name);
+  }
+
+ private:
+  comet::ControllerStore store_;
+};
+
+class HttpHostdBackend final : public HostdBackend {
+ public:
+  HttpHostdBackend(
+      std::string controller_url,
+      std::string private_key_base64,
+      std::string trusted_controller_fingerprint)
+      : target_(ParseControllerTarget(std::move(controller_url))),
+        private_key_base64_(std::move(private_key_base64)),
+        trusted_controller_fingerprint_(std::move(trusted_controller_fingerprint)) {}
+
+  std::optional<comet::HostAssignment> ClaimNextHostAssignment(
+      const std::string& node_name) override {
+    EnsureSession(node_name, "claiming next assignment");
+    const json payload = SendEncryptedControllerJsonRequest(
+        "/api/v1/hostd/assignments/next",
+        json{{"node_name", node_name}},
+        "assignments/next");
+    if (!payload.contains("assignment") || payload["assignment"].is_null()) {
+      return std::nullopt;
+    }
+    return ParseAssignmentPayload(payload["assignment"]);
+  }
+
+  bool TransitionClaimedHostAssignment(
+      int assignment_id,
+      comet::HostAssignmentStatus status,
+      const std::string& status_message) override {
+    if (status == comet::HostAssignmentStatus::Applied) {
+      SendEncryptedControllerJsonRequest(
+          "/api/v1/hostd/assignments/" + std::to_string(assignment_id) + "/applied",
+          json{{"status_message", status_message}},
+          "assignments/" + std::to_string(assignment_id) + "/applied");
+      return true;
+    }
+    if (status == comet::HostAssignmentStatus::Pending || status == comet::HostAssignmentStatus::Failed) {
+      SendEncryptedControllerJsonRequest(
+          "/api/v1/hostd/assignments/" + std::to_string(assignment_id) + "/failed",
+          json{
+              {"status_message", status_message},
+              {"retry", status == comet::HostAssignmentStatus::Pending},
+          },
+          "assignments/" + std::to_string(assignment_id) + "/failed");
+      return true;
+    }
+    throw std::runtime_error("unsupported remote assignment transition");
+  }
+
+  void UpsertHostObservation(const comet::HostObservation& observation) override {
+    EnsureSession(observation.node_name, "uploading observation");
+    SendEncryptedControllerJsonRequest(
+        "/api/v1/hostd/observations",
+        BuildHostObservationPayload(observation),
+        "observations/upsert");
+  }
+
+  void AppendEvent(const comet::EventRecord& event) override {
+    if (!event.node_name.empty()) {
+      EnsureSession(event.node_name, "appending event");
+    }
+    SendEncryptedControllerJsonRequest(
+        "/api/v1/hostd/events",
+        json{
+            {"plane_name", event.plane_name},
+            {"node_name", event.node_name},
+            {"worker_name", event.worker_name},
+            {"assignment_id", event.assignment_id.has_value() ? json(*event.assignment_id)
+                                                              : json(nullptr)},
+            {"rollout_action_id",
+             event.rollout_action_id.has_value() ? json(*event.rollout_action_id) : json(nullptr)},
+            {"category", event.category},
+            {"event_type", event.event_type},
+            {"severity", event.severity},
+            {"message", event.message},
+            {"payload_json", event.payload_json},
+        },
+        "events/append");
+  }
+
+  void UpsertDiskRuntimeState(const comet::DiskRuntimeState& state) override {
+    EnsureSession(state.node_name, "upserting disk runtime state");
+    SendEncryptedControllerJsonRequest(
+        "/api/v1/hostd/disk-runtime-state",
+        BuildDiskRuntimeStatePayload(state),
+        "disk-runtime-state/upsert");
+  }
+
+  std::optional<comet::DiskRuntimeState> LoadDiskRuntimeState(
+      const std::string& disk_name,
+      const std::string& node_name) override {
+    EnsureSession(node_name, "loading disk runtime state");
+    const json payload = SendEncryptedControllerJsonRequest(
+        "/api/v1/hostd/disk-runtime-state/load",
+        json{{"disk_name", disk_name}, {"node_name", node_name}},
+        "disk-runtime-state/load");
+    if (!payload.contains("runtime_state") || payload["runtime_state"].is_null()) {
+      return std::nullopt;
+    }
+    return ParseDiskRuntimeStatePayload(payload["runtime_state"]);
+  }
+
+ private:
+  static constexpr std::uint64_t SessionRekeyMessageLimit() {
+    return 64;
+  }
+
+  std::string BuildRequestAad(
+      const std::string& message_type,
+      std::uint64_t sequence_number) const {
+    return "request\n" + message_type + "\n" + session_node_name_ + "\n" +
+           std::to_string(sequence_number);
+  }
+
+  std::string BuildResponseAad(
+      const std::string& message_type,
+      std::uint64_t sequence_number) const {
+    return "response\n" + message_type + "\n" + session_node_name_ + "\n" +
+           std::to_string(sequence_number);
+  }
+
+  json SendEncryptedControllerJsonRequest(
+      const std::string& path,
+      const json& payload,
+      const std::string& message_type) {
+    if (session_token_.empty()) {
+      throw std::runtime_error("missing host session token");
+    }
+    host_sequence_ += 1;
+    const comet::EncryptedEnvelope envelope = comet::EncryptEnvelopeBase64(
+        payload.dump(),
+        session_token_,
+        BuildRequestAad(message_type, host_sequence_));
+    const json response = SendControllerJsonRequest(
+        target_,
+        "POST",
+        path,
+        json{
+            {"encrypted", true},
+            {"sequence_number", host_sequence_},
+            {"nonce", envelope.nonce_base64},
+            {"ciphertext", envelope.ciphertext_base64},
+        },
+        SessionHeaders());
+    if (!response.value("encrypted", false)) {
+      return response;
+    }
+    const std::uint64_t controller_sequence =
+        response.value("sequence_number", static_cast<std::uint64_t>(0));
+    if (controller_sequence <= controller_sequence_) {
+      throw std::runtime_error("stale or replayed controller session response");
+    }
+    const comet::EncryptedEnvelope response_envelope{
+        response.value("nonce", std::string{}),
+        response.value("ciphertext", std::string{}),
+    };
+    const std::string decrypted = comet::DecryptEnvelopeBase64(
+        response_envelope,
+        session_token_,
+        BuildResponseAad(message_type, controller_sequence));
+    controller_sequence_ = controller_sequence;
+    return decrypted.empty() ? json::object() : json::parse(decrypted);
+  }
+
+  void EnsureSession(const std::string& node_name, const std::string& status_message) {
+    if (!session_token_.empty() &&
+        (host_sequence_ >= SessionRekeyMessageLimit() ||
+         controller_sequence_ >= SessionRekeyMessageLimit())) {
+      session_token_.clear();
+      session_node_name_.clear();
+      host_sequence_ = 0;
+      controller_sequence_ = 0;
+    }
+    if (!session_token_.empty() && session_node_name_ == node_name) {
+      try {
+        SendEncryptedControllerJsonRequest(
+            "/api/v1/hostd/session/heartbeat",
+            json{
+                {"node_name", node_name},
+                {"session_state", "connected"},
+                {"status_message", status_message}},
+            "session/heartbeat");
+        return;
+      } catch (const std::exception&) {
+        session_token_.clear();
+        session_node_name_.clear();
+        host_sequence_ = 0;
+        controller_sequence_ = 0;
+      }
+    }
+    const std::string nonce = comet::RandomTokenBase64(24);
+    const std::string timestamp = std::to_string(std::time(nullptr));
+    const std::string message =
+        "hostd-session-open\n" + node_name + "\n" + timestamp + "\n" + nonce;
+    const std::string signature =
+        comet::SignDetachedBase64(message, private_key_base64_);
+    const json response = SendControllerJsonRequest(
+        target_,
+        "POST",
+        "/api/v1/hostd/session/open",
+        json{
+            {"node_name", node_name},
+            {"timestamp", timestamp},
+            {"nonce", nonce},
+            {"signature", signature},
+            {"status_message", status_message},
+        });
+    const std::string controller_fingerprint =
+        response.value("controller_public_key_fingerprint", std::string{});
+    if (!trusted_controller_fingerprint_.empty() &&
+        controller_fingerprint != trusted_controller_fingerprint_) {
+      throw std::runtime_error("controller fingerprint mismatch during host session open");
+    }
+    session_token_ = response.value("session_token", std::string{});
+    session_node_name_ = node_name;
+    host_sequence_ = 0;
+    controller_sequence_ =
+        response.value("controller_sequence", static_cast<std::uint64_t>(0));
+    SendEncryptedControllerJsonRequest(
+        "/api/v1/hostd/session/heartbeat",
+        json{{"node_name", node_name}, {"session_state", "connected"}, {"status_message", status_message}},
+        "session/heartbeat");
+  }
+
+  std::map<std::string, std::string> SessionHeaders() const {
+    if (session_token_.empty()) {
+      return {};
+    }
+    return {
+        {"X-Comet-Host-Session", session_token_},
+        {"X-Comet-Host-Node", session_node_name_},
+    };
+  }
+
+  ControllerEndpointTarget target_;
+  std::string private_key_base64_;
+  std::string trusted_controller_fingerprint_;
+  std::string session_token_;
+  std::string session_node_name_;
+  std::uint64_t host_sequence_ = 0;
+  std::uint64_t controller_sequence_ = 0;
+};
+
+std::unique_ptr<HostdBackend> CreateHostdBackend(
+    const std::optional<std::string>& db_path,
+    const std::optional<std::string>& controller_url,
+    const std::optional<std::string>& host_private_key_path,
+    const std::optional<std::string>& controller_fingerprint) {
+  if (controller_url.has_value() && !controller_url->empty()) {
+    if (!host_private_key_path.has_value() || host_private_key_path->empty()) {
+      throw std::runtime_error("--host-private-key is required for remote host-agent mode");
+    }
+    std::ifstream input(*host_private_key_path);
+    if (!input.is_open()) {
+      throw std::runtime_error("failed to read host private key '" + *host_private_key_path + "'");
+    }
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    return std::make_unique<HttpHostdBackend>(
+        *controller_url,
+        Trim(buffer.str()),
+        controller_fingerprint.value_or(""));
+  }
+  return std::make_unique<LocalDbHostdBackend>(db_path.value_or(DefaultDbPath()));
+}
+
 void AppendHostdEvent(
-    comet::ControllerStore& store,
+    HostdBackend& backend,
     const std::string& category,
     const std::string& event_type,
     const std::string& message,
@@ -1203,7 +1854,7 @@ void AppendHostdEvent(
     const std::optional<int>& assignment_id = std::nullopt,
     const std::optional<int>& rollout_action_id = std::nullopt,
     const std::string& severity = "info") {
-  store.AppendEvent(comet::EventRecord{
+  backend.AppendEvent(comet::EventRecord{
       0,
       plane_name,
       node_name,
@@ -2155,14 +2806,12 @@ comet::HostObservation BuildObservedStateSnapshot(
 }
 
 void ReportObservedState(
-    const std::string& db_path,
+    HostdBackend& backend,
     const comet::HostObservation& observation,
     const std::string& source_label) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  store.UpsertHostObservation(observation);
+  backend.UpsertHostObservation(observation);
   AppendHostdEvent(
-      store,
+      backend,
       "host-observation",
       "reported",
       source_label,
@@ -2183,7 +2832,7 @@ void ReportObservedState(
       observation.last_assignment_id);
 
   std::cout << source_label << "\n";
-  std::cout << "db=" << db_path << "\n";
+  std::cout << "backend=hostd-control\n";
   std::cout << "node=" << observation.node_name << "\n";
   std::cout << "status=" << comet::ToString(observation.status) << "\n";
   if (!observation.plane_name.empty()) {
@@ -2238,7 +2887,7 @@ void ApplyNodePlan(
     const comet::NodeComposePlan& compose_plan,
     const std::optional<std::string>& runtime_root,
     ComposeMode compose_mode,
-    comet::ControllerStore* store) {
+    HostdBackend* backend) {
   std::cout << "applying node=" << plan.node_name << "\n";
   std::cout << "compose=" << plan.compose_file_path << "\n";
 
@@ -2253,8 +2902,8 @@ void ApplyNodePlan(
         }
         const auto realized_state =
             EnsureDesiredDiskRuntimeState(*disk, operation.target, runtime_root);
-        if (store != nullptr) {
-          store->UpsertDiskRuntimeState(realized_state);
+        if (backend != nullptr) {
+          backend->UpsertDiskRuntimeState(realized_state);
         }
         PrintOperationApplied(operation, "applied");
         break;
@@ -2262,7 +2911,8 @@ void ApplyNodePlan(
       case comet::HostOperationKind::RemoveDisk: {
         const auto [disk_name, disk_node_name] = SplitDiskKey(operation.target);
         const auto runtime_state =
-            store == nullptr ? std::nullopt : store->LoadDiskRuntimeState(disk_name, disk_node_name);
+            backend == nullptr ? std::nullopt
+                               : backend->LoadDiskRuntimeState(disk_name, disk_node_name);
         bool removed = false;
         const bool mounted_now = IsPathMounted(operation.details);
         if (HostCanManageRealDisks() &&
@@ -2298,8 +2948,8 @@ void ApplyNodePlan(
           if (runtime_root.has_value()) {
             removed_state.image_path.clear();
           }
-          if (store != nullptr) {
-            store->UpsertDiskRuntimeState(removed_state);
+          if (backend != nullptr) {
+            backend->UpsertDiskRuntimeState(removed_state);
           }
         } else {
           RemoveDiskDirectory(operation.details, runtime_root);
@@ -2535,11 +3185,19 @@ void ShowRuntimeStatus(
 }
 
 void ReportLocalObservedState(
-    const std::string& db_path,
+    const std::optional<std::string>& db_path,
+    const std::optional<std::string>& controller_url,
+    const std::optional<std::string>& host_private_key_path,
+    const std::optional<std::string>& controller_fingerprint,
     const std::string& node_name,
     const std::string& state_root) {
-  ReportObservedState(
+  auto backend = CreateHostdBackend(
       db_path,
+      controller_url,
+      host_private_key_path,
+      controller_fingerprint);
+  ReportObservedState(
+      *backend,
       BuildObservedStateSnapshot(
           node_name,
           state_root,
@@ -2609,26 +3267,26 @@ comet::DiskRuntimeState EnsureDesiredDiskRuntimeState(
 }
 
 void PersistDiskRuntimeStateForDesiredDisks(
-    comet::ControllerStore* store,
+    HostdBackend* backend,
     const comet::DesiredState& desired_node_state,
     const std::optional<std::string>& runtime_root,
     const std::string& status_message) {
-  if (store == nullptr) {
+  if (backend == nullptr) {
     return;
   }
   for (const auto& disk : desired_node_state.disks) {
     auto realized_state =
         EnsureDesiredDiskRuntimeState(disk, disk.name + "@" + disk.node_name, runtime_root);
     realized_state.status_message = status_message;
-    store->UpsertDiskRuntimeState(realized_state);
+    backend->UpsertDiskRuntimeState(realized_state);
   }
 }
 
 void PersistDiskRuntimeStateForRemovedDisks(
-    comet::ControllerStore* store,
+    HostdBackend* backend,
     const std::optional<comet::DesiredState>& previous_state,
     const comet::NodeExecutionPlan& execution_plan) {
-  if (store == nullptr) {
+  if (backend == nullptr) {
     return;
   }
   for (const auto& operation : execution_plan.operations) {
@@ -2636,7 +3294,7 @@ void PersistDiskRuntimeStateForRemovedDisks(
       continue;
     }
     const auto [disk_name, disk_node_name] = SplitDiskKey(operation.target);
-    const auto existing_state = store->LoadDiskRuntimeState(disk_name, disk_node_name);
+    const auto existing_state = backend->LoadDiskRuntimeState(disk_name, disk_node_name);
     if (existing_state.has_value() && existing_state->runtime_state == "removed") {
       continue;
     }
@@ -2648,7 +3306,7 @@ void PersistDiskRuntimeStateForRemovedDisks(
         BuildDiskRuntimeState(*removed_disk, "removed", "runtime path removed by hostd");
     runtime_state.filesystem_type = "";
     runtime_state.mount_point = operation.details;
-    store->UpsertDiskRuntimeState(runtime_state);
+    backend->UpsertDiskRuntimeState(runtime_state);
   }
 }
 
@@ -2715,7 +3373,7 @@ void ApplyDesiredNodeState(
     ComposeMode compose_mode,
     const std::string& source_label,
     const std::optional<int>& desired_generation,
-    comet::ControllerStore* store) {
+    HostdBackend* backend) {
   const std::string node_name = RequireSingleNodeName(desired_node_state);
   const std::string& plane_name = desired_node_state.plane_name;
   const auto current_local_state = LoadLocalAppliedState(state_root, node_name, plane_name);
@@ -2750,7 +3408,7 @@ void ApplyDesiredNodeState(
   if (execution_plan.operations.empty()) {
     std::cout << "no local changes for node=" << node_name << "\n";
     PersistDiskRuntimeStateForDesiredDisks(
-        store,
+        backend,
         desired_node_state,
         runtime_root,
         "disk runtime verified by hostd");
@@ -2773,10 +3431,10 @@ void ApplyDesiredNodeState(
       compose_plan,
       runtime_root,
       compose_mode,
-      store);
-  PersistDiskRuntimeStateForRemovedDisks(store, current_local_state, execution_plan);
+      backend);
+  PersistDiskRuntimeStateForRemovedDisks(backend, current_local_state, execution_plan);
   PersistDiskRuntimeStateForDesiredDisks(
-      store,
+      backend,
       desired_node_state,
       runtime_root,
       "disk runtime applied by hostd");
@@ -2814,6 +3472,7 @@ void ApplyStateOps(
     ComposeMode compose_mode) {
   comet::ControllerStore store(db_path);
   store.Initialize();
+  LocalDbHostdBackend backend(db_path);
   const auto state = store.LoadDesiredState();
   if (!state.has_value()) {
     throw std::runtime_error("no desired state found in db '" + db_path + "'");
@@ -2835,9 +3494,9 @@ void ApplyStateOps(
         compose_mode,
         "hostd apply-state-ops",
         desired_generation,
-        &store);
+        &backend);
     ReportObservedState(
-        db_path,
+        backend,
         BuildObservedStateSnapshot(
             node_name,
             state_root,
@@ -2848,7 +3507,7 @@ void ApplyStateOps(
         "hostd observed-state-update");
   } catch (const std::exception& error) {
     ReportObservedState(
-        db_path,
+        backend,
         BuildObservedStateSnapshot(
             node_name,
             state_root,
@@ -2860,21 +3519,31 @@ void ApplyStateOps(
 }
 
 void ApplyNextAssignment(
-    const std::string& db_path,
+    const std::optional<std::string>& db_path,
+    const std::optional<std::string>& controller_url,
+    const std::optional<std::string>& host_private_key_path,
+    const std::optional<std::string>& controller_fingerprint,
     const std::string& node_name,
     const std::optional<std::string>& runtime_root,
     const std::string& state_root,
     ComposeMode compose_mode) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  const auto assignment = store.ClaimNextHostAssignment(node_name);
+  auto backend = CreateHostdBackend(
+      db_path,
+      controller_url,
+      host_private_key_path,
+      controller_fingerprint);
+  const auto assignment = backend->ClaimNextHostAssignment(node_name);
   if (!assignment.has_value()) {
     std::cout << "no pending assignments for node=" << node_name << "\n";
     return;
   }
 
   std::cout << "hostd apply-next-assignment\n";
-  std::cout << "db=" << db_path << "\n";
+  if (controller_url.has_value()) {
+    std::cout << "controller=" << *controller_url << "\n";
+  } else {
+    std::cout << "db=" << db_path.value_or(DefaultDbPath()) << "\n";
+  }
   PrintAssignmentSummary(*assignment);
   if (runtime_root.has_value()) {
     std::cout << "runtime_root=" << *runtime_root << "\n";
@@ -2907,7 +3576,7 @@ void ApplyNextAssignment(
         is_eviction_assignment ? CaptureServiceHostPids(victim_names)
                                : std::map<std::string, int>{};
     ReportObservedState(
-        db_path,
+        *backend,
         BuildObservedStateSnapshot(
             node_name,
             state_root,
@@ -2935,7 +3604,7 @@ void ApplyNextAssignment(
                    ? "hostd eviction-assignment-ops"
                    : "hostd apply-assignment-ops")),
         assignment->desired_generation,
-        &store);
+        backend.get());
     if (is_eviction_assignment &&
         compose_mode == ComposeMode::Exec &&
         !VerifyEvictionAssignment(
@@ -2948,7 +3617,7 @@ void ApplyNextAssignment(
           "eviction verification timed out; gpu resources were not released");
     }
     ReportObservedState(
-        db_path,
+        *backend,
         BuildObservedStateSnapshot(
             node_name,
             state_root,
@@ -2962,7 +3631,7 @@ void ApplyNextAssignment(
                 std::to_string(assignment->desired_generation) + assignment_context,
             assignment->id),
         "hostd observed-state-update");
-    if (!store.TransitionClaimedHostAssignment(
+    if (!backend->TransitionClaimedHostAssignment(
         assignment->id,
         comet::HostAssignmentStatus::Applied,
         (is_drain_assignment ? "drained node for desired generation "
@@ -2979,7 +3648,7 @@ void ApplyNextAssignment(
                 << " because it is no longer claimed\n";
     }
     AppendHostdEvent(
-        store,
+        *backend,
         "host-assignment",
         "applied",
         "applied assignment on node " + node_name,
@@ -2996,7 +3665,7 @@ void ApplyNextAssignment(
   } catch (const std::exception& error) {
     const std::string error_message = error.what();
     ReportObservedState(
-        db_path,
+        *backend,
         BuildObservedStateSnapshot(
             node_name,
             state_root,
@@ -3005,7 +3674,7 @@ void ApplyNextAssignment(
             assignment->id),
         "hostd observed-state-update");
     if (assignment->attempt_count < assignment->max_attempts) {
-      if (!store.TransitionClaimedHostAssignment(
+      if (!backend->TransitionClaimedHostAssignment(
               assignment->id,
               comet::HostAssignmentStatus::Pending,
               "attempt " + std::to_string(assignment->attempt_count) + "/" +
@@ -3015,7 +3684,7 @@ void ApplyNextAssignment(
                   << " because it is no longer claimed\n";
       }
     } else {
-      if (!store.TransitionClaimedHostAssignment(
+      if (!backend->TransitionClaimedHostAssignment(
               assignment->id,
               comet::HostAssignmentStatus::Failed,
               "attempt " + std::to_string(assignment->attempt_count) + "/" +
@@ -3026,7 +3695,7 @@ void ApplyNextAssignment(
       }
     }
     AppendHostdEvent(
-        store,
+        *backend,
         "host-assignment",
         "failed",
         error_message,
@@ -3056,6 +3725,8 @@ int main(int argc, char** argv) {
 
   const std::string command = argv[1];
   const auto node_name = ParseNodeArg(argc, argv);
+  const auto controller_url = ParseControllerArg(argc, argv);
+  const auto host_private_key_path = ParseHostPrivateKeyArg(argc, argv);
   if (!node_name.has_value()) {
     std::cerr << "error: --node is required\n";
     return 1;
@@ -3089,7 +3760,10 @@ int main(int argc, char** argv) {
 
     if (command == "report-observed-state") {
       ReportLocalObservedState(
-          ResolveDbPath(ParseDbArg(argc, argv)),
+          ParseDbArg(argc, argv),
+          controller_url,
+          host_private_key_path,
+          ParseControllerFingerprintArg(argc, argv),
           *node_name,
           ResolveStateRoot(ParseStateRootArg(argc, argv)));
       return 0;
@@ -3108,7 +3782,10 @@ int main(int argc, char** argv) {
 
     if (command == "apply-next-assignment") {
       ApplyNextAssignment(
-          ResolveDbPath(ParseDbArg(argc, argv)),
+          ParseDbArg(argc, argv),
+          controller_url,
+          host_private_key_path,
+          ParseControllerFingerprintArg(argc, argv),
           *node_name,
           ParseRuntimeRootArg(argc, argv),
           ResolveStateRoot(ParseStateRootArg(argc, argv)),

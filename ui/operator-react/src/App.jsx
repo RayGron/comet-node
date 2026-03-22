@@ -136,6 +136,55 @@ function EmptyState({ title, detail }) {
   );
 }
 
+function OnboardingCard({ bundlePath, setBundlePath, bundleBusy, executeBundleAction, bundleOutput }) {
+  return (
+    <section className="onboarding-card">
+      <div className="section-label">First plane</div>
+      <h3>Load a plane from the Web UI</h3>
+      <p className="onboarding-copy">
+        The platform is running. Enter a bundle path, preview the plan, then apply it. Controller
+        and hostd are already active and will materialize infer and worker runtime after apply.
+      </p>
+      <div className="onboarding-steps">
+        <div>1. Enter an absolute bundle path.</div>
+        <div>2. Preview the bundle.</div>
+        <div>3. Apply the bundle.</div>
+      </div>
+      <label className="field-label" htmlFor="bundle-path-input">
+        Bundle path
+      </label>
+      <input
+        id="bundle-path-input"
+        className="text-input"
+        type="text"
+        value={bundlePath}
+        onChange={(event) => setBundlePath(event.target.value)}
+        placeholder="/abs/path/to/plane-bundle"
+        spellCheck="false"
+      />
+      <div className="toolbar">
+        <button
+          className="ghost-button"
+          type="button"
+          onClick={() => executeBundleAction("preview")}
+          disabled={bundleBusy !== ""}
+        >
+          Preview bundle
+        </button>
+        <button
+          className="ghost-button"
+          type="button"
+          onClick={() => executeBundleAction("apply")}
+          disabled={bundleBusy !== ""}
+        >
+          Apply bundle
+        </button>
+      </div>
+      {bundleOutput ? <pre className="bundle-output">{bundleOutput}</pre> : null}
+    </section>
+  );
+}
+
 function SummaryCard({ label, value, meta }) {
   return (
     <article className="summary-card">
@@ -438,7 +487,13 @@ function App() {
           </div>
           <div className="plane-list">
             {planes.length === 0 ? (
-              <EmptyState title="No planes" detail="Import and apply a plane bundle first." />
+              <OnboardingCard
+                bundlePath={bundlePath}
+                setBundlePath={setBundlePath}
+                bundleBusy={bundleBusy}
+                executeBundleAction={executeBundleAction}
+                bundleOutput={bundleOutput}
+              />
             ) : (
               planes.map((plane) => {
                 const selected = plane.name === selectedPlane;
@@ -469,40 +524,42 @@ function App() {
               })
             )}
           </div>
-          <div className="bundle-workflow">
-            <div className="section-label">Bundle workflow</div>
-            <label className="field-label" htmlFor="bundle-path-input">
-              Bundle path
-            </label>
-            <input
-              id="bundle-path-input"
-              className="text-input"
-              type="text"
-              value={bundlePath}
-              onChange={(event) => setBundlePath(event.target.value)}
-              placeholder="/abs/path/to/plane-bundle"
-              spellCheck="false"
-            />
-            <div className="toolbar">
-              <button
-                className="ghost-button"
-                type="button"
-                onClick={() => executeBundleAction("preview")}
-                disabled={bundleBusy !== ""}
-              >
-                Preview bundle
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                onClick={() => executeBundleAction("apply")}
-                disabled={bundleBusy !== ""}
-              >
-                Apply bundle
-              </button>
+          {planes.length > 0 ? (
+            <div className="bundle-workflow">
+              <div className="section-label">Bundle workflow</div>
+              <label className="field-label" htmlFor="bundle-path-input">
+                Bundle path
+              </label>
+              <input
+                id="bundle-path-input"
+                className="text-input"
+                type="text"
+                value={bundlePath}
+                onChange={(event) => setBundlePath(event.target.value)}
+                placeholder="/abs/path/to/plane-bundle"
+                spellCheck="false"
+              />
+              <div className="toolbar">
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => executeBundleAction("preview")}
+                  disabled={bundleBusy !== ""}
+                >
+                  Preview bundle
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => executeBundleAction("apply")}
+                  disabled={bundleBusy !== ""}
+                >
+                  Apply bundle
+                </button>
+              </div>
+              {bundleOutput ? <pre className="bundle-output">{bundleOutput}</pre> : null}
             </div>
-            {bundleOutput ? <pre className="bundle-output">{bundleOutput}</pre> : null}
-          </div>
+          ) : null}
         </section>
 
         <section className="panel plane-overview">

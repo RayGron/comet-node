@@ -21,6 +21,8 @@ mkdir -p "${dist_dir}"
 declare -a artifacts=()
 
 for candidate in \
+  "${build_dir}/comet-node" \
+  "${build_dir}/comet-node.exe" \
   "${build_dir}/comet-controller" \
   "${build_dir}/comet-controller.exe" \
   "${build_dir}/comet-hostd" \

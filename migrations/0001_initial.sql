@@ -21,6 +21,26 @@ CREATE TABLE nodes (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE registered_hosts (
+    node_name TEXT PRIMARY KEY,
+    advertised_address TEXT NOT NULL DEFAULT '',
+    public_key_pem TEXT NOT NULL DEFAULT '',
+    controller_public_key_fingerprint TEXT NOT NULL DEFAULT '',
+    transport_mode TEXT NOT NULL DEFAULT 'out',
+    registration_state TEXT NOT NULL DEFAULT 'registered',
+    session_state TEXT NOT NULL DEFAULT 'disconnected',
+    session_token TEXT NOT NULL DEFAULT '',
+    session_expires_at TEXT NOT NULL DEFAULT '',
+    session_host_sequence INTEGER NOT NULL DEFAULT 0,
+    session_controller_sequence INTEGER NOT NULL DEFAULT 0,
+    capabilities_json TEXT NOT NULL DEFAULT '{}',
+    status_message TEXT NOT NULL DEFAULT '',
+    last_session_at TEXT NOT NULL DEFAULT '',
+    last_heartbeat_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE plane_nodes (
     plane_name TEXT NOT NULL,
     node_name TEXT NOT NULL,

@@ -9,6 +9,7 @@
     },
     "llama-cpp",
     "nlohmann-json",
+    "openssl",
     "sqlite3"
   ]
 }

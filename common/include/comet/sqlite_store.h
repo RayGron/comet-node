@@ -168,6 +168,26 @@ struct PlaneRecord {
   std::string created_at;
 };
 
+struct RegisteredHostRecord {
+  std::string node_name;
+  std::string advertised_address;
+  std::string public_key_pem;
+  std::string controller_public_key_fingerprint;
+  std::string transport_mode;
+  std::string registration_state;
+  std::string session_state;
+  std::string session_token;
+  std::string session_expires_at;
+  std::int64_t session_host_sequence = 0;
+  std::int64_t session_controller_sequence = 0;
+  std::string capabilities_json = "{}";
+  std::string status_message;
+  std::string last_session_at;
+  std::string last_heartbeat_at;
+  std::string created_at;
+  std::string updated_at;
+};
+
 class ControllerStore {
  public:
   explicit ControllerStore(std::string db_path);
@@ -192,6 +212,10 @@ class ControllerStore {
   std::optional<int> LoadRebalanceIteration(const std::string& plane_name) const;
   std::vector<PlaneRecord> LoadPlanes() const;
   std::optional<PlaneRecord> LoadPlane(const std::string& plane_name) const;
+  void UpsertRegisteredHost(const RegisteredHostRecord& host);
+  std::optional<RegisteredHostRecord> LoadRegisteredHost(const std::string& node_name) const;
+  std::vector<RegisteredHostRecord> LoadRegisteredHosts(
+      const std::optional<std::string>& node_name = std::nullopt) const;
   bool UpdatePlaneState(
       const std::string& plane_name,
       const std::string& state);

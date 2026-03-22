@@ -618,6 +618,84 @@ The current [ui/operator/index.html](/mnt/e/dev/Repos/comet-node/ui/operator/ind
 - smoke validation
 - backend surface inspection as a plain non-React fallback
 
+## Production Deployment (Phase K)
+
+`comet-node` is now the public deployment entrypoint. The intended production shape is:
+
+- machine A: `comet-node` in `controller` mode, optionally with local `hostd` and `comet-web-ui`
+- machine B: `comet-node` in `hostd` mode on a GPU node
+- remote `hostd` dials out to the controller and exchanges assignments, telemetry, events, and disk runtime state through controller-owned host-agent APIs
+
+Primary user flow:
+
+```bash
+./build/linux/x64/comet-node install controller --with-web-ui --with-hostd --skip-systemctl
+./build/linux/x64/comet-node run controller
+```
+
+Then:
+
+- open `http://localhost:18081`
+- load the first plane from the Web UI
+- controller and local `hostd` materialize infer and worker runtime automatically
+
+For single-node local demo work, install the local host with a node name that matches the bundle, for example `--node node-a`.
+
+Primary remote hostd flow:
+
+```bash
+./build/linux/x64/comet-node install controller --with-web-ui --skip-systemctl
+./build/linux/x64/comet-node run controller
+
+./build/linux/x64/comet-node install hostd --controller http://controller:18080 --node gpu-b --skip-systemctl
+./build/linux/x64/comet-node connect-hostd --db /var/lib/comet-node/controller.sqlite --node gpu-b --public-key /var/lib/comet-node/keys/hostd.pub.pem
+./build/linux/x64/comet-node run hostd
+```
+
+Service and diagnostics flow:
+
+```bash
+./build/linux/x64/comet-node service verify controller-hostd --skip-systemctl
+./build/linux/x64/comet-node service verify hostd --skip-systemctl
+./build/linux/x64/comet-controller show-hostd-hosts --db var/controller.sqlite
+./build/linux/x64/comet-controller apply-bundle --bundle config/demo-plane --db var/controller.sqlite --artifacts-root var/artifacts
+```
+
+There is now also a dedicated live validation harness for the simplified startup UX:
+
+```bash
+./scripts/check-live-phase-l.sh --skip-build --skip-image-build
+```
+
+It validates the primary user flow:
+
+- install controller with local `hostd` and `comet-web-ui`
+- run controller with defaults
+- open the Web UI
+- preview and apply the first plane through the browser-facing API path
+- see local `hostd` materialize state after plane apply
+
+`--skip-image-build` is valid when `comet/web-ui:dev` is already present locally. The harness
+uses `--hostd-compose-mode skip`, so it validates first-use onboarding and local state
+materialization without requiring infer/worker runtime images.
+
+Host-agent security includes:
+
+- long-lived host identity keys
+- signed session open
+- encrypted request/response envelopes
+- replay guards via sequence numbers
+- session TTL and rekey threshold
+- host revoke and host-key rotation
+
+Registry inspection and control:
+
+```bash
+./build/linux/x64/comet-controller show-hostd-hosts --db var/controller.sqlite
+./build/linux/x64/comet-controller revoke-hostd --db var/controller.sqlite --node gpu-b
+./build/linux/x64/comet-controller rotate-hostd-key --db var/controller.sqlite --node gpu-b --public-key /path/to/new-hostd.pub.pem
+```
+
 The browser-facing runtime architecture is now:
 
 - `Level 0`: `comet-web-ui`

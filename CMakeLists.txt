@@ -60,11 +60,13 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
 find_package(llama CONFIG REQUIRED)
 
 add_library(
   comet-common
   common/src/compose_renderer.cpp
+  common/src/crypto_utils.cpp
   common/src/demo_state.cpp
   common/src/execution_plan.cpp
   common/src/import_bundle.cpp
@@ -82,6 +84,7 @@ target_link_libraries(
   comet-common
   PUBLIC
     nlohmann_json::nlohmann_json
+    OpenSSL::Crypto
     unofficial::sqlite3::sqlite3
 )
 target_compile_options(comet-common PRIVATE -Wall -Wextra -Wpedantic)
@@ -96,6 +99,10 @@ if(UNIX AND NOT APPLE)
   target_link_libraries(comet-hostd PRIVATE dl)
 endif()
 target_compile_options(comet-hostd PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(comet-node launcher/src/main.cpp)
+target_link_libraries(comet-node PRIVATE comet-common)
+target_compile_options(comet-node PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(
   comet-inferctl

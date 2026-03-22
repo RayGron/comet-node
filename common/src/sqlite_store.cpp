@@ -40,6 +40,26 @@ CREATE TABLE IF NOT EXISTS nodes (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS registered_hosts (
+    node_name TEXT PRIMARY KEY,
+    advertised_address TEXT NOT NULL DEFAULT '',
+    public_key_pem TEXT NOT NULL DEFAULT '',
+    controller_public_key_fingerprint TEXT NOT NULL DEFAULT '',
+    transport_mode TEXT NOT NULL DEFAULT 'out',
+    registration_state TEXT NOT NULL DEFAULT 'registered',
+    session_state TEXT NOT NULL DEFAULT 'disconnected',
+    session_token TEXT NOT NULL DEFAULT '',
+    session_expires_at TEXT NOT NULL DEFAULT '',
+    session_host_sequence INTEGER NOT NULL DEFAULT 0,
+    session_controller_sequence INTEGER NOT NULL DEFAULT 0,
+    capabilities_json TEXT NOT NULL DEFAULT '{}',
+    status_message TEXT NOT NULL DEFAULT '',
+    last_session_at TEXT NOT NULL DEFAULT '',
+    last_heartbeat_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS plane_nodes (
     plane_name TEXT NOT NULL,
     node_name TEXT NOT NULL,
@@ -834,6 +854,76 @@ void ControllerStore::Initialize() {
       "scheduler_plane_runtime",
       "status_message",
       "status_message TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "advertised_address",
+      "advertised_address TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "public_key_pem",
+      "public_key_pem TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "controller_public_key_fingerprint",
+      "controller_public_key_fingerprint TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "transport_mode",
+      "transport_mode TEXT NOT NULL DEFAULT 'out'");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "registration_state",
+      "registration_state TEXT NOT NULL DEFAULT 'registered'");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "session_state",
+      "session_state TEXT NOT NULL DEFAULT 'disconnected'");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "session_token",
+      "session_token TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "session_expires_at",
+      "session_expires_at TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "session_host_sequence",
+      "session_host_sequence INTEGER NOT NULL DEFAULT 0");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "session_controller_sequence",
+      "session_controller_sequence INTEGER NOT NULL DEFAULT 0");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "capabilities_json",
+      "capabilities_json TEXT NOT NULL DEFAULT '{}'");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "status_message",
+      "status_message TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "last_session_at",
+      "last_session_at TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "last_heartbeat_at",
+      "last_heartbeat_at TEXT NOT NULL DEFAULT ''");
 }
 
 void ControllerStore::ReplaceDesiredState(const DesiredState& state, int generation) {
@@ -1361,6 +1451,169 @@ std::optional<PlaneRecord> ControllerStore::LoadPlane(const std::string& plane_n
     return std::nullopt;
   }
   return PlaneFromStatement(statement.raw());
+}
+
+void ControllerStore::UpsertRegisteredHost(const RegisteredHostRecord& host) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "INSERT INTO registered_hosts("
+      " node_name,"
+      " advertised_address,"
+      " public_key_pem,"
+      " controller_public_key_fingerprint,"
+      " transport_mode,"
+      " registration_state,"
+      " session_state,"
+      " session_token,"
+      " session_expires_at,"
+      " session_host_sequence,"
+      " session_controller_sequence,"
+      " capabilities_json,"
+      " status_message,"
+      " last_session_at,"
+      " last_heartbeat_at,"
+      " updated_at"
+      ") VALUES ("
+      " ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, CURRENT_TIMESTAMP"
+      ")"
+      " ON CONFLICT(node_name) DO UPDATE SET"
+      " advertised_address = excluded.advertised_address,"
+      " public_key_pem = excluded.public_key_pem,"
+      " controller_public_key_fingerprint = excluded.controller_public_key_fingerprint,"
+      " transport_mode = excluded.transport_mode,"
+      " registration_state = excluded.registration_state,"
+      " session_state = excluded.session_state,"
+      " session_token = excluded.session_token,"
+      " session_expires_at = excluded.session_expires_at,"
+      " session_host_sequence = excluded.session_host_sequence,"
+      " session_controller_sequence = excluded.session_controller_sequence,"
+      " capabilities_json = excluded.capabilities_json,"
+      " status_message = excluded.status_message,"
+      " last_session_at = excluded.last_session_at,"
+      " last_heartbeat_at = excluded.last_heartbeat_at,"
+      " updated_at = CURRENT_TIMESTAMP;");
+  statement.BindText(1, host.node_name);
+  statement.BindText(2, host.advertised_address);
+  statement.BindText(3, host.public_key_pem);
+  statement.BindText(4, host.controller_public_key_fingerprint);
+  statement.BindText(5, host.transport_mode);
+  statement.BindText(6, host.registration_state);
+  statement.BindText(7, host.session_state);
+  statement.BindText(8, host.session_token);
+  statement.BindText(9, host.session_expires_at);
+  statement.BindInt(10, static_cast<int>(host.session_host_sequence));
+  statement.BindInt(11, static_cast<int>(host.session_controller_sequence));
+  statement.BindText(12, host.capabilities_json);
+  statement.BindText(13, host.status_message);
+  statement.BindText(14, host.last_session_at);
+  statement.BindText(15, host.last_heartbeat_at);
+  statement.StepDone();
+}
+
+std::optional<RegisteredHostRecord> ControllerStore::LoadRegisteredHost(
+    const std::string& node_name) const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT node_name,"
+      " advertised_address,"
+      " public_key_pem,"
+      " controller_public_key_fingerprint,"
+      " transport_mode,"
+      " registration_state,"
+      " session_state,"
+      " session_token,"
+      " session_expires_at,"
+      " session_host_sequence,"
+      " session_controller_sequence,"
+      " capabilities_json,"
+      " status_message,"
+      " last_session_at,"
+      " last_heartbeat_at,"
+      " created_at,"
+      " updated_at"
+      " FROM registered_hosts WHERE node_name = ?1;");
+  statement.BindText(1, node_name);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+
+  return RegisteredHostRecord{
+      ToColumnText(statement.raw(), 0),
+      ToColumnText(statement.raw(), 1),
+      ToColumnText(statement.raw(), 2),
+      ToColumnText(statement.raw(), 3),
+      ToColumnText(statement.raw(), 4),
+      ToColumnText(statement.raw(), 5),
+      ToColumnText(statement.raw(), 6),
+      ToColumnText(statement.raw(), 7),
+      ToColumnText(statement.raw(), 8),
+      sqlite3_column_int64(statement.raw(), 9),
+      sqlite3_column_int64(statement.raw(), 10),
+      ToColumnText(statement.raw(), 11),
+      ToColumnText(statement.raw(), 12),
+      ToColumnText(statement.raw(), 13),
+      ToColumnText(statement.raw(), 14),
+      ToColumnText(statement.raw(), 15),
+      ToColumnText(statement.raw(), 16),
+  };
+}
+
+std::vector<RegisteredHostRecord> ControllerStore::LoadRegisteredHosts(
+    const std::optional<std::string>& node_name) const {
+  sqlite3* db = AsSqlite(db_);
+  std::string sql =
+      "SELECT node_name,"
+      " advertised_address,"
+      " public_key_pem,"
+      " controller_public_key_fingerprint,"
+      " transport_mode,"
+      " registration_state,"
+      " session_state,"
+      " session_token,"
+      " session_expires_at,"
+      " session_host_sequence,"
+      " session_controller_sequence,"
+      " capabilities_json,"
+      " status_message,"
+      " last_session_at,"
+      " last_heartbeat_at,"
+      " created_at,"
+      " updated_at"
+      " FROM registered_hosts";
+  if (node_name.has_value()) {
+    sql += " WHERE node_name = ?1";
+  }
+  sql += " ORDER BY node_name ASC;";
+  Statement statement(db, sql);
+  if (node_name.has_value()) {
+    statement.BindText(1, *node_name);
+  }
+
+  std::vector<RegisteredHostRecord> hosts;
+  while (statement.StepRow()) {
+    hosts.push_back(RegisteredHostRecord{
+        ToColumnText(statement.raw(), 0),
+        ToColumnText(statement.raw(), 1),
+        ToColumnText(statement.raw(), 2),
+        ToColumnText(statement.raw(), 3),
+        ToColumnText(statement.raw(), 4),
+        ToColumnText(statement.raw(), 5),
+        ToColumnText(statement.raw(), 6),
+        ToColumnText(statement.raw(), 7),
+        ToColumnText(statement.raw(), 8),
+        sqlite3_column_int64(statement.raw(), 9),
+        sqlite3_column_int64(statement.raw(), 10),
+        ToColumnText(statement.raw(), 11),
+        ToColumnText(statement.raw(), 12),
+        ToColumnText(statement.raw(), 13),
+        ToColumnText(statement.raw(), 14),
+        ToColumnText(statement.raw(), 15),
+        ToColumnText(statement.raw(), 16),
+    });
+  }
+  return hosts;
 }
 
 bool ControllerStore::UpdatePlaneState(

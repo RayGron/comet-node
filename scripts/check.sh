@@ -68,6 +68,27 @@ multiplane_state_root="${PWD}/var/hostd-state-multiplane"
 multiplane_beta_bundle="${PWD}/var/demo-plane-beta"
 web_ui_runtime_root="${PWD}/var/web-ui-runtime"
 ui_smoke_root="${PWD}/var/ui-smoke"
+launcher_smoke_root="${PWD}/var/launcher-smoke"
+launcher_default_root="${PWD}/var/launcher-defaults"
+launcher_config_path="${launcher_smoke_root}/etc/comet-node/config.toml"
+launcher_state_root="${launcher_smoke_root}/var/lib/comet-node"
+launcher_log_root="${launcher_smoke_root}/var/log/comet-node"
+launcher_systemd_dir="${launcher_smoke_root}/etc/systemd/system"
+launcher_db_path="${launcher_smoke_root}/controller.sqlite"
+remote_agent_db_path="${PWD}/var/controller-remote-agent.sqlite"
+remote_agent_artifacts_root="${PWD}/var/artifacts-remote-agent"
+remote_agent_runtime_root="${PWD}/var/runtime-remote-agent"
+remote_agent_state_root="${PWD}/var/hostd-state-remote-agent"
+remote_agent_install_root="${PWD}/var/remote-agent-install"
+remote_agent_config_path="${remote_agent_install_root}/etc/comet-node/config.toml"
+remote_agent_layout_state_root="${remote_agent_install_root}/var/lib/comet-node"
+remote_agent_layout_log_root="${remote_agent_install_root}/var/log/comet-node"
+remote_agent_layout_systemd_dir="${remote_agent_install_root}/etc/systemd/system"
+remote_agent_rotated_install_root="${PWD}/var/remote-agent-install-rotated"
+remote_agent_rotated_config_path="${remote_agent_rotated_install_root}/etc/comet-node/config.toml"
+remote_agent_rotated_layout_state_root="${remote_agent_rotated_install_root}/var/lib/comet-node"
+remote_agent_rotated_layout_log_root="${remote_agent_rotated_install_root}/var/log/comet-node"
+remote_agent_rotated_layout_systemd_dir="${remote_agent_rotated_install_root}/etc/systemd/system"
 http_server_pid=""
 
 cleanup() {
@@ -88,6 +109,7 @@ cmake -E rm -f "${drain_db_path}"
 cmake -E rm -f "${compute_db_path}"
 cmake -E rm -f "${api_db_path}"
 cmake -E rm -f "${multiplane_db_path}"
+cmake -E rm -f "${remote_agent_db_path}"
 cmake -E remove_directory "${artifacts_root}"
 cmake -E remove_directory "${parallel_artifacts_root}"
 cmake -E remove_directory "${rebalance_artifacts_root}"
@@ -120,11 +142,188 @@ cmake -E remove_directory "${api_state_root}"
 cmake -E remove_directory "${multiplane_state_root}"
 cmake -E remove_directory "${infer_model_root}"
 cmake -E remove_directory "${ui_smoke_root}"
+cmake -E remove_directory "${launcher_smoke_root}"
+cmake -E remove_directory "${launcher_default_root}"
 cmake -E remove_directory "${multiplane_beta_bundle}"
 cmake -E remove_directory "${web_ui_runtime_root}"
+cmake -E remove_directory "${remote_agent_artifacts_root}"
+cmake -E remove_directory "${remote_agent_runtime_root}"
+cmake -E remove_directory "${remote_agent_state_root}"
+cmake -E remove_directory "${remote_agent_install_root}"
+cmake -E remove_directory "${remote_agent_rotated_install_root}"
 cmake -E rm -f "${bad_state_root}"
 
 "${script_dir}/build-target.sh" "${host_os}" "${host_arch}" Debug
+
+"${build_dir}/comet-node" version | grep -F 'comet-node 0.1.0' >/dev/null
+"${build_dir}/comet-node" doctor controller | grep -F 'controller_binary=yes' >/dev/null
+default_http_port="$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)"
+launcher_install_output="$(COMET_INSTALL_ROOT="${launcher_default_root}" \
+"${build_dir}/comet-node" install controller \
+  --with-hostd \
+  --with-web-ui \
+  --listen-port "${default_http_port}" \
+  --skip-systemctl)"
+printf '%s' "${launcher_install_output}" | grep -F "next_step=comet-node run controller" >/dev/null
+test -f "${launcher_default_root}/etc/comet-node/config.toml"
+test -f "${launcher_default_root}/etc/systemd/system/comet-node-controller.service"
+test -f "${launcher_default_root}/etc/systemd/system/comet-node-hostd.service"
+COMET_INSTALL_ROOT="${launcher_default_root}" \
+"${build_dir}/comet-node" service verify controller-hostd --skip-systemctl >/dev/null
+COMET_INSTALL_ROOT="${launcher_default_root}" \
+"${build_dir}/comet-node" run controller \
+  --listen-host 127.0.0.1 \
+  --compose-mode skip >/tmp/comet-node-default-run.log 2>&1 &
+http_server_pid="$!"
+wait_for_http "http://127.0.0.1:${default_http_port}/health" 100 "/tmp/comet-node-default-run.log"
+for _ in $(seq 1 80); do
+  if "${build_dir}/comet-controller" show-hostd-hosts \
+      --db "${launcher_default_root}/var/lib/comet-node/controller.sqlite" \
+      --node controller-local | grep -F '"session_state": "connected"' >/dev/null; then
+    break
+  fi
+  sleep 0.2
+done
+"${build_dir}/comet-controller" show-hostd-hosts \
+  --db "${launcher_default_root}/var/lib/comet-node/controller.sqlite" \
+  --node controller-local | grep -F '"session_state": "connected"' >/dev/null
+kill "${http_server_pid}" >/dev/null 2>&1 || true
+wait "${http_server_pid}" >/dev/null 2>&1 || true
+http_server_pid=""
+"${build_dir}/comet-node" install controller \
+  --config "${launcher_config_path}" \
+  --state-root "${launcher_state_root}" \
+  --log-root "${launcher_log_root}" \
+  --systemd-dir "${launcher_systemd_dir}" \
+  --listen-port 28080 \
+  --with-hostd \
+  --with-web-ui \
+  --skip-systemctl >/dev/null
+test -f "${launcher_config_path}"
+test -f "${launcher_systemd_dir}/comet-node-controller.service"
+test -f "${launcher_systemd_dir}/comet-node-hostd.service"
+grep -F '[controller]' "${launcher_config_path}" >/dev/null
+grep -F 'web_ui_enabled = true' "${launcher_config_path}" >/dev/null
+grep -F 'local_hostd_enabled = true' "${launcher_config_path}" >/dev/null
+grep -F 'ExecStart=' "${launcher_systemd_dir}/comet-node-controller.service" >/dev/null
+"${build_dir}/comet-node" service status controller-hostd \
+  --systemd-dir "${launcher_systemd_dir}" \
+  --skip-systemctl | grep -F 'installed=yes' >/dev/null
+"${build_dir}/comet-node" service verify controller-hostd \
+  --systemd-dir "${launcher_systemd_dir}" \
+  --skip-systemctl >/dev/null
+"${build_dir}/comet-node" connect-hostd \
+  --db "${launcher_db_path}" \
+  --node gpu-b \
+  --address http://127.0.0.1:29090 \
+  --public-key "${launcher_state_root}/keys/hostd.pub.pem" >/dev/null
+"${build_dir}/comet-controller" show-hostd-hosts --db "${launcher_db_path}" --node gpu-b | grep -F '"node_name": "gpu-b"' >/dev/null
+python3 - <<'PY' "${launcher_db_path}"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+row = db.execute("select node_name, advertised_address, registration_state from registered_hosts where node_name='gpu-b'").fetchone()
+assert row == ("gpu-b", "http://127.0.0.1:29090", "registered"), row
+db.close()
+PY
+"${build_dir}/comet-node" service uninstall controller-hostd \
+  --systemd-dir "${launcher_systemd_dir}" \
+  --skip-systemctl >/dev/null
+test ! -f "${launcher_systemd_dir}/comet-node-controller.service"
+test ! -f "${launcher_systemd_dir}/comet-node-hostd.service"
+"${build_dir}/comet-controller" init-db --db "${remote_agent_db_path}" >/dev/null
+remote_http_port="$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)"
+"${build_dir}/comet-node" install hostd \
+  --controller "http://127.0.0.1:${remote_http_port}" \
+  --node node-a \
+  --config "${remote_agent_config_path}" \
+  --state-root "${remote_agent_layout_state_root}" \
+  --log-root "${remote_agent_layout_log_root}" \
+  --systemd-dir "${remote_agent_layout_systemd_dir}" \
+  --skip-systemctl | grep -F "next_step=comet-node run hostd" >/dev/null
+"${build_dir}/comet-node" service verify hostd \
+  --systemd-dir "${remote_agent_layout_systemd_dir}" \
+  --skip-systemctl >/dev/null
+"${build_dir}/comet-node" connect-hostd \
+  --db "${remote_agent_db_path}" \
+  --node node-a \
+  --address http://127.0.0.1:29999 \
+  --public-key "${remote_agent_layout_state_root}/keys/hostd.pub.pem" >/dev/null
+"${build_dir}/comet-controller" apply-bundle \
+  --bundle "${PWD}/config/demo-plane" \
+  --db "${remote_agent_db_path}" \
+  --artifacts-root "${remote_agent_artifacts_root}" >/dev/null
+"${build_dir}/comet-controller" serve --db "${remote_agent_db_path}" --listen-host 127.0.0.1 --listen-port "${remote_http_port}" >/tmp/comet-controller-remote-agent.log 2>&1 &
+http_server_pid="$!"
+wait_for_http "http://127.0.0.1:${remote_http_port}/health" 100 "/tmp/comet-controller-remote-agent.log"
+"${build_dir}/comet-hostd" apply-next-assignment \
+  --controller "http://127.0.0.1:${remote_http_port}" \
+  --node node-a \
+  --runtime-root "${remote_agent_runtime_root}" \
+  --state-root "${remote_agent_state_root}" \
+  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.pem" \
+  --compose-mode skip >/dev/null
+"${build_dir}/comet-hostd" report-observed-state \
+  --controller "http://127.0.0.1:${remote_http_port}" \
+  --node node-a \
+  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.pem" \
+  --state-root "${remote_agent_state_root}" >/dev/null
+"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_agent_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
+"${build_dir}/comet-controller" show-host-observations --db "${remote_agent_db_path}" --node node-a | grep -F 'status=idle applied_generation=1' >/dev/null
+"${build_dir}/comet-controller" show-events --db "${remote_agent_db_path}" --node node-a --category host-assignment | grep -F 'category=host-assignment type=applied' >/dev/null
+"${build_dir}/comet-node" install hostd \
+  --controller "http://127.0.0.1:${remote_http_port}" \
+  --node node-a \
+  --config "${remote_agent_rotated_config_path}" \
+  --state-root "${remote_agent_rotated_layout_state_root}" \
+  --log-root "${remote_agent_rotated_layout_log_root}" \
+  --systemd-dir "${remote_agent_rotated_layout_systemd_dir}" \
+  --skip-systemctl | grep -F "next_step=comet-node run hostd" >/dev/null
+"${build_dir}/comet-controller" rotate-hostd-key \
+  --db "${remote_agent_db_path}" \
+  --node node-a \
+  --public-key "${remote_agent_rotated_layout_state_root}/keys/hostd.pub.pem" >/dev/null
+"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_agent_db_path}" --node node-a | grep -F '"session_state": "rotation-pending"' >/dev/null
+if "${build_dir}/comet-hostd" report-observed-state \
+  --controller "http://127.0.0.1:${remote_http_port}" \
+  --node node-a \
+  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.pem" \
+  --state-root "${remote_agent_state_root}" >/dev/null 2>&1; then
+  echo "check: old host key unexpectedly authenticated after rotation" >&2
+  exit 1
+fi
+"${build_dir}/comet-hostd" report-observed-state \
+  --controller "http://127.0.0.1:${remote_http_port}" \
+  --node node-a \
+  --host-private-key "${remote_agent_rotated_layout_state_root}/keys/hostd.pem" \
+  --state-root "${remote_agent_state_root}" >/dev/null
+"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_agent_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
+"${build_dir}/comet-controller" revoke-hostd --db "${remote_agent_db_path}" --node node-a >/dev/null
+"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_agent_db_path}" --node node-a | grep -F '"registration_state": "revoked"' >/dev/null
+if "${build_dir}/comet-hostd" report-observed-state \
+  --controller "http://127.0.0.1:${remote_http_port}" \
+  --node node-a \
+  --host-private-key "${remote_agent_rotated_layout_state_root}/keys/hostd.pem" \
+  --state-root "${remote_agent_state_root}" >/dev/null 2>&1; then
+  echo "check: revoked host unexpectedly authenticated" >&2
+  exit 1
+fi
+kill "${http_server_pid}" >/dev/null 2>&1 || true
+wait "${http_server_pid}" >/dev/null 2>&1 || true
+http_server_pid=""
 
 "${build_dir}/comet-controller" show-demo-plan >/dev/null
 "${build_dir}/comet-controller" render-demo-compose --node node-a >/dev/null

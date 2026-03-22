@@ -36,6 +36,7 @@
 #include <nlohmann/json.hpp>
 
 #include "comet/compose_renderer.h"
+#include "comet/crypto_utils.h"
 #include "comet/demo_state.h"
 #include "comet/execution_plan.h"
 #include "comet/import_bundle.h"
@@ -207,6 +208,12 @@ void AppendControllerEvent(
     const std::optional<int>& rollout_action_id = std::nullopt,
     const std::string& severity = "info");
 
+std::string UtcNowSqlTimestamp();
+
+std::optional<long long> TimestampAgeSeconds(const std::string& timestamp_text);
+
+std::string Trim(const std::string& value);
+
 SchedulerRuntimeView LoadSchedulerRuntimeView(
     comet::ControllerStore& store,
     const std::optional<comet::DesiredState>& desired_state);
@@ -245,6 +252,9 @@ void PrintUsage() {
       << "  comet-controller show-plane --plane <plane-name> [--db <path>]\n"
       << "  comet-controller start-plane --plane <plane-name> [--db <path>]\n"
       << "  comet-controller stop-plane --plane <plane-name> [--db <path>]\n"
+      << "  comet-controller show-hostd-hosts [--db <path>] [--node <node-name>]\n"
+      << "  comet-controller revoke-hostd --node <node-name> [--db <path>] [--message <text>]\n"
+      << "  comet-controller rotate-hostd-key --node <node-name> --public-key <pem-or-file> [--db <path>] [--message <text>]\n"
       << "  comet-controller ensure-web-ui [--db <path>] [--web-ui-root <path>] [--listen-port <port>] [--controller-upstream <url>] [--compose-mode skip|exec]\n"
       << "  comet-controller show-web-ui-status [--db <path>] [--web-ui-root <path>]\n"
       << "  comet-controller stop-web-ui [--db <path>] [--web-ui-root <path>] [--compose-mode skip|exec]\n"
@@ -459,6 +469,34 @@ std::optional<std::string> ParseCategoryArg(int argc, char** argv) {
   return std::nullopt;
 }
 
+std::optional<std::string> ParsePublicKeyArg(int argc, char** argv) {
+  for (int index = 2; index < argc; ++index) {
+    const std::string arg = argv[index];
+    if (arg == "--public-key" && index + 1 < argc) {
+      return std::string(argv[index + 1]);
+    }
+  }
+  return std::nullopt;
+}
+
+std::string ReadTextFile(const std::filesystem::path& path) {
+  std::ifstream input(path);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to read file '" + path.string() + "'");
+  }
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+  return buffer.str();
+}
+
+std::string ReadPublicKeyArgument(const std::string& value) {
+  const std::filesystem::path candidate(value);
+  if (std::filesystem::exists(candidate)) {
+    return Trim(ReadTextFile(candidate));
+  }
+  return value;
+}
+
 std::string Trim(const std::string& value) {
   std::size_t start = 0;
   while (start < value.size() &&
@@ -602,6 +640,36 @@ HttpRequest ParseHttpRequest(const std::string& request_text) {
     offset = next + 2;
   }
   return request;
+}
+
+std::size_t ExpectedRequestBytes(const std::string& request_text) {
+  const std::size_t headers_end = request_text.find("\r\n\r\n");
+  if (headers_end == std::string::npos) {
+    return 0;
+  }
+  const std::string header_text = request_text.substr(0, headers_end);
+  std::size_t offset = 0;
+  std::size_t content_length = 0;
+  while (offset < header_text.size()) {
+    const std::size_t next = header_text.find("\r\n", offset);
+    const std::string line = header_text.substr(
+        offset,
+        next == std::string::npos ? std::string::npos : next - offset);
+    const std::size_t colon = line.find(':');
+    if (colon != std::string::npos) {
+      const std::string key = Lowercase(Trim(line.substr(0, colon)));
+      const std::string value = Trim(line.substr(colon + 1));
+      if (key == "content-length") {
+        content_length = static_cast<std::size_t>(std::stoul(value));
+        break;
+      }
+    }
+    if (next == std::string::npos) {
+      break;
+    }
+    offset = next + 2;
+  }
+  return headers_end + 4 + content_length;
 }
 
 std::string ReasonPhrase(int status_code) {
@@ -1112,6 +1180,12 @@ struct EventsViewData {
   std::vector<comet::EventRecord> events;
 };
 
+struct RegisteredHostsViewData {
+  std::string db_path;
+  std::optional<std::string> node_name;
+  std::vector<comet::RegisteredHostRecord> hosts;
+};
+
 std::string SerializeEventPayload(const json& payload) {
   return payload.dump();
 }
@@ -1280,6 +1354,18 @@ EventsViewData LoadEventsViewData(
   };
 }
 
+RegisteredHostsViewData LoadRegisteredHostsViewData(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name) {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  return RegisteredHostsViewData{
+      db_path,
+      node_name,
+      store.LoadRegisteredHosts(node_name),
+  };
+}
+
 json BuildEventPayloadItem(const comet::EventRecord& event) {
   json payload = json::object();
   if (!event.payload_json.empty()) {
@@ -1306,6 +1392,82 @@ json BuildEventPayloadItem(const comet::EventRecord& event) {
       {"payload", payload},
       {"created_at", event.created_at},
   };
+}
+
+json BuildAssignmentPayloadItem(const comet::HostAssignment& assignment) {
+  return json{
+      {"id", assignment.id},
+      {"node_name", assignment.node_name},
+      {"plane_name", assignment.plane_name},
+      {"desired_generation", assignment.desired_generation},
+      {"attempt_count", assignment.attempt_count},
+      {"max_attempts", assignment.max_attempts},
+      {"assignment_type", assignment.assignment_type},
+      {"desired_state_json", assignment.desired_state_json},
+      {"artifacts_root", assignment.artifacts_root},
+      {"status", comet::ToString(assignment.status)},
+      {"status_message", assignment.status_message},
+  };
+}
+
+comet::HostObservation ParseHostObservationPayload(const json& payload) {
+  comet::HostObservation observation;
+  observation.node_name = payload.value("node_name", std::string{});
+  observation.plane_name = payload.value("plane_name", std::string{});
+  if (payload.contains("applied_generation") && !payload.at("applied_generation").is_null()) {
+    observation.applied_generation = payload.at("applied_generation").get<int>();
+  }
+  if (payload.contains("last_assignment_id") && !payload.at("last_assignment_id").is_null()) {
+    observation.last_assignment_id = payload.at("last_assignment_id").get<int>();
+  }
+  observation.status =
+      comet::ParseHostObservationStatus(payload.value("status", std::string("idle")));
+  observation.status_message = payload.value("status_message", std::string{});
+  observation.observed_state_json = payload.value("observed_state_json", std::string{});
+  observation.runtime_status_json = payload.value("runtime_status_json", std::string{});
+  observation.instance_runtime_json = payload.value("instance_runtime_json", std::string{});
+  observation.gpu_telemetry_json = payload.value("gpu_telemetry_json", std::string{});
+  observation.disk_telemetry_json = payload.value("disk_telemetry_json", std::string{});
+  observation.network_telemetry_json = payload.value("network_telemetry_json", std::string{});
+  observation.cpu_telemetry_json = payload.value("cpu_telemetry_json", std::string{});
+  observation.heartbeat_at = payload.value("heartbeat_at", std::string{});
+  return observation;
+}
+
+json BuildDiskRuntimeStatePayloadItem(const comet::DiskRuntimeState& state) {
+  return json{
+      {"disk_name", state.disk_name},
+      {"plane_name", state.plane_name},
+      {"node_name", state.node_name},
+      {"image_path", state.image_path},
+      {"filesystem_type", state.filesystem_type},
+      {"loop_device", state.loop_device},
+      {"mount_point", state.mount_point},
+      {"runtime_state", state.runtime_state},
+      {"attached_at", state.attached_at},
+      {"mounted_at", state.mounted_at},
+      {"last_verified_at", state.last_verified_at},
+      {"status_message", state.status_message},
+      {"updated_at", state.updated_at},
+  };
+}
+
+comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const json& payload) {
+  comet::DiskRuntimeState state;
+  state.disk_name = payload.value("disk_name", std::string{});
+  state.plane_name = payload.value("plane_name", std::string{});
+  state.node_name = payload.value("node_name", std::string{});
+  state.image_path = payload.value("image_path", std::string{});
+  state.filesystem_type = payload.value("filesystem_type", std::string{});
+  state.loop_device = payload.value("loop_device", std::string{});
+  state.mount_point = payload.value("mount_point", std::string{});
+  state.runtime_state = payload.value("runtime_state", std::string{});
+  state.attached_at = payload.value("attached_at", std::string{});
+  state.mounted_at = payload.value("mounted_at", std::string{});
+  state.last_verified_at = payload.value("last_verified_at", std::string{});
+  state.status_message = payload.value("status_message", std::string{});
+  state.updated_at = payload.value("updated_at", std::string{});
+  return state;
 }
 
 json BuildHostAssignmentsPayload(
@@ -1337,6 +1499,43 @@ json BuildHostAssignmentsPayload(
       {"db_path", view.db_path},
       {"node_name", view.node_name.has_value() ? json(*view.node_name) : json(nullptr)},
       {"assignments", assignments},
+  };
+}
+
+json BuildRegisteredHostsPayload(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name) {
+  const auto view = LoadRegisteredHostsViewData(db_path, node_name);
+  json items = json::array();
+  for (const auto& host : view.hosts) {
+    items.push_back(json{
+        {"node_name", host.node_name},
+        {"advertised_address", host.advertised_address.empty() ? json(nullptr) : json(host.advertised_address)},
+        {"transport_mode", host.transport_mode},
+        {"registration_state", host.registration_state},
+        {"session_state", host.session_state},
+        {"controller_public_key_fingerprint",
+         host.controller_public_key_fingerprint.empty()
+             ? json(nullptr)
+             : json(host.controller_public_key_fingerprint)},
+        {"host_public_key_fingerprint",
+         host.public_key_pem.empty()
+             ? json(nullptr)
+             : json(comet::ComputeKeyFingerprintHex(host.public_key_pem))},
+        {"status_message", host.status_message.empty() ? json(nullptr) : json(host.status_message)},
+        {"last_session_at", host.last_session_at.empty() ? json(nullptr) : json(host.last_session_at)},
+        {"session_expires_at",
+         host.session_expires_at.empty() ? json(nullptr) : json(host.session_expires_at)},
+        {"last_heartbeat_at",
+         host.last_heartbeat_at.empty() ? json(nullptr) : json(host.last_heartbeat_at)},
+        {"updated_at", host.updated_at},
+    });
+  }
+  return json{
+      {"service", "comet-controller"},
+      {"db_path", view.db_path},
+      {"node_name", view.node_name.has_value() ? json(*view.node_name) : json(nullptr)},
+      {"items", items},
   };
 }
 
@@ -1841,7 +2040,9 @@ json BuildEventsPayload(
     const std::optional<std::string>& category,
     int limit);
 
-std::string ResolveArtifactsRoot(const std::optional<std::string>& artifacts_root_arg);
+std::string ResolveArtifactsRoot(
+    const std::optional<std::string>& artifacts_root_arg,
+    const std::string& fallback_artifacts_root = DefaultArtifactsRoot());
 
 int ReconcileRolloutActions(
     const std::string& db_path,
@@ -1900,6 +2101,17 @@ int StartPlane(const std::string& db_path, const std::string& plane_name);
 
 int StopPlane(const std::string& db_path, const std::string& plane_name);
 
+int RevokeHostd(
+    const std::string& db_path,
+    const std::string& node_name,
+    const std::optional<std::string>& status_message);
+
+int RotateHostdKey(
+    const std::string& db_path,
+    const std::string& node_name,
+    const std::string& public_key_pem,
+    const std::optional<std::string>& status_message);
+
 struct ControllerActionResult {
   std::string action_name;
   int exit_code = 0;
@@ -1935,6 +2147,125 @@ HttpResponse BuildJsonResponse(int status_code, const json& payload) {
     }
   }
   return HttpResponse{status_code, "application/json", enriched.dump()};
+}
+
+json ParseJsonRequestBody(const HttpRequest& request) {
+  if (request.body.empty()) {
+    return json::object();
+  }
+  return json::parse(request.body);
+}
+
+std::string BuildHostRequestAad(
+    const std::string& message_type,
+    const std::string& node_name,
+    std::int64_t sequence_number) {
+  return "request\n" + message_type + "\n" + node_name + "\n" + std::to_string(sequence_number);
+}
+
+std::string BuildHostResponseAad(
+    const std::string& message_type,
+    const std::string& node_name,
+    std::int64_t sequence_number) {
+  return "response\n" + message_type + "\n" + node_name + "\n" + std::to_string(sequence_number);
+}
+
+std::optional<comet::RegisteredHostRecord> AuthenticateHostSession(
+    comet::ControllerStore& store,
+    const HttpRequest& request,
+    const std::optional<std::string>& expected_node_name = std::nullopt) {
+  const auto token_it = request.headers.find("x-comet-host-session");
+  if (token_it == request.headers.end() || token_it->second.empty()) {
+    return std::nullopt;
+  }
+  const auto node_name_it = request.headers.find("x-comet-host-node");
+  if (node_name_it == request.headers.end() || node_name_it->second.empty()) {
+    return std::nullopt;
+  }
+  const auto host = store.LoadRegisteredHost(node_name_it->second);
+  if (!host.has_value()) {
+    return std::nullopt;
+  }
+  if (expected_node_name.has_value() && *expected_node_name != host->node_name) {
+    return std::nullopt;
+  }
+  if (host->registration_state != "registered") {
+    return std::nullopt;
+  }
+  if (!host->session_expires_at.empty()) {
+    const auto expires_age = TimestampAgeSeconds(host->session_expires_at);
+    if (expires_age.has_value() && *expires_age >= 0) {
+      return std::nullopt;
+    }
+  }
+  if (host->session_token.empty() || host->session_token != token_it->second) {
+    return std::nullopt;
+  }
+  return host;
+}
+
+constexpr int HostSessionLifetimeSeconds() {
+  return 600;
+}
+
+std::string SqlTimestampAfterSeconds(int seconds) {
+  const std::time_t future = std::time(nullptr) + seconds;
+  std::tm tm{};
+  gmtime_r(&future, &tm);
+  std::ostringstream out;
+  out << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+  return out.str();
+}
+
+json ParseEncryptedHostRequestBody(
+    comet::ControllerStore& store,
+    const HttpRequest& request,
+    comet::RegisteredHostRecord* host,
+    const std::string& message_type) {
+  const json body = ParseJsonRequestBody(request);
+  if (!body.value("encrypted", false)) {
+    return body;
+  }
+  const std::int64_t sequence_number = body.value("sequence_number", static_cast<std::int64_t>(0));
+  if (sequence_number <= host->session_host_sequence) {
+    throw std::runtime_error("stale or replayed host session request");
+  }
+  const comet::EncryptedEnvelope envelope{
+      body.value("nonce", std::string{}),
+      body.value("ciphertext", std::string{}),
+  };
+  const std::string decrypted = comet::DecryptEnvelopeBase64(
+      envelope,
+      host->session_token,
+      BuildHostRequestAad(message_type, host->node_name, sequence_number));
+  host->session_host_sequence = sequence_number;
+  host->session_expires_at = SqlTimestampAfterSeconds(HostSessionLifetimeSeconds());
+  store.UpsertRegisteredHost(*host);
+  if (decrypted.empty()) {
+    return json::object();
+  }
+  return json::parse(decrypted);
+}
+
+HttpResponse BuildEncryptedHostResponse(
+    comet::ControllerStore& store,
+    comet::RegisteredHostRecord* host,
+    const std::string& message_type,
+    const json& payload) {
+  host->session_controller_sequence += 1;
+  store.UpsertRegisteredHost(*host);
+  const comet::EncryptedEnvelope envelope = comet::EncryptEnvelopeBase64(
+      payload.dump(),
+      host->session_token,
+      BuildHostResponseAad(message_type, host->node_name, host->session_controller_sequence));
+  return BuildJsonResponse(
+      200,
+      json{
+          {"encrypted", true},
+          {"sequence_number", host->session_controller_sequence},
+          {"nonce", envelope.nonce_base64},
+          {"ciphertext", envelope.ciphertext_base64},
+      });
 }
 
 std::string GuessContentType(const std::filesystem::path& file_path) {
@@ -2205,6 +2536,25 @@ ControllerActionResult ExecuteStopPlaneAction(
       [&]() { return StopPlane(db_path, plane_name); });
 }
 
+ControllerActionResult ExecuteRevokeHostdAction(
+    const std::string& db_path,
+    const std::string& node_name,
+    const std::optional<std::string>& status_message) {
+  return RunControllerActionResult(
+      "revoke-hostd",
+      [&]() { return RevokeHostd(db_path, node_name, status_message); });
+}
+
+ControllerActionResult ExecuteRotateHostdKeyAction(
+    const std::string& db_path,
+    const std::string& node_name,
+    const std::string& public_key_pem,
+    const std::optional<std::string>& status_message) {
+  return RunControllerActionResult(
+      "rotate-hostd-key",
+      [&]() { return RotateHostdKey(db_path, node_name, public_key_pem, status_message); });
+}
+
 int ExecuteRemoteControllerCommand(
     const ControllerEndpointTarget& target,
     const std::string& command,
@@ -2259,6 +2609,46 @@ int ExecuteRemoteControllerCommand(
   if (command == "show-state") {
     return EmitRemoteJsonPayload(
         SendControllerJsonRequest(target, "GET", "/api/v1/state"));
+  }
+  if (command == "show-hostd-hosts") {
+    return EmitRemoteJsonPayload(
+        SendControllerJsonRequest(
+            target,
+            "GET",
+            "/api/v1/hostd/hosts",
+            {{"node", node_name.value_or("")}}));
+  }
+  if (command == "revoke-hostd") {
+    if (!node_name.has_value()) {
+      std::cerr << "error: --node is required\n";
+      return 1;
+    }
+    return EmitRemoteControllerActionPayload(
+        SendControllerJsonRequest(
+            target,
+            "POST",
+            "/api/v1/hostd/hosts/" + UrlEncode(*node_name) + "/revoke",
+            {{"message", message.value_or("")}}));
+  }
+  if (command == "rotate-hostd-key") {
+    if (!node_name.has_value()) {
+      std::cerr << "error: --node is required\n";
+      return 1;
+    }
+    const auto public_key = ParsePublicKeyArg(argc, argv);
+    if (!public_key.has_value()) {
+      std::cerr << "error: --public-key is required\n";
+      return 1;
+    }
+    return EmitRemoteControllerActionPayload(
+        SendControllerJsonRequest(
+            target,
+            "POST",
+            "/api/v1/hostd/hosts/" + UrlEncode(*node_name) + "/rotate-key",
+            json{
+                {"public_key_pem", ReadPublicKeyArgument(*public_key)},
+                {"message", message.value_or("")},
+            }));
   }
   if (command == "show-host-assignments") {
     return EmitRemoteJsonPayload(
@@ -2611,6 +3001,7 @@ void StreamEventsSse(
 
 HttpResponse HandleControllerRequest(
     const std::string& db_path,
+    const std::string& default_artifacts_root,
     const HttpRequest& request,
     const std::optional<std::filesystem::path>& ui_root) {
   const ScopedCurrentHttpRequest scoped_request(request);
@@ -2619,6 +3010,586 @@ HttpResponse HandleControllerRequest(
       return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
     }
     return BuildJsonResponse(200, BuildControllerHealthPayload(db_path));
+  }
+  if (request.path == "/api/v1/hostd/register") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      const json body = ParseJsonRequestBody(request);
+      const std::string node_name = body.value("node_name", std::string{});
+      if (node_name.empty()) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "missing required field 'node_name'"}});
+      }
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      comet::RegisteredHostRecord host;
+      if (const auto current = store.LoadRegisteredHost(node_name); current.has_value()) {
+        host = *current;
+      }
+      host.node_name = node_name;
+      host.advertised_address = body.value("advertised_address", host.advertised_address);
+      host.public_key_pem = body.value("public_key_pem", host.public_key_pem);
+      host.controller_public_key_fingerprint = body.value(
+          "controller_public_key_fingerprint",
+          host.controller_public_key_fingerprint);
+      host.transport_mode = body.value("transport_mode", host.transport_mode.empty() ? "out" : host.transport_mode);
+      host.registration_state = body.value(
+          "registration_state",
+          host.registration_state.empty() ? "registered" : host.registration_state);
+      host.session_state = body.value(
+          "session_state",
+          host.session_state.empty() ? "disconnected" : host.session_state);
+      host.session_token.clear();
+      host.session_expires_at.clear();
+      host.capabilities_json = body.value("capabilities_json", std::string("{}"));
+      host.status_message = body.value("status_message", std::string("registered via host-agent API"));
+      store.UpsertRegisteredHost(host);
+      AppendControllerEvent(
+          store,
+          "host-registry",
+          "registered",
+          "registered host node",
+          json{{"transport_mode", host.transport_mode}},
+          "",
+          node_name);
+      return BuildJsonResponse(
+          200,
+          json{
+              {"service", "comet-controller"},
+              {"node_name", node_name},
+              {"registration_state", host.registration_state},
+          });
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/hostd/hosts") {
+    if (request.method != "GET") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      return BuildJsonResponse(
+          200,
+          BuildRegisteredHostsPayload(db_path, FindQueryString(request, "node")));
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (StartsWithPath(request.path, "/api/v1/hostd/hosts/")) {
+    const std::string remainder =
+        request.path.substr(std::string("/api/v1/hostd/hosts/").size());
+    if (remainder.empty()) {
+      return BuildJsonResponse(404, json{{"status", "not_found"}});
+    }
+    const auto revoke_pos = remainder.find("/revoke");
+    if (revoke_pos != std::string::npos &&
+        revoke_pos + std::string("/revoke").size() == remainder.size()) {
+      if (request.method != "POST") {
+        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+      }
+      const std::string node_name = remainder.substr(0, revoke_pos);
+      try {
+        const json body = ParseJsonRequestBody(request);
+        const std::optional<std::string> message =
+            body.contains("message") && body["message"].is_string()
+                ? std::make_optional(body["message"].get<std::string>())
+                : std::nullopt;
+        return BuildJsonResponse(
+            200,
+            BuildControllerActionPayload(
+                ExecuteRevokeHostdAction(db_path, node_name, message)));
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+      }
+    }
+    const auto rotate_pos = remainder.find("/rotate-key");
+    if (rotate_pos != std::string::npos &&
+        rotate_pos + std::string("/rotate-key").size() == remainder.size()) {
+      if (request.method != "POST") {
+        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+      }
+      const std::string node_name = remainder.substr(0, rotate_pos);
+      try {
+        const json body = ParseJsonRequestBody(request);
+        const std::string public_key_pem = body.value("public_key_pem", std::string{});
+        if (public_key_pem.empty()) {
+          return BuildJsonResponse(
+              400,
+              json{{"status", "bad_request"}, {"message", "missing required field 'public_key_pem'"}}); 
+        }
+        const std::optional<std::string> message =
+            body.contains("message") && body["message"].is_string()
+                ? std::make_optional(body["message"].get<std::string>())
+                : std::nullopt;
+        return BuildJsonResponse(
+            200,
+            BuildControllerActionPayload(
+                ExecuteRotateHostdKeyAction(db_path, node_name, public_key_pem, message)));
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+      }
+    }
+    return BuildJsonResponse(404, json{{"status", "not_found"}});
+  }
+  if (request.path == "/api/v1/hostd/session/open") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      const json body = ParseJsonRequestBody(request);
+      const std::string node_name = body.value("node_name", std::string{});
+      if (node_name.empty()) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "missing required field 'node_name'"}});
+      }
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      auto current = store.LoadRegisteredHost(node_name);
+      if (!current.has_value()) {
+        return BuildJsonResponse(
+            404,
+            json{{"status", "not_found"}, {"message", "host node is not registered"}});
+      }
+      const std::string timestamp = body.value("timestamp", std::string{});
+      const std::string nonce = body.value("nonce", std::string{});
+      const std::string signature = body.value("signature", std::string{});
+      if (timestamp.empty() || nonce.empty() || signature.empty()) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "missing required session handshake fields"}});
+      }
+      if (current->public_key_pem.empty()) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "registered host is missing public key"}});
+      }
+      const std::string signed_message =
+          "hostd-session-open\n" + node_name + "\n" + timestamp + "\n" + nonce;
+      if (!comet::VerifyDetachedBase64(signed_message, signature, current->public_key_pem)) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "invalid host session signature"}});
+      }
+      current->session_state = "connected";
+      current->last_session_at = UtcNowSqlTimestamp();
+      current->session_token = comet::RandomTokenBase64(32);
+      current->session_expires_at = SqlTimestampAfterSeconds(HostSessionLifetimeSeconds());
+      current->session_host_sequence = 0;
+      current->session_controller_sequence = 0;
+      current->status_message = body.value("status_message", std::string("session opened"));
+      store.UpsertRegisteredHost(*current);
+      AppendControllerEvent(
+          store,
+          "host-registry",
+          "session-opened",
+          "opened host-agent session",
+          json::object(),
+          "",
+          node_name);
+      return BuildJsonResponse(
+          200,
+          json{
+              {"service", "comet-controller"},
+              {"node_name", node_name},
+              {"session_state", current->session_state},
+              {"last_session_at", current->last_session_at},
+              {"session_token", current->session_token},
+              {"controller_public_key_fingerprint",
+               current->controller_public_key_fingerprint},
+              {"controller_sequence", current->session_controller_sequence},
+          });
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/hostd/session/heartbeat") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto authenticated = AuthenticateHostSession(store, request);
+      if (!authenticated.has_value()) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
+      }
+      auto current = *authenticated;
+      const json decrypted = ParseEncryptedHostRequestBody(store, request, &current, "session/heartbeat");
+      const std::string node_name =
+          decrypted.value("node_name", current.node_name);
+      if (node_name.empty() || node_name != current.node_name) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "node mismatch for host heartbeat"}});
+      }
+      current.session_state = decrypted.value("session_state", std::string("connected"));
+      current.last_heartbeat_at = UtcNowSqlTimestamp();
+      current.last_session_at = current.last_heartbeat_at;
+      current.status_message = decrypted.value("status_message", std::string("heartbeat"));
+      store.UpsertRegisteredHost(current);
+      return BuildEncryptedHostResponse(
+          store,
+          &current,
+          "session/heartbeat",
+          json{
+              {"service", "comet-controller"},
+              {"node_name", node_name},
+              {"session_state", current.session_state},
+              {"last_heartbeat_at", current.last_heartbeat_at},
+          });
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/hostd/assignments/next") {
+    if (request.method != "GET" && request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      std::optional<std::string> node_name = FindQueryString(request, "node");
+      std::optional<comet::RegisteredHostRecord> authenticated;
+      bool encrypted_request = false;
+      if (request.method == "POST") {
+        authenticated = AuthenticateHostSession(store, request);
+        if (!authenticated.has_value()) {
+          return BuildJsonResponse(
+              403,
+              json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
+        }
+        auto host = *authenticated;
+        const json decrypted = ParseEncryptedHostRequestBody(store, request, &host, "assignments/next");
+        node_name = decrypted.contains("node_name")
+                        ? std::optional<std::string>(decrypted.value("node_name", std::string{}))
+                        : node_name;
+        authenticated = host;
+        encrypted_request = true;
+      }
+      if (!node_name.has_value() || node_name->empty()) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "missing required query parameter 'node'"}});
+      }
+      if (!authenticated.has_value()) {
+        authenticated = AuthenticateHostSession(store, request, *node_name);
+        if (!authenticated.has_value()) {
+          return BuildJsonResponse(
+              403,
+              json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
+        }
+      }
+      const auto assignment = store.ClaimNextHostAssignment(*node_name);
+      const json payload{
+          {"service", "comet-controller"},
+          {"node_name", *node_name},
+          {"assignment", assignment.has_value() ? BuildAssignmentPayloadItem(*assignment) : json(nullptr)},
+      };
+      if (encrypted_request) {
+        auto host = *authenticated;
+        return BuildEncryptedHostResponse(store, &host, "assignments/next", payload);
+      }
+      return BuildJsonResponse(200, payload);
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (StartsWithPath(request.path, "/api/v1/hostd/assignments/")) {
+    const std::string remainder =
+        request.path.substr(std::string("/api/v1/hostd/assignments/").size());
+    const auto slash = remainder.find('/');
+    if (slash == std::string::npos) {
+      return BuildJsonResponse(404, json{{"status", "not_found"}});
+    }
+    const int assignment_id = std::stoi(remainder.substr(0, slash));
+    const std::string action = remainder.substr(slash + 1);
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto assignment = store.LoadHostAssignment(assignment_id);
+      if (!assignment.has_value()) {
+        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "assignment not found"}});
+      }
+      const auto authenticated =
+          AuthenticateHostSession(store, request, assignment->node_name);
+      if (!authenticated.has_value()) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
+      }
+      auto host = *authenticated;
+      const json body = ParseEncryptedHostRequestBody(
+          store,
+          request,
+          &host,
+          "assignments/" + std::to_string(assignment_id) + "/" + action);
+      const std::string status_message = body.value("status_message", std::string{});
+      if (action == "applied") {
+        const bool updated = store.TransitionClaimedHostAssignment(
+            assignment_id,
+            comet::HostAssignmentStatus::Applied,
+            status_message);
+        return BuildEncryptedHostResponse(
+            store,
+            &host,
+            "assignments/" + std::to_string(assignment_id) + "/applied",
+            json{{"service", "comet-controller"}, {"updated", updated}, {"assignment_id", assignment_id}});
+      }
+      if (action == "failed") {
+        const bool retry = body.value("retry", false);
+        const bool updated = retry
+                                 ? store.TransitionClaimedHostAssignment(
+                                       assignment_id,
+                                       comet::HostAssignmentStatus::Pending,
+                                       status_message)
+                                 : store.TransitionClaimedHostAssignment(
+                                       assignment_id,
+                                       comet::HostAssignmentStatus::Failed,
+                                       status_message);
+        return BuildEncryptedHostResponse(
+            store,
+            &host,
+            "assignments/" + std::to_string(assignment_id) + "/failed",
+            json{
+                {"service", "comet-controller"},
+                {"updated", updated},
+                {"assignment_id", assignment_id},
+                {"retry", retry},
+            });
+      }
+      return BuildJsonResponse(404, json{{"status", "not_found"}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/hostd/observations") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto authenticated = AuthenticateHostSession(store, request);
+      if (!authenticated.has_value()) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
+      }
+      auto host = *authenticated;
+      const json body = ParseEncryptedHostRequestBody(store, request, &host, "observations/upsert");
+      const auto observation = ParseHostObservationPayload(body);
+      if (observation.node_name.empty()) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "missing required field 'node_name'"}});
+      }
+      if (host.node_name != observation.node_name) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "node mismatch for host observation"}});
+      }
+      store.UpsertHostObservation(observation);
+      AppendControllerEvent(
+          store,
+          "host-observation",
+          "reported",
+          "reported host observation via host-agent API",
+          json{{"status", comet::ToString(observation.status)}},
+          observation.plane_name,
+          observation.node_name,
+          "",
+          observation.last_assignment_id);
+      return BuildEncryptedHostResponse(
+          store,
+          &host,
+          "observations/upsert",
+          json{{"service", "comet-controller"}, {"node_name", observation.node_name}, {"updated", true}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/hostd/events") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto authenticated = AuthenticateHostSession(store, request);
+      if (!authenticated.has_value()) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
+      }
+      auto host = *authenticated;
+      const json body = ParseEncryptedHostRequestBody(store, request, &host, "events/append");
+      const std::string node_name = body.value("node_name", std::string{});
+      if (!node_name.empty() && node_name != host.node_name) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "node mismatch for event append"}});
+      }
+      store.AppendEvent(comet::EventRecord{
+          0,
+          body.value("plane_name", std::string{}),
+          body.value("node_name", std::string{}),
+          body.value("worker_name", std::string{}),
+          body.contains("assignment_id") && !body.at("assignment_id").is_null()
+              ? std::optional<int>(body.at("assignment_id").get<int>())
+              : std::nullopt,
+          body.contains("rollout_action_id") && !body.at("rollout_action_id").is_null()
+              ? std::optional<int>(body.at("rollout_action_id").get<int>())
+              : std::nullopt,
+          body.value("category", std::string{}),
+          body.value("event_type", std::string{}),
+          body.value("severity", std::string("info")),
+          body.value("message", std::string{}),
+          body.value("payload_json", std::string("{}")),
+          "",
+      });
+      return BuildEncryptedHostResponse(
+          store,
+          &host,
+          "events/append",
+          json{{"service", "comet-controller"}, {"appended", true}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/hostd/disk-runtime-state") {
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      if (request.method == "GET") {
+        const auto disk_name = FindQueryString(request, "disk_name");
+        const auto node_name = FindQueryString(request, "node");
+        if (!disk_name.has_value() || !node_name.has_value()) {
+          return BuildJsonResponse(
+              400,
+              json{{"status", "bad_request"}, {"message", "missing required query parameters 'disk_name' and 'node'"}});
+        }
+        const auto authenticated = AuthenticateHostSession(store, request, *node_name);
+        if (!authenticated.has_value()) {
+          return BuildJsonResponse(
+              403,
+              json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
+        }
+        const auto runtime_state = store.LoadDiskRuntimeState(*disk_name, *node_name);
+        return BuildJsonResponse(
+            200,
+            json{
+                {"service", "comet-controller"},
+                {"runtime_state", runtime_state.has_value() ? BuildDiskRuntimeStatePayloadItem(*runtime_state) : json(nullptr)},
+            });
+      }
+      if (request.method == "POST") {
+        const auto authenticated = AuthenticateHostSession(store, request);
+        if (!authenticated.has_value()) {
+          return BuildJsonResponse(
+              403,
+              json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
+        }
+        auto host = *authenticated;
+        const json body = ParseEncryptedHostRequestBody(store, request, &host, "disk-runtime-state/upsert");
+        const auto runtime_state = ParseDiskRuntimeStatePayload(body);
+        if (runtime_state.disk_name.empty() || runtime_state.node_name.empty()) {
+          return BuildJsonResponse(
+              400,
+              json{{"status", "bad_request"}, {"message", "missing required fields 'disk_name' and 'node_name'"}});
+        }
+        if (host.node_name != runtime_state.node_name) {
+          return BuildJsonResponse(
+              403,
+              json{{"status", "forbidden"}, {"message", "node mismatch for disk runtime state"}});
+        }
+        store.UpsertDiskRuntimeState(runtime_state);
+        return BuildEncryptedHostResponse(
+            store,
+            &host,
+            "disk-runtime-state/upsert",
+            json{{"service", "comet-controller"}, {"updated", true}, {"disk_name", runtime_state.disk_name}});
+      }
+      if (request.method == "POST" && request.path == "/api/v1/hostd/disk-runtime-state/load") {
+        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+      }
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/hostd/disk-runtime-state/load") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto authenticated = AuthenticateHostSession(store, request);
+      if (!authenticated.has_value()) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
+      }
+      auto host = *authenticated;
+      const json body = ParseEncryptedHostRequestBody(store, request, &host, "disk-runtime-state/load");
+      const std::string disk_name = body.value("disk_name", std::string{});
+      const std::string node_name = body.value("node_name", std::string{});
+      if (disk_name.empty() || node_name.empty()) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "missing disk_name or node_name"}});
+      }
+      if (host.node_name != node_name) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "node mismatch for disk runtime load"}});
+      }
+      const auto runtime_state = store.LoadDiskRuntimeState(disk_name, node_name);
+      return BuildEncryptedHostResponse(
+          store,
+          &host,
+          "disk-runtime-state/load",
+          json{
+              {"service", "comet-controller"},
+              {"runtime_state", runtime_state.has_value() ? BuildDiskRuntimeStatePayloadItem(*runtime_state)
+                                                          : json(nullptr)},
+          });
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
   }
   if (request.method == "GET" && ui_root.has_value()) {
     if (const auto static_path = ResolveUiRequestPath(*ui_root, request.path);
@@ -2712,7 +3683,9 @@ HttpResponse HandleControllerRequest(
               ExecuteApplyBundleAction(
                   db_path,
                   *bundle_dir,
-                  ResolveArtifactsRoot(FindQueryString(request, "artifacts_root")))));
+                  ResolveArtifactsRoot(
+                      FindQueryString(request, "artifacts_root"),
+                      default_artifacts_root))));
     } catch (const std::exception& error) {
       return BuildJsonResponse(
           500,
@@ -3008,7 +3981,9 @@ HttpResponse HandleControllerRequest(
           BuildControllerActionPayload(
               ExecuteSchedulerTickAction(
                   db_path,
-                  ResolveArtifactsRoot(FindQueryString(request, "artifacts_root")))));
+                  ResolveArtifactsRoot(
+                      FindQueryString(request, "artifacts_root"),
+                      default_artifacts_root))));
     } catch (const std::exception& error) {
       return BuildJsonResponse(
           500,
@@ -3025,7 +4000,9 @@ HttpResponse HandleControllerRequest(
           BuildControllerActionPayload(
               ExecuteReconcileRebalanceProposalsAction(
                   db_path,
-                  ResolveArtifactsRoot(FindQueryString(request, "artifacts_root")))));
+                  ResolveArtifactsRoot(
+                      FindQueryString(request, "artifacts_root"),
+                      default_artifacts_root))));
     } catch (const std::exception& error) {
       return BuildJsonResponse(
           500,
@@ -3042,7 +4019,9 @@ HttpResponse HandleControllerRequest(
           BuildControllerActionPayload(
               ExecuteReconcileRolloutActionsAction(
                   db_path,
-                  ResolveArtifactsRoot(FindQueryString(request, "artifacts_root")))));
+                  ResolveArtifactsRoot(
+                      FindQueryString(request, "artifacts_root"),
+                      default_artifacts_root))));
     } catch (const std::exception& error) {
       return BuildJsonResponse(
           500,
@@ -3066,7 +4045,9 @@ HttpResponse HandleControllerRequest(
               ExecuteApplyRebalanceProposalAction(
                   db_path,
                   *worker_name,
-                  ResolveArtifactsRoot(FindQueryString(request, "artifacts_root")))));
+                  ResolveArtifactsRoot(
+                      FindQueryString(request, "artifacts_root"),
+                      default_artifacts_root))));
     } catch (const std::exception& error) {
       return BuildJsonResponse(
           500,
@@ -3142,7 +4123,9 @@ HttpResponse HandleControllerRequest(
               ExecuteApplyReadyRolloutActionAction(
                   db_path,
                   *action_id,
-                  ResolveArtifactsRoot(FindQueryString(request, "artifacts_root")))));
+                  ResolveArtifactsRoot(
+                      FindQueryString(request, "artifacts_root"),
+                      default_artifacts_root))));
     } catch (const std::exception& error) {
       return BuildJsonResponse(
           500,
@@ -3181,6 +4164,7 @@ void ControllerSignalHandler(int) {
 
 int ServeControllerApi(
     const std::string& db_path,
+    const std::string& default_artifacts_root,
     const std::string& listen_host,
     int listen_port,
     const std::optional<std::filesystem::path>& ui_root) {
@@ -3195,10 +4179,11 @@ int ServeControllerApi(
   std::cout << "comet-controller serve\n";
   std::cout << "listen=" << listen_host << ":" << listen_port << "\n";
   std::cout << "db=" << db_path << "\n";
+  std::cout << "artifacts_root=" << default_artifacts_root << "\n";
   if (ui_root.has_value()) {
     std::cout << "ui_root=" << ui_root->string() << "\n";
   }
-  std::cout << "routes=/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment\n";
+  std::cout << "routes=/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key\n";
   std::cout.flush();
 
   while (!g_stop_requested.load()) {
@@ -3233,13 +4218,17 @@ int ServeControllerApi(
 
     std::string request_data;
     std::array<char, 8192> buffer{};
+    std::size_t expected_request_bytes = 0;
     while (true) {
       const ssize_t read_count = recv(client_fd, buffer.data(), buffer.size(), 0);
       if (read_count <= 0) {
         break;
       }
       request_data.append(buffer.data(), static_cast<std::size_t>(read_count));
-      if (request_data.find("\r\n\r\n") != std::string::npos) {
+      if (expected_request_bytes == 0) {
+        expected_request_bytes = ExpectedRequestBytes(request_data);
+      }
+      if (expected_request_bytes != 0 && request_data.size() >= expected_request_bytes) {
         break;
       }
     }
@@ -3254,7 +4243,8 @@ int ServeControllerApi(
             .detach();
         continue;
       }
-      const HttpResponse response = HandleControllerRequest(db_path, request, ui_root);
+      const HttpResponse response =
+          HandleControllerRequest(db_path, default_artifacts_root, request, ui_root);
       SendHttpResponse(client_fd, response);
     }
     shutdown(client_fd, SHUT_RDWR);
@@ -3269,8 +4259,10 @@ std::string ResolveDbPath(const std::optional<std::string>& db_arg) {
   return db_arg.value_or(DefaultDbPath());
 }
 
-std::string ResolveArtifactsRoot(const std::optional<std::string>& artifacts_root_arg) {
-  return artifacts_root_arg.value_or(DefaultArtifactsRoot());
+std::string ResolveArtifactsRoot(
+    const std::optional<std::string>& artifacts_root_arg,
+    const std::string& fallback_artifacts_root) {
+  return artifacts_root_arg.value_or(fallback_artifacts_root);
 }
 
 std::string ResolveWebUiRoot(const std::optional<std::string>& web_ui_root_arg) {
@@ -7749,6 +8741,14 @@ int ShowHostAssignments(
   return 0;
 }
 
+int ShowRegisteredHosts(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name) {
+  const json payload = BuildRegisteredHostsPayload(db_path, node_name);
+  std::cout << payload.dump(2) << "\n";
+  return 0;
+}
+
 int ShowHostObservations(
     const std::string& db_path,
     const std::optional<std::string>& plane_name,
@@ -9043,6 +10043,81 @@ int StopPlane(const std::string& db_path, const std::string& plane_name) {
   return 0;
 }
 
+int RevokeHostd(
+    const std::string& db_path,
+    const std::string& node_name,
+    const std::optional<std::string>& status_message) {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  auto host = store.LoadRegisteredHost(node_name);
+  if (!host.has_value()) {
+    throw std::runtime_error("registered host '" + node_name + "' not found");
+  }
+  const std::string previous_state = host->registration_state;
+  host->registration_state = "revoked";
+  host->session_state = "revoked";
+  host->session_token.clear();
+  host->session_expires_at.clear();
+  host->session_host_sequence = 0;
+  host->session_controller_sequence = 0;
+  host->status_message = status_message.value_or("revoked by operator");
+  store.UpsertRegisteredHost(*host);
+  AppendControllerEvent(
+      store,
+      "host-registry",
+      "revoked",
+      host->status_message,
+      json{{"previous_registration_state", previous_state}},
+      "",
+      node_name,
+      "",
+      std::nullopt,
+      std::nullopt,
+      "warning");
+  std::cout << "host revoked: " << node_name
+            << " previous_registration_state=" << previous_state << "\n";
+  return 0;
+}
+
+int RotateHostdKey(
+    const std::string& db_path,
+    const std::string& node_name,
+    const std::string& public_key_pem,
+    const std::optional<std::string>& status_message) {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  auto host = store.LoadRegisteredHost(node_name);
+  if (!host.has_value()) {
+    throw std::runtime_error("registered host '" + node_name + "' not found");
+  }
+  const std::string previous_fingerprint =
+      host->public_key_pem.empty() ? std::string{} : comet::ComputeKeyFingerprintHex(host->public_key_pem);
+  host->public_key_pem = Trim(public_key_pem);
+  host->registration_state = "registered";
+  host->session_state = "rotation-pending";
+  host->session_token.clear();
+  host->session_expires_at.clear();
+  host->session_host_sequence = 0;
+  host->session_controller_sequence = 0;
+  host->status_message = status_message.value_or("host public key rotated by operator");
+  store.UpsertRegisteredHost(*host);
+  AppendControllerEvent(
+      store,
+      "host-registry",
+      "rotated-key",
+      host->status_message,
+      json{
+          {"previous_fingerprint",
+           previous_fingerprint.empty() ? json(nullptr) : json(previous_fingerprint)},
+          {"next_fingerprint", comet::ComputeKeyFingerprintHex(host->public_key_pem)},
+      },
+      "",
+      node_name);
+  std::cout << "host key rotated: " << node_name
+            << " fingerprint=" << comet::ComputeKeyFingerprintHex(host->public_key_pem) << "\n";
+  return 0;
+}
+
 int ShowDiskState(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
@@ -9295,6 +10370,39 @@ int main(int argc, char** argv) {
       return ShowState(db_path);
     }
 
+    if (command == "show-hostd-hosts") {
+      return ShowRegisteredHosts(db_path, ParseNodeArg(argc, argv));
+    }
+
+    if (command == "revoke-hostd") {
+      const auto node_name = ParseNodeArg(argc, argv);
+      if (!node_name.has_value()) {
+        std::cerr << "error: --node is required\n";
+        return 1;
+      }
+      return EmitControllerActionResult(
+          ExecuteRevokeHostdAction(db_path, *node_name, ParseMessageArg(argc, argv)));
+    }
+
+    if (command == "rotate-hostd-key") {
+      const auto node_name = ParseNodeArg(argc, argv);
+      if (!node_name.has_value()) {
+        std::cerr << "error: --node is required\n";
+        return 1;
+      }
+      const auto public_key = ParsePublicKeyArg(argc, argv);
+      if (!public_key.has_value()) {
+        std::cerr << "error: --public-key is required\n";
+        return 1;
+      }
+      return EmitControllerActionResult(
+          ExecuteRotateHostdKeyAction(
+              db_path,
+              *node_name,
+              ReadPublicKeyArgument(*public_key),
+              ParseMessageArg(argc, argv)));
+    }
+
     if (command == "list-planes") {
       return ListPlanes(db_path);
     }
@@ -9533,6 +10641,7 @@ int main(int argc, char** argv) {
       }
       return ServeControllerApi(
           db_path,
+          ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv)),
           ParseListenHostArg(argc, argv).value_or(DefaultListenHost()),
           ParseListenPortArg(argc, argv).value_or(DefaultListenPort()),
           ui_root);

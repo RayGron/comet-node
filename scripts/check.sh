@@ -59,6 +59,15 @@ compute_runtime_root="${PWD}/var/runtime-compute"
 compute_state_root="${PWD}/var/hostd-state-compute"
 api_db_path="${PWD}/var/controller-api.sqlite"
 api_artifacts_root="${PWD}/var/artifacts-api"
+api_runtime_root="${PWD}/var/runtime-api"
+api_state_root="${PWD}/var/hostd-state-api"
+multiplane_db_path="${PWD}/var/controller-multiplane.sqlite"
+multiplane_artifacts_root="${PWD}/var/artifacts-multiplane"
+multiplane_runtime_root="${PWD}/var/runtime-multiplane"
+multiplane_state_root="${PWD}/var/hostd-state-multiplane"
+multiplane_beta_bundle="${PWD}/var/demo-plane-beta"
+web_ui_runtime_root="${PWD}/var/web-ui-runtime"
+ui_smoke_root="${PWD}/var/ui-smoke"
 http_server_pid=""
 
 cleanup() {
@@ -78,6 +87,7 @@ cmake -E rm -f "${budget_db_path}"
 cmake -E rm -f "${drain_db_path}"
 cmake -E rm -f "${compute_db_path}"
 cmake -E rm -f "${api_db_path}"
+cmake -E rm -f "${multiplane_db_path}"
 cmake -E remove_directory "${artifacts_root}"
 cmake -E remove_directory "${parallel_artifacts_root}"
 cmake -E remove_directory "${rebalance_artifacts_root}"
@@ -86,6 +96,7 @@ cmake -E remove_directory "${budget_artifacts_root}"
 cmake -E remove_directory "${drain_artifacts_root}"
 cmake -E remove_directory "${compute_artifacts_root}"
 cmake -E remove_directory "${api_artifacts_root}"
+cmake -E remove_directory "${multiplane_artifacts_root}"
 cmake -E remove_directory "${runtime_root}"
 cmake -E remove_directory "${parallel_runtime_root}"
 cmake -E remove_directory "${rebalance_runtime_root}"
@@ -93,6 +104,8 @@ cmake -E remove_directory "${threshold_runtime_root}"
 cmake -E remove_directory "${budget_runtime_root}"
 cmake -E remove_directory "${drain_runtime_root}"
 cmake -E remove_directory "${compute_runtime_root}"
+cmake -E remove_directory "${api_runtime_root}"
+cmake -E remove_directory "${multiplane_runtime_root}"
 cmake -E remove_directory "${preemption_artifacts_root}"
 cmake -E remove_directory "${preemption_runtime_root}"
 cmake -E remove_directory "${state_root}"
@@ -103,7 +116,12 @@ cmake -E remove_directory "${budget_state_root}"
 cmake -E remove_directory "${drain_state_root}"
 cmake -E remove_directory "${compute_state_root}"
 cmake -E remove_directory "${preemption_state_root}"
+cmake -E remove_directory "${api_state_root}"
+cmake -E remove_directory "${multiplane_state_root}"
 cmake -E remove_directory "${infer_model_root}"
+cmake -E remove_directory "${ui_smoke_root}"
+cmake -E remove_directory "${multiplane_beta_bundle}"
+cmake -E remove_directory "${web_ui_runtime_root}"
 cmake -E rm -f "${bad_state_root}"
 
 "${script_dir}/build-target.sh" "${host_os}" "${host_arch}" Debug
@@ -111,6 +129,8 @@ cmake -E rm -f "${bad_state_root}"
 "${build_dir}/comet-controller" show-demo-plan >/dev/null
 "${build_dir}/comet-controller" render-demo-compose --node node-a >/dev/null
 "${build_dir}/comet-controller" init-db --db "${db_path}" >/dev/null
+mkdir -p "${ui_smoke_root}/assets"
+cp -R "${PWD}/ui/operator/." "${ui_smoke_root}"
 http_port="$(python3 - <<'PY'
 import socket
 s = socket.socket()
@@ -119,7 +139,7 @@ print(s.getsockname()[1])
 s.close()
 PY
 )"
-"${build_dir}/comet-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${http_port}" >/tmp/comet-controller-serve.log 2>&1 &
+"${build_dir}/comet-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${http_port}" --ui-root "${ui_smoke_root}" >/tmp/comet-controller-serve.log 2>&1 &
 http_server_pid="$!"
 for _ in $(seq 1 50); do
   if curl -fsS "http://127.0.0.1:${http_port}/health" >/tmp/comet-controller-health.json 2>/dev/null; then
@@ -128,20 +148,43 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 wait_for_http "http://127.0.0.1:${http_port}/health" 100 "/tmp/comet-controller-serve.log"
+curl -fsS "http://127.0.0.1:${http_port}/" | grep -F 'Comet Command Deck' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/assets/app.js" | grep -F '/api/v1/dashboard' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/assets/app.js" | grep -F '/api/v1/events/stream' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/planes/alpha" | grep -F 'Comet Command Deck' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/health" | grep -F '"service":"comet-controller"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/health" | grep -F '"status":"ok"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/state" | grep -F '"desired_generation":null' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/state" | grep -F '"desired_state":null' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/planes" | grep -F '"items":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/planes/alpha" | grep -F '"desired_state":null' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-assignments" | grep -F '"assignments":[]' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations" | grep -F '"observations":[]' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-health" | grep -F '"items":[]' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state" | grep -F '"items":[]' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/rollout-actions" | grep -F '"actions":[]' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan" | grep -F '"rebalance_plan":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"plane":null' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"recent_events":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"alerts":{' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"critical":0' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"warning":0' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"booting":0' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/events" | grep -F '"events":[]' >/dev/null
 kill "${http_server_pid}" >/dev/null 2>&1 || true
 wait "${http_server_pid}" >/dev/null 2>&1 || true
 http_server_pid=""
+"${build_dir}/comet-controller" ensure-web-ui --db "${db_path}" --web-ui-root "${web_ui_runtime_root}" --listen-port 19081 --controller-upstream "http://host.docker.internal:18080" --compose-mode skip >/dev/null
+test -f "${web_ui_runtime_root}/docker-compose.yml"
+test -f "${web_ui_runtime_root}/web-ui-state.json"
+grep -F 'image: comet/web-ui:dev' "${web_ui_runtime_root}/docker-compose.yml" >/dev/null
+grep -F '19081:8080' "${web_ui_runtime_root}/docker-compose.yml" >/dev/null
+grep -F 'COMET_CONTROLLER_UPSTREAM: http://host.docker.internal:18080' "${web_ui_runtime_root}/docker-compose.yml" >/dev/null
+"${build_dir}/comet-controller" show-web-ui-status --web-ui-root "${web_ui_runtime_root}" | grep -F 'materialized=yes' >/dev/null
+"${build_dir}/comet-controller" show-web-ui-status --web-ui-root "${web_ui_runtime_root}" | grep -F 'running=no' >/dev/null
+"${build_dir}/comet-controller" stop-web-ui --db "${db_path}" --web-ui-root "${web_ui_runtime_root}" --compose-mode skip >/dev/null
+"${build_dir}/comet-controller" show-web-ui-status --web-ui-root "${web_ui_runtime_root}" | grep -F 'materialized=no' >/dev/null
+"${build_dir}/comet-controller" show-events --db "${db_path}" --category web-ui | grep -F 'category=web-ui type=stopped' >/dev/null
 "${build_dir}/comet-controller" init-db --db "${api_db_path}" >/dev/null
 http_api_port="$(python3 - <<'PY'
 import socket
@@ -160,6 +203,12 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 wait_for_http "http://127.0.0.1:${http_api_port}/health" 100 "/tmp/comet-controller-api-mutations.log"
+sse_bundle_output="/tmp/comet-controller-events-stream-bundle.txt"
+sse_replay_output="/tmp/comet-controller-events-stream-replay.txt"
+rm -f "${sse_bundle_output}" "${sse_replay_output}"
+curl -NsS --max-time 5 "http://127.0.0.1:${http_api_port}/api/v1/events/stream?category=bundle" >"${sse_bundle_output}" 2>/tmp/comet-controller-events-stream-bundle.log &
+sse_bundle_pid="$!"
+sleep 0.2
 api_validate_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/bundles/validate?bundle=${PWD}/config/demo-plane")"
 printf '%s' "${api_validate_output}" | grep -F '"action":"validate-bundle"' >/dev/null
 printf '%s' "${api_validate_output}" | grep -F 'bundle validation: OK' >/dev/null
@@ -172,6 +221,48 @@ printf '%s' "${api_import_output}" | grep -F "imported bundle '${PWD}/config/dem
 api_apply_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/bundles/apply?bundle=${PWD}/config/demo-plane&artifacts_root=${api_artifacts_root}")"
 printf '%s' "${api_apply_output}" | grep -F '"action":"apply-bundle"' >/dev/null
 printf '%s' "${api_apply_output}" | grep -F "applied bundle '${PWD}/config/demo-plane'" >/dev/null
+curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes" | grep -F '"name":"alpha"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha" | grep -F '"plane_name":"alpha"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha/dashboard" | grep -F '"plane_name":"alpha"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha/dashboard" | grep -F '"alerts"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/dashboard?plane=alpha" | grep -F '"plane_name":"alpha"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/disk-state?plane=alpha" | grep -F '"plane_name":"alpha"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/rollout-actions?plane=alpha" | grep -F '"plane_name":"alpha"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/rebalance-plan?plane=alpha" | grep -F '"plane_name":"alpha"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/events?plane=alpha&limit=5" | grep -F '"plane_name":"alpha"' >/dev/null
+api_stop_plane_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha/stop")"
+printf '%s' "${api_stop_plane_output}" | grep -F '"action":"stop-plane"' >/dev/null
+printf '%s' "${api_stop_plane_output}" | grep -F 'plane stopped: alpha' >/dev/null
+curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha" | grep -F '"state":"stopped"' >/dev/null
+"${build_dir}/comet-hostd" apply-next-assignment --node node-a --db "${api_db_path}" --runtime-root "${api_runtime_root}" --state-root "${api_state_root}" --compose-mode skip | grep -F 'assignment_type=stop-plane-state' >/dev/null
+"${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${api_state_root}" | grep -F 'instances=0' >/dev/null
+api_start_plane_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha/start")"
+printf '%s' "${api_start_plane_output}" | grep -F '"action":"start-plane"' >/dev/null
+printf '%s' "${api_start_plane_output}" | grep -F 'plane started: alpha' >/dev/null
+curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha" | grep -F '"state":"running"' >/dev/null
+for _ in $(seq 1 30); do
+  if grep -F 'event: bundle.imported' "${sse_bundle_output}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+kill "${sse_bundle_pid}" >/dev/null 2>&1 || true
+wait "${sse_bundle_pid}" >/dev/null 2>&1 || true
+grep -F 'event: bundle.imported' "${sse_bundle_output}" >/dev/null
+grep -F '"category":"bundle"' "${sse_bundle_output}" >/dev/null
+last_seen_event_id="$(python3 - <<'PY' "${api_db_path}"
+import sqlite3, sys
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+row = conn.execute("SELECT MAX(id) FROM event_log").fetchone()
+conn.close()
+print(row[0] if row and row[0] is not None else 0)
+PY
+)"
+test -n "${last_seen_event_id}"
+curl -NsS --max-time 5 -H "Last-Event-ID: ${last_seen_event_id}" "http://127.0.0.1:${http_api_port}/api/v1/events/stream?node=node-a" >"${sse_replay_output}" 2>/tmp/comet-controller-events-stream-replay.log &
+sse_replay_pid="$!"
+sleep 0.2
 api_availability_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/node-availability?node=node-b&availability=unavailable&message=api-http")"
 printf '%s' "${api_availability_output}" | grep -F '"action":"set-node-availability"' >/dev/null
 printf '%s' "${api_availability_output}" | grep -F 'updated node availability for node-b' >/dev/null
@@ -202,6 +293,19 @@ printf '%s' "${api_retry_output}" | grep -F "requeued host assignment id=${api_f
 "${build_dir}/comet-controller" show-node-availability --controller "http://127.0.0.1:${http_api_port}" --node node-b | grep -F '"availability": "unavailable"' >/dev/null
 "${build_dir}/comet-controller" validate-bundle --controller "http://127.0.0.1:${http_api_port}" --bundle "${PWD}/config/demo-plane" | grep -F 'bundle validation: OK' >/dev/null
 "${build_dir}/comet-controller" set-node-availability --controller "http://127.0.0.1:${http_api_port}" --node node-a --availability draining --message cli-http | grep -F 'updated node availability for node-a' >/dev/null
+for _ in $(seq 1 30); do
+  if grep -F 'event: node-availability.updated' "${sse_replay_output}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+kill "${sse_replay_pid}" >/dev/null 2>&1 || true
+wait "${sse_replay_pid}" >/dev/null 2>&1 || true
+grep -F 'event: node-availability.updated' "${sse_replay_output}" >/dev/null
+if grep -F 'event: bundle.imported' "${sse_replay_output}" >/dev/null 2>&1; then
+  echo "check: SSE replay stream unexpectedly replayed pre-cutoff bundle event" >&2
+  exit 1
+fi
 COMET_CONTROLLER="http://127.0.0.1:${http_api_port}" "${build_dir}/comet-controller" show-node-availability --node node-a | grep -F '"availability": "draining"' >/dev/null
 kill "${http_server_pid}" >/dev/null 2>&1 || true
 wait "${http_server_pid}" >/dev/null 2>&1 || true
@@ -572,9 +676,18 @@ curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" |
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-health?node=node-a" | grep -F '"node_name":"node-a"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-health?node=node-a" | grep -F '"health":"unknown"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state?node=node-a" | grep -F '"disk_name":"plane-alpha-shared"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state?plane=alpha&node=node-a" | grep -F '"plane_name":"alpha"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/rollout-actions?node=node-a" | grep -F '"actions":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/rollout-actions?plane=alpha&node=node-a" | grep -F '"plane_name":"alpha"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan?node=node-a" | grep -F '"rebalance_plan":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan?plane=alpha&node=node-a" | grep -F '"plane_name":"alpha"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan?node=node-a" | grep -F '"controller_gate"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"plane_name":"alpha"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"desired_generation":1' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"assignments"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"alerts"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"recent_events"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/events?plane=alpha&limit=5" | grep -F '"plane_name":"alpha"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/scheduler-tick?artifacts_root=${artifacts_root}" | grep -F '"action":"scheduler-tick"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/scheduler-tick?artifacts_root=${artifacts_root}" | grep -F 'step=rebalance-reconcile' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/reconcile-rebalance-proposals?artifacts_root=${artifacts_root}" | grep -F '"action":"reconcile-rebalance-proposals"' >/dev/null
@@ -688,7 +801,9 @@ perl -MJSON::PP -e '
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_read_bytes=" >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_faults=" >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "network_telemetry_source=sysfs" >/dev/null
+"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "cpu_telemetry_source=procfs" >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "net iface=eth0" >/dev/null
+"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "cpu loadavg=" >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "read_bytes=" >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "fault_count=" >/dev/null
 "${build_dir}/comet-controller" show-events --db "${db_path}" --node node-a | grep -F "category=host-observation type=reported" >/dev/null
@@ -696,7 +811,9 @@ perl -MJSON::PP -e '
 http_server_pid="$!"
 wait_for_http "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" 100 "/tmp/comet-controller-serve.log"
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"network_telemetry"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"cpu_telemetry"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"read_bytes"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"utilization_pct"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"fault_count"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"interface_name":"eth0"' >/dev/null
 curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state?node=node-a" | grep -F '"io_bytes"' >/dev/null
@@ -781,6 +898,104 @@ wait "${parallel_pid_a}"
 wait "${parallel_pid_b}"
 "${build_dir}/comet-controller" show-host-assignments --db "${parallel_db_path}" --node node-a | grep -F "status=applied" >/dev/null
 "${build_dir}/comet-controller" show-host-assignments --db "${parallel_db_path}" --node node-b | grep -F "status=applied" >/dev/null
+
+"${build_dir}/comet-controller" init-db --db "${multiplane_db_path}" >/dev/null
+mkdir -p "${multiplane_beta_bundle}/workers"
+cat > "${multiplane_beta_bundle}/plane.json" <<'JSON'
+{
+  "name": "beta",
+  "control_root": "/comet/shared/control/beta",
+  "runtime": {
+    "primary_infer_node": "node-a",
+    "net_if": "eth0",
+    "models_root": "/comet/shared/models",
+    "gguf_cache_dir": "/comet/shared/models/gguf",
+    "infer_log_dir": "/comet/shared/logs/infer",
+    "llama_port": 8001,
+    "llama_ctx_size": 8192,
+    "llama_threads": 8,
+    "llama_gpu_layers": 99,
+    "inference_healthcheck_retries": 300,
+    "inference_healthcheck_interval_sec": 5
+  },
+  "gateway": {
+    "listen_host": "0.0.0.0",
+    "listen_port": 8081,
+    "server_name": "beta.local"
+  },
+  "shared_disk_gb": 200,
+  "nodes": [
+    {
+      "name": "node-a",
+      "platform": "linux",
+      "gpus": ["0", "1"],
+      "gpu_memory_mb": {
+        "0": 24576,
+        "1": 24576
+      }
+    },
+    {
+      "name": "node-b",
+      "platform": "linux",
+      "gpus": ["0"],
+      "gpu_memory_mb": {
+        "0": 24576
+      }
+    }
+  ]
+}
+JSON
+cat > "${multiplane_beta_bundle}/infer.json" <<'JSON'
+{
+  "name": "infer-beta",
+  "node": "node-a",
+  "private_disk_gb": 80,
+  "image": "comet/infer-runtime:dev"
+}
+JSON
+cat > "${multiplane_beta_bundle}/workers/worker-c.json" <<'JSON'
+{
+  "name": "worker-c",
+  "node": "node-b",
+  "gpu_device": "0",
+  "share_mode": "shared",
+  "gpu_fraction": 0.25,
+  "priority": 120,
+  "preemptible": true,
+  "memory_cap_mb": 4096,
+  "private_disk_gb": 40,
+  "image": "comet/worker-runtime:dev"
+}
+JSON
+"${build_dir}/comet-controller" import-bundle --db "${multiplane_db_path}" --bundle "${PWD}/config/demo-plane" >/dev/null
+"${build_dir}/comet-controller" import-bundle --db "${multiplane_db_path}" --bundle "${multiplane_beta_bundle}" >/dev/null
+"${build_dir}/comet-controller" list-planes --db "${multiplane_db_path}" | grep -F "name=alpha state=ready generation=1" >/dev/null
+"${build_dir}/comet-controller" list-planes --db "${multiplane_db_path}" | grep -F "name=beta state=ready generation=1" >/dev/null
+"${build_dir}/comet-controller" start-plane --db "${multiplane_db_path}" --plane alpha >/dev/null
+"${build_dir}/comet-controller" start-plane --db "${multiplane_db_path}" --plane beta >/dev/null
+"${build_dir}/comet-controller" show-host-assignments --db "${multiplane_db_path}" --node node-a | grep -F "plane=alpha" >/dev/null
+"${build_dir}/comet-controller" show-host-assignments --db "${multiplane_db_path}" --node node-a | grep -F "plane=beta" >/dev/null
+"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-a --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
+"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-a --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
+"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-b --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
+"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-b --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
+test -f "${multiplane_state_root}/node-a/planes/alpha/applied-state.json"
+test -f "${multiplane_state_root}/node-a/planes/beta/applied-state.json"
+"${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${multiplane_state_root}" | grep -F "instances=3" >/dev/null
+"${build_dir}/comet-hostd" show-local-state --node node-b --state-root "${multiplane_state_root}" | grep -F "instances=2" >/dev/null
+"${build_dir}/comet-controller" stop-plane --db "${multiplane_db_path}" --plane alpha >/dev/null
+"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-a --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip | grep -F "assignment_type=stop-plane-state" >/dev/null
+"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-b --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip | grep -F "assignment_type=stop-plane-state" >/dev/null
+"${build_dir}/comet-controller" show-plane --db "${multiplane_db_path}" --plane alpha | grep -F "state=stopped" >/dev/null
+"${build_dir}/comet-controller" show-plane --db "${multiplane_db_path}" --plane beta | grep -F "state=running" >/dev/null
+"${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${multiplane_state_root}" | grep -F "instances=1" >/dev/null
+"${build_dir}/comet-hostd" show-local-state --node node-b --state-root "${multiplane_state_root}" | grep -F "instances=1" >/dev/null
+"${build_dir}/comet-controller" start-plane --db "${multiplane_db_path}" --plane alpha >/dev/null
+"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-a --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
+"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-b --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
+"${build_dir}/comet-controller" show-plane --db "${multiplane_db_path}" --plane alpha | grep -F "state=running" >/dev/null
+"${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${multiplane_state_root}" | grep -F "instances=3" >/dev/null
+"${build_dir}/comet-hostd" show-local-state --node node-b --state-root "${multiplane_state_root}" | grep -F "instances=2" >/dev/null
 
 test -d "${runtime_root}/var/lib/comet/disks/planes/alpha/shared"
 test -f "${runtime_root}/var/lib/comet/disks/planes/alpha/shared/control/alpha/infer-runtime.json"

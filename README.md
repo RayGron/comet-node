@@ -453,6 +453,7 @@ curl http://127.0.0.1:18080/api/v1/disk-state
 curl http://127.0.0.1:18080/api/v1/rollout-actions
 curl http://127.0.0.1:18080/api/v1/rebalance-plan
 curl http://127.0.0.1:18080/api/v1/events
+curl -N http://127.0.0.1:18080/api/v1/events/stream
 curl -X POST "http://127.0.0.1:18080/api/v1/scheduler-tick?artifacts_root=$(pwd)/var/artifacts"
 curl -X POST "http://127.0.0.1:18080/api/v1/reconcile-rebalance-proposals?artifacts_root=$(pwd)/var/artifacts"
 curl -X POST "http://127.0.0.1:18080/api/v1/reconcile-rollout-actions?artifacts_root=$(pwd)/var/artifacts"
@@ -526,6 +527,110 @@ There is also a dedicated live validation harness for Phase G telemetry and even
 ```bash
 ./scripts/check-live-phase-g.sh --skip-build
 ```
+
+The first Phase H realtime seam now exists through SSE on top of the persisted controller
+`event_log`:
+
+```bash
+curl -N http://127.0.0.1:18080/api/v1/events/stream
+curl -N -H "Last-Event-ID: 42" "http://127.0.0.1:18080/api/v1/events/stream?category=bundle"
+```
+
+The stream currently emits persisted controller/hostd events with:
+
+- `id`
+- `event: <category>.<event_type>`
+- JSON `data:` payload matching the `/api/v1/events` item shape
+
+Phase H also now has a first compact browser-facing aggregate read model:
+
+```bash
+curl http://127.0.0.1:18080/api/v1/dashboard
+```
+
+`GET /api/v1/dashboard` returns a compact JSON document with plane summary, node summary,
+runtime readiness counts, assignment summary, rollout summary, and recent events so the first
+browser UI does not need to stitch together many low-level endpoints.
+
+The controller can now also serve static frontend assets directly:
+
+```bash
+./build/linux/x64/comet-controller serve --db var/controller.sqlite --ui-root ui/operator
+```
+
+When `--ui-root` contains `index.html`, non-API browser paths are resolved from that directory,
+static assets such as `/assets/app.js` are served directly, and unknown non-API paths fall back
+to `index.html`.
+
+This seam is now considered a development fallback only.
+
+The production React workspace now lives under
+[ui/operator-react](/mnt/e/dev/Repos/comet-node/ui/operator-react). For local UI
+iteration without the sidecar image:
+
+```bash
+cd ui/operator-react
+npm install
+npm run build
+cd ../..
+./build/linux/x64/comet-controller serve --db var/controller.sqlite --ui-root ui/operator-react/dist
+```
+
+The updated Phase H production direction is:
+
+- a separate global `comet-web-ui` container on the controller host
+- browser origin terminates at `comet-web-ui`, not at `comet-controller`
+- `comet-web-ui` serves the operator UI and reverse-proxies `/api/*` and
+  `/api/v1/events/stream` into the controller
+- the production UI is now sourced from the React workspace, with `Node.js` allowed only as a build-time toolchain
+
+The controller now also has the first sidecar-management seam for that production path:
+
+```bash
+./build/linux/x64/comet-controller ensure-web-ui --db var/controller.sqlite --web-ui-root var/web-ui --listen-port 18081 --controller-upstream http://host.docker.internal:18080 --compose-mode skip
+./build/linux/x64/comet-controller show-web-ui-status --web-ui-root var/web-ui
+./build/linux/x64/comet-controller stop-web-ui --db var/controller.sqlite --web-ui-root var/web-ui --compose-mode skip
+```
+
+`ensure-web-ui` materializes controller-local compose/config artifacts for the `comet/web-ui:dev`
+sidecar. That image now builds the React workspace in a Node-based build stage and serves the
+resulting bundle from a minimal nginx runtime stage. `--compose-mode exec` uses Docker Compose to
+start or stop the sidecar; `skip` keeps the same code path but only renders lifecycle artifacts
+for smoke/dev environments.
+
+There is now also a live validation harness for the full browser-facing path:
+
+```bash
+./scripts/check-live-phase-h.sh
+```
+
+It validates:
+
+- `comet/web-ui:dev` image build
+- controller-side sidecar lifecycle
+- proxied REST through `comet-web-ui`
+- proxied SSE through `comet-web-ui`
+- browser-facing `stop-plane` / `start-plane` transitions through the sidecar path
+
+The current [ui/operator/index.html](/mnt/e/dev/Repos/comet-node/ui/operator/index.html) remains useful for:
+
+- local development
+- smoke validation
+- backend surface inspection as a plain non-React fallback
+
+The browser-facing runtime architecture is now:
+
+- `Level 0`: `comet-web-ui`
+- `Level 1`: `comet-controller`
+- `Level 2`: infer runtime
+- `Level 3`: worker runtime
+
+The updated Phase H backend also needs:
+
+- multi-plane controller/store/planner support
+- plane lifecycle operations such as `start-plane` and `stop-plane`
+- `stop-plane = scale-to-zero, keep config`
+- CPU telemetry as part of the browser-facing observability surface
 
 Show controller-side host health, including stale-heartbeat detection:
 

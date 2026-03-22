@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -37,6 +38,14 @@ CREATE TABLE IF NOT EXISTS nodes (
     platform TEXT NOT NULL,
     state TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS plane_nodes (
+    plane_name TEXT NOT NULL,
+    node_name TEXT NOT NULL,
+    PRIMARY KEY (plane_name, node_name),
+    FOREIGN KEY (plane_name) REFERENCES planes(name) ON DELETE CASCADE,
+    FOREIGN KEY (node_name) REFERENCES nodes(name) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS node_gpus (
@@ -153,6 +162,7 @@ CREATE TABLE IF NOT EXISTS node_availability_overrides (
 
 CREATE TABLE IF NOT EXISTS rollout_actions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plane_name TEXT NOT NULL DEFAULT '',
     desired_generation INTEGER NOT NULL,
     step INTEGER NOT NULL,
     worker_name TEXT NOT NULL,
@@ -180,6 +190,7 @@ CREATE TABLE IF NOT EXISTS host_observations (
     gpu_telemetry_json TEXT NOT NULL DEFAULT '',
     disk_telemetry_json TEXT NOT NULL DEFAULT '',
     network_telemetry_json TEXT NOT NULL DEFAULT '',
+    cpu_telemetry_json TEXT NOT NULL DEFAULT '',
     heartbeat_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -559,16 +570,17 @@ std::string SerializeStringArray(const std::vector<std::string>& values) {
 RolloutActionRecord RolloutActionFromStatement(sqlite3_stmt* statement) {
   RolloutActionRecord action;
   action.id = sqlite3_column_int(statement, 0);
-  action.desired_generation = sqlite3_column_int(statement, 1);
-  action.step = sqlite3_column_int(statement, 2);
-  action.worker_name = ToColumnText(statement, 3);
-  action.action = ToColumnText(statement, 4);
-  action.target_node_name = ToColumnText(statement, 5);
-  action.target_gpu_device = ToColumnText(statement, 6);
-  action.victim_worker_names = DeserializeStringArray(ToColumnText(statement, 7));
-  action.reason = ToColumnText(statement, 8);
-  action.status = ParseRolloutActionStatus(ToColumnText(statement, 9));
-  action.status_message = ToColumnText(statement, 10);
+  action.plane_name = ToColumnText(statement, 1);
+  action.desired_generation = sqlite3_column_int(statement, 2);
+  action.step = sqlite3_column_int(statement, 3);
+  action.worker_name = ToColumnText(statement, 4);
+  action.action = ToColumnText(statement, 5);
+  action.target_node_name = ToColumnText(statement, 6);
+  action.target_gpu_device = ToColumnText(statement, 7);
+  action.victim_worker_names = DeserializeStringArray(ToColumnText(statement, 8));
+  action.reason = ToColumnText(statement, 9);
+  action.status = ParseRolloutActionStatus(ToColumnText(statement, 10));
+  action.status_message = ToColumnText(statement, 11);
   return action;
 }
 
@@ -586,7 +598,8 @@ HostObservation ObservationFromStatement(sqlite3_stmt* statement) {
   observation.gpu_telemetry_json = ToColumnText(statement, 9);
   observation.disk_telemetry_json = ToColumnText(statement, 10);
   observation.network_telemetry_json = ToColumnText(statement, 11);
-  observation.heartbeat_at = ToColumnText(statement, 12);
+  observation.cpu_telemetry_json = ToColumnText(statement, 12);
+  observation.heartbeat_at = ToColumnText(statement, 13);
   return observation;
 }
 
@@ -658,6 +671,18 @@ EventRecord EventFromStatement(sqlite3_stmt* statement) {
   event.payload_json = ToColumnText(statement, 10);
   event.created_at = ToColumnText(statement, 11);
   return event;
+}
+
+PlaneRecord PlaneFromStatement(sqlite3_stmt* statement) {
+  PlaneRecord plane;
+  plane.name = ToColumnText(statement, 0);
+  plane.shared_disk_name = ToColumnText(statement, 1);
+  plane.control_root = ToColumnText(statement, 2);
+  plane.generation = sqlite3_column_int(statement, 3);
+  plane.rebalance_iteration = sqlite3_column_int(statement, 4);
+  plane.state = ToColumnText(statement, 5);
+  plane.created_at = ToColumnText(statement, 6);
+  return plane;
 }
 
 DiskRuntimeState DiskRuntimeStateFromStatement(sqlite3_stmt* statement) {
@@ -766,6 +791,36 @@ void ControllerStore::Initialize() {
       "network_telemetry_json TEXT NOT NULL DEFAULT ''");
   EnsureColumn(
       db,
+      "host_observations",
+      "cpu_telemetry_json",
+      "cpu_telemetry_json TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "rollout_actions",
+      "plane_name",
+      "plane_name TEXT NOT NULL DEFAULT ''");
+  {
+    Statement blank_rollout_statement(
+        db,
+        "SELECT 1 FROM rollout_actions WHERE plane_name = '' LIMIT 1;");
+    if (blank_rollout_statement.StepRow()) {
+      Statement plane_statement(
+          db,
+          "SELECT name FROM planes ORDER BY generation DESC, created_at DESC LIMIT 1;");
+      if (plane_statement.StepRow()) {
+        const std::string plane_name = ToColumnText(plane_statement.raw(), 0);
+        if (!plane_name.empty()) {
+          Statement backfill_statement(
+              db,
+              "UPDATE rollout_actions SET plane_name = ?1 WHERE plane_name = '';");
+          backfill_statement.BindText(1, plane_name);
+          backfill_statement.StepDone();
+        }
+      }
+    }
+  }
+  EnsureColumn(
+      db,
       "scheduler_worker_runtime",
       "last_scheduler_phase",
       "last_scheduler_phase TEXT NOT NULL DEFAULT ''");
@@ -793,16 +848,27 @@ void ControllerStore::ReplaceDesiredState(
   Exec(db, "BEGIN IMMEDIATE TRANSACTION;");
 
   try {
-    Exec(
-        db,
-        "DELETE FROM instance_labels;"
-        "DELETE FROM instance_environment;"
-        "DELETE FROM instance_dependencies;"
-        "DELETE FROM instances;"
-        "DELETE FROM virtual_disks;"
-        "DELETE FROM node_gpus;"
-        "DELETE FROM nodes;"
-        "DELETE FROM planes;");
+    {
+      Statement statement(
+          db,
+          "DELETE FROM virtual_disks WHERE plane_name = ?1;");
+      statement.BindText(1, state.plane_name);
+      statement.StepDone();
+    }
+    {
+      Statement statement(
+          db,
+          "DELETE FROM instances WHERE plane_name = ?1;");
+      statement.BindText(1, state.plane_name);
+      statement.StepDone();
+    }
+    {
+      Statement statement(
+          db,
+          "DELETE FROM plane_nodes WHERE plane_name = ?1;");
+      statement.BindText(1, state.plane_name);
+      statement.StepDone();
+    }
 
     {
       Statement statement(
@@ -810,7 +876,16 @@ void ControllerStore::ReplaceDesiredState(
           "INSERT INTO planes("
           "name, shared_disk_name, control_root, inference_config_json, gateway_config_json, "
           "runtime_gpu_nodes_json, generation, rebalance_iteration, state"
-          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'ready');");
+          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'ready') "
+          "ON CONFLICT(name) DO UPDATE SET "
+          "shared_disk_name = excluded.shared_disk_name, "
+          "control_root = excluded.control_root, "
+          "inference_config_json = excluded.inference_config_json, "
+          "gateway_config_json = excluded.gateway_config_json, "
+          "runtime_gpu_nodes_json = excluded.runtime_gpu_nodes_json, "
+          "generation = excluded.generation, "
+          "rebalance_iteration = excluded.rebalance_iteration, "
+          "state = excluded.state;");
       statement.BindText(1, state.plane_name);
       statement.BindText(2, state.plane_shared_disk_name);
       statement.BindText(
@@ -828,10 +903,28 @@ void ControllerStore::ReplaceDesiredState(
     for (const auto& node : state.nodes) {
       Statement node_statement(
           db,
-          "INSERT INTO nodes(name, platform, state) VALUES(?1, ?2, 'ready');");
+          "INSERT INTO nodes(name, platform, state) VALUES(?1, ?2, 'ready') "
+          "ON CONFLICT(name) DO UPDATE SET "
+          "platform = excluded.platform, "
+          "state = excluded.state;");
       node_statement.BindText(1, node.name);
       node_statement.BindText(2, node.platform);
       node_statement.StepDone();
+
+      Statement membership_statement(
+          db,
+          "INSERT INTO plane_nodes(plane_name, node_name) VALUES(?1, ?2);");
+      membership_statement.BindText(1, state.plane_name);
+      membership_statement.BindText(2, node.name);
+      membership_statement.StepDone();
+
+      {
+        Statement clear_gpu_statement(
+            db,
+            "DELETE FROM node_gpus WHERE node_name = ?1;");
+        clear_gpu_statement.BindText(1, node.name);
+        clear_gpu_statement.StepDone();
+      }
 
       for (const auto& gpu_device : node.gpu_devices) {
         Statement gpu_statement(
@@ -935,14 +1028,27 @@ void ControllerStore::ReplaceDesiredState(const DesiredState& state) {
 
 std::optional<DesiredState> ControllerStore::LoadDesiredState() const {
   sqlite3* db = AsSqlite(db_);
+  Statement plane_statement(
+      db,
+      "SELECT name FROM planes ORDER BY created_at DESC, name ASC LIMIT 1;");
+  if (!plane_statement.StepRow()) {
+    return std::nullopt;
+  }
+  return LoadDesiredState(ToColumnText(plane_statement.raw(), 0));
+}
+
+std::optional<DesiredState> ControllerStore::LoadDesiredState(const std::string& plane_name) const {
+  sqlite3* db = AsSqlite(db_);
   DesiredState state;
+  std::set<std::string> plane_node_names;
 
   {
     Statement statement(
         db,
         "SELECT name, shared_disk_name, control_root, inference_config_json, gateway_config_json, "
         "runtime_gpu_nodes_json "
-        "FROM planes ORDER BY created_at DESC, name ASC LIMIT 1;");
+        "FROM planes WHERE name = ?1;");
+    statement.BindText(1, plane_name);
     if (!statement.StepRow()) {
       return std::nullopt;
     }
@@ -955,36 +1061,92 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState() const {
     state.inference = DeserializeInferenceSettings(ToColumnText(statement.raw(), 3));
     state.gateway = DeserializeGatewaySettings(ToColumnText(statement.raw(), 4));
     state.runtime_gpu_nodes = DeserializeRuntimeGpuNodes(ToColumnText(statement.raw(), 5));
+    for (const auto& runtime_node : state.runtime_gpu_nodes) {
+      plane_node_names.insert(runtime_node.node_name);
+    }
+  }
+
+  {
+    Statement membership_statement(
+        db,
+        "SELECT node_name FROM plane_nodes WHERE plane_name = ?1 ORDER BY node_name ASC;");
+    membership_statement.BindText(1, plane_name);
+    while (membership_statement.StepRow()) {
+      plane_node_names.insert(ToColumnText(membership_statement.raw(), 0));
+    }
+  }
+
+  {
+    Statement disk_statement(
+        db,
+        "SELECT node_name FROM virtual_disks WHERE plane_name = ?1;");
+    disk_statement.BindText(1, plane_name);
+    while (disk_statement.StepRow()) {
+      plane_node_names.insert(ToColumnText(disk_statement.raw(), 0));
+    }
+    Statement instance_statement(
+        db,
+        "SELECT node_name FROM instances WHERE plane_name = ?1;");
+    instance_statement.BindText(1, plane_name);
+    while (instance_statement.StepRow()) {
+      plane_node_names.insert(ToColumnText(instance_statement.raw(), 0));
+    }
+    if (!state.inference.primary_infer_node.empty()) {
+      plane_node_names.insert(state.inference.primary_infer_node);
+    }
   }
 
   {
     std::map<std::string, std::size_t> node_indexes;
-    Statement node_statement(
-        db,
-        "SELECT name, platform FROM nodes ORDER BY name ASC;");
-    while (node_statement.StepRow()) {
-      NodeInventory node;
-      node.name = ToColumnText(node_statement.raw(), 0);
-      node.platform = ToColumnText(node_statement.raw(), 1);
-      node_indexes[node.name] = state.nodes.size();
-      state.nodes.push_back(std::move(node));
-    }
-
-    Statement gpu_statement(
-        db,
-        "SELECT node_name, gpu_device, memory_mb "
-        "FROM node_gpus ORDER BY node_name ASC, gpu_device ASC;");
-    while (gpu_statement.StepRow()) {
-      const std::string node_name = ToColumnText(gpu_statement.raw(), 0);
-      const auto node_it = node_indexes.find(node_name);
-      if (node_it == node_indexes.end()) {
-        throw std::runtime_error("gpu row references unknown node '" + node_name + "'");
+    if (!plane_node_names.empty()) {
+      std::string node_sql = "SELECT name, platform FROM nodes WHERE name IN (";
+      for (std::size_t index = 0; index < plane_node_names.size(); ++index) {
+        if (index > 0) {
+          node_sql += ", ";
+        }
+        node_sql += "?" + std::to_string(index + 1);
       }
-      const std::string gpu_device = ToColumnText(gpu_statement.raw(), 1);
-      state.nodes[node_it->second].gpu_devices.push_back(gpu_device);
-      const int memory_mb = sqlite3_column_int(gpu_statement.raw(), 2);
-      if (memory_mb > 0) {
-        state.nodes[node_it->second].gpu_memory_mb[gpu_device] = memory_mb;
+      node_sql += ") ORDER BY name ASC;";
+      Statement node_statement(db, node_sql);
+      int bind_index = 1;
+      for (const auto& node_name : plane_node_names) {
+        node_statement.BindText(bind_index++, node_name);
+      }
+      while (node_statement.StepRow()) {
+        NodeInventory node;
+        node.name = ToColumnText(node_statement.raw(), 0);
+        node.platform = ToColumnText(node_statement.raw(), 1);
+        node_indexes[node.name] = state.nodes.size();
+        state.nodes.push_back(std::move(node));
+      }
+
+      std::string gpu_sql =
+          "SELECT node_name, gpu_device, memory_mb "
+          "FROM node_gpus WHERE node_name IN (";
+      for (std::size_t index = 0; index < plane_node_names.size(); ++index) {
+        if (index > 0) {
+          gpu_sql += ", ";
+        }
+        gpu_sql += "?" + std::to_string(index + 1);
+      }
+      gpu_sql += ") ORDER BY node_name ASC, gpu_device ASC;";
+      Statement gpu_statement(db, gpu_sql);
+      bind_index = 1;
+      for (const auto& node_name : plane_node_names) {
+        gpu_statement.BindText(bind_index++, node_name);
+      }
+      while (gpu_statement.StepRow()) {
+        const std::string node_name = ToColumnText(gpu_statement.raw(), 0);
+        const auto node_it = node_indexes.find(node_name);
+        if (node_it == node_indexes.end()) {
+          throw std::runtime_error("gpu row references unknown node '" + node_name + "'");
+        }
+        const std::string gpu_device = ToColumnText(gpu_statement.raw(), 1);
+        state.nodes[node_it->second].gpu_devices.push_back(gpu_device);
+        const int memory_mb = sqlite3_column_int(gpu_statement.raw(), 2);
+        if (memory_mb > 0) {
+          state.nodes[node_it->second].gpu_memory_mb[gpu_device] = memory_mb;
+        }
       }
     }
   }
@@ -993,7 +1155,8 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState() const {
     Statement statement(
         db,
         "SELECT name, plane_name, owner_name, node_name, kind, host_path, container_path, size_gb "
-        "FROM virtual_disks ORDER BY name ASC;");
+        "FROM virtual_disks WHERE plane_name = ?1 ORDER BY name ASC;");
+    statement.BindText(1, plane_name);
     while (statement.StepRow()) {
       DiskSpec disk;
       disk.name = ToColumnText(statement.raw(), 0);
@@ -1015,7 +1178,8 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState() const {
         "SELECT name, plane_name, node_name, role, image, command, private_disk_name, "
         "shared_disk_name, gpu_device, placement_mode, share_mode, gpu_fraction, priority, preemptible, "
         "memory_cap_mb, private_disk_size_gb "
-        "FROM instances ORDER BY name ASC;");
+        "FROM instances WHERE plane_name = ?1 ORDER BY name ASC;");
+    statement.BindText(1, plane_name);
     while (statement.StepRow()) {
       InstanceSpec instance;
       instance.name = ToColumnText(statement.raw(), 0);
@@ -1045,8 +1209,12 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState() const {
   {
     Statement statement(
         db,
-        "SELECT instance_name, dependency_name "
-        "FROM instance_dependencies ORDER BY instance_name ASC, dependency_name ASC;");
+        "SELECT d.instance_name, d.dependency_name "
+        "FROM instance_dependencies d "
+        "JOIN instances i ON i.name = d.instance_name "
+        "WHERE i.plane_name = ?1 "
+        "ORDER BY d.instance_name ASC, d.dependency_name ASC;");
+    statement.BindText(1, plane_name);
     while (statement.StepRow()) {
       const std::string instance_name = ToColumnText(statement.raw(), 0);
       const auto instance_it = instance_indexes.find(instance_name);
@@ -1061,8 +1229,12 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState() const {
   {
     Statement statement(
         db,
-        "SELECT instance_name, env_key, env_value "
-        "FROM instance_environment ORDER BY instance_name ASC, env_key ASC;");
+        "SELECT e.instance_name, e.env_key, e.env_value "
+        "FROM instance_environment e "
+        "JOIN instances i ON i.name = e.instance_name "
+        "WHERE i.plane_name = ?1 "
+        "ORDER BY e.instance_name ASC, e.env_key ASC;");
+    statement.BindText(1, plane_name);
     while (statement.StepRow()) {
       const std::string instance_name = ToColumnText(statement.raw(), 0);
       const auto instance_it = instance_indexes.find(instance_name);
@@ -1078,8 +1250,12 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState() const {
   {
     Statement statement(
         db,
-        "SELECT instance_name, label_key, label_value "
-        "FROM instance_labels ORDER BY instance_name ASC, label_key ASC;");
+        "SELECT l.instance_name, l.label_key, l.label_value "
+        "FROM instance_labels l "
+        "JOIN instances i ON i.name = l.instance_name "
+        "WHERE i.plane_name = ?1 "
+        "ORDER BY l.instance_name ASC, l.label_key ASC;");
+    statement.BindText(1, plane_name);
     while (statement.StepRow()) {
       const std::string instance_name = ToColumnText(statement.raw(), 0);
       const auto instance_it = instance_indexes.find(instance_name);
@@ -1104,11 +1280,33 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState() const {
   return state;
 }
 
+std::vector<DesiredState> ControllerStore::LoadDesiredStates() const {
+  std::vector<DesiredState> states;
+  for (const auto& plane : LoadPlanes()) {
+    if (auto state = LoadDesiredState(plane.name); state.has_value()) {
+      states.push_back(std::move(*state));
+    }
+  }
+  return states;
+}
+
 std::optional<int> ControllerStore::LoadDesiredGeneration() const {
+  sqlite3* db = AsSqlite(db_);
+  Statement plane_statement(
+      db,
+      "SELECT name FROM planes ORDER BY created_at DESC, name ASC LIMIT 1;");
+  if (!plane_statement.StepRow()) {
+    return std::nullopt;
+  }
+  return LoadDesiredGeneration(ToColumnText(plane_statement.raw(), 0));
+}
+
+std::optional<int> ControllerStore::LoadDesiredGeneration(const std::string& plane_name) const {
   sqlite3* db = AsSqlite(db_);
   Statement statement(
       db,
-      "SELECT generation FROM planes ORDER BY created_at DESC, name ASC LIMIT 1;");
+      "SELECT generation FROM planes WHERE name = ?1;");
+  statement.BindText(1, plane_name);
   if (!statement.StepRow()) {
     return std::nullopt;
   }
@@ -1117,13 +1315,80 @@ std::optional<int> ControllerStore::LoadDesiredGeneration() const {
 
 std::optional<int> ControllerStore::LoadRebalanceIteration() const {
   sqlite3* db = AsSqlite(db_);
+  Statement plane_statement(
+      db,
+      "SELECT name FROM planes ORDER BY created_at DESC, name ASC LIMIT 1;");
+  if (!plane_statement.StepRow()) {
+    return std::nullopt;
+  }
+  return LoadRebalanceIteration(ToColumnText(plane_statement.raw(), 0));
+}
+
+std::optional<int> ControllerStore::LoadRebalanceIteration(
+    const std::string& plane_name) const {
+  sqlite3* db = AsSqlite(db_);
   Statement statement(
       db,
-      "SELECT rebalance_iteration FROM planes ORDER BY created_at DESC, name ASC LIMIT 1;");
+      "SELECT rebalance_iteration FROM planes WHERE name = ?1;");
+  statement.BindText(1, plane_name);
   if (!statement.StepRow()) {
     return std::nullopt;
   }
   return sqlite3_column_int(statement.raw(), 0);
+}
+
+std::vector<PlaneRecord> ControllerStore::LoadPlanes() const {
+  sqlite3* db = AsSqlite(db_);
+  std::vector<PlaneRecord> planes;
+  Statement statement(
+      db,
+      "SELECT name, shared_disk_name, control_root, generation, rebalance_iteration, state, "
+      "created_at FROM planes ORDER BY name ASC;");
+  while (statement.StepRow()) {
+    planes.push_back(PlaneFromStatement(statement.raw()));
+  }
+  return planes;
+}
+
+std::optional<PlaneRecord> ControllerStore::LoadPlane(const std::string& plane_name) const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT name, shared_disk_name, control_root, generation, rebalance_iteration, state, "
+      "created_at FROM planes WHERE name = ?1;");
+  statement.BindText(1, plane_name);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return PlaneFromStatement(statement.raw());
+}
+
+bool ControllerStore::UpdatePlaneState(
+    const std::string& plane_name,
+    const std::string& state) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE planes SET state = ?2 WHERE name = ?1;");
+  statement.BindText(1, plane_name);
+  statement.BindText(2, state);
+  statement.StepDone();
+  return sqlite3_changes(db) > 0;
+}
+
+int ControllerStore::SupersedeHostAssignmentsForPlane(
+    const std::string& plane_name,
+    const std::string& status_message) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE host_assignments "
+      "SET status = 'superseded', status_message = ?2, updated_at = CURRENT_TIMESTAMP "
+      "WHERE plane_name = ?1 AND status IN ('pending', 'claimed');");
+  statement.BindText(1, plane_name);
+  statement.BindText(2, status_message);
+  statement.StepDone();
+  return sqlite3_changes(db);
 }
 
 void ControllerStore::UpsertNodeAvailabilityOverride(
@@ -1279,6 +1544,7 @@ std::vector<DiskRuntimeState> ControllerStore::LoadDiskRuntimeStates(
 }
 
 void ControllerStore::ReplaceRolloutActions(
+    const std::string& plane_name,
     int desired_generation,
     const std::vector<SchedulerRolloutAction>& actions) {
   sqlite3* db = AsSqlite(db_);
@@ -1287,7 +1553,8 @@ void ControllerStore::ReplaceRolloutActions(
     {
       Statement delete_statement(
           db,
-          "DELETE FROM rollout_actions;");
+          "DELETE FROM rollout_actions WHERE plane_name = ?1;");
+      delete_statement.BindText(1, plane_name);
       delete_statement.StepDone();
     }
 
@@ -1295,20 +1562,21 @@ void ControllerStore::ReplaceRolloutActions(
       Statement insert_statement(
           db,
           "INSERT INTO rollout_actions("
-          "desired_generation, step, worker_name, action, target_node_name, "
+          "plane_name, desired_generation, step, worker_name, action, target_node_name, "
           "target_gpu_device, victim_worker_names_json, reason, status, status_message, "
           "created_at, updated_at"
-          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);");
-      insert_statement.BindInt(1, desired_generation);
-      insert_statement.BindInt(2, action.step);
-      insert_statement.BindText(3, action.worker_name);
-      insert_statement.BindText(4, action.action);
-      insert_statement.BindText(5, action.target_node_name);
-      insert_statement.BindText(6, action.target_gpu_device);
-      insert_statement.BindText(7, SerializeStringArray(action.victim_worker_names));
-      insert_statement.BindText(8, action.reason);
-      insert_statement.BindText(9, ToString(RolloutActionStatus::Pending));
-      insert_statement.BindText(10, "");
+          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);");
+      insert_statement.BindText(1, plane_name);
+      insert_statement.BindInt(2, desired_generation);
+      insert_statement.BindInt(3, action.step);
+      insert_statement.BindText(4, action.worker_name);
+      insert_statement.BindText(5, action.action);
+      insert_statement.BindText(6, action.target_node_name);
+      insert_statement.BindText(7, action.target_gpu_device);
+      insert_statement.BindText(8, SerializeStringArray(action.victim_worker_names));
+      insert_statement.BindText(9, action.reason);
+      insert_statement.BindText(10, ToString(RolloutActionStatus::Pending));
+      insert_statement.BindText(11, "");
       insert_statement.StepDone();
     }
 
@@ -1320,30 +1588,41 @@ void ControllerStore::ReplaceRolloutActions(
 }
 
 std::vector<RolloutActionRecord> ControllerStore::LoadRolloutActions(
+    const std::optional<std::string>& plane_name,
     const std::optional<std::string>& target_node_name,
     const std::optional<RolloutActionStatus>& status) const {
   sqlite3* db = AsSqlite(db_);
   std::string sql =
-      "SELECT id, desired_generation, step, worker_name, action, target_node_name, "
+      "SELECT id, plane_name, desired_generation, step, worker_name, action, target_node_name, "
       "target_gpu_device, victim_worker_names_json, reason, status, status_message "
       "FROM rollout_actions";
+  int bind_index = 1;
   bool has_where = false;
+  if (plane_name.has_value()) {
+    sql += " WHERE plane_name = ?" + std::to_string(bind_index++);
+    has_where = true;
+  }
   if (target_node_name.has_value()) {
-    sql += " WHERE target_node_name = ?1";
+    sql += has_where ? " AND " : " WHERE ";
+    sql += "target_node_name = ?" + std::to_string(bind_index++);
     has_where = true;
   }
   if (status.has_value()) {
     sql += has_where ? " AND " : " WHERE ";
-    sql += target_node_name.has_value() ? "status = ?2" : "status = ?1";
+    sql += "status = ?" + std::to_string(bind_index++);
   }
-  sql += " ORDER BY desired_generation ASC, step ASC, id ASC;";
+  sql += " ORDER BY plane_name ASC, desired_generation ASC, step ASC, id ASC;";
 
   Statement statement(db, sql);
+  bind_index = 1;
+  if (plane_name.has_value()) {
+    statement.BindText(bind_index++, *plane_name);
+  }
   if (target_node_name.has_value()) {
-    statement.BindText(1, *target_node_name);
+    statement.BindText(bind_index++, *target_node_name);
   }
   if (status.has_value()) {
-    statement.BindText(target_node_name.has_value() ? 2 : 1, ToString(*status));
+    statement.BindText(bind_index++, ToString(*status));
   }
 
   std::vector<RolloutActionRecord> actions;
@@ -1378,8 +1657,8 @@ void ControllerStore::UpsertHostObservation(const HostObservation& observation) 
       "node_name, plane_name, applied_generation, last_assignment_id, status, "
       "status_message, observed_state_json, runtime_status_json, "
       "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, "
-      "network_telemetry_json, heartbeat_at, updated_at"
-      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+      "network_telemetry_json, cpu_telemetry_json, heartbeat_at, updated_at"
+      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
       "ON CONFLICT(node_name) DO UPDATE SET "
       "plane_name = excluded.plane_name, "
       "applied_generation = excluded.applied_generation, "
@@ -1392,6 +1671,7 @@ void ControllerStore::UpsertHostObservation(const HostObservation& observation) 
       "gpu_telemetry_json = excluded.gpu_telemetry_json, "
       "disk_telemetry_json = excluded.disk_telemetry_json, "
       "network_telemetry_json = excluded.network_telemetry_json, "
+      "cpu_telemetry_json = excluded.cpu_telemetry_json, "
       "heartbeat_at = CURRENT_TIMESTAMP, "
       "updated_at = CURRENT_TIMESTAMP;");
   statement.BindText(1, observation.node_name);
@@ -1406,6 +1686,7 @@ void ControllerStore::UpsertHostObservation(const HostObservation& observation) 
   statement.BindText(10, observation.gpu_telemetry_json);
   statement.BindText(11, observation.disk_telemetry_json);
   statement.BindText(12, observation.network_telemetry_json);
+  statement.BindText(13, observation.cpu_telemetry_json);
   statement.StepDone();
 }
 
@@ -1416,7 +1697,7 @@ std::optional<HostObservation> ControllerStore::LoadHostObservation(
       db,
       "SELECT node_name, plane_name, applied_generation, last_assignment_id, status, "
       "status_message, observed_state_json, runtime_status_json, "
-      "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, network_telemetry_json, heartbeat_at "
+      "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, network_telemetry_json, cpu_telemetry_json, heartbeat_at "
       "FROM host_observations WHERE node_name = ?1;");
   statement.BindText(1, node_name);
   if (!statement.StepRow()) {
@@ -1426,23 +1707,35 @@ std::optional<HostObservation> ControllerStore::LoadHostObservation(
 }
 
 std::vector<HostObservation> ControllerStore::LoadHostObservations(
-    const std::optional<std::string>& node_name) const {
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& plane_name) const {
   sqlite3* db = AsSqlite(db_);
   std::vector<HostObservation> observations;
 
   std::string sql =
       "SELECT node_name, plane_name, applied_generation, last_assignment_id, status, "
       "status_message, observed_state_json, runtime_status_json, "
-      "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, network_telemetry_json, heartbeat_at "
+      "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, network_telemetry_json, cpu_telemetry_json, heartbeat_at "
       "FROM host_observations";
+  int bind_index = 1;
+  bool has_where = false;
   if (node_name.has_value()) {
-    sql += " WHERE node_name = ?1";
+    sql += " WHERE node_name = ?" + std::to_string(bind_index++);
+    has_where = true;
+  }
+  if (plane_name.has_value()) {
+    sql += has_where ? " AND " : " WHERE ";
+    sql += "plane_name = ?" + std::to_string(bind_index++);
   }
   sql += " ORDER BY node_name ASC;";
 
   Statement statement(db, sql);
+  bind_index = 1;
   if (node_name.has_value()) {
-    statement.BindText(1, *node_name);
+    statement.BindText(bind_index++, *node_name);
+  }
+  if (plane_name.has_value()) {
+    statement.BindText(bind_index++, *plane_name);
   }
 
   while (statement.StepRow()) {
@@ -1478,7 +1771,9 @@ std::vector<EventRecord> ControllerStore::LoadEvents(
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& worker_name,
     const std::optional<std::string>& category,
-    int limit) const {
+    int limit,
+    const std::optional<int>& since_id,
+    bool ascending) const {
   sqlite3* db = AsSqlite(db_);
   std::vector<std::string> clauses;
   if (plane_name.has_value()) {
@@ -1492,6 +1787,9 @@ std::vector<EventRecord> ControllerStore::LoadEvents(
   }
   if (category.has_value()) {
     clauses.push_back("category = ?" + std::to_string(clauses.size() + 1));
+  }
+  if (since_id.has_value()) {
+    clauses.push_back("id > ?" + std::to_string(clauses.size() + 1));
   }
 
   std::string sql =
@@ -1507,7 +1805,8 @@ std::vector<EventRecord> ControllerStore::LoadEvents(
       sql += clauses[index];
     }
   }
-  sql += " ORDER BY id DESC LIMIT ?" + std::to_string(clauses.size() + 1) + ";";
+  sql += std::string(" ORDER BY id ") + (ascending ? "ASC" : "DESC") +
+         " LIMIT ?" + std::to_string(clauses.size() + 1) + ";";
 
   Statement statement(db, sql);
   int bind_index = 1;
@@ -1522,6 +1821,9 @@ std::vector<EventRecord> ControllerStore::LoadEvents(
   }
   if (category.has_value()) {
     statement.BindText(bind_index++, *category);
+  }
+  if (since_id.has_value()) {
+    statement.BindInt(bind_index++, *since_id);
   }
   statement.BindInt(bind_index, limit > 0 ? limit : 100);
 
@@ -1844,37 +2146,50 @@ std::optional<HostAssignment> ControllerStore::LoadHostAssignment(int assignment
 
 std::vector<HostAssignment> ControllerStore::LoadHostAssignments(
     const std::optional<std::string>& node_name,
-    const std::optional<HostAssignmentStatus>& status) const {
+    const std::optional<HostAssignmentStatus>& status,
+    const std::optional<std::string>& plane_name) const {
   sqlite3* db = AsSqlite(db_);
   std::vector<HostAssignment> assignments;
 
   const bool has_node = node_name.has_value();
   const bool has_status = status.has_value();
+  const bool has_plane = plane_name.has_value();
 
   std::string sql =
       "SELECT id, node_name, plane_name, desired_generation, attempt_count, max_attempts, "
       "assignment_type, desired_state_json, artifacts_root, status, status_message "
       "FROM host_assignments";
-  if (has_node || has_status) {
+  int bind_index = 1;
+  if (has_node || has_status || has_plane) {
     sql += " WHERE ";
     if (has_node) {
-      sql += "node_name = ?1";
+      sql += "node_name = ?" + std::to_string(bind_index++);
     }
-    if (has_node && has_status) {
+    if (has_node && (has_status || has_plane)) {
       sql += " AND ";
     }
     if (has_status) {
-      sql += has_node ? "status = ?2" : "status = ?1";
+      sql += "status = ?" + std::to_string(bind_index++);
+    }
+    if (has_plane) {
+      if (has_node || has_status) {
+        sql += " AND ";
+      }
+      sql += "plane_name = ?" + std::to_string(bind_index++);
     }
   }
   sql += " ORDER BY id ASC;";
 
   Statement statement(db, sql);
+  bind_index = 1;
   if (has_node) {
-    statement.BindText(1, *node_name);
+    statement.BindText(bind_index++, *node_name);
   }
   if (has_status) {
-    statement.BindText(has_node ? 2 : 1, ToString(*status));
+    statement.BindText(bind_index++, ToString(*status));
+  }
+  if (has_plane) {
+    statement.BindText(bind_index++, *plane_name);
   }
 
   while (statement.StepRow()) {

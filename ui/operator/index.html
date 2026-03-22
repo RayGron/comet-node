@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Comet Command Deck</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div class="space-grid" aria-hidden="true"></div>
+    <div class="page-shell">
+      <header class="hero-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">Comet Operator Constellation</p>
+          <h1>Comet Command Deck</h1>
+          <p class="hero-text">
+            Plane state, node health, runtime readiness, rollout pressure, and live controller events.
+          </p>
+        </div>
+        <div class="hero-status">
+          <div class="status-chip" id="api-status-chip">
+            <span class="status-dot status-booting"></span>
+            <span>API pending</span>
+          </div>
+          <div class="status-chip" id="stream-status-chip">
+            <span class="status-dot status-booting"></span>
+            <span>Stream pending</span>
+          </div>
+          <div class="meta-block">
+            <span class="meta-label">Last refresh</span>
+            <span class="meta-value" id="last-refresh-value">never</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="layout-grid">
+        <section class="panel summary-panel">
+          <div class="panel-header">
+            <h2>Fleet Summary</h2>
+            <button class="ghost-button" id="refresh-button" type="button">Refresh</button>
+          </div>
+          <div class="summary-grid" id="summary-grid"></div>
+        </section>
+
+        <section class="panel nodes-panel">
+          <div class="panel-header">
+            <h2>Nodes</h2>
+            <p class="panel-subtitle">Availability, runtime phase, and readiness per node.</p>
+          </div>
+          <div class="node-grid" id="node-grid"></div>
+        </section>
+
+        <section class="panel rollout-panel">
+          <div class="panel-header">
+            <h2>Rollout and Rebalance</h2>
+            <p class="panel-subtitle">Current scheduler posture and deferred actions.</p>
+          </div>
+          <div class="duo-grid">
+            <div class="subpanel">
+              <h3>Rollout Actions</h3>
+              <div class="list-stack" id="rollout-list"></div>
+            </div>
+            <div class="subpanel">
+              <h3>Rebalance Plan</h3>
+              <div class="list-stack" id="rebalance-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel assignments-panel">
+          <div class="panel-header">
+            <h2>Assignments</h2>
+            <p class="panel-subtitle">Pending and applied work per node.</p>
+          </div>
+          <div class="assignment-grid" id="assignment-grid"></div>
+        </section>
+
+        <section class="panel disk-panel">
+          <div class="panel-header">
+            <h2>Disk State</h2>
+            <p class="panel-subtitle">Desired vs realized disk lifecycle and usage.</p>
+          </div>
+          <div class="list-stack" id="disk-list"></div>
+        </section>
+
+        <section class="panel events-panel">
+          <div class="panel-header">
+            <h2>Live Event Feed</h2>
+            <p class="panel-subtitle">Controller and host transitions from the persisted event log.</p>
+          </div>
+          <div class="event-stream" id="event-stream"></div>
+        </section>
+      </main>
+    </div>
+
+    <template id="empty-state-template">
+      <div class="empty-state">No data available.</div>
+    </template>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

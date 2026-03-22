@@ -25,6 +25,7 @@ docker_cmd="$(resolve_docker)"
 base_tag="${1:-comet/base-runtime:dev}"
 infer_tag="${2:-comet/infer-runtime:dev}"
 worker_tag="${3:-comet/worker-runtime:dev}"
+web_ui_tag="${4:-comet/web-ui:dev}"
 
 echo "building ${base_tag}"
 "${docker_cmd}" build \
@@ -44,7 +45,14 @@ echo "building ${worker_tag}"
   -t "${worker_tag}" \
   "${repo_root}"
 
+echo "building ${web_ui_tag}"
+"${docker_cmd}" build \
+  -f "${repo_root}/runtime/web-ui/Dockerfile" \
+  -t "${web_ui_tag}" \
+  "${repo_root}"
+
 echo "runtime images ready"
 echo "  base=${base_tag}"
 echo "  infer=${infer_tag}"
 echo "  worker=${worker_tag}"
+echo "  web_ui=${web_ui_tag}"

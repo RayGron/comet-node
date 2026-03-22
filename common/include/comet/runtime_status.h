@@ -99,6 +99,21 @@ struct NetworkTelemetrySnapshot {
   std::vector<NetworkInterfaceTelemetry> interfaces;
 };
 
+struct CpuTelemetrySnapshot {
+  int contract_version = 1;
+  bool degraded = false;
+  std::string source;
+  std::string collected_at;
+  int core_count = 0;
+  double utilization_pct = 0.0;
+  double loadavg_1m = 0.0;
+  double loadavg_5m = 0.0;
+  double loadavg_15m = 0.0;
+  std::uint64_t total_memory_bytes = 0;
+  std::uint64_t available_memory_bytes = 0;
+  std::uint64_t used_memory_bytes = 0;
+};
+
 struct RuntimeStatus {
   std::string plane_name;
   std::string control_root;
@@ -145,6 +160,8 @@ std::string SerializeDiskTelemetryJson(const DiskTelemetrySnapshot& snapshot);
 DiskTelemetrySnapshot DeserializeDiskTelemetryJson(const std::string& json_text);
 std::string SerializeNetworkTelemetryJson(const NetworkTelemetrySnapshot& snapshot);
 NetworkTelemetrySnapshot DeserializeNetworkTelemetryJson(const std::string& json_text);
+std::string SerializeCpuTelemetryJson(const CpuTelemetrySnapshot& snapshot);
+CpuTelemetrySnapshot DeserializeCpuTelemetryJson(const std::string& json_text);
 
 std::optional<RuntimeStatus> LoadRuntimeStatusJson(const std::string& path);
 void SaveRuntimeStatusJson(const RuntimeStatus& status, const std::string& path);

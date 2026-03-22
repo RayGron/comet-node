@@ -56,7 +56,8 @@ enum class ComposeMode {
 std::string ResolvedDockerCommand();
 std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
     const std::string& state_root,
-    const std::string& node_name);
+    const std::string& node_name,
+    const std::optional<std::string>& plane_name = std::nullopt);
 
 void PrintUsage() {
   std::cout
@@ -449,14 +450,46 @@ void RemoveStateFileIfExists(const std::string& path) {
   RemoveFileIfExists(path);
 }
 
+std::string LocalPlaneRoot(
+    const std::string& state_root,
+    const std::string& node_name,
+    const std::string& plane_name) {
+  return (std::filesystem::path(state_root) / node_name / "planes" / plane_name).string();
+}
+
 std::string LocalGenerationPath(const std::string& state_root, const std::string& node_name) {
   return (std::filesystem::path(state_root) / node_name / "applied-generation.txt").string();
 }
 
-std::optional<int> LoadLocalAppliedGeneration(
+std::string LocalPlaneGenerationPath(
+    const std::string& state_root,
+    const std::string& node_name,
+    const std::string& plane_name) {
+  return (std::filesystem::path(LocalPlaneRoot(state_root, node_name, plane_name)) /
+          "applied-generation.txt")
+      .string();
+}
+
+std::vector<std::string> ListLocalPlaneNames(
     const std::string& state_root,
     const std::string& node_name) {
-  const std::string path = LocalGenerationPath(state_root, node_name);
+  std::vector<std::string> result;
+  const std::filesystem::path planes_root =
+      std::filesystem::path(state_root) / node_name / "planes";
+  if (!std::filesystem::exists(planes_root)) {
+    return result;
+  }
+  for (const auto& entry : std::filesystem::directory_iterator(planes_root)) {
+    if (!entry.is_directory()) {
+      continue;
+    }
+    result.push_back(entry.path().filename().string());
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
+
+std::optional<int> LoadGenerationFromPath(const std::string& path) {
   if (!std::filesystem::exists(path)) {
     return std::nullopt;
   }
@@ -474,11 +507,41 @@ std::optional<int> LoadLocalAppliedGeneration(
   return generation;
 }
 
+std::optional<int> LoadLocalAppliedGeneration(
+    const std::string& state_root,
+    const std::string& node_name,
+    const std::optional<std::string>& plane_name = std::nullopt) {
+  if (plane_name.has_value()) {
+    return LoadGenerationFromPath(LocalPlaneGenerationPath(state_root, node_name, *plane_name));
+  }
+
+  const std::string aggregate_path = LocalGenerationPath(state_root, node_name);
+  if (std::filesystem::exists(aggregate_path)) {
+    return LoadGenerationFromPath(aggregate_path);
+  }
+
+  const auto plane_names = ListLocalPlaneNames(state_root, node_name);
+  std::optional<int> generation;
+  for (const auto& current_plane_name : plane_names) {
+    const auto plane_generation =
+        LoadGenerationFromPath(LocalPlaneGenerationPath(state_root, node_name, current_plane_name));
+    if (!plane_generation.has_value()) {
+      continue;
+    }
+    generation = generation.has_value() ? std::max(*generation, *plane_generation)
+                                        : *plane_generation;
+  }
+  return generation;
+}
+
 void SaveLocalAppliedGeneration(
     const std::string& state_root,
     const std::string& node_name,
-    int generation) {
-  const std::string path = LocalGenerationPath(state_root, node_name);
+    int generation,
+    const std::optional<std::string>& plane_name = std::nullopt) {
+  const std::string path = plane_name.has_value()
+                               ? LocalPlaneGenerationPath(state_root, node_name, *plane_name)
+                               : LocalGenerationPath(state_root, node_name);
   const std::filesystem::path file_path(path);
   if (file_path.has_parent_path()) {
     std::filesystem::create_directories(file_path.parent_path());
@@ -547,40 +610,189 @@ std::string LocalStatePath(const std::string& state_root, const std::string& nod
   return (std::filesystem::path(state_root) / node_name / "applied-state.json").string();
 }
 
-std::optional<comet::DesiredState> LoadLocalAppliedState(
+std::string LocalPlaneStatePath(
+    const std::string& state_root,
+    const std::string& node_name,
+    const std::string& plane_name) {
+  return (std::filesystem::path(LocalPlaneRoot(state_root, node_name, plane_name)) /
+          "applied-state.json")
+      .string();
+}
+
+std::optional<comet::DesiredState> LoadStateFromPath(const std::string& path) {
+  return comet::LoadDesiredStateJson(path);
+}
+
+comet::DesiredState MergeLocalAppliedStates(const std::vector<comet::DesiredState>& states) {
+  if (states.empty()) {
+    throw std::runtime_error("cannot merge empty local state list");
+  }
+
+  comet::DesiredState merged = states.front();
+  if (states.size() > 1) {
+    merged.plane_name.clear();
+    merged.plane_shared_disk_name.clear();
+  }
+  merged.runtime_gpu_nodes.clear();
+  merged.nodes.clear();
+  merged.disks.clear();
+  merged.instances.clear();
+
+  std::set<std::string> seen_nodes;
+  std::set<std::string> seen_runtime_gpu_nodes;
+  for (const auto& state : states) {
+    for (const auto& node : state.nodes) {
+      if (seen_nodes.insert(node.name).second) {
+        merged.nodes.push_back(node);
+      }
+    }
+    for (const auto& runtime_gpu_node : state.runtime_gpu_nodes) {
+      const std::string key = runtime_gpu_node.node_name + ":" + runtime_gpu_node.gpu_device;
+      if (seen_runtime_gpu_nodes.insert(key).second) {
+        merged.runtime_gpu_nodes.push_back(runtime_gpu_node);
+      }
+    }
+    merged.disks.insert(merged.disks.end(), state.disks.begin(), state.disks.end());
+    merged.instances.insert(merged.instances.end(), state.instances.begin(), state.instances.end());
+  }
+  return merged;
+}
+
+std::vector<comet::DesiredState> LoadAllLocalAppliedStates(
     const std::string& state_root,
     const std::string& node_name) {
-  return comet::LoadDesiredStateJson(LocalStatePath(state_root, node_name));
+  std::vector<comet::DesiredState> result;
+  const auto plane_names = ListLocalPlaneNames(state_root, node_name);
+  for (const auto& plane_name : plane_names) {
+    const auto plane_state =
+        LoadStateFromPath(LocalPlaneStatePath(state_root, node_name, plane_name));
+    if (plane_state.has_value()) {
+      result.push_back(*plane_state);
+    }
+  }
+  if (!result.empty()) {
+    return result;
+  }
+
+  const auto aggregate_state = LoadStateFromPath(LocalStatePath(state_root, node_name));
+  if (aggregate_state.has_value()) {
+    result.push_back(*aggregate_state);
+  }
+  return result;
+}
+
+std::optional<comet::DesiredState> LoadLocalAppliedState(
+    const std::string& state_root,
+    const std::string& node_name,
+    const std::optional<std::string>& plane_name = std::nullopt) {
+  if (plane_name.has_value()) {
+    return LoadStateFromPath(LocalPlaneStatePath(state_root, node_name, *plane_name));
+  }
+
+  const auto states = LoadAllLocalAppliedStates(state_root, node_name);
+  if (states.empty()) {
+    return std::nullopt;
+  }
+  return MergeLocalAppliedStates(states);
+}
+
+void RewriteAggregateLocalState(const std::string& state_root, const std::string& node_name) {
+  const auto states = LoadAllLocalAppliedStates(state_root, node_name);
+  if (states.empty()) {
+    RemoveStateFileIfExists(LocalStatePath(state_root, node_name));
+    return;
+  }
+  comet::SaveDesiredStateJson(
+      MergeLocalAppliedStates(states),
+      LocalStatePath(state_root, node_name));
+}
+
+void RewriteAggregateLocalGeneration(
+    const std::string& state_root,
+    const std::string& node_name) {
+  std::optional<int> generation;
+  for (const auto& plane_name : ListLocalPlaneNames(state_root, node_name)) {
+    const auto plane_generation =
+        LoadGenerationFromPath(LocalPlaneGenerationPath(state_root, node_name, plane_name));
+    if (!plane_generation.has_value()) {
+      continue;
+    }
+    generation = generation.has_value() ? std::max(*generation, *plane_generation)
+                                        : *plane_generation;
+  }
+  if (generation.has_value()) {
+    SaveLocalAppliedGeneration(state_root, node_name, *generation, std::nullopt);
+  } else {
+    RemoveStateFileIfExists(LocalGenerationPath(state_root, node_name));
+  }
 }
 
 std::optional<comet::RuntimeStatus> LoadLocalRuntimeStatus(
     const std::string& state_root,
-    const std::string& node_name) {
-  const auto local_state = LoadLocalAppliedState(state_root, node_name);
-  if (!local_state.has_value()) {
-    return std::nullopt;
+    const std::string& node_name,
+    const std::optional<std::string>& plane_name = std::nullopt) {
+  if (plane_name.has_value()) {
+    const auto local_state = LoadLocalAppliedState(state_root, node_name, plane_name);
+    if (!local_state.has_value()) {
+      return std::nullopt;
+    }
+    const auto runtime_status_path = RuntimeStatusPathForNode(*local_state, node_name);
+    if (!runtime_status_path.has_value()) {
+      return std::nullopt;
+    }
+    return comet::LoadRuntimeStatusJson(*runtime_status_path);
   }
-  const auto runtime_status_path = RuntimeStatusPathForNode(*local_state, node_name);
-  if (!runtime_status_path.has_value()) {
-    return std::nullopt;
+
+  for (const auto& local_state : LoadAllLocalAppliedStates(state_root, node_name)) {
+    const auto runtime_status_path = RuntimeStatusPathForNode(local_state, node_name);
+    if (!runtime_status_path.has_value()) {
+      continue;
+    }
+    const auto runtime_status = comet::LoadRuntimeStatusJson(*runtime_status_path);
+    if (runtime_status.has_value()) {
+      return runtime_status;
+    }
   }
-  return comet::LoadRuntimeStatusJson(*runtime_status_path);
+  return std::nullopt;
 }
 
 void SaveLocalAppliedState(
     const std::string& state_root,
     const std::string& node_name,
-    const comet::DesiredState& state) {
-  comet::SaveDesiredStateJson(state, LocalStatePath(state_root, node_name));
+    const comet::DesiredState& state,
+    const std::optional<std::string>& plane_name = std::nullopt) {
+  const std::string effective_plane_name =
+      plane_name.has_value() ? *plane_name : state.plane_name;
+  const std::string path = plane_name.has_value()
+                               ? LocalPlaneStatePath(state_root, node_name, effective_plane_name)
+                               : LocalStatePath(state_root, node_name);
+  comet::SaveDesiredStateJson(state, path);
+}
+
+void RemoveLocalAppliedPlaneState(
+    const std::string& state_root,
+    const std::string& node_name,
+    const std::string& plane_name) {
+  RemoveStateFileIfExists(LocalPlaneStatePath(state_root, node_name, plane_name));
+  RemoveStateFileIfExists(LocalPlaneGenerationPath(state_root, node_name, plane_name));
+  std::error_code error;
+  std::filesystem::remove(
+      std::filesystem::path(LocalPlaneRoot(state_root, node_name, plane_name)),
+      error);
+  if (error) {
+    throw std::runtime_error(
+        "failed to remove plane state root for plane '" + plane_name + "': " + error.message());
+  }
 }
 
 void WaitForLocalRuntimeStatus(
     const std::string& state_root,
     const std::string& node_name,
+    const std::optional<std::string>& plane_name,
     std::chrono::seconds timeout) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
-    if (LoadLocalRuntimeStatus(state_root, node_name).has_value()) {
+    if (LoadLocalRuntimeStatus(state_root, node_name, plane_name).has_value()) {
       return;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -602,6 +814,7 @@ std::size_t ExpectedRuntimeStatusCountForNode(
 void WaitForLocalInstanceRuntimeStatuses(
     const std::string& state_root,
     const std::string& node_name,
+    const std::optional<std::string>& plane_name,
     std::size_t expected_count,
     std::chrono::seconds timeout) {
   if (expected_count == 0) {
@@ -609,7 +822,7 @@ void WaitForLocalInstanceRuntimeStatuses(
   }
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
-    const auto statuses = LoadLocalInstanceRuntimeStatuses(state_root, node_name);
+    const auto statuses = LoadLocalInstanceRuntimeStatuses(state_root, node_name, plane_name);
     if (statuses.size() >= expected_count) {
       return;
     }
@@ -1252,6 +1465,104 @@ std::uint64_t ReadUint64FileOrZero(const std::filesystem::path& path) {
   return value;
 }
 
+struct CpuSample {
+  std::uint64_t idle = 0;
+  std::uint64_t total = 0;
+};
+
+std::optional<CpuSample> ReadCpuSample() {
+  std::ifstream input("/proc/stat");
+  if (!input.is_open()) {
+    return std::nullopt;
+  }
+
+  std::string cpu_label;
+  CpuSample sample;
+  std::uint64_t user = 0;
+  std::uint64_t nice = 0;
+  std::uint64_t system = 0;
+  std::uint64_t idle = 0;
+  std::uint64_t iowait = 0;
+  std::uint64_t irq = 0;
+  std::uint64_t softirq = 0;
+  std::uint64_t steal = 0;
+  input >> cpu_label >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal;
+  if (!input.good() || cpu_label != "cpu") {
+    return std::nullopt;
+  }
+  sample.idle = idle + iowait;
+  sample.total = user + nice + system + idle + iowait + irq + softirq + steal;
+  return sample;
+}
+
+std::optional<std::array<double, 3>> ReadLoadAverage() {
+  std::ifstream input("/proc/loadavg");
+  if (!input.is_open()) {
+    return std::nullopt;
+  }
+  std::array<double, 3> load{0.0, 0.0, 0.0};
+  input >> load[0] >> load[1] >> load[2];
+  if (!input.good()) {
+    return std::nullopt;
+  }
+  return load;
+}
+
+comet::CpuTelemetrySnapshot CollectCpuTelemetry() {
+  comet::CpuTelemetrySnapshot snapshot;
+  snapshot.contract_version = 1;
+  snapshot.source = "procfs";
+  snapshot.collected_at = CurrentTimestampString();
+  snapshot.core_count = static_cast<int>(std::thread::hardware_concurrency());
+
+  const auto first = ReadCpuSample();
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  const auto second = ReadCpuSample();
+  if (first.has_value() && second.has_value() && second->total > first->total) {
+    const auto total_delta = static_cast<double>(second->total - first->total);
+    const auto idle_delta = static_cast<double>(second->idle - first->idle);
+    snapshot.utilization_pct =
+        total_delta > 0.0 ? std::max(0.0, 100.0 * (1.0 - (idle_delta / total_delta))) : 0.0;
+  } else {
+    snapshot.degraded = true;
+    snapshot.source = "procfs-unavailable";
+  }
+
+  if (const auto load = ReadLoadAverage(); load.has_value()) {
+    snapshot.loadavg_1m = (*load)[0];
+    snapshot.loadavg_5m = (*load)[1];
+    snapshot.loadavg_15m = (*load)[2];
+  } else {
+    snapshot.degraded = true;
+  }
+
+  std::ifstream meminfo("/proc/meminfo");
+  if (meminfo.is_open()) {
+    std::string key;
+    std::uint64_t value = 0;
+    std::string unit;
+    std::uint64_t total_kb = 0;
+    std::uint64_t available_kb = 0;
+    while (meminfo >> key >> value >> unit) {
+      if (key == "MemTotal:") {
+        total_kb = value;
+      } else if (key == "MemAvailable:") {
+        available_kb = value;
+      }
+    }
+    snapshot.total_memory_bytes = total_kb * 1024ULL;
+    snapshot.available_memory_bytes = available_kb * 1024ULL;
+    snapshot.used_memory_bytes =
+        snapshot.total_memory_bytes >= snapshot.available_memory_bytes
+            ? (snapshot.total_memory_bytes - snapshot.available_memory_bytes)
+            : 0;
+  } else {
+    snapshot.degraded = true;
+  }
+
+  return snapshot;
+}
+
 comet::NetworkTelemetrySnapshot CollectNetworkTelemetry() {
   comet::NetworkTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
@@ -1340,31 +1651,40 @@ comet::RuntimeProcessStatus ToProcessStatus(
 
 std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
     const std::string& state_root,
-    const std::string& node_name) {
+    const std::string& node_name,
+    const std::optional<std::string>& plane_name) {
   std::vector<comet::RuntimeProcessStatus> result;
-  const auto local_state = LoadLocalAppliedState(state_root, node_name);
-  if (!local_state.has_value()) {
-    return result;
-  }
-
-  for (const auto& instance : local_state->instances) {
-    if (instance.node_name != node_name) {
-      continue;
+  const auto local_states = plane_name.has_value()
+                                ? [&]() {
+                                    std::vector<comet::DesiredState> states;
+                                    const auto state =
+                                        LoadLocalAppliedState(state_root, node_name, plane_name);
+                                    if (state.has_value()) {
+                                      states.push_back(*state);
+                                    }
+                                    return states;
+                                  }()
+                                : LoadAllLocalAppliedStates(state_root, node_name);
+  for (const auto& local_state : local_states) {
+    for (const auto& instance : local_state.instances) {
+      if (instance.node_name != node_name) {
+        continue;
+      }
+      std::optional<std::string> status_path;
+      if (instance.role == comet::InstanceRole::Infer) {
+        status_path = RuntimeStatusPathForNode(local_state, node_name);
+      } else {
+        status_path = WorkerRuntimeStatusPathForInstance(local_state, instance);
+      }
+      if (!status_path.has_value() || !std::filesystem::exists(*status_path)) {
+        continue;
+      }
+      const auto status = comet::LoadRuntimeStatusJson(*status_path);
+      if (!status.has_value()) {
+        continue;
+      }
+      result.push_back(ToProcessStatus(*status, instance));
     }
-    std::optional<std::string> status_path;
-    if (instance.role == comet::InstanceRole::Infer) {
-      status_path = RuntimeStatusPathForNode(*local_state, node_name);
-    } else {
-      status_path = WorkerRuntimeStatusPathForInstance(*local_state, instance);
-    }
-    if (!status_path.has_value() || !std::filesystem::exists(*status_path)) {
-      continue;
-    }
-    const auto status = comet::LoadRuntimeStatusJson(*status_path);
-    if (!status.has_value()) {
-      continue;
-    }
-    result.push_back(ToProcessStatus(*status, instance));
   }
   return result;
 }
@@ -1828,6 +2148,8 @@ comet::HostObservation BuildObservedStateSnapshot(
   }
   observation.network_telemetry_json =
       comet::SerializeNetworkTelemetryJson(CollectNetworkTelemetry());
+  observation.cpu_telemetry_json =
+      comet::SerializeCpuTelemetryJson(CollectCpuTelemetry());
 
   return observation;
 }
@@ -2098,8 +2420,10 @@ void ShowDesiredNodeOps(
     const std::string& source_label,
     const std::optional<int>& desired_generation) {
   const std::string node_name = RequireSingleNodeName(desired_node_state);
-  const auto current_local_state = LoadLocalAppliedState(state_root, node_name);
-  const auto applied_generation = LoadLocalAppliedGeneration(state_root, node_name);
+  const auto current_local_state =
+      LoadLocalAppliedState(state_root, node_name, desired_node_state.plane_name);
+  const auto applied_generation =
+      LoadLocalAppliedGeneration(state_root, node_name, desired_node_state.plane_name);
   const auto plan = ResolveNodeExecutionPlan(
       comet::BuildNodeExecutionPlans(current_local_state, desired_node_state, artifacts_root),
       current_local_state,
@@ -2109,7 +2433,8 @@ void ShowDesiredNodeOps(
 
   std::cout << source_label << " for node=" << plan.node_name << "\n";
   std::cout << "artifacts_root=" << artifacts_root << "\n";
-  std::cout << "state_path=" << LocalStatePath(state_root, node_name) << "\n";
+  std::cout << "state_path="
+            << LocalPlaneStatePath(state_root, node_name, desired_node_state.plane_name) << "\n";
   if (desired_generation.has_value()) {
     std::cout << "desired_generation=" << *desired_generation << "\n";
   }
@@ -2159,14 +2484,7 @@ void ShowRuntimeStatus(
     return;
   }
 
-  const auto runtime_status_path = RuntimeStatusPathForNode(*local_state, node_name);
-  if (!runtime_status_path.has_value()) {
-    std::cout << "runtime_status: unavailable (node has no infer instance)\n";
-    return;
-  }
-
-  std::cout << "runtime_status_path=" << *runtime_status_path << "\n";
-  const auto runtime_status = comet::LoadRuntimeStatusJson(*runtime_status_path);
+  const auto runtime_status = LoadLocalRuntimeStatus(state_root, node_name);
   if (!runtime_status.has_value()) {
     std::cout << "runtime_status: empty\n";
     return;
@@ -2399,8 +2717,9 @@ void ApplyDesiredNodeState(
     const std::optional<int>& desired_generation,
     comet::ControllerStore* store) {
   const std::string node_name = RequireSingleNodeName(desired_node_state);
-  const auto current_local_state = LoadLocalAppliedState(state_root, node_name);
-  const auto applied_generation = LoadLocalAppliedGeneration(state_root, node_name);
+  const std::string& plane_name = desired_node_state.plane_name;
+  const auto current_local_state = LoadLocalAppliedState(state_root, node_name, plane_name);
+  const auto applied_generation = LoadLocalAppliedGeneration(state_root, node_name, plane_name);
   const auto execution_plan = ResolveNodeExecutionPlan(
       comet::BuildNodeExecutionPlans(current_local_state, desired_node_state, artifacts_root),
       current_local_state,
@@ -2411,7 +2730,7 @@ void ApplyDesiredNodeState(
 
   std::cout << source_label << "\n";
   std::cout << "artifacts_root=" << artifacts_root << "\n";
-  std::cout << "state_path=" << LocalStatePath(state_root, node_name) << "\n";
+  std::cout << "state_path=" << LocalPlaneStatePath(state_root, node_name, plane_name) << "\n";
   if (desired_generation.has_value()) {
     std::cout << "desired_generation=" << *desired_generation << "\n";
   }
@@ -2436,14 +2755,15 @@ void ApplyDesiredNodeState(
         runtime_root,
         "disk runtime verified by hostd");
     if (IsDesiredNodeStateEmpty(desired_node_state)) {
-      RemoveStateFileIfExists(LocalStatePath(state_root, node_name));
-      RemoveStateFileIfExists(LocalGenerationPath(state_root, node_name));
+      RemoveLocalAppliedPlaneState(state_root, node_name, plane_name);
     } else {
-      SaveLocalAppliedState(state_root, node_name, desired_node_state);
+      SaveLocalAppliedState(state_root, node_name, desired_node_state, plane_name);
       if (desired_generation.has_value()) {
-        SaveLocalAppliedGeneration(state_root, node_name, *desired_generation);
+        SaveLocalAppliedGeneration(state_root, node_name, *desired_generation, plane_name);
       }
     }
+    RewriteAggregateLocalState(state_root, node_name);
+    RewriteAggregateLocalGeneration(state_root, node_name);
     return;
   }
 
@@ -2461,21 +2781,25 @@ void ApplyDesiredNodeState(
       runtime_root,
       "disk runtime applied by hostd");
   if (IsDesiredNodeStateEmpty(desired_node_state)) {
-    RemoveStateFileIfExists(LocalStatePath(state_root, node_name));
-    RemoveStateFileIfExists(LocalGenerationPath(state_root, node_name));
+    RemoveLocalAppliedPlaneState(state_root, node_name, plane_name);
+    RewriteAggregateLocalState(state_root, node_name);
+    RewriteAggregateLocalGeneration(state_root, node_name);
     return;
   }
-  SaveLocalAppliedState(state_root, node_name, desired_node_state);
+  SaveLocalAppliedState(state_root, node_name, desired_node_state, plane_name);
   if (desired_generation.has_value()) {
-    SaveLocalAppliedGeneration(state_root, node_name, *desired_generation);
+    SaveLocalAppliedGeneration(state_root, node_name, *desired_generation, plane_name);
   }
+  RewriteAggregateLocalState(state_root, node_name);
+  RewriteAggregateLocalGeneration(state_root, node_name);
   if (compose_mode == ComposeMode::Exec) {
     if (NodeHasInferInstance(desired_node_state)) {
-      WaitForLocalRuntimeStatus(state_root, node_name, std::chrono::seconds(20));
+      WaitForLocalRuntimeStatus(state_root, node_name, plane_name, std::chrono::seconds(20));
     }
     WaitForLocalInstanceRuntimeStatuses(
         state_root,
         node_name,
+        plane_name,
         ExpectedRuntimeStatusCountForNode(desired_node_state, node_name),
         std::chrono::seconds(20));
   }
@@ -2564,6 +2888,7 @@ void ApplyNextAssignment(
   try {
     if (assignment->assignment_type != "apply-node-state" &&
         assignment->assignment_type != "drain-node-state" &&
+        assignment->assignment_type != "stop-plane-state" &&
         assignment->assignment_type != "evict-workers") {
       throw std::runtime_error(
           "unsupported assignment type '" + assignment->assignment_type + "'");
@@ -2573,6 +2898,7 @@ void ApplyNextAssignment(
         comet::DeserializeDesiredStateJson(assignment->desired_state_json),
         runtime_root);
     const bool is_drain_assignment = assignment->assignment_type == "drain-node-state";
+    const bool is_stop_assignment = assignment->assignment_type == "stop-plane-state";
     const bool is_eviction_assignment = assignment->assignment_type == "evict-workers";
     const auto victim_names =
         is_eviction_assignment ? ParseTaggedCsv(assignment->status_message, "victims")
@@ -2587,9 +2913,11 @@ void ApplyNextAssignment(
             state_root,
             comet::HostObservationStatus::Applying,
             (is_drain_assignment ? "draining node for desired generation "
+                                 : (is_stop_assignment
+                                        ? "stopping plane state for desired generation "
                                  : (is_eviction_assignment
                                         ? "evicting rollout workers for desired generation "
-                                        : "applying desired generation ")) +
+                                        : "applying desired generation "))) +
                 std::to_string(assignment->desired_generation) + assignment_context,
             assignment->id),
         "hostd observed-state-update");
@@ -2601,9 +2929,11 @@ void ApplyNextAssignment(
         compose_mode,
         is_drain_assignment
             ? "hostd drain-assignment-ops"
+            : (is_stop_assignment
+                   ? "hostd stop-plane-assignment-ops"
             : (is_eviction_assignment
                    ? "hostd eviction-assignment-ops"
-                   : "hostd apply-assignment-ops"),
+                   : "hostd apply-assignment-ops")),
         assignment->desired_generation,
         &store);
     if (is_eviction_assignment &&
@@ -2624,9 +2954,11 @@ void ApplyNextAssignment(
             state_root,
             comet::HostObservationStatus::Applied,
             (is_drain_assignment ? "drained node for desired generation "
+                                 : (is_stop_assignment
+                                        ? "stopped plane state for desired generation "
                                  : (is_eviction_assignment
                                         ? "evicted rollout workers for desired generation "
-                                        : "applied desired generation ")) +
+                                        : "applied desired generation "))) +
                 std::to_string(assignment->desired_generation) + assignment_context,
             assignment->id),
         "hostd observed-state-update");
@@ -2634,9 +2966,11 @@ void ApplyNextAssignment(
         assignment->id,
         comet::HostAssignmentStatus::Applied,
         (is_drain_assignment ? "drained node for desired generation "
+                             : (is_stop_assignment
+                                    ? "stopped plane state for desired generation "
                              : (is_eviction_assignment
                                     ? "evicted rollout workers for desired generation "
-                                    : "applied desired generation ")) +
+                                    : "applied desired generation "))) +
             std::to_string(assignment->desired_generation) +
             assignment_context +
             " on attempt " + std::to_string(assignment->attempt_count) + "/" +

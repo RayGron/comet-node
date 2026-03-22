@@ -21,6 +21,14 @@ CREATE TABLE nodes (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE plane_nodes (
+    plane_name TEXT NOT NULL,
+    node_name TEXT NOT NULL,
+    PRIMARY KEY (plane_name, node_name),
+    FOREIGN KEY (plane_name) REFERENCES planes(name) ON DELETE CASCADE,
+    FOREIGN KEY (node_name) REFERENCES nodes(name) ON DELETE CASCADE
+);
+
 CREATE TABLE node_gpus (
     node_name TEXT NOT NULL,
     gpu_device TEXT NOT NULL,
@@ -135,6 +143,7 @@ CREATE TABLE node_availability_overrides (
 
 CREATE TABLE rollout_actions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plane_name TEXT NOT NULL DEFAULT '',
     desired_generation INTEGER NOT NULL,
     step INTEGER NOT NULL,
     worker_name TEXT NOT NULL,
@@ -162,6 +171,7 @@ CREATE TABLE host_observations (
     gpu_telemetry_json TEXT NOT NULL DEFAULT '',
     disk_telemetry_json TEXT NOT NULL DEFAULT '',
     network_telemetry_json TEXT NOT NULL DEFAULT '',
+    cpu_telemetry_json TEXT NOT NULL DEFAULT '',
     heartbeat_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

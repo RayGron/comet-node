@@ -8,6 +8,21 @@
 - the host agent now has a privileged Linux disk lifecycle path (`image -> loop -> mkfs -> mount`) plus an explicit unprivileged directory-backed fallback for local development and smoke scenarios
 - controller reporting can now show both declared disk inventory and realized disk lifecycle separately, including node-scoped disk views for operator inspection
 - the controller now also has a native HTTP server seam (`serve`) with JSON health, state, host-assignment, host-observation, host-health, node-availability, disk-state, rollout-action, and rebalance-plan endpoints, plus the first safe mutating orchestration endpoints for `scheduler-tick`, `reconcile-rebalance-proposals`, `reconcile-rollout-actions`, `apply-rebalance-proposal`, `set-rollout-action-status`, `enqueue-rollout-eviction`, and `apply-ready-rollout-action`
+- the first realtime Phase H seam now exists as `GET /api/v1/events/stream`, which streams persisted controller/hostd events from `event_log` as SSE with `Last-Event-ID` / `since_id` support and keepalive frames
+- the first browser-facing Phase H aggregate read model now exists as `GET /api/v1/dashboard`, which exposes compact plane/node/runtime/assignment/rollout/event summaries for the future web UI
+- the controller now also has a static asset serving seam through `serve --ui-root <dir>`; this remains a development fallback and local inspection seam, not the target production browser-hosting path
+- the first operator UI exists today as a plain static bundle under `ui/operator/`, but the production Phase H direction is now a separate global `comet-web-ui` sidecar that serves a React operator UI and reverse-proxies controller REST/SSE
+- the first controller-managed `comet-web-ui` lifecycle seam now exists through `ensure-web-ui`, `show-web-ui-status`, and `stop-web-ui`; it materializes controller-local compose/config under `var/web-ui` and can run that sidecar through Docker Compose when requested
+- the browser-facing runtime architecture is now explicitly layered as:
+  - `Level 0`: `comet-web-ui`
+  - `Level 1`: `comet-controller`
+  - `Level 2`: infer runtime
+  - `Level 3`: worker runtime
+- the target browser deployment model is now:
+  - one global `comet-web-ui` sidecar on the controller host
+  - browser traffic terminates at `comet-web-ui`
+  - `comet-web-ui` serves UI assets and reverse-proxies `/api/*` and `/api/v1/events/stream` to `comet-controller`
+- React is now an accepted UI technology for Phase H, but `Node.js` remains build-time only and is not part of the shipped runtime path
 - `comet-controller` can now also operate as a thin remote operator CLI for the common controller workflows through `--controller`, `COMET_CONTROLLER`, and `~/.config/comet/controller`, so the first Phase F bridge now covers both REST and CLI-over-HTTP
 - the current Phase F API contract also injects `api_version` plus `request.path` / `request.method` into JSON responses and normalizes API errors under `status=error` with `error.code` / `error.message`
 
@@ -64,6 +79,7 @@ The first implementation slice is intentionally narrow:
 - controller-side rebalance now has an explicit cluster gate summary, so active rollout lifecycle, pending/claimed host assignments, and unconverged schedulable nodes can block new rebalance iterations until the cluster is stable again
 - observed GPU telemetry now also participates in target admission: the scheduler can hold a candidate on `compute-pressure` or `observed-insufficient-vram` instead of trusting only static fractions
 - host observations now also carry disk telemetry and network telemetry in normalized controller-visible envelopes
+- CPU telemetry is now also a required backend dependency for the browser-facing operator surface, rather than optional future enrichment
 - disk telemetry now covers both filesystem usage/capacity and block-device IO counters when a
   realized disk resolves to a mounted block device, so controller views can inspect `read_bytes`,
   `write_bytes`, `read_ios`, `write_ios`, accumulated IO time, and normalized disk fault counters
@@ -95,5 +111,36 @@ That seam should stay stable even after the following pieces are added:
 - SQLite state and migrations application
 - JSON bundle import and validation
 - Docker API execution
-- REST API, SSE, and UI
+- REST API, SSE, multi-plane browser workflows, and the `comet-web-ui` sidecar
 - scheduler logic for sharing and draining GPUs
+
+## Phase H Direction
+
+Phase H no longer targets controller-hosted static UI as the production endpoint.
+
+The current `serve --ui-root` path stays in the repository for:
+
+- local development
+- smoke validation
+- low-friction inspection during backend bring-up
+
+The production Phase H target is:
+
+- a separate controller-managed `comet-web-ui` container
+- React-based operator UI assets built ahead of time
+- controller API and SSE consumed through a reverse-proxy seam owned by `comet-web-ui`
+- multi-plane browser workflows, not only the current single-plane dashboard
+
+Current implementation status inside that target:
+
+- the React workspace now exists under `ui/operator-react`
+- the `comet/web-ui:dev` image builds that workspace in a multi-stage Dockerfile
+- `serve --ui-root` remains a dev fallback and can serve `ui/operator-react/dist` for local inspection
+- a live Phase H harness now validates sidecar-proxied REST and SSE through `scripts/check-live-phase-h.sh`
+
+This also changes the backend requirements for Phase H:
+
+- controller/store/planner must become plane-scoped and multi-plane safe
+- `stop-plane` means scale runtime to zero while preserving configuration
+- `delete-plane` remains a separate destructive action
+- event taxonomy and telemetry need to remain browser-consumable through the sidecar proxy path

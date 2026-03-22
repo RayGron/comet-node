@@ -63,6 +63,7 @@ struct HostObservation {
   std::string gpu_telemetry_json;
   std::string disk_telemetry_json;
   std::string network_telemetry_json;
+  std::string cpu_telemetry_json;
   std::string heartbeat_at;
 };
 
@@ -75,6 +76,7 @@ struct NodeAvailabilityOverride {
 
 struct RolloutActionRecord {
   int id = 0;
+  std::string plane_name;
   int desired_generation = 0;
   int step = 0;
   std::string worker_name;
@@ -156,6 +158,16 @@ struct EventRecord {
   std::string created_at;
 };
 
+struct PlaneRecord {
+  std::string name;
+  std::string shared_disk_name;
+  std::string control_root;
+  int generation = 0;
+  int rebalance_iteration = 0;
+  std::string state;
+  std::string created_at;
+};
+
 class ControllerStore {
  public:
   explicit ControllerStore(std::string db_path);
@@ -172,8 +184,20 @@ class ControllerStore {
       int rebalance_iteration);
   void ReplaceDesiredState(const DesiredState& state);
   std::optional<DesiredState> LoadDesiredState() const;
+  std::optional<DesiredState> LoadDesiredState(const std::string& plane_name) const;
+  std::vector<DesiredState> LoadDesiredStates() const;
   std::optional<int> LoadDesiredGeneration() const;
+  std::optional<int> LoadDesiredGeneration(const std::string& plane_name) const;
   std::optional<int> LoadRebalanceIteration() const;
+  std::optional<int> LoadRebalanceIteration(const std::string& plane_name) const;
+  std::vector<PlaneRecord> LoadPlanes() const;
+  std::optional<PlaneRecord> LoadPlane(const std::string& plane_name) const;
+  bool UpdatePlaneState(
+      const std::string& plane_name,
+      const std::string& state);
+  int SupersedeHostAssignmentsForPlane(
+      const std::string& plane_name,
+      const std::string& status_message);
   void UpsertNodeAvailabilityOverride(const NodeAvailabilityOverride& availability_override);
   std::optional<NodeAvailabilityOverride> LoadNodeAvailabilityOverride(
       const std::string& node_name) const;
@@ -187,9 +211,11 @@ class ControllerStore {
       const std::optional<std::string>& plane_name = std::nullopt,
       const std::optional<std::string>& node_name = std::nullopt) const;
   void ReplaceRolloutActions(
+      const std::string& plane_name,
       int desired_generation,
       const std::vector<SchedulerRolloutAction>& actions);
   std::vector<RolloutActionRecord> LoadRolloutActions(
+      const std::optional<std::string>& plane_name = std::nullopt,
       const std::optional<std::string>& target_node_name = std::nullopt,
       const std::optional<RolloutActionStatus>& status = std::nullopt) const;
   bool UpdateRolloutActionStatus(
@@ -199,14 +225,17 @@ class ControllerStore {
   void UpsertHostObservation(const HostObservation& observation);
   std::optional<HostObservation> LoadHostObservation(const std::string& node_name) const;
   std::vector<HostObservation> LoadHostObservations(
-      const std::optional<std::string>& node_name = std::nullopt) const;
+      const std::optional<std::string>& node_name = std::nullopt,
+      const std::optional<std::string>& plane_name = std::nullopt) const;
   void AppendEvent(const EventRecord& event);
   std::vector<EventRecord> LoadEvents(
       const std::optional<std::string>& plane_name = std::nullopt,
       const std::optional<std::string>& node_name = std::nullopt,
       const std::optional<std::string>& worker_name = std::nullopt,
       const std::optional<std::string>& category = std::nullopt,
-      int limit = 100) const;
+      int limit = 100,
+      const std::optional<int>& since_id = std::nullopt,
+      bool ascending = false) const;
   void UpsertSchedulerPlaneRuntime(const SchedulerPlaneRuntime& runtime);
   std::optional<SchedulerPlaneRuntime> LoadSchedulerPlaneRuntime(
       const std::string& plane_name) const;
@@ -228,7 +257,8 @@ class ControllerStore {
   std::optional<HostAssignment> LoadHostAssignment(int assignment_id) const;
   std::vector<HostAssignment> LoadHostAssignments(
       const std::optional<std::string>& node_name = std::nullopt,
-      const std::optional<HostAssignmentStatus>& status = std::nullopt) const;
+      const std::optional<HostAssignmentStatus>& status = std::nullopt,
+      const std::optional<std::string>& plane_name = std::nullopt) const;
   std::optional<HostAssignment> ClaimNextHostAssignment(const std::string& node_name);
   bool TransitionClaimedHostAssignment(
       int assignment_id,

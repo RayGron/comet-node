@@ -265,6 +265,43 @@ NetworkTelemetrySnapshot NetworkTelemetrySnapshotFromJson(const json& value) {
   return snapshot;
 }
 
+json ToJson(const CpuTelemetrySnapshot& snapshot) {
+  return json{
+      {"contract_version", snapshot.contract_version},
+      {"degraded", snapshot.degraded},
+      {"source", snapshot.source},
+      {"collected_at", snapshot.collected_at},
+      {"core_count", snapshot.core_count},
+      {"utilization_pct", snapshot.utilization_pct},
+      {"loadavg_1m", snapshot.loadavg_1m},
+      {"loadavg_5m", snapshot.loadavg_5m},
+      {"loadavg_15m", snapshot.loadavg_15m},
+      {"total_memory_bytes", snapshot.total_memory_bytes},
+      {"available_memory_bytes", snapshot.available_memory_bytes},
+      {"used_memory_bytes", snapshot.used_memory_bytes},
+  };
+}
+
+CpuTelemetrySnapshot CpuTelemetrySnapshotFromJson(const json& value) {
+  CpuTelemetrySnapshot snapshot;
+  snapshot.contract_version = value.value("contract_version", 1);
+  snapshot.degraded = value.value("degraded", false);
+  snapshot.source = value.value("source", std::string{});
+  snapshot.collected_at = value.value("collected_at", std::string{});
+  snapshot.core_count = value.value("core_count", 0);
+  snapshot.utilization_pct = value.value("utilization_pct", 0.0);
+  snapshot.loadavg_1m = value.value("loadavg_1m", 0.0);
+  snapshot.loadavg_5m = value.value("loadavg_5m", 0.0);
+  snapshot.loadavg_15m = value.value("loadavg_15m", 0.0);
+  snapshot.total_memory_bytes =
+      value.value("total_memory_bytes", static_cast<std::uint64_t>(0));
+  snapshot.available_memory_bytes =
+      value.value("available_memory_bytes", static_cast<std::uint64_t>(0));
+  snapshot.used_memory_bytes =
+      value.value("used_memory_bytes", static_cast<std::uint64_t>(0));
+  return snapshot;
+}
+
 json ToJson(const RuntimeStatus& status) {
   return json{
       {"plane_name", status.plane_name},
@@ -392,6 +429,14 @@ std::string SerializeNetworkTelemetryJson(const NetworkTelemetrySnapshot& snapsh
 
 NetworkTelemetrySnapshot DeserializeNetworkTelemetryJson(const std::string& json_text) {
   return NetworkTelemetrySnapshotFromJson(json::parse(json_text));
+}
+
+std::string SerializeCpuTelemetryJson(const CpuTelemetrySnapshot& snapshot) {
+  return ToJson(snapshot).dump(2);
+}
+
+CpuTelemetrySnapshot DeserializeCpuTelemetryJson(const std::string& json_text) {
+  return CpuTelemetrySnapshotFromJson(json::parse(json_text));
 }
 
 std::optional<RuntimeStatus> LoadRuntimeStatusJson(const std::string& path) {

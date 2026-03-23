@@ -69,6 +69,8 @@ enum class ComposeMode {
 class HostdBackend;
 
 std::string ResolvedDockerCommand();
+std::string ShellQuote(const std::string& value);
+bool RunCommandOk(const std::string& command);
 std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
     const std::string& state_root,
     const std::string& node_name,
@@ -470,6 +472,27 @@ void RemoveDiskDirectory(
 
   std::error_code error;
   std::filesystem::remove_all(disk_path, error);
+  if ((error == std::errc::permission_denied ||
+       error == std::errc::operation_not_permitted) &&
+      std::filesystem::exists(disk_path) &&
+      disk_path.has_parent_path()) {
+    const std::filesystem::path parent = disk_path.parent_path();
+    const std::string helper_image = "comet/base-runtime:dev";
+    const std::string docker = ResolvedDockerCommand();
+    if (!RunCommandOk(
+            docker + " image inspect " + ShellQuote(helper_image) + " >/dev/null 2>&1")) {
+      RunCommandOk(docker + " pull " + ShellQuote(helper_image) + " >/dev/null 2>&1");
+    }
+    const std::string helper_command =
+        docker + " run --rm --user 0:0" +
+        " -v " + ShellQuote(parent.string() + ":/cleanup-parent") +
+        " --entrypoint /bin/rm " + ShellQuote(helper_image) +
+        " -rf -- " + ShellQuote("/cleanup-parent/" + disk_path.filename().string());
+    if (RunCommandOk(helper_command)) {
+      error.clear();
+      std::filesystem::remove_all(disk_path, error);
+    }
+  }
   if (error) {
     throw std::runtime_error(
         "failed to remove managed disk path '" + path + "': " + error.message());

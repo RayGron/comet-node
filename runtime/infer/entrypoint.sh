@@ -8,6 +8,20 @@ echo "[comet-infer] booting plane=${COMET_PLANE_NAME:-unknown} instance=${COMET_
 echo "[comet-infer] control_root=${COMET_CONTROL_ROOT:-unknown}"
 echo "[comet-infer] runtime_config=${config_path}"
 echo "[comet-infer] boot_mode=${boot_mode}"
+
+run_startup_doctor() {
+  local checks="${COMET_INFER_STARTUP_DOCTOR_CHECKS:-config,filesystem,tools,gateway}"
+  /runtime/infer/inferctl.sh doctor --config "${config_path}" --checks "${checks}"
+}
+
+probe_topology_doctor() {
+  if /runtime/infer/inferctl.sh doctor --config "${config_path}" --checks topology; then
+    return 0
+  fi
+  echo "[comet-infer] worker group topology is still bootstrapping; continuing startup"
+  return 0
+}
+
 if [[ -f "${config_path}" ]]; then
   echo "[comet-infer] runtime config found"
   if [[ -x /runtime/bin/comet-inferctl || -x /runtime/infer/inferctl.sh ]]; then
@@ -25,7 +39,8 @@ if [[ -f "${config_path}" ]]; then
         ;;
       launch-embedded)
         /runtime/infer/inferctl.sh bootstrap-runtime --config "${config_path}" --apply
-        /runtime/infer/inferctl.sh doctor --config "${config_path}"
+        run_startup_doctor
+        probe_topology_doctor
         /runtime/infer/inferctl.sh gateway-plan --config "${config_path}" --apply
         /runtime/infer/inferctl.sh plan-launch --config "${config_path}"
         /runtime/infer/inferctl.sh status --config "${config_path}" --apply
@@ -33,7 +48,8 @@ if [[ -f "${config_path}" ]]; then
         ;;
       launch-runtime)
         /runtime/infer/inferctl.sh bootstrap-runtime --config "${config_path}" --apply
-        /runtime/infer/inferctl.sh doctor --config "${config_path}"
+        run_startup_doctor
+        probe_topology_doctor
         /runtime/infer/inferctl.sh gateway-plan --config "${config_path}" --apply
         /runtime/infer/inferctl.sh plan-launch --config "${config_path}"
         /runtime/infer/inferctl.sh status --config "${config_path}" --apply

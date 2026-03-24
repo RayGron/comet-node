@@ -1884,6 +1884,25 @@ json ParseInteractionPayload(const std::string& body) {
   return body.empty() ? json::object() : json::parse(body);
 }
 
+std::string RemoveThinkBlocks(std::string value) {
+  while (true) {
+    const std::size_t begin = value.find("<think>");
+    if (begin == std::string::npos) {
+      return value;
+    }
+    const std::size_t end = value.find("</think>", begin);
+    if (end == std::string::npos) {
+      return value.substr(0, begin);
+    }
+    value.erase(begin, end + std::string("</think>").size() - begin);
+  }
+}
+
+std::string SanitizeInteractionText(std::string text) {
+  text = RemoveThinkBlocks(std::move(text));
+  return Trim(text);
+}
+
 std::string ExtractInteractionText(const json& payload) {
   if (!payload.contains("choices") || !payload.at("choices").is_array() ||
       payload.at("choices").empty()) {
@@ -1891,9 +1910,9 @@ std::string ExtractInteractionText(const json& payload) {
   }
   const json& choice = payload.at("choices").at(0);
   if (choice.contains("message") && choice.at("message").is_object()) {
-    return choice.at("message").value("content", std::string{});
+    return SanitizeInteractionText(choice.at("message").value("content", std::string{}));
   }
-  return choice.value("text", std::string{});
+  return SanitizeInteractionText(choice.value("text", std::string{}));
 }
 
 std::string ExtractInteractionFinishReason(const json& payload) {

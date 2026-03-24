@@ -90,6 +90,10 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
       }
     }
 
+    if (service.use_nvidia_runtime) {
+      out << "    runtime: nvidia\n";
+    }
+
     if (!service.volumes.empty()) {
       out << "    volumes:\n";
       for (const auto& volume : service.volumes) {

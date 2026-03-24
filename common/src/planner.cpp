@@ -171,7 +171,15 @@ ComposeService BuildComposeService(
     }
   }
   if (service.gpu_device.has_value()) {
+    service.use_nvidia_runtime = true;
     service.environment["NVIDIA_VISIBLE_DEVICES"] = *service.gpu_device;
+    service.environment["NVIDIA_DRIVER_CAPABILITIES"] = "compute,utility";
+    service.security_opts.push_back("apparmor=unconfined");
+  } else if (use_vllm && instance.role == InstanceRole::Infer) {
+    // vLLM-backed infer still links against CUDA-enabled binaries, so expose driver
+    // libraries without claiming a device on infer-only hosts.
+    service.use_nvidia_runtime = true;
+    service.environment["NVIDIA_VISIBLE_DEVICES"] = "none";
     service.environment["NVIDIA_DRIVER_CAPABILITIES"] = "compute,utility";
     service.security_opts.push_back("apparmor=unconfined");
   }

@@ -36,12 +36,25 @@ long_request_json="${tmp_dir}/long-request.json"
 long_response_json="${tmp_dir}/long-response.json"
 failure_chat_response_json="${tmp_dir}/failure-chat-response.json"
 
-infer_container="infer-${plane_name}"
-worker_container="worker-${plane_name}"
+resolve_container_name() {
+  local service_name="$1"
+  local container_name
+  container_name="$("${docker_cmd[@]}" ps --format '{{.Names}}' | grep -F "${service_name}" | head -n1 || true)"
+  if [[ -z "${container_name}" ]]; then
+    echo "error: unable to find running container for ${service_name}" >&2
+    exit 1
+  fi
+  printf '%s\n' "${container_name}"
+}
+
+infer_container=""
+worker_container=""
 worker_stopped_for_validation="no"
 
 echo "[check-live-vllm] ensuring plane ${plane_name} is running"
 "${repo_root}/scripts/run-plane.sh" "${plane_name}" >/dev/null
+infer_container="$(resolve_container_name "infer-${plane_name}")"
+worker_container="$(resolve_container_name "worker-${plane_name}")"
 
 echo "[check-live-vllm] checking interaction status"
 curl -fsS "${controller_url}/api/v1/planes/${plane_name}/interaction/status" >"${status_json}"

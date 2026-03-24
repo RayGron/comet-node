@@ -425,15 +425,6 @@ std::string ComposePathForNode(
       .string();
 }
 
-bool NodeHasInferInstance(const comet::DesiredState& state, const std::string& node_name) {
-  for (const auto& instance : state.instances) {
-    if (instance.node_name == node_name && instance.role == comet::InstanceRole::Infer) {
-      return true;
-    }
-  }
-  return false;
-}
-
 const comet::DiskSpec* FindSharedDiskForNode(
     const comet::DesiredState& state,
     const std::string& node_name) {
@@ -453,10 +444,6 @@ std::optional<std::string> ControlFilePathForNode(
     const comet::DesiredState& state,
     const std::string& node_name,
     const std::string& file_name) {
-  if (!NodeHasInferInstance(state, node_name)) {
-    return std::nullopt;
-  }
-
   const auto* shared_disk = FindSharedDiskForNode(state, node_name);
   if (shared_disk == nullptr) {
     return std::nullopt;

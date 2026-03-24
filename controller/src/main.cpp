@@ -9896,6 +9896,8 @@ std::string RenderWebUiComposeYaml(
   out << "    restart: unless-stopped\n";
   out << "    environment:\n";
   out << "      COMET_CONTROLLER_UPSTREAM: " << controller_upstream << "\n";
+  out << "    security_opt:\n";
+  out << "      - apparmor=unconfined\n";
   out << "    extra_hosts:\n";
   out << "      - \"host.docker.internal:host-gateway\"\n";
   out << "    ports:\n";

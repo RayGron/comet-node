@@ -33,6 +33,43 @@ infer_tag="${2:-comet/infer-runtime:dev}"
 worker_tag="${3:-comet/worker-runtime:dev}"
 web_ui_tag="${4:-comet/web-ui:dev}"
 
+build_web_ui_image() {
+  local temp_root
+  mkdir -p "${repo_root}/var"
+  temp_root="$(mktemp -d "${repo_root}/var/web-ui-image.XXXXXX")"
+  trap 'rm -rf "'"${temp_root}"'"' RETURN
+  mkdir -p "${temp_root}/dist"
+  cp "${repo_root}/runtime/web-ui/nginx.conf.template" "${temp_root}/nginx.conf.template"
+
+  local -a helper_args=(
+    run
+    --rm
+    -v "${repo_root}/ui/operator-react:/src:ro"
+    -v "${temp_root}/dist:/out"
+    -w /tmp/work
+    node:20-bookworm-slim
+    bash
+    -lc
+    "cp /src/package.json /src/package-lock.json . && npm ci && cp -R /src/. . && npm run build && cp -R dist/. /out/"
+  )
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    helper_args=(run --rm --security-opt apparmor=unconfined "${helper_args[@]:2}")
+  fi
+
+  "${docker_cmd}" "${helper_args[@]}"
+
+  cat > "${temp_root}/Dockerfile" <<'EOF'
+FROM nginx:1.29-alpine
+
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY dist/ /usr/share/nginx/html/
+
+EXPOSE 8080
+EOF
+
+  "${docker_cmd}" build -f "${temp_root}/Dockerfile" -t "${web_ui_tag}" "${temp_root}"
+}
+
 echo "building ${base_tag}"
 "${docker_cmd}" build \
   -f "${repo_root}/runtime/base/Dockerfile" \
@@ -53,10 +90,7 @@ echo "building ${worker_tag}"
 
 if [[ "${skip_web_ui}" != "yes" ]]; then
   echo "building ${web_ui_tag}"
-  "${docker_cmd}" build \
-    -f "${repo_root}/runtime/web-ui/Dockerfile" \
-    -t "${web_ui_tag}" \
-    "${repo_root}"
+  build_web_ui_image
 fi
 
 echo "runtime images ready"

@@ -1529,29 +1529,34 @@ std::string BuildInteractionUpstreamBody(
   const auto preferred_language =
       ResolveInteractionPreferredLanguage(resolution.desired_state, payload);
 
-  json system_messages = json::array();
+  std::vector<std::string> system_instruction_parts;
   if (resolution.desired_state.interaction.has_value() &&
       resolution.desired_state.interaction->system_prompt.has_value() &&
       !resolution.desired_state.interaction->system_prompt->empty()) {
-    system_messages.push_back(json{
-        {"role", "system"},
-        {"content", *resolution.desired_state.interaction->system_prompt},
-    });
+    system_instruction_parts.push_back(*resolution.desired_state.interaction->system_prompt);
   }
-  system_messages.push_back(json{
-      {"role", "system"},
-      {"content", BuildLanguageInstruction(resolution.desired_state, preferred_language)},
-  });
+  system_instruction_parts.push_back(
+      BuildLanguageInstruction(resolution.desired_state, preferred_language));
   if (policy.require_completion_marker || policy.max_continuations > 0) {
-    system_messages.push_back(json{
-        {"role", "system"},
-        {"content", BuildSemanticCompletionInstruction(policy)},
-    });
+    system_instruction_parts.push_back(BuildSemanticCompletionInstruction(policy));
   }
 
   json merged_messages = json::array();
-  for (const auto& message : system_messages) {
-    merged_messages.push_back(message);
+  std::string combined_system_instruction;
+  for (const auto& part : system_instruction_parts) {
+    if (part.empty()) {
+      continue;
+    }
+    if (!combined_system_instruction.empty()) {
+      combined_system_instruction += "\n\n";
+    }
+    combined_system_instruction += part;
+  }
+  if (!combined_system_instruction.empty()) {
+    merged_messages.push_back(json{
+        {"role", "system"},
+        {"content", combined_system_instruction},
+    });
   }
   for (const auto& message : payload.at("messages")) {
     merged_messages.push_back(message);

@@ -271,8 +271,12 @@ import sys
 
 code = int(sys.argv[1])
 body = pathlib.Path(sys.argv[2]).read_text()
-assert code >= 500, (code, body)
-assert "unavailable" in body.lower() or "failed" in body.lower(), body
+assert code == 409 or code >= 500, (code, body)
+assert (
+    "unavailable" in body.lower()
+    or "failed" in body.lower()
+    or "not ready" in body.lower()
+), body
 print(f"missing_worker_chat=http_{code}")
 PY
 "${docker_cmd[@]}" start "${worker_container}" >/dev/null

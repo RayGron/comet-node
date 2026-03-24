@@ -146,6 +146,7 @@ install_prereqs_if_needed() {
   run_as_root apt-get update
   run_as_root apt-get install -y "${packages[@]}"
   run_as_root apt-get install -y "${docker_packages[@]}" || run_as_root apt-get install -y docker.io || true
+  run_as_root apt-get clean || true
 }
 
 apt_package_has_candidate() {
@@ -192,6 +193,7 @@ install_cuda_toolkit_if_needed() {
 
   echo "[install-single-node] installing CUDA toolkit package ${package_name}"
   run_as_root apt-get install -y "${package_name}"
+  run_as_root apt-get clean || true
 }
 
 config_summary="$(

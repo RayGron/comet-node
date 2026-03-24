@@ -76,7 +76,6 @@ ComposeService BuildComposeService(
       service.environment["COMET_INFER_RUNTIME_BACKEND"] = "worker-vllm";
       if (const auto local_worker = FindLocalWorkerDependency(node_instances, state);
           local_worker.has_value()) {
-        service.depends_on.push_back(*local_worker);
         service.environment["COMET_INFER_VLLM_UPSTREAM_URL"] =
             "http://" + *local_worker + ":" + std::to_string(state.inference.api_port);
       }

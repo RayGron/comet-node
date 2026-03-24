@@ -1898,9 +1898,60 @@ std::string RemoveThinkBlocks(std::string value) {
   }
 }
 
+std::vector<std::string> SplitParagraphs(const std::string& value) {
+  std::vector<std::string> paragraphs;
+  std::string current;
+  bool last_blank = false;
+  std::istringstream input(value);
+  std::string line;
+  while (std::getline(input, line)) {
+    const bool blank = Trim(line).empty();
+    if (blank) {
+      if (!current.empty()) {
+        paragraphs.push_back(Trim(current));
+        current.clear();
+      }
+      last_blank = true;
+      continue;
+    }
+    if (!current.empty()) {
+      current += last_blank ? "\n" : "\n";
+    }
+    current += line;
+    last_blank = false;
+  }
+  if (!current.empty()) {
+    paragraphs.push_back(Trim(current));
+  }
+  return paragraphs;
+}
+
+bool StartsWithReasoningPreamble(const std::string& text) {
+  const std::string lowered = ToLowerCopy(Trim(text));
+  return StartsWith(lowered, "thinking process:") || StartsWith(lowered, "reasoning:") ||
+         StartsWith(lowered, "analysis:") || StartsWith(lowered, "chain of thought:");
+}
+
 std::string SanitizeInteractionText(std::string text) {
   text = RemoveThinkBlocks(std::move(text));
-  return Trim(text);
+  text = Trim(text);
+  if (StartsWithReasoningPreamble(text)) {
+    const auto paragraphs = SplitParagraphs(text);
+    for (auto it = paragraphs.rbegin(); it != paragraphs.rend(); ++it) {
+      const std::string candidate = Trim(*it);
+      if (candidate.empty()) {
+        continue;
+      }
+      const std::string lowered = ToLowerCopy(candidate);
+      if (StartsWithReasoningPreamble(candidate) || StartsWith(lowered, "1.") ||
+          StartsWith(lowered, "2.") || StartsWith(lowered, "3.") ||
+          StartsWith(lowered, "* ")) {
+        continue;
+      }
+      return candidate;
+    }
+  }
+  return text;
 }
 
 std::string ExtractInteractionText(const json& payload) {

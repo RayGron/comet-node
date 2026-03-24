@@ -2121,13 +2121,21 @@ bool HostCanManageRealDisks() {
   return geteuid() == 0;
 }
 
-std::string NormalizeLoopImagePath(const std::string& image_path) {
+std::string NormalizeManagedPath(const std::string& path) {
   std::error_code error;
-  const auto normalized = std::filesystem::weakly_canonical(image_path, error);
+  const auto normalized = std::filesystem::weakly_canonical(path, error);
   if (!error) {
     return normalized.string();
   }
-  return std::filesystem::path(image_path).lexically_normal().string();
+  return std::filesystem::path(path).lexically_normal().string();
+}
+
+std::string NormalizeLoopImagePath(const std::string& image_path) {
+  return NormalizeManagedPath(image_path);
+}
+
+std::string NormalizeMountPointPath(const std::string& mount_point) {
+  return NormalizeManagedPath(mount_point);
 }
 
 std::optional<std::string> DetectExistingLoopDevice(const std::string& image_path) {
@@ -2176,11 +2184,22 @@ std::string DetectFilesystemTypeForDevice(const std::string& device_path) {
 }
 
 bool IsPathMounted(const std::string& mount_point) {
-  return RunCommandOk(
-      "/usr/bin/mountpoint -q " + ShellQuote(mount_point) + " >/dev/null 2>&1");
+  if (RunCommandOk(
+          "/usr/bin/mountpoint -q " + ShellQuote(mount_point) + " >/dev/null 2>&1")) {
+    return true;
+  }
+  const std::string normalized_mount_point = NormalizeMountPointPath(mount_point);
+  return normalized_mount_point != mount_point &&
+         RunCommandOk(
+             "/usr/bin/mountpoint -q " + ShellQuote(normalized_mount_point) +
+             " >/dev/null 2>&1");
 }
 
 std::optional<std::string> CurrentMountSource(const std::string& mount_point) {
+  const std::array<std::string, 2> candidates = {
+      mount_point,
+      NormalizeMountPointPath(mount_point),
+  };
   std::ifstream input("/proc/self/mounts");
   if (!input.is_open()) {
     return std::nullopt;
@@ -2192,8 +2211,10 @@ std::optional<std::string> CurrentMountSource(const std::string& mount_point) {
   while (input >> source >> target >> fs_type) {
     std::string rest_of_line;
     std::getline(input, rest_of_line);
-    if (target == mount_point) {
-      return source;
+    for (const auto& candidate : candidates) {
+      if (!candidate.empty() && target == candidate) {
+        return source;
+      }
     }
   }
   return std::nullopt;

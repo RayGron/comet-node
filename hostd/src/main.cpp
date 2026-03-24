@@ -49,6 +49,13 @@ namespace {
 
 using nlohmann::json;
 
+struct CometNodeConfig {
+  std::string storage_root = "/var/lib/comet";
+};
+
+constexpr const char* kDefaultManagedStorageRoot = "/var/lib/comet";
+constexpr const char* kDefaultNodeConfigRelativePath = "config/comet-node-config.json";
+
 std::string DefaultDbPath() {
   return (std::filesystem::path("var") / "controller.sqlite").string();
 }
@@ -79,13 +86,13 @@ std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
 void PrintUsage() {
   std::cout
       << "Usage:\n"
-      << "  comet-hostd show-demo-ops --node <node-name>\n"
-      << "  comet-hostd show-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>]\n"
+      << "  comet-hostd show-demo-ops --node <node-name> [--config <path>]\n"
+      << "  comet-hostd show-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>] [--config <path>]\n"
       << "  comet-hostd show-local-state --node <node-name> [--state-root <path>]\n"
       << "  comet-hostd show-runtime-status --node <node-name> [--state-root <path>]\n"
       << "  comet-hostd report-observed-state --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--state-root <path>]\n"
-      << "  comet-hostd apply-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec]\n"
-      << "  comet-hostd apply-next-assignment --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec]\n";
+      << "  comet-hostd apply-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n"
+      << "  comet-hostd apply-next-assignment --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n";
 }
 
 std::optional<std::string> ParseNodeArg(int argc, char** argv) {
@@ -178,6 +185,16 @@ std::optional<std::string> ParseControllerFingerprintArg(int argc, char** argv) 
   return std::nullopt;
 }
 
+std::optional<std::string> ParseConfigArg(int argc, char** argv) {
+  for (int index = 2; index < argc; ++index) {
+    const std::string arg = argv[index];
+    if (arg == "--config" && index + 1 < argc) {
+      return std::string(argv[index + 1]);
+    }
+  }
+  return std::nullopt;
+}
+
 std::string ResolveDbPath(const std::optional<std::string>& db_arg) {
   return db_arg.value_or(DefaultDbPath());
 }
@@ -200,15 +217,155 @@ ComposeMode ResolveComposeMode(const std::optional<std::string>& compose_mode_ar
   throw std::runtime_error("unsupported compose mode '" + *compose_mode_arg + "'");
 }
 
-std::string RebaseManagedPath(
+std::optional<std::filesystem::path> FindNodeConfigPath(const char* argv0) {
+  std::vector<std::filesystem::path> candidates;
+  candidates.emplace_back(std::filesystem::current_path() / kDefaultNodeConfigRelativePath);
+
+  if (argv0 != nullptr && *argv0 != '\0') {
+    std::error_code error;
+    const std::filesystem::path executable_path = std::filesystem::absolute(argv0, error);
+    if (!error) {
+      std::filesystem::path current = executable_path.parent_path();
+      for (int depth = 0; depth < 4 && !current.empty(); ++depth) {
+        candidates.emplace_back(current / kDefaultNodeConfigRelativePath);
+        current = current.parent_path();
+      }
+    }
+  }
+
+  for (const auto& candidate : candidates) {
+    std::error_code error;
+    if (std::filesystem::exists(candidate, error) && !error) {
+      return candidate.lexically_normal();
+    }
+  }
+  return std::nullopt;
+}
+
+CometNodeConfig LoadCometNodeConfig(
+    const std::optional<std::string>& config_arg,
+    const char* argv0) {
+  std::optional<std::filesystem::path> config_path;
+  bool explicit_path = false;
+
+  if (config_arg.has_value()) {
+    config_path = *config_arg;
+    explicit_path = true;
+  } else if (const char* env_path = std::getenv("COMET_NODE_CONFIG_PATH");
+             env_path != nullptr && *env_path != '\0') {
+    config_path = env_path;
+    explicit_path = true;
+  } else {
+    config_path = FindNodeConfigPath(argv0);
+  }
+
+  if (!config_path.has_value()) {
+    return {};
+  }
+
+  if (!std::filesystem::exists(*config_path)) {
+    if (explicit_path) {
+      throw std::runtime_error(
+          "comet node config file not found: " + config_path->string());
+    }
+    return {};
+  }
+
+  std::ifstream input(*config_path);
+  if (!input.is_open()) {
+    throw std::runtime_error(
+        "failed to open comet node config file '" + config_path->string() + "'");
+  }
+
+  const json value = json::parse(input, nullptr, true, true);
+  if (!value.is_object()) {
+    throw std::runtime_error(
+        "comet node config must be a JSON object: " + config_path->string());
+  }
+
+  CometNodeConfig config;
+  if (value.contains("paths")) {
+    if (!value.at("paths").is_object()) {
+      throw std::runtime_error(
+          "comet node config field 'paths' must be an object: " + config_path->string());
+    }
+    const auto& paths = value.at("paths");
+    if (paths.contains("storage_root")) {
+      if (!paths.at("storage_root").is_string()) {
+        throw std::runtime_error(
+            "comet node config field 'paths.storage_root' must be a string: " +
+            config_path->string());
+      }
+      config.storage_root = paths.at("storage_root").get<std::string>();
+    }
+  } else if (value.contains("storage_root")) {
+    if (!value.at("storage_root").is_string()) {
+      throw std::runtime_error(
+          "comet node config field 'storage_root' must be a string: " +
+          config_path->string());
+    }
+    config.storage_root = value.at("storage_root").get<std::string>();
+  }
+
+  if (config.storage_root.empty()) {
+    throw std::runtime_error(
+        "comet node config storage_root must not be empty: " + config_path->string());
+  }
+
+  const std::filesystem::path storage_root_path(config.storage_root);
+  if (!storage_root_path.is_absolute()) {
+    throw std::runtime_error(
+        "comet node config storage_root must be an absolute path: " +
+        config_path->string());
+  }
+
+  config.storage_root = storage_root_path.lexically_normal().string();
+  return config;
+}
+
+bool HasPathPrefix(
+    const std::filesystem::path& path,
+    const std::filesystem::path& prefix) {
+  const auto path_text = path.lexically_normal().generic_string();
+  const auto prefix_text = prefix.lexically_normal().generic_string();
+  return path_text == prefix_text ||
+         (path_text.size() > prefix_text.size() &&
+          path_text.compare(0, prefix_text.size(), prefix_text) == 0 &&
+          path_text[prefix_text.size()] == '/');
+}
+
+std::string RebaseManagedStorageRoot(
     const std::string& path,
-    const std::optional<std::string>& runtime_root,
-    const std::optional<std::string>& node_name = std::nullopt) {
-  if (!runtime_root.has_value()) {
+    const std::string& storage_root) {
+  const std::filesystem::path original(path);
+  if (!original.is_absolute()) {
     return path;
   }
 
-  const std::filesystem::path original(path);
+  const std::filesystem::path default_root(kDefaultManagedStorageRoot);
+  if (!HasPathPrefix(original, default_root)) {
+    return path;
+  }
+
+  const std::filesystem::path configured_root(storage_root);
+  if (configured_root.lexically_normal() == default_root.lexically_normal()) {
+    return path;
+  }
+
+  return (configured_root / original.lexically_relative(default_root)).string();
+}
+
+std::string RebaseManagedPath(
+    const std::string& path,
+    const std::string& storage_root,
+    const std::optional<std::string>& runtime_root,
+    const std::optional<std::string>& node_name = std::nullopt) {
+  const std::string storage_rebased = RebaseManagedStorageRoot(path, storage_root);
+  if (!runtime_root.has_value()) {
+    return storage_rebased;
+  }
+
+  const std::filesystem::path original(storage_rebased);
   const std::filesystem::path base(*runtime_root);
   const std::filesystem::path rebased =
       original.is_absolute() ? (base / original.relative_path()) : (base / original);
@@ -220,8 +377,10 @@ std::string RebaseManagedPath(
 
 comet::DesiredState RebaseStateForRuntimeRoot(
     comet::DesiredState state,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root) {
-  if (!runtime_root.has_value()) {
+  if (!runtime_root.has_value() &&
+      storage_root == std::string(kDefaultManagedStorageRoot)) {
     return state;
   }
 
@@ -231,6 +390,7 @@ comet::DesiredState RebaseStateForRuntimeRoot(
         disk.kind == comet::DiskKind::WorkerPrivate;
     disk.host_path = RebaseManagedPath(
         disk.host_path,
+        storage_root,
         runtime_root,
         node_local_disk ? std::optional<std::string>(disk.node_name) : std::nullopt);
   }
@@ -431,10 +591,15 @@ std::string SanitizeDiskPathComponent(const std::string& value) {
 
 std::string ManagedDiskImagePath(
     const comet::DiskSpec& disk,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root) {
   if (disk.kind == comet::DiskKind::PlaneShared) {
     const std::filesystem::path base(
-        RebaseManagedPath("/var/lib/comet/disk-images", runtime_root, std::nullopt));
+        RebaseManagedPath(
+            std::string(kDefaultManagedStorageRoot) + "/disk-images",
+            storage_root,
+            runtime_root,
+            std::nullopt));
     return (
         base /
         SanitizeDiskPathComponent(disk.plane_name) /
@@ -448,7 +613,8 @@ std::string ManagedDiskImagePath(
       disk.kind == comet::DiskKind::WorkerPrivate;
   const std::filesystem::path base(
       RebaseManagedPath(
-          "/var/lib/comet/disk-images",
+          std::string(kDefaultManagedStorageRoot) + "/disk-images",
+          storage_root,
           runtime_root,
           node_local_disk ? std::optional<std::string>(disk.node_name) : std::nullopt));
   return (
@@ -1923,12 +2089,13 @@ void CreateSparseImageFile(const std::string& image_path, int size_gb) {
 
 comet::DiskRuntimeState EnsureRealDiskMount(
     const comet::DiskSpec& disk,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root) {
   comet::DiskRuntimeState runtime_state;
   runtime_state.disk_name = disk.name;
   runtime_state.plane_name = disk.plane_name;
   runtime_state.node_name = disk.node_name;
-  runtime_state.image_path = ManagedDiskImagePath(disk, runtime_root);
+  runtime_state.image_path = ManagedDiskImagePath(disk, storage_root, runtime_root);
   runtime_state.mount_point = disk.host_path;
 
   CreateSparseImageFile(runtime_state.image_path, disk.size_gb);
@@ -2000,12 +2167,13 @@ comet::DiskRuntimeState EnsureRealDiskMount(
 
 comet::DiskRuntimeState InspectRealDiskRuntime(
     const comet::DiskSpec& disk,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root) {
   comet::DiskRuntimeState runtime_state;
   runtime_state.disk_name = disk.name;
   runtime_state.plane_name = disk.plane_name;
   runtime_state.node_name = disk.node_name;
-  runtime_state.image_path = ManagedDiskImagePath(disk, runtime_root);
+  runtime_state.image_path = ManagedDiskImagePath(disk, storage_root, runtime_root);
   runtime_state.mount_point = disk.host_path;
 
   const bool image_exists = std::filesystem::exists(runtime_state.image_path);
@@ -3791,6 +3959,7 @@ comet::DiskRuntimeState BuildDiskRuntimeState(
 comet::DiskRuntimeState EnsureDesiredDiskRuntimeState(
     const comet::DiskSpec& disk,
     const std::string& disk_key,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root);
 
 std::pair<std::string, std::string> SplitDiskKey(const std::string& disk_key);
@@ -3803,6 +3972,7 @@ void ApplyNodePlan(
     const comet::NodeExecutionPlan& plan,
     const comet::DesiredState& desired_node_state,
     const comet::NodeComposePlan& compose_plan,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
     ComposeMode compose_mode,
     const std::optional<int>& assignment_id,
@@ -3820,7 +3990,11 @@ void ApplyNodePlan(
               "missing desired disk for ensure operation '" + operation.target + "'");
         }
         const auto realized_state =
-            EnsureDesiredDiskRuntimeState(*disk, operation.target, runtime_root);
+            EnsureDesiredDiskRuntimeState(
+                *disk,
+                operation.target,
+                storage_root,
+                runtime_root);
         if (backend != nullptr) {
           backend->UpsertDiskRuntimeState(realized_state);
         }
@@ -3969,9 +4143,10 @@ void ApplyNodePlan(
 
 void ShowDemoOps(
     const std::string& node_name,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root) {
   const comet::DesiredState state =
-      RebaseStateForRuntimeRoot(comet::BuildDemoState(), runtime_root);
+      RebaseStateForRuntimeRoot(comet::BuildDemoState(), storage_root, runtime_root);
   const auto plan = FindNodeExecutionPlan(
       comet::BuildNodeExecutionPlans(
           std::nullopt,
@@ -3987,6 +4162,7 @@ void ShowStateOps(
     const std::string& db_path,
     const std::string& node_name,
     const std::string& artifacts_root,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
     const std::string& state_root) {
   comet::ControllerStore store(db_path);
@@ -3997,7 +4173,7 @@ void ShowStateOps(
   }
 
   const comet::DesiredState rebased_full_state =
-      RebaseStateForRuntimeRoot(*state, runtime_root);
+      RebaseStateForRuntimeRoot(*state, storage_root, runtime_root);
   const comet::DesiredState desired_node_state =
       comet::SliceDesiredStateForNode(rebased_full_state, node_name);
   const auto desired_generation = store.LoadDesiredGeneration();
@@ -4196,9 +4372,10 @@ comet::DiskRuntimeState BuildDiskRuntimeState(
 comet::DiskRuntimeState EnsureDesiredDiskRuntimeState(
     const comet::DiskSpec& disk,
     const std::string& disk_key,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root) {
   if (HostCanManageRealDisks()) {
-    const auto inspected_state = InspectRealDiskRuntime(disk, runtime_root);
+    const auto inspected_state = InspectRealDiskRuntime(disk, storage_root, runtime_root);
     if (inspected_state.runtime_state == "mounted") {
       return inspected_state;
     }
@@ -4206,7 +4383,7 @@ comet::DiskRuntimeState EnsureDesiredDiskRuntimeState(
       throw std::runtime_error(
           "managed disk drift detected for '" + disk_key + "': " + inspected_state.status_message);
     }
-    return EnsureRealDiskMount(disk, runtime_root);
+    return EnsureRealDiskMount(disk, storage_root, runtime_root);
   }
 
   EnsureDiskDirectory(disk.host_path, disk_key);
@@ -4219,6 +4396,7 @@ comet::DiskRuntimeState EnsureDesiredDiskRuntimeState(
 void PersistDiskRuntimeStateForDesiredDisks(
     HostdBackend* backend,
     const comet::DesiredState& desired_node_state,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
     const std::string& status_message) {
   if (backend == nullptr) {
@@ -4226,7 +4404,11 @@ void PersistDiskRuntimeStateForDesiredDisks(
   }
   for (const auto& disk : desired_node_state.disks) {
     auto realized_state =
-        EnsureDesiredDiskRuntimeState(disk, disk.name + "@" + disk.node_name, runtime_root);
+        EnsureDesiredDiskRuntimeState(
+            disk,
+            disk.name + "@" + disk.node_name,
+            storage_root,
+            runtime_root);
     realized_state.status_message = status_message;
     backend->UpsertDiskRuntimeState(realized_state);
   }
@@ -4235,10 +4417,15 @@ void PersistDiskRuntimeStateForDesiredDisks(
 void EnsureDesiredDisksReady(
     HostdBackend* backend,
     const comet::DesiredState& desired_node_state,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root) {
   for (const auto& disk : desired_node_state.disks) {
     const auto realized_state =
-        EnsureDesiredDiskRuntimeState(disk, disk.name + "@" + disk.node_name, runtime_root);
+        EnsureDesiredDiskRuntimeState(
+            disk,
+            disk.name + "@" + disk.node_name,
+            storage_root,
+            runtime_root);
     if (backend != nullptr) {
       backend->UpsertDiskRuntimeState(realized_state);
     }
@@ -4331,6 +4518,7 @@ void RemoveRealDiskMount(
 void ApplyDesiredNodeState(
     const comet::DesiredState& desired_node_state,
     const std::string& artifacts_root,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
     const std::string& state_root,
     ComposeMode compose_mode,
@@ -4376,6 +4564,7 @@ void ApplyDesiredNodeState(
     PersistDiskRuntimeStateForDesiredDisks(
         backend,
         desired_node_state,
+        storage_root,
         runtime_root,
         "disk runtime verified by hostd");
     if (IsDesiredNodeStateEmpty(desired_node_state)) {
@@ -4401,13 +4590,14 @@ void ApplyDesiredNodeState(
     return;
   }
 
-  EnsureDesiredDisksReady(backend, desired_node_state, runtime_root);
+  EnsureDesiredDisksReady(backend, desired_node_state, storage_root, runtime_root);
   BootstrapPlaneModelIfNeeded(desired_node_state, node_name, backend, assignment_id);
 
   ApplyNodePlan(
       execution_plan,
       desired_node_state,
       compose_plan,
+      storage_root,
       runtime_root,
       compose_mode,
       assignment_id,
@@ -4416,6 +4606,7 @@ void ApplyDesiredNodeState(
   PersistDiskRuntimeStateForDesiredDisks(
       backend,
       desired_node_state,
+      storage_root,
       runtime_root,
       "disk runtime applied by hostd");
   if (IsDesiredNodeStateEmpty(desired_node_state)) {
@@ -4467,6 +4658,7 @@ void ApplyStateOps(
     const std::string& db_path,
     const std::string& node_name,
     const std::string& artifacts_root,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
     const std::string& state_root,
     ComposeMode compose_mode) {
@@ -4480,7 +4672,7 @@ void ApplyStateOps(
   const auto desired_generation = store.LoadDesiredGeneration();
 
   const comet::DesiredState rebased_full_state =
-      RebaseStateForRuntimeRoot(*state, runtime_root);
+      RebaseStateForRuntimeRoot(*state, storage_root, runtime_root);
   const comet::DesiredState desired_node_state =
       comet::SliceDesiredStateForNode(rebased_full_state, node_name);
 
@@ -4489,6 +4681,7 @@ void ApplyStateOps(
     ApplyDesiredNodeState(
         desired_node_state,
         artifacts_root,
+        storage_root,
         runtime_root,
         state_root,
         compose_mode,
@@ -4525,6 +4718,7 @@ void ApplyNextAssignment(
     const std::optional<std::string>& host_private_key_path,
     const std::optional<std::string>& controller_fingerprint,
     const std::string& node_name,
+    const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
     const std::string& state_root,
     ComposeMode compose_mode) {
@@ -4567,6 +4761,7 @@ void ApplyNextAssignment(
 
     const comet::DesiredState rebased_state = RebaseStateForRuntimeRoot(
         comet::DeserializeDesiredStateJson(assignment->desired_state_json),
+        storage_root,
         runtime_root);
     const bool is_drain_assignment = assignment->assignment_type == "drain-node-state";
     const bool is_stop_assignment = assignment->assignment_type == "stop-plane-state";
@@ -4610,6 +4805,7 @@ void ApplyNextAssignment(
     ApplyDesiredNodeState(
         rebased_state,
         assignment->artifacts_root,
+        storage_root,
         runtime_root,
         state_root,
         compose_mode,
@@ -4747,6 +4943,7 @@ int main(int argc, char** argv) {
 
   const std::string command = argv[1];
   const auto node_name = ParseNodeArg(argc, argv);
+  const auto config_path = ParseConfigArg(argc, argv);
   const auto controller_url = ParseControllerArg(argc, argv);
   const auto host_private_key_path = ParseHostPrivateKeyArg(argc, argv);
   if (!node_name.has_value()) {
@@ -4755,8 +4952,10 @@ int main(int argc, char** argv) {
   }
 
   try {
+    const CometNodeConfig node_config = LoadCometNodeConfig(config_path, argv[0]);
+
     if (command == "show-demo-ops") {
-      ShowDemoOps(*node_name, ParseRuntimeRootArg(argc, argv));
+      ShowDemoOps(*node_name, node_config.storage_root, ParseRuntimeRootArg(argc, argv));
       return 0;
     }
 
@@ -4765,6 +4964,7 @@ int main(int argc, char** argv) {
           ResolveDbPath(ParseDbArg(argc, argv)),
           *node_name,
           ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv)),
+          node_config.storage_root,
           ParseRuntimeRootArg(argc, argv),
           ResolveStateRoot(ParseStateRootArg(argc, argv)));
       return 0;
@@ -4796,6 +4996,7 @@ int main(int argc, char** argv) {
           ResolveDbPath(ParseDbArg(argc, argv)),
           *node_name,
           ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv)),
+          node_config.storage_root,
           ParseRuntimeRootArg(argc, argv),
           ResolveStateRoot(ParseStateRootArg(argc, argv)),
           ResolveComposeMode(ParseComposeModeArg(argc, argv)));
@@ -4809,6 +5010,7 @@ int main(int argc, char** argv) {
           host_private_key_path,
           ParseControllerFingerprintArg(argc, argv),
           *node_name,
+          node_config.storage_root,
           ParseRuntimeRootArg(argc, argv),
           ResolveStateRoot(ParseStateRootArg(argc, argv)),
           ResolveComposeMode(ParseComposeModeArg(argc, argv)));

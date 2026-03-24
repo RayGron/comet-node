@@ -150,8 +150,16 @@ if single_source_url and not bootstrap.get("local_path"):
     if not filename:
       parsed = urlparse(single_source_url)
       filename = pathlib.Path(parsed.path).name
-    model_dir_name = sanitize(bootstrap.get("model_id") or plane_name)
-    bootstrap["local_path"] = str(model_cache_root / model_dir_name / filename)
+    existing_path = None
+    for candidate in sorted(model_cache_root.rglob(filename)):
+        if candidate.is_file():
+            existing_path = candidate
+            break
+    if existing_path is not None:
+        bootstrap["local_path"] = str(existing_path)
+    else:
+        model_dir_name = sanitize(bootstrap.get("model_id") or plane_name)
+        bootstrap["local_path"] = str(model_cache_root / model_dir_name / filename)
 
 if force_cpu:
     state.setdefault("inference", {})["llama_gpu_layers"] = 0

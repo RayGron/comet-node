@@ -551,17 +551,58 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
     const auto runtime = plane_json.at("runtime");
     state.inference.primary_infer_node =
         OptionalString(runtime, "primary_infer_node", state.inference.primary_infer_node);
+    state.inference.runtime_engine =
+        OptionalString(runtime, "runtime_engine", state.inference.runtime_engine);
     state.inference.net_if = OptionalString(runtime, "net_if", state.inference.net_if);
     state.inference.models_root =
         OptionalString(runtime, "models_root", state.inference.models_root);
+    state.inference.model_cache_dir =
+        OptionalString(runtime, "model_cache_dir", state.inference.model_cache_dir);
+    state.inference.runtime_log_dir =
+        OptionalString(runtime, "runtime_log_dir", state.inference.runtime_log_dir);
+    state.inference.api_port =
+        OptionalInt(
+            runtime,
+            "api_port",
+            OptionalInt(runtime, "llama_port", state.inference.api_port));
+    state.inference.max_model_len =
+        OptionalInt(
+            runtime,
+            "max_model_len",
+            OptionalInt(runtime, "llama_ctx_size", state.inference.max_model_len));
+    state.inference.tensor_parallel_size =
+        OptionalInt(runtime, "tensor_parallel_size", state.inference.tensor_parallel_size);
+    state.inference.pipeline_parallel_size =
+        OptionalInt(runtime, "pipeline_parallel_size", state.inference.pipeline_parallel_size);
+    state.inference.max_num_seqs =
+        OptionalInt(runtime, "max_num_seqs", state.inference.max_num_seqs);
+    state.inference.gpu_memory_utilization =
+        OptionalDouble(
+            runtime,
+            "gpu_memory_utilization",
+            state.inference.gpu_memory_utilization);
+    state.inference.enforce_eager =
+        OptionalBool(runtime, "enforce_eager", state.inference.enforce_eager);
     state.inference.gguf_cache_dir =
-        OptionalString(runtime, "gguf_cache_dir", state.inference.gguf_cache_dir);
+        OptionalString(
+            runtime,
+            "gguf_cache_dir",
+            OptionalString(runtime, "model_cache_dir", state.inference.gguf_cache_dir));
     state.inference.infer_log_dir =
-        OptionalString(runtime, "infer_log_dir", state.inference.infer_log_dir);
+        OptionalString(
+            runtime,
+            "infer_log_dir",
+            OptionalString(runtime, "runtime_log_dir", state.inference.infer_log_dir));
     state.inference.llama_port =
-        OptionalInt(runtime, "llama_port", state.inference.llama_port);
+        OptionalInt(
+            runtime,
+            "llama_port",
+            OptionalInt(runtime, "api_port", state.inference.llama_port));
     state.inference.llama_ctx_size =
-        OptionalInt(runtime, "llama_ctx_size", state.inference.llama_ctx_size);
+        OptionalInt(
+            runtime,
+            "llama_ctx_size",
+            OptionalInt(runtime, "max_model_len", state.inference.llama_ctx_size));
     state.inference.llama_threads =
         OptionalInt(runtime, "llama_threads", state.inference.llama_threads);
     state.inference.llama_gpu_layers =
@@ -574,6 +615,30 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
         runtime,
         "inference_healthcheck_interval_sec",
         state.inference.inference_healthcheck_interval_sec);
+    if (state.inference.model_cache_dir.empty()) {
+      state.inference.model_cache_dir = state.inference.gguf_cache_dir;
+    }
+    if (state.inference.gguf_cache_dir.empty()) {
+      state.inference.gguf_cache_dir = state.inference.model_cache_dir;
+    }
+    if (state.inference.runtime_log_dir.empty()) {
+      state.inference.runtime_log_dir = state.inference.infer_log_dir;
+    }
+    if (state.inference.infer_log_dir.empty()) {
+      state.inference.infer_log_dir = state.inference.runtime_log_dir;
+    }
+    if (state.inference.api_port <= 0) {
+      state.inference.api_port = state.inference.llama_port;
+    }
+    if (state.inference.llama_port <= 0) {
+      state.inference.llama_port = state.inference.api_port;
+    }
+    if (state.inference.max_model_len <= 0) {
+      state.inference.max_model_len = state.inference.llama_ctx_size;
+    }
+    if (state.inference.llama_ctx_size <= 0) {
+      state.inference.llama_ctx_size = state.inference.max_model_len;
+    }
   }
 
   if (const auto gateway = OptionalObject(plane_json, "gateway")) {
@@ -631,7 +696,7 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
       {"COMET_CONTROLLER_URL", "http://controller.internal:8080"},
       {"COMET_CONTROL_ROOT", state.control_root},
       {"COMET_INFER_RUNTIME_CONFIG", state.control_root + "/infer-runtime.json"},
-      {"COMET_INFERENCE_PORT", std::to_string(state.inference.llama_port)},
+      {"COMET_INFERENCE_PORT", std::to_string(state.inference.api_port)},
       {"COMET_GATEWAY_PORT", std::to_string(state.gateway.listen_port)},
       {"COMET_SHARED_DISK_PATH", "/comet/shared"},
       {"COMET_PRIVATE_DISK_PATH", "/comet/private"},

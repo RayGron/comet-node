@@ -90,8 +90,18 @@ struct RuntimeGpuNode {
 
 struct InferenceRuntimeSettings {
   std::string primary_infer_node;
+  std::string runtime_engine = "llama.cpp";
   std::string net_if = "eth0";
   std::string models_root = "/comet/shared/models";
+  std::string model_cache_dir = "/comet/shared/models/cache";
+  std::string runtime_log_dir = "/comet/shared/logs/infer";
+  int api_port = 8000;
+  int max_model_len = 8192;
+  int tensor_parallel_size = 1;
+  int pipeline_parallel_size = 1;
+  int max_num_seqs = 16;
+  double gpu_memory_utilization = 0.9;
+  bool enforce_eager = false;
   std::string gguf_cache_dir = "/comet/shared/models/gguf";
   std::string infer_log_dir = "/comet/shared/logs/infer";
   int llama_port = 8000;

@@ -67,7 +67,7 @@ ComposeService BuildComposeService(
                             : "CMD-SHELL test -f /tmp/comet-ready";
   if (instance.role == InstanceRole::Infer) {
     service.published_ports.push_back(
-        PublishedPort{"127.0.0.1", state.inference.llama_port, state.inference.llama_port});
+        PublishedPort{"127.0.0.1", state.inference.api_port, state.inference.api_port});
     service.published_ports.push_back(
         PublishedPort{"127.0.0.1", state.gateway.listen_port, state.gateway.listen_port});
   }

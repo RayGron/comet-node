@@ -14,6 +14,36 @@ namespace {
 
 using nlohmann::json;
 
+void NormalizeInferenceSettings(InferenceRuntimeSettings* settings) {
+  if (settings == nullptr) {
+    return;
+  }
+  if (settings->model_cache_dir.empty()) {
+    settings->model_cache_dir = settings->gguf_cache_dir;
+  }
+  if (settings->gguf_cache_dir.empty()) {
+    settings->gguf_cache_dir = settings->model_cache_dir;
+  }
+  if (settings->runtime_log_dir.empty()) {
+    settings->runtime_log_dir = settings->infer_log_dir;
+  }
+  if (settings->infer_log_dir.empty()) {
+    settings->infer_log_dir = settings->runtime_log_dir;
+  }
+  if (settings->api_port <= 0) {
+    settings->api_port = settings->llama_port;
+  }
+  if (settings->llama_port <= 0) {
+    settings->llama_port = settings->api_port;
+  }
+  if (settings->max_model_len <= 0) {
+    settings->max_model_len = settings->llama_ctx_size;
+  }
+  if (settings->llama_ctx_size <= 0) {
+    settings->llama_ctx_size = settings->max_model_len;
+  }
+}
+
 DiskKind ParseDiskKind(const std::string& value) {
   if (value == "plane-shared") {
     return DiskKind::PlaneShared;
@@ -369,8 +399,18 @@ json DesiredStateToJson(const DesiredState& state) {
       {"inference",
        {
            {"primary_infer_node", state.inference.primary_infer_node},
+           {"runtime_engine", state.inference.runtime_engine},
            {"net_if", state.inference.net_if},
            {"models_root", state.inference.models_root},
+           {"model_cache_dir", state.inference.model_cache_dir},
+           {"runtime_log_dir", state.inference.runtime_log_dir},
+           {"api_port", state.inference.api_port},
+           {"max_model_len", state.inference.max_model_len},
+           {"tensor_parallel_size", state.inference.tensor_parallel_size},
+           {"pipeline_parallel_size", state.inference.pipeline_parallel_size},
+           {"max_num_seqs", state.inference.max_num_seqs},
+           {"gpu_memory_utilization", state.inference.gpu_memory_utilization},
+           {"enforce_eager", state.inference.enforce_eager},
            {"gguf_cache_dir", state.inference.gguf_cache_dir},
            {"infer_log_dir", state.inference.infer_log_dir},
            {"llama_port", state.inference.llama_port},
@@ -439,17 +479,51 @@ DesiredState DesiredStateFromJson(const json& value) {
     const auto& inference = value.at("inference");
     state.inference.primary_infer_node =
         inference.value("primary_infer_node", state.inference.primary_infer_node);
+    state.inference.runtime_engine =
+        inference.value("runtime_engine", state.inference.runtime_engine);
     state.inference.net_if = inference.value("net_if", state.inference.net_if);
     state.inference.models_root =
         inference.value("models_root", state.inference.models_root);
+    state.inference.model_cache_dir =
+        inference.value("model_cache_dir", state.inference.model_cache_dir);
+    state.inference.runtime_log_dir =
+        inference.value("runtime_log_dir", state.inference.runtime_log_dir);
+    state.inference.api_port =
+        inference.value(
+            "api_port",
+            inference.value("llama_port", state.inference.api_port));
+    state.inference.max_model_len =
+        inference.value(
+            "max_model_len",
+            inference.value("llama_ctx_size", state.inference.max_model_len));
+    state.inference.tensor_parallel_size =
+        inference.value("tensor_parallel_size", state.inference.tensor_parallel_size);
+    state.inference.pipeline_parallel_size =
+        inference.value("pipeline_parallel_size", state.inference.pipeline_parallel_size);
+    state.inference.max_num_seqs =
+        inference.value("max_num_seqs", state.inference.max_num_seqs);
+    state.inference.gpu_memory_utilization =
+        inference.value(
+            "gpu_memory_utilization",
+            state.inference.gpu_memory_utilization);
+    state.inference.enforce_eager =
+        inference.value("enforce_eager", state.inference.enforce_eager);
     state.inference.gguf_cache_dir =
-        inference.value("gguf_cache_dir", state.inference.gguf_cache_dir);
+        inference.value(
+            "gguf_cache_dir",
+            inference.value("model_cache_dir", state.inference.gguf_cache_dir));
     state.inference.infer_log_dir =
-        inference.value("infer_log_dir", state.inference.infer_log_dir);
+        inference.value(
+            "infer_log_dir",
+            inference.value("runtime_log_dir", state.inference.infer_log_dir));
     state.inference.llama_port =
-        inference.value("llama_port", state.inference.llama_port);
+        inference.value(
+            "llama_port",
+            inference.value("api_port", state.inference.llama_port));
     state.inference.llama_ctx_size =
-        inference.value("llama_ctx_size", state.inference.llama_ctx_size);
+        inference.value(
+            "llama_ctx_size",
+            inference.value("max_model_len", state.inference.llama_ctx_size));
     state.inference.llama_threads =
         inference.value("llama_threads", state.inference.llama_threads);
     state.inference.llama_gpu_layers =
@@ -461,6 +535,7 @@ DesiredState DesiredStateFromJson(const json& value) {
         "inference_healthcheck_interval_sec",
         state.inference.inference_healthcheck_interval_sec);
   }
+  NormalizeInferenceSettings(&state.inference);
 
   if (value.contains("gateway") && value.at("gateway").is_object()) {
     const auto& gateway = value.at("gateway");

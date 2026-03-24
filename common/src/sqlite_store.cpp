@@ -423,8 +423,18 @@ void EnsureColumn(
 std::string SerializeInferenceSettings(const InferenceRuntimeSettings& settings) {
   return json{
       {"primary_infer_node", settings.primary_infer_node},
+      {"runtime_engine", settings.runtime_engine},
       {"net_if", settings.net_if},
       {"models_root", settings.models_root},
+      {"model_cache_dir", settings.model_cache_dir},
+      {"runtime_log_dir", settings.runtime_log_dir},
+      {"api_port", settings.api_port},
+      {"max_model_len", settings.max_model_len},
+      {"tensor_parallel_size", settings.tensor_parallel_size},
+      {"pipeline_parallel_size", settings.pipeline_parallel_size},
+      {"max_num_seqs", settings.max_num_seqs},
+      {"gpu_memory_utilization", settings.gpu_memory_utilization},
+      {"enforce_eager", settings.enforce_eager},
       {"gguf_cache_dir", settings.gguf_cache_dir},
       {"infer_log_dir", settings.infer_log_dir},
       {"llama_port", settings.llama_port},
@@ -577,18 +587,59 @@ InferenceRuntimeSettings DeserializeInferenceSettings(const std::string& json_te
   const json value = json::parse(json_text);
   settings.primary_infer_node =
       value.value("primary_infer_node", settings.primary_infer_node);
+  settings.runtime_engine = value.value("runtime_engine", settings.runtime_engine);
   settings.net_if = value.value("net_if", settings.net_if);
   settings.models_root = value.value("models_root", settings.models_root);
-  settings.gguf_cache_dir = value.value("gguf_cache_dir", settings.gguf_cache_dir);
-  settings.infer_log_dir = value.value("infer_log_dir", settings.infer_log_dir);
-  settings.llama_port = value.value("llama_port", settings.llama_port);
-  settings.llama_ctx_size = value.value("llama_ctx_size", settings.llama_ctx_size);
+  settings.model_cache_dir = value.value("model_cache_dir", settings.model_cache_dir);
+  settings.runtime_log_dir = value.value("runtime_log_dir", settings.runtime_log_dir);
+  settings.api_port = value.value("api_port", value.value("llama_port", settings.api_port));
+  settings.max_model_len =
+      value.value("max_model_len", value.value("llama_ctx_size", settings.max_model_len));
+  settings.tensor_parallel_size =
+      value.value("tensor_parallel_size", settings.tensor_parallel_size);
+  settings.pipeline_parallel_size =
+      value.value("pipeline_parallel_size", settings.pipeline_parallel_size);
+  settings.max_num_seqs = value.value("max_num_seqs", settings.max_num_seqs);
+  settings.gpu_memory_utilization =
+      value.value("gpu_memory_utilization", settings.gpu_memory_utilization);
+  settings.enforce_eager = value.value("enforce_eager", settings.enforce_eager);
+  settings.gguf_cache_dir =
+      value.value("gguf_cache_dir", value.value("model_cache_dir", settings.gguf_cache_dir));
+  settings.infer_log_dir =
+      value.value("infer_log_dir", value.value("runtime_log_dir", settings.infer_log_dir));
+  settings.llama_port = value.value("llama_port", value.value("api_port", settings.llama_port));
+  settings.llama_ctx_size =
+      value.value("llama_ctx_size", value.value("max_model_len", settings.llama_ctx_size));
   settings.llama_threads = value.value("llama_threads", settings.llama_threads);
   settings.llama_gpu_layers = value.value("llama_gpu_layers", settings.llama_gpu_layers);
   settings.inference_healthcheck_retries = value.value(
       "inference_healthcheck_retries", settings.inference_healthcheck_retries);
   settings.inference_healthcheck_interval_sec = value.value(
       "inference_healthcheck_interval_sec", settings.inference_healthcheck_interval_sec);
+  if (settings.model_cache_dir.empty()) {
+    settings.model_cache_dir = settings.gguf_cache_dir;
+  }
+  if (settings.gguf_cache_dir.empty()) {
+    settings.gguf_cache_dir = settings.model_cache_dir;
+  }
+  if (settings.runtime_log_dir.empty()) {
+    settings.runtime_log_dir = settings.infer_log_dir;
+  }
+  if (settings.infer_log_dir.empty()) {
+    settings.infer_log_dir = settings.runtime_log_dir;
+  }
+  if (settings.api_port <= 0) {
+    settings.api_port = settings.llama_port;
+  }
+  if (settings.llama_port <= 0) {
+    settings.llama_port = settings.api_port;
+  }
+  if (settings.max_model_len <= 0) {
+    settings.max_model_len = settings.llama_ctx_size;
+  }
+  if (settings.llama_ctx_size <= 0) {
+    settings.llama_ctx_size = settings.max_model_len;
+  }
   return settings;
 }
 

@@ -10,6 +10,9 @@ web_ui_url="${COMET_WEB_UI_URL:-http://127.0.0.1:18081}"
 
 tmp_dir="$(mktemp -d)"
 cleanup() {
+  if [[ "${worker_stopped_for_validation:-no}" == "yes" ]]; then
+    docker start "${worker_container}" >/dev/null 2>&1 || true
+  fi
   rm -rf "${tmp_dir}"
 }
 trap cleanup EXIT
@@ -22,6 +25,11 @@ stream_request_json="${tmp_dir}/stream-request.json"
 stream_response_txt="${tmp_dir}/stream-response.txt"
 long_request_json="${tmp_dir}/long-request.json"
 long_response_json="${tmp_dir}/long-response.json"
+failure_chat_response_json="${tmp_dir}/failure-chat-response.json"
+
+infer_container="infer-${plane_name}"
+worker_container="worker-${plane_name}"
+worker_stopped_for_validation="no"
 
 echo "[check-live-vllm] ensuring plane ${plane_name} is running"
 "${repo_root}/scripts/run-plane.sh" "${plane_name}" >/dev/null
@@ -51,6 +59,36 @@ payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
 models = payload.get("data") or []
 assert models, payload
 print("models=" + ",".join(item.get("id", "") for item in models))
+PY
+
+echo "[check-live-vllm] checking worker upstream contract"
+docker inspect "${infer_container}" >/dev/null
+if docker inspect "${infer_container}" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^COMET_INFER_VLLM_UPSTREAM_URL='; then
+  echo "error: infer container still has COMET_INFER_VLLM_UPSTREAM_URL pinned" >&2
+  exit 1
+fi
+worker_upstream_path="$(
+  python3 - <<'PY' "${status_json}"
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+control_root = (payload.get("runtime_status") or {}).get("control_root", "")
+assert control_root, payload
+print(control_root.rstrip("/") + "/worker-upstream.json")
+PY
+)"
+docker exec "${infer_container}" test -f "${worker_upstream_path}"
+docker exec "${infer_container}" python3 - <<'PY' "${worker_upstream_path}"
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert payload.get("ready") is True, payload
+assert payload.get("base_url", "").startswith("http://"), payload
+print("worker_upstream=ok")
 PY
 
 echo "[check-live-vllm] checking basic chat completion"
@@ -115,6 +153,83 @@ for match in re.finditer(r"event: delta\ndata: (.+)", text):
 joined = "".join(deltas).strip()
 assert joined == "PONG", joined
 print("stream=PONG")
+PY
+
+echo "[check-live-vllm] checking missing-worker failure handling"
+docker stop "${worker_container}" >/dev/null
+worker_stopped_for_validation="yes"
+deadline=$((SECONDS + 60))
+status_payload=""
+while (( SECONDS < deadline )); do
+  status_payload="$(curl -fsS "${controller_url}/api/v1/planes/${plane_name}/interaction/status")"
+  ready="$(
+    python3 - <<'PY' "${status_payload}"
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+print("yes" if payload.get("ready") else "no")
+PY
+)"
+  if [[ "${ready}" == "no" ]]; then
+    break
+  fi
+  sleep 2
+done
+python3 - <<'PY' "${status_payload}"
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+assert payload.get("ready") is False, payload
+runtime_status = payload.get("runtime_status") or {}
+assert runtime_status.get("inference_ready") is False, runtime_status
+print("missing_worker_status=ok")
+PY
+failure_code="$(
+  curl -sS -o "${failure_chat_response_json}" -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    --data-binary "@${chat_request_json}" \
+    "${controller_url}/api/v1/planes/${plane_name}/interaction/chat/completions"
+)"
+python3 - <<'PY' "${failure_code}" "${failure_chat_response_json}"
+import pathlib
+import sys
+
+code = int(sys.argv[1])
+body = pathlib.Path(sys.argv[2]).read_text()
+assert code >= 500, (code, body)
+assert "unavailable" in body.lower() or "failed" in body.lower(), body
+print(f"missing_worker_chat=http_{code}")
+PY
+docker start "${worker_container}" >/dev/null
+worker_stopped_for_validation="no"
+deadline=$((SECONDS + 120))
+status_payload=""
+while (( SECONDS < deadline )); do
+  if status_payload="$(curl -fsS "${controller_url}/api/v1/planes/${plane_name}/interaction/status" 2>/dev/null)"; then
+    ready="$(
+      python3 - <<'PY' "${status_payload}"
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+print("yes" if payload.get("ready") else "no")
+PY
+)"
+    if [[ "${ready}" == "yes" ]]; then
+      break
+    fi
+  fi
+  sleep 2
+done
+python3 - <<'PY' "${status_payload}"
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+assert payload.get("ready") is True, payload
+print("worker_recovery=ok")
 PY
 
 echo "[check-live-vllm] checking long-form semantic completion"

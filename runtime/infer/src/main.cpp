@@ -128,6 +128,7 @@ struct AssistantTextFilterState {
   std::string emitted_text;
 };
 
+json LoadWorkerUpstreamContract(const RuntimeConfig& config);
 std::string Trim(const std::string& value);
 std::string JsonString(const json& object, const char* key);
 std::string Lowercase(std::string value);
@@ -205,6 +206,32 @@ UpstreamTarget ParseHttpUrl(const std::string& url) {
     target.port = std::stoi(authority.substr(colon + 1));
   }
   return target;
+}
+
+std::optional<std::string> ResolveRuntimeUpstreamBaseUrl(const RuntimeConfig& config) {
+  const char* worker_vllm_upstream = std::getenv("COMET_INFER_VLLM_UPSTREAM_URL");
+  if (worker_vllm_upstream != nullptr && std::strlen(worker_vllm_upstream) > 0) {
+    return std::string(worker_vllm_upstream);
+  }
+  const json worker_upstream = LoadWorkerUpstreamContract(config);
+  if (worker_upstream.is_object()) {
+    const std::string advertised = JsonString(worker_upstream, "base_url");
+    if (!advertised.empty()) {
+      return advertised;
+    }
+  }
+  if (config.runtime_engine != "vllm") {
+    return "http://127.0.0.1:" + std::to_string(config.api_port);
+  }
+  return std::nullopt;
+}
+
+std::optional<UpstreamTarget> ResolveRuntimeUpstreamTarget(const RuntimeConfig& config) {
+  const auto base_url = ResolveRuntimeUpstreamBaseUrl(config);
+  if (!base_url.has_value()) {
+    return std::nullopt;
+  }
+  return ParseHttpUrl(*base_url);
 }
 
 int ConnectTcpHost(const std::string& host, int port) {
@@ -766,27 +793,14 @@ bool CommandExists(const std::string& command) {
   return false;
 }
 
-std::string RuntimeUpstreamBaseUrl(const RuntimeConfig& config) {
-  const char* worker_vllm_upstream = std::getenv("COMET_INFER_VLLM_UPSTREAM_URL");
-  if (worker_vllm_upstream != nullptr && std::strlen(worker_vllm_upstream) > 0) {
-    return worker_vllm_upstream;
-  }
-  const json worker_upstream = LoadWorkerUpstreamContract(config);
-  if (worker_upstream.is_object()) {
-    const std::string advertised = JsonString(worker_upstream, "base_url");
-    if (!advertised.empty()) {
-      return advertised;
-    }
-  }
-  return "http://127.0.0.1:" + std::to_string(config.api_port);
-}
-
 std::string RuntimeUpstreamHealthUrl(const RuntimeConfig& config) {
-  return RuntimeUpstreamBaseUrl(config) + "/health";
+  const auto base_url = ResolveRuntimeUpstreamBaseUrl(config);
+  return base_url.has_value() ? *base_url + "/health" : std::string{};
 }
 
 std::string RuntimeUpstreamModelsUrl(const RuntimeConfig& config) {
-  return RuntimeUpstreamBaseUrl(config) + "/v1/models";
+  const auto base_url = ResolveRuntimeUpstreamBaseUrl(config);
+  return base_url.has_value() ? *base_url + "/v1/models" : std::string{};
 }
 
 std::string RuntimeGatewayHealthUrl(const RuntimeConfig& config) {
@@ -1728,12 +1742,14 @@ class LocalHttpServer {
       std::string service_name,
       const RuntimeConfig& config,
       LlamaLibraryEngine* engine,
+      bool dynamic_upstream = false,
       std::optional<UpstreamTarget> upstream = std::nullopt)
       : host_(std::move(host)),
         port_(port),
         service_name_(std::move(service_name)),
         config_(config),
         engine_(engine),
+        dynamic_upstream_(dynamic_upstream),
         upstream_(std::move(upstream)) {}
 
   void Start() {
@@ -1805,7 +1821,12 @@ class LocalHttpServer {
       }
     }
     if (!request_data.empty()) {
-      if (upstream_.has_value()) {
+      if (dynamic_upstream_) {
+        const auto upstream = ResolveRuntimeUpstreamTarget(config_);
+        if (!upstream.has_value() || !ProxyHttpRequest(client_fd, request_data, *upstream)) {
+          SendErrorResponse(client_fd, 503, "upstream runtime is unavailable");
+        }
+      } else if (upstream_.has_value()) {
         if (!ProxyHttpRequest(client_fd, request_data, *upstream_)) {
           SendErrorResponse(client_fd, 503, "upstream runtime is unavailable");
         }
@@ -1829,6 +1850,7 @@ class LocalHttpServer {
   std::string service_name_;
   RuntimeConfig config_;
   LlamaLibraryEngine* engine_ = nullptr;
+  bool dynamic_upstream_ = false;
   std::optional<UpstreamTarget> upstream_;
   std::thread worker_;
   std::atomic<bool> running_{false};
@@ -2365,11 +2387,13 @@ class LocalRuntime {
       std::string backend,
       std::string started_at,
       std::unique_ptr<LlamaLibraryEngine> engine,
+      bool dynamic_upstream = false,
       std::optional<UpstreamTarget> upstream = std::nullopt)
       : config_(config),
         backend_(std::move(backend)),
         started_at_(std::move(started_at)),
         engine_(std::move(engine)),
+        dynamic_upstream_(dynamic_upstream),
         upstream_(std::move(upstream)),
         inference_server_(
             "0.0.0.0",
@@ -2377,6 +2401,7 @@ class LocalRuntime {
             "comet-inference-local",
             config,
             engine_.get(),
+            dynamic_upstream_,
             upstream_),
         gateway_server_(
             config.gateway_listen_host,
@@ -2384,6 +2409,7 @@ class LocalRuntime {
             "comet-gateway-local",
             config,
             engine_.get(),
+            dynamic_upstream_,
             upstream_) {}
 
   int Run() {
@@ -2407,8 +2433,9 @@ class LocalRuntime {
 
  private:
   bool InferenceReady() const {
-    if (upstream_.has_value()) {
-      return ProbeUrl(RuntimeUpstreamHealthUrl(config_));
+    if (dynamic_upstream_ || upstream_.has_value()) {
+      const std::string health_url = RuntimeUpstreamHealthUrl(config_);
+      return !health_url.empty() && ProbeUrl(health_url);
     }
     return ProbeUrl("http://127.0.0.1:" + std::to_string(config_.api_port) + "/health");
   }
@@ -2434,6 +2461,7 @@ class LocalRuntime {
   std::string backend_;
   std::string started_at_;
   std::unique_ptr<LlamaLibraryEngine> engine_;
+  bool dynamic_upstream_ = false;
   std::optional<UpstreamTarget> upstream_;
   LocalHttpServer inference_server_;
   LocalHttpServer gateway_server_;
@@ -2460,16 +2488,12 @@ int LaunchLlamaRuntime(const RuntimeConfig& config) {
 }
 
 int LaunchWorkerVllmRuntime(const RuntimeConfig& config) {
-  const char* upstream_url = std::getenv("COMET_INFER_VLLM_UPSTREAM_URL");
-  if (upstream_url == nullptr || std::strlen(upstream_url) == 0) {
-    Throw("worker-vllm backend requires COMET_INFER_VLLM_UPSTREAM_URL");
-  }
   LocalRuntime runtime(
       config,
       "worker-vllm",
       UtcNowIso(),
       nullptr,
-      ParseHttpUrl(upstream_url));
+      true);
   return runtime.Run();
 }
 

@@ -27,23 +27,6 @@ const DiskSpec& FindDiskByName(
   return *it;
 }
 
-std::optional<std::string> FindLocalWorkerDependency(
-    const std::vector<InstanceSpec>& node_instances,
-    const DesiredState& state) {
-  const auto worker_it = std::find_if(
-      node_instances.begin(),
-      node_instances.end(),
-      [&](const InstanceSpec& candidate) {
-        return candidate.role == InstanceRole::Worker &&
-               candidate.node_name == state.inference.primary_infer_node &&
-               candidate.gpu_device.has_value();
-      });
-  if (worker_it == node_instances.end()) {
-    return std::nullopt;
-  }
-  return worker_it->name;
-}
-
 ComposeService BuildComposeService(
     const InstanceSpec& instance,
     const std::vector<DiskSpec>& disks,
@@ -74,11 +57,6 @@ ComposeService BuildComposeService(
   if (use_vllm) {
     if (instance.role == InstanceRole::Infer) {
       service.environment["COMET_INFER_RUNTIME_BACKEND"] = "worker-vllm";
-      if (const auto local_worker = FindLocalWorkerDependency(node_instances, state);
-          local_worker.has_value()) {
-        service.environment["COMET_INFER_VLLM_UPSTREAM_URL"] =
-            "http://" + *local_worker + ":" + std::to_string(state.inference.api_port);
-      }
     } else if (instance.role == InstanceRole::Worker) {
       service.environment["COMET_WORKER_BOOT_MODE"] = "vllm-openai";
       service.environment["COMET_VLLM_PORT"] = std::to_string(state.inference.api_port);

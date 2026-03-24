@@ -104,6 +104,36 @@ resolve_docker() {
   echo ""
 }
 
+resolve_sudo_prefix() {
+  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    echo "sudo -n"
+    return 0
+  fi
+  echo ""
+}
+
+hostd_report_observation() {
+  local sudo_prefix="$1"
+  local hostd_bin="${repo_root}/build/linux/x64/comet-hostd"
+  local db_path="${COMET_NODE_CONTROLLER_DB:-/var/lib/comet-node/controller.sqlite}"
+  local node_name="${COMET_NODE_NAME:-local-hostd}"
+  local state_root="${COMET_NODE_HOSTD_STATE_ROOT:-/var/lib/comet-node/hostd-state}"
+  if [[ ! -x "${hostd_bin}" || ! -f "${db_path}" ]]; then
+    return 0
+  fi
+  if [[ -n "${sudo_prefix}" ]]; then
+    ${sudo_prefix} "${hostd_bin}" report-observed-state \
+      --db "${db_path}" \
+      --node "${node_name}" \
+      --state-root "${state_root}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  "${hostd_bin}" report-observed-state \
+    --db "${db_path}" \
+    --node "${node_name}" \
+    --state-root "${state_root}" >/dev/null 2>&1 || true
+}
+
 download_to_cache_if_needed() {
   local source_url="$1"
   local target_path="$2"
@@ -120,6 +150,7 @@ download_to_cache_if_needed() {
 }
 
 tmp_dir="$(mktemp -d "${repo_root}/var/run-plane.XXXXXX")"
+sudo_prefix="$(resolve_sudo_prefix)"
 cleanup() {
   rm -rf "${tmp_dir}"
 }
@@ -270,6 +301,7 @@ echo "[run-plane] waiting for ${plane_name} readiness"
 deadline=$((SECONDS + wait_seconds))
 status_payload=""
 while (( SECONDS < deadline )); do
+  hostd_report_observation "${sudo_prefix}"
   if status_payload="$(curl -fsS "${controller_url}/api/v1/planes/${plane_name}/interaction/status" 2>/dev/null)"; then
     ready="$(
       python3 - <<'PY' "${status_payload}"
@@ -305,6 +337,7 @@ if [[ "${ready}" != "yes" ]]; then
   exit 1
 fi
 
+hostd_report_observation "${sudo_prefix}"
 models_payload="$(curl -fsS "${controller_url}/api/v1/planes/${plane_name}/interaction/models")"
 
 echo "plane=${plane_name}"

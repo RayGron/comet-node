@@ -34,6 +34,32 @@ if ! "${docker_cmd[@]}" info >/dev/null 2>&1; then
   exit 1
 fi
 
+sudo_prefix=""
+if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+  sudo_prefix="sudo -n"
+fi
+
+hostd_report_observation() {
+  local hostd_bin="${repo_root}/build/linux/x64/comet-hostd"
+  local db_path="${COMET_NODE_CONTROLLER_DB:-/var/lib/comet-node/controller.sqlite}"
+  local node_name="${COMET_NODE_NAME:-local-hostd}"
+  local state_root="${COMET_NODE_HOSTD_STATE_ROOT:-/var/lib/comet-node/hostd-state}"
+  if [[ ! -x "${hostd_bin}" || ! -f "${db_path}" ]]; then
+    return 0
+  fi
+  if [[ -n "${sudo_prefix}" ]]; then
+    ${sudo_prefix} "${hostd_bin}" report-observed-state \
+      --db "${db_path}" \
+      --node "${node_name}" \
+      --state-root "${state_root}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  "${hostd_bin}" report-observed-state \
+    --db "${db_path}" \
+    --node "${node_name}" \
+    --state-root "${state_root}" >/dev/null 2>&1 || true
+}
+
 tmp_dir="$(mktemp -d)"
 cleanup() {
   if [[ "${worker_stopped_for_validation:-no}" == "yes" ]]; then
@@ -71,13 +97,14 @@ worker_stopped_for_validation="no"
 echo "[check-live-vllm] ensuring plane ${plane_name} is running"
 if [[ "${recreate_plane}" == "yes" ]]; then
   echo "[check-live-vllm] recreating plane ${plane_name}"
-  curl -fsS -X DELETE "${controller_url}/api/v1/planes/${plane_name}" >/dev/null || true
+  curl -sS -X DELETE "${controller_url}/api/v1/planes/${plane_name}" >/dev/null || true
 fi
 "${repo_root}/scripts/run-plane.sh" "${plane_name}" >/dev/null
 infer_container="$(resolve_container_name "infer-${plane_name}")"
 worker_container="$(resolve_container_name "worker-${plane_name}")"
 
 echo "[check-live-vllm] checking interaction status"
+hostd_report_observation
 curl -fsS "${controller_url}/api/v1/planes/${plane_name}/interaction/status" >"${status_json}"
 python3 - <<'PY' "${status_json}"
 import json
@@ -204,6 +231,7 @@ worker_stopped_for_validation="yes"
 deadline=$((SECONDS + 60))
 status_payload=""
 while (( SECONDS < deadline )); do
+  hostd_report_observation
   status_payload="$(curl -fsS "${controller_url}/api/v1/planes/${plane_name}/interaction/status")"
   ready="$(
     python3 - <<'PY' "${status_payload}"
@@ -250,6 +278,7 @@ worker_stopped_for_validation="no"
 deadline=$((SECONDS + 120))
 status_payload=""
 while (( SECONDS < deadline )); do
+  hostd_report_observation
   if status_payload="$(curl -fsS "${controller_url}/api/v1/planes/${plane_name}/interaction/status" 2>/dev/null)"; then
     ready="$(
       python3 - <<'PY' "${status_payload}"

@@ -19,7 +19,7 @@ models_json="${tmp_dir}/models.json"
 chat_request_json="${tmp_dir}/chat-request.json"
 chat_response_json="${tmp_dir}/chat-response.json"
 stream_request_json="${tmp_dir}/stream-request.json"
-stream_response.txt="${tmp_dir}/stream-response.txt"
+stream_response_txt="${tmp_dir}/stream-response.txt"
 long_request_json="${tmp_dir}/long-request.json"
 long_response_json="${tmp_dir}/long-response.json"
 
@@ -98,8 +98,8 @@ curl -sN --max-time 20 \
   -H 'Content-Type: application/json' \
   --data-binary "@${stream_request_json}" \
   "${controller_url}/api/v1/planes/${plane_name}/interaction/chat/completions/stream" \
-  >"${stream_response.txt}"
-python3 - <<'PY' "${stream_response.txt}"
+  >"${stream_response_txt}"
+python3 - <<'PY' "${stream_response_txt}"
 import json
 import pathlib
 import re

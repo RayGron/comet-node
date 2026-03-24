@@ -1316,6 +1316,8 @@ std::string BuildSemanticCompletionInstruction(const InteractionCompletionPolicy
               << " on its own line only when the task is fully complete.\n"
               << "- If the task is not complete in this segment, do not output the marker.\n"
               << "- For continuation segments, continue exactly where you stopped without repeating prior text unless recap is explicitly requested.\n"
+              << "- Respect the user's requested length and scope. Once the requested artifact is complete, stop instead of adding optional extra sections.\n"
+              << "- When you have satisfied the user's requested structure and length, emit the marker immediately on its own line and end the response.\n"
               << "- Do not emit tool calls, tool requests, or waiting states in this phase.\n";
   if (!policy.semantic_goal.empty()) {
     instruction << "- Task completion goal: " << policy.semantic_goal << "\n";
@@ -1330,7 +1332,8 @@ std::string BuildSemanticCompletionInstruction(const InteractionCompletionPolicy
 std::string BuildContinuationPrompt(
     const InteractionCompletionPolicy& policy,
     bool natural_stop_without_marker,
-    const std::string& trailing_excerpt = "") {
+    const std::string& trailing_excerpt = "",
+    int remaining_completion_tokens = 0) {
   std::ostringstream prompt;
   if (natural_stop_without_marker) {
     prompt << "Your previous segment stopped before you proved the task was complete. "
@@ -1344,8 +1347,18 @@ std::string BuildContinuationPrompt(
            << trailing_excerpt
            << "\nContinue immediately after that excerpt.";
   }
+  if (remaining_completion_tokens > 0) {
+    prompt << " You have approximately " << remaining_completion_tokens
+           << " completion tokens remaining across all future segments.";
+    if (remaining_completion_tokens <= policy.max_tokens) {
+      prompt << " Finish the remaining required content and conclude in this segment if possible.";
+    } else {
+      prompt << " Prioritize the remaining required sections and avoid optional expansion.";
+    }
+  }
   prompt << " Do not repeat prior text. Emit " << policy.completion_marker
-         << " on its own line only in the final segment when the task is fully complete.";
+         << " on its own line only in the final segment when the task is fully complete."
+         << " Do not restart the outline, recap earlier sections, or add extra filler once the requested artifact is complete.";
   return prompt.str();
 }
 
@@ -2088,7 +2101,8 @@ json BuildContinuationPayload(
     const json& original_payload,
     const std::string& accumulated_text,
     const InteractionCompletionPolicy& policy,
-    bool natural_stop_without_marker) {
+    bool natural_stop_without_marker,
+    int total_completion_tokens) {
   json payload = original_payload;
   json messages = json::array();
   if (payload.contains("messages") && payload.at("messages").is_array()) {
@@ -2098,9 +2112,16 @@ json BuildContinuationPayload(
   }
   const std::string trailing_excerpt =
       accumulated_text.empty() ? std::string{} : Utf8SafeSuffix(accumulated_text, 256);
+  const int remaining_completion_tokens =
+      std::max(0, policy.max_total_completion_tokens - total_completion_tokens);
   messages.push_back(json{
       {"role", "user"},
-      {"content", BuildContinuationPrompt(policy, natural_stop_without_marker, trailing_excerpt)},
+      {"content",
+       BuildContinuationPrompt(
+           policy,
+           natural_stop_without_marker,
+           trailing_excerpt,
+           remaining_completion_tokens)},
   });
   payload["messages"] = messages;
   return payload;
@@ -2252,7 +2273,8 @@ InteractionSessionResult ExecuteInteractionSession(
         original_payload,
         result.content,
         policy,
-        summary.finish_reason != "length");
+        summary.finish_reason != "length",
+        result.total_completion_tokens);
   }
 
   if (result.completion_status == "in_progress") {
@@ -5334,7 +5356,8 @@ void StreamPlaneInteractionSse(
           original_payload,
           session.content,
           policy,
-          segment.summary.finish_reason != "length");
+          segment.summary.finish_reason != "length",
+          session.total_completion_tokens);
     }
 
     if (session.completion_status == "in_progress") {

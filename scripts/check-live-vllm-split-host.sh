@@ -9,6 +9,8 @@ controller_url="${COMET_CONTROLLER_URL:-http://127.0.0.1:18080}"
 controller_db="${COMET_NODE_CONTROLLER_DB:-/var/lib/comet-node/controller.sqlite}"
 runtime_root="${COMET_SPLIT_HOSTD_RUNTIME_ROOT:-/var/lib/comet-node/runtime}"
 hostd_poll_interval="${COMET_SPLIT_HOSTD_POLL_INTERVAL_SEC:-2}"
+controller_public_key_path="${COMET_NODE_CONTROLLER_PUBLIC_KEY:-/var/lib/comet-node/keys/controller.pub.b64}"
+host_private_key_path="${COMET_NODE_HOST_PRIVATE_KEY:-/var/lib/comet-node/keys/hostd.key.b64}"
 
 docker_cmd=(docker)
 if ! docker info >/dev/null 2>&1; then
@@ -35,6 +37,26 @@ if [[ ! -x "${launcher_bin}" || ! -x "${controller_bin}" ]]; then
   echo "error: required binaries are missing under ${build_dir}" >&2
   exit 1
 fi
+if [[ ! -f "${controller_public_key_path}" ]]; then
+  echo "error: controller public key is missing: ${controller_public_key_path}" >&2
+  exit 1
+fi
+if [[ ! -f "${host_private_key_path}" ]]; then
+  echo "error: host private key is missing: ${host_private_key_path}" >&2
+  exit 1
+fi
+
+controller_fingerprint="$(
+  python3 - <<'PY' "${controller_public_key_path}"
+import base64
+import hashlib
+import pathlib
+import sys
+
+public_key_b64 = pathlib.Path(sys.argv[1]).read_text().strip()
+print(hashlib.sha256(base64.b64decode(public_key_b64)).hexdigest())
+PY
+)"
 
 tmp_dir="$(mktemp -d "${repo_root}/var/check-live-vllm-split-host.XXXXXX")"
 hostd_pid_dir="${tmp_dir}/pids"
@@ -112,6 +134,7 @@ register_host() {
     --db "${controller_db}" \
     --node "${node_name}" \
     --public-key /var/lib/comet-node/keys/hostd.pub.b64 \
+    --controller-fingerprint "${controller_fingerprint}" \
     --execution-mode "${execution_mode}" >/dev/null
 }
 
@@ -129,7 +152,9 @@ start_hostd_loop() {
       --foreground \
       --skip-systemctl \
       --node '${node_name}' \
-      --db '${controller_db}' \
+      --controller '${controller_url}' \
+      --controller-fingerprint '${controller_fingerprint}' \
+      --host-private-key '${host_private_key_path}' \
       --runtime-root '${runtime_root}' \
       --state-root '${state_root}' \
       --compose-mode exec \

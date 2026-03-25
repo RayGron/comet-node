@@ -1667,6 +1667,17 @@ std::optional<std::uintmax_t> FileSizeIfExists(const std::string& path) {
   return size;
 }
 
+bool LooksLikeRecognizedModelDirectory(const std::string& path) {
+  std::error_code error;
+  const std::filesystem::path root(path);
+  if (!std::filesystem::exists(root, error) || error ||
+      !std::filesystem::is_directory(root, error) || error) {
+    return false;
+  }
+  return std::filesystem::exists(root / "config.json", error) ||
+         std::filesystem::exists(root / "params.json", error);
+}
+
 std::string ComputeFileSha256Hex(const std::string& path) {
   comet::InitializeCrypto();
   std::ifstream input(path, std::ios::binary);
@@ -1984,7 +1995,13 @@ void BootstrapPlaneModelIfNeeded(
     if (artifact.local_path.has_value() && !artifact.local_path->empty()) {
       expected_size = FileSizeIfExists(*artifact.local_path);
       const auto target_size = FileSizeIfExists(artifact.target_host_path);
+      const bool source_is_directory =
+          std::filesystem::is_directory(*artifact.local_path);
+      const bool target_has_model_root =
+          !source_is_directory || LooksLikeRecognizedModelDirectory(artifact.target_host_path);
       if (!expected_size.has_value() || !target_size.has_value() || *expected_size != *target_size) {
+        already_present = false;
+      } else if (!target_has_model_root) {
         already_present = false;
       }
     } else if (artifact.source_url.has_value() && !artifact.source_url->empty()) {

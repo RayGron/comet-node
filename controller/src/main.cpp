@@ -2431,11 +2431,13 @@ InteractionSessionResult ExecuteInteractionSession(
     HttpResponse upstream;
     constexpr int kMaxAttempts = 3;
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+      const std::string upstream_body = BuildInteractionUpstreamBody(
+          resolution, current_payload, false, policy);
       upstream = SendControllerHttpRequest(
           *resolution.target,
           "POST",
           "/v1/chat/completions",
-          BuildInteractionUpstreamBody(resolution, current_payload, false, policy),
+          upstream_body,
           {{"Accept", "application/json"}});
       if (upstream.status_code == 200 || upstream.status_code < 500 ||
           attempt + 1 == kMaxAttempts) {
@@ -2447,9 +2449,13 @@ InteractionSessionResult ExecuteInteractionSession(
     if (upstream.status_code != 200) {
       const std::string upstream_detail =
           upstream.body.empty() ? std::string{} : (": " + upstream.body);
+      const std::string request_excerpt =
+          upstream_body.size() > 1024 ? upstream_body.substr(0, 1024) + "...[truncated]"
+                                      : upstream_body;
       throw std::runtime_error(
           "upstream interaction request failed with status " +
-          std::to_string(upstream.status_code) + upstream_detail);
+          std::to_string(upstream.status_code) + " target=" +
+          resolution.target->raw + " request=" + request_excerpt + upstream_detail);
     }
     const json upstream_payload = upstream.body.empty() ? json::object() : json::parse(upstream.body);
     const auto segment_finished_at = std::chrono::steady_clock::now();

@@ -268,7 +268,7 @@ ComposeService BuildComposeService(
     service.published_ports.push_back(
         PublishedPort{"127.0.0.1", state.inference.api_port, state.inference.api_port});
     service.published_ports.push_back(
-        PublishedPort{"127.0.0.1", state.gateway.listen_port, state.gateway.listen_port});
+        PublishedPort{"0.0.0.0", state.gateway.listen_port, state.gateway.listen_port});
   }
 
   const auto& shared_disk =

@@ -273,6 +273,7 @@ def probe(url: str) -> bool:
 
 
 def build_command(model_ref: str, served_model_name: str, port: int) -> list[str]:
+    tokenizer_ref = env("COMET_VLLM_TOKENIZER", model_ref)
     command = [
         sys.executable,
         "-m",
@@ -283,6 +284,8 @@ def build_command(model_ref: str, served_model_name: str, port: int) -> list[str
         str(port),
         "--model",
         model_ref,
+        "--tokenizer",
+        tokenizer_ref,
         "--served-model-name",
         served_model_name,
         "--tensor-parallel-size",

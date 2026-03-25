@@ -1936,9 +1936,22 @@ PlaneInteractionResolution ResolvePlaneInteraction(
   bool observation_matches_plane = false;
   if (!primary_node.empty()) {
     resolution.observation = store.LoadHostObservation(primary_node);
+    bool infer_runtime_present = false;
+    if (resolution.observation.has_value()) {
+      if (const auto infer_instance_name = FindInferInstanceName(*desired_state);
+          infer_instance_name.has_value()) {
+        const auto instance_statuses = ParseInstanceRuntimeStatuses(*resolution.observation);
+        infer_runtime_present = std::any_of(
+            instance_statuses.begin(),
+            instance_statuses.end(),
+            [&](const comet::RuntimeProcessStatus& status) {
+              return status.instance_name == *infer_instance_name;
+            });
+      }
+    }
     observation_matches_plane =
         resolution.observation.has_value() &&
-        ObservationMatchesPlane(*resolution.observation, plane_name);
+        (ObservationMatchesPlane(*resolution.observation, plane_name) || infer_runtime_present);
     if (observation_matches_plane) {
       resolution.runtime_status =
           BuildPlaneScopedRuntimeStatus(*desired_state, *resolution.observation);
@@ -2855,6 +2868,18 @@ bool ObservationMatchesPlane(
     if (instance.plane_name == plane_name) {
       return true;
     }
+  }
+  try {
+    const auto instance_statuses = ParseInstanceRuntimeStatuses(observation);
+    for (const auto& status : instance_statuses) {
+      const std::string worker_prefix = "worker-" + plane_name + "-";
+      if (status.instance_name == "infer-" + plane_name ||
+          status.instance_name == "worker-" + plane_name ||
+          status.instance_name.rfind(worker_prefix, 0) == 0) {
+        return true;
+      }
+    }
+  } catch (const std::exception&) {
   }
   return false;
 }
@@ -7051,9 +7076,30 @@ int ServeControllerApi(
             .detach();
         continue;
       }
-      const HttpResponse response =
-          HandleControllerRequest(db_path, default_artifacts_root, request, ui_root);
-      SendHttpResponse(client_fd, response);
+      std::thread(
+          [client_fd, db_path, default_artifacts_root, request, ui_root]() {
+            try {
+              const HttpResponse response = HandleControllerRequest(
+                  db_path, default_artifacts_root, request, ui_root);
+              SendHttpResponse(client_fd, response);
+            } catch (const std::exception& error) {
+              try {
+                SendHttpResponse(
+                    client_fd,
+                    BuildJsonResponse(
+                        500,
+                        json{
+                            {"status", "error"},
+                            {"message", error.what()},
+                        }));
+              } catch (const std::exception&) {
+              }
+            }
+            shutdown(client_fd, SHUT_RDWR);
+            close(client_fd);
+          })
+          .detach();
+      continue;
     }
     shutdown(client_fd, SHUT_RDWR);
     close(client_fd);

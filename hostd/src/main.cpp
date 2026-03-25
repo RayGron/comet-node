@@ -782,6 +782,15 @@ void SaveLocalAppliedGeneration(
   }
 }
 
+std::string RunCommandCapture(const std::string& command);
+
+bool ComposeProjectHasContainers(const std::string& compose_file_path) {
+  const std::string command =
+      ResolvedDockerCommand() + " compose -f '" + compose_file_path + "' ps -a --quiet 2>/dev/null";
+  const std::string output = RunCommandCapture(command);
+  return output.find_first_not_of(" \t\r\n") != std::string::npos;
+}
+
 void RunComposeCommand(
     const std::string& compose_file_path,
     const std::string& subcommand,
@@ -798,6 +807,9 @@ void RunComposeCommand(
       ResolvedDockerCommand() + " compose -f '" + compose_file_path + "' " + effective_subcommand;
   const int rc = std::system(command.c_str());
   if (rc != 0) {
+    if (subcommand == "down" && !ComposeProjectHasContainers(compose_file_path)) {
+      return;
+    }
     throw std::runtime_error(
         "compose command failed with exit code " + std::to_string(rc) + ": " + command);
   }

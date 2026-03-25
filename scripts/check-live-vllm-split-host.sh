@@ -144,18 +144,8 @@ wait_for_json_field() {
   local payload=""
   for _ in $(seq 1 "${attempts}"); do
     if payload="$(curl -fsS "${url}" 2>/dev/null)"; then
-      if python3 - <<'PY' "${payload}" "${expr}"
-import json
-import sys
-
-payload = json.loads(sys.argv[1])
-expr = sys.argv[2]
-namespace = {"payload": payload}
-print("yes" if eval(expr, {"__builtins__": {}}, namespace) else "no")
-PY
-      then
-        local matched
-        matched="$(python3 - <<'PY' "${payload}" "${expr}"
+      local matched
+      matched="$(python3 - <<'PY' "${payload}" "${expr}"
 import json
 import sys
 
@@ -165,10 +155,9 @@ namespace = {"payload": payload}
 print("yes" if eval(expr, {"__builtins__": {}}, namespace) else "no")
 PY
 )"
-        if [[ "${matched}" == "yes" ]]; then
-          printf '%s\n' "${payload}"
-          return 0
-        fi
+      if [[ "${matched}" == "yes" ]]; then
+        printf '%s\n' "${payload}"
+        return 0
       fi
     fi
     sleep 2
@@ -261,21 +250,8 @@ wait_for_plane_absent() {
   for _ in $(seq 1 120); do
     local planes_payload
     planes_payload="$(curl -fsS "${controller_url}/api/v1/planes")"
-    if python3 - <<'PY' "${planes_payload}" "${target_plane}"
-import json
-import sys
-
-payload = json.loads(sys.argv[1])
-target_plane = sys.argv[2]
-print(
-    "yes"
-    if all(item.get("name") != target_plane for item in payload.get("items", []))
-    else "no"
-)
-PY
-    then
-      local absent
-      absent="$(python3 - <<'PY' "${planes_payload}" "${target_plane}"
+    local absent
+    absent="$(python3 - <<'PY' "${planes_payload}" "${target_plane}"
 import json
 import sys
 
@@ -288,9 +264,8 @@ print(
 )
 PY
 )"
-      if [[ "${absent}" == "yes" ]]; then
-        return 0
-      fi
+    if [[ "${absent}" == "yes" ]]; then
+      return 0
     fi
     sleep 2
   done

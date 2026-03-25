@@ -284,7 +284,7 @@ def probe(url: str) -> bool:
     try:
         with urllib.request.urlopen(url, timeout=2) as response:
             return response.status == 200
-    except (urllib.error.URLError, TimeoutError, ValueError):
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
         return False
 
 

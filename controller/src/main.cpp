@@ -1843,6 +1843,34 @@ std::optional<comet::RuntimeStatus> BuildPlaneScopedRuntimeStatus(
   return runtime;
 }
 
+int CountReadyWorkerMembers(
+    comet::ControllerStore& store,
+    const comet::DesiredState& desired_state) {
+  int ready_workers = 0;
+  for (const auto& worker_name : FindWorkerInstanceNames(desired_state)) {
+    const auto instance_it = std::find_if(
+        desired_state.instances.begin(),
+        desired_state.instances.end(),
+        [&](const comet::InstanceSpec& instance) {
+          return instance.name == worker_name &&
+                 instance.role == comet::InstanceRole::Worker;
+        });
+    if (instance_it == desired_state.instances.end() || instance_it->node_name.empty()) {
+      continue;
+    }
+    const auto observation = store.LoadHostObservation(instance_it->node_name);
+    if (!observation.has_value()) {
+      continue;
+    }
+    const auto instance_statuses = ParseInstanceRuntimeStatuses(*observation);
+    const auto worker_status = FindInstanceRuntimeStatus(instance_statuses, worker_name);
+    if (worker_status.has_value() && worker_status->ready) {
+      ++ready_workers;
+    }
+  }
+  return ready_workers;
+}
+
 std::string CurrentControllerPlatform() {
 #if defined(_WIN32)
   return "windows";
@@ -1975,8 +2003,11 @@ PlaneInteractionResolution ResolvePlaneInteraction(
   const bool observation_ready = observation_matches_plane;
   const int expected_worker_members =
       std::max(0, desired_state->worker_group.expected_workers);
-  const int ready_worker_members =
-      resolution.runtime_status.has_value() ? resolution.runtime_status->registry_entries : 0;
+  const int ready_worker_members = CountReadyWorkerMembers(store, *desired_state);
+  if (resolution.runtime_status.has_value()) {
+    resolution.runtime_status->registry_entries =
+        std::max(resolution.runtime_status->registry_entries, ready_worker_members);
+  }
   const bool worker_group_degraded =
       expected_worker_members > 0 &&
       ready_worker_members > 0 &&

@@ -67,7 +67,7 @@ cleanup() {
   curl -sS -X DELETE "${controller_url}/api/v1/planes/${plane_name}" >/dev/null 2>&1 || true
   local node_name
   for node_name in infer-hostd worker-hostd-a worker-hostd-b; do
-    ${sudo_prefix} pkill -f "comet-node run hostd --foreground --skip-systemctl --node ${node_name} " >/dev/null 2>&1 || true
+    terminate_existing_hostd_loops "${node_name}" >/dev/null 2>&1 || true
   done
   local pid_file
   for pid_file in "${hostd_pid_dir}"/*.pid; do
@@ -81,11 +81,54 @@ cleanup() {
 }
 trap cleanup EXIT
 
+matching_hostd_loop_pids() {
+  local node_name="$1"
+  ${sudo_prefix} python3 - "${node_name}" <<'PY'
+import subprocess
+import sys
+
+node_name = sys.argv[1]
+target = f"comet-node run hostd --foreground --skip-systemctl --node {node_name}"
+result = subprocess.run(
+    ["ps", "-eo", "pid=,args="],
+    check=True,
+    capture_output=True,
+    text=True,
+)
+pids = []
+for raw_line in result.stdout.splitlines():
+    line = raw_line.strip()
+    if not line:
+        continue
+    pid_text, _, args = line.partition(" ")
+    try:
+        pid = int(pid_text)
+    except ValueError:
+        continue
+    if target not in args:
+        continue
+    if "check-live-vllm-split-host.sh" in args or "python3 -" in args:
+        continue
+    pids.append(str(pid))
+
+print(" ".join(pids))
+PY
+}
+
+terminate_existing_hostd_loops() {
+  local node_name="$1"
+  local pids
+  pids="$(matching_hostd_loop_pids "${node_name}")"
+  if [[ -n "${pids}" ]]; then
+    ${sudo_prefix} kill ${pids} >/dev/null 2>&1 || true
+  fi
+}
+
 stop_existing_hostd_loop() {
   local node_name="$1"
-  ${sudo_prefix} pkill -f "comet-node run hostd --foreground --skip-systemctl --node ${node_name} " >/dev/null 2>&1 || true
+  terminate_existing_hostd_loops "${node_name}"
   for _ in $(seq 1 30); do
-    if ! ${sudo_prefix} pgrep -f "comet-node run hostd --foreground --skip-systemctl --node ${node_name} " >/dev/null 2>&1; then
+    if [[ -z "$(matching_hostd_loop_pids "${node_name}")" ]]; then
       return 0
     fi
     sleep 1

@@ -195,6 +195,48 @@ PY
   exit 1
 }
 
+wait_for_plane_absent() {
+  local target_plane="$1"
+  for _ in $(seq 1 120); do
+    local planes_payload
+    planes_payload="$(curl -fsS "${controller_url}/api/v1/planes")"
+    if python3 - <<'PY' "${planes_payload}" "${target_plane}"
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+target_plane = sys.argv[2]
+print(
+    "yes"
+    if all(item.get("name") != target_plane for item in payload.get("items", []))
+    else "no"
+)
+PY
+    then
+      local absent
+      absent="$(python3 - <<'PY' "${planes_payload}" "${target_plane}"
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+target_plane = sys.argv[2]
+print(
+    "yes"
+    if all(item.get("name") != target_plane for item in payload.get("items", []))
+    else "no"
+)
+PY
+)"
+      if [[ "${absent}" == "yes" ]]; then
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  echo "error: plane ${target_plane} did not disappear from controller state" >&2
+  exit 1
+}
+
 echo "[check-live-vllm-split] registering host roles"
 start_hostd_loop "infer-hostd" "infer-only"
 start_hostd_loop "worker-hostd-a" "worker-only"
@@ -209,6 +251,7 @@ echo "registered_hosts=ok"
 echo "[check-live-vllm-split] ensuring plane ${plane_name} is running"
 delete_competing_planes
 curl -sS -X DELETE "${controller_url}/api/v1/planes/${plane_name}" >/dev/null || true
+wait_for_plane_absent "${plane_name}"
 "${repo_root}/scripts/run-plane.sh" "${plane_name}" >/dev/null
 
 status_payload="$(

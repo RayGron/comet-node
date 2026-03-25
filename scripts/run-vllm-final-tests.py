@@ -589,6 +589,8 @@ class Campaign:
                     "gpu_memory_mb": {"0": 97887, "1": 97887},
                 }
             ]
+        if len(state["nodes"]) > 1:
+            state.pop("placement_target", None)
         state["disks"] = [
             {
                 "name": shared_disk_name,
@@ -760,6 +762,7 @@ class Campaign:
             )
         nodes.extend(worker_nodes)
         state["nodes"] = nodes
+        state.pop("placement_target", None)
         state["runtime_gpu_nodes"] = [
             {
                 "name": member["name"],

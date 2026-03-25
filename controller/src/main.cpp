@@ -2369,12 +2369,22 @@ InteractionSessionResult ExecuteInteractionSession(
   json current_payload = original_payload;
   for (int segment_index = 0;; ++segment_index) {
     const auto segment_started_at = std::chrono::steady_clock::now();
-    const HttpResponse upstream = SendControllerHttpRequest(
-        *resolution.target,
-        "POST",
-        "/v1/chat/completions",
-        BuildInteractionUpstreamBody(resolution, current_payload, false, policy),
-        {{"Accept", "application/json"}});
+    HttpResponse upstream;
+    constexpr int kMaxAttempts = 3;
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+      upstream = SendControllerHttpRequest(
+          *resolution.target,
+          "POST",
+          "/v1/chat/completions",
+          BuildInteractionUpstreamBody(resolution, current_payload, false, policy),
+          {{"Accept", "application/json"}});
+      if (upstream.status_code == 200 || upstream.status_code < 500 ||
+          attempt + 1 == kMaxAttempts) {
+        break;
+      }
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(250 * (attempt + 1)));
+    }
     if (upstream.status_code != 200) {
       throw std::runtime_error(
           "upstream interaction request failed with status " + std::to_string(upstream.status_code));
@@ -2504,17 +2514,34 @@ HttpResponse ProxyInteractionJson(
                   resolution,
                   ParseInteractionPayload(body),
                   false,
-                  ResolveInteractionCompletionPolicy(
-                      resolution.desired_state,
-                      ParseInteractionPayload(body))
+                      ResolveInteractionCompletionPolicy(
+                          resolution.desired_state,
+                          ParseInteractionPayload(body))
                       .policy)
             : body;
-    const HttpResponse upstream = SendControllerHttpRequest(
-        *resolution.target,
-        method,
-        path,
-        upstream_body,
-        {{"Accept", "application/json"}});
+    HttpResponse upstream;
+    std::string last_error;
+    constexpr int kMaxAttempts = 3;
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+      try {
+        upstream = SendControllerHttpRequest(
+            *resolution.target,
+            method,
+            path,
+            upstream_body,
+            {{"Accept", "application/json"}});
+        if (upstream.status_code < 500 || attempt + 1 == kMaxAttempts) {
+          break;
+        }
+      } catch (const std::exception& error) {
+        last_error = error.what();
+        if (attempt + 1 == kMaxAttempts) {
+          throw;
+        }
+      }
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(250 * (attempt + 1)));
+    }
     return upstream;
   } catch (const std::exception& error) {
     return BuildPlaneInteractionError(502, resolution.status_payload, error.what());

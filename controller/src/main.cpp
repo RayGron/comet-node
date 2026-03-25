@@ -1717,6 +1717,127 @@ std::optional<ControllerEndpointTarget> ParseInteractionTarget(
   return ParseControllerEndpointTarget(host + ":" + std::to_string(port));
 }
 
+std::optional<std::string> FindInferInstanceName(const comet::DesiredState& desired_state) {
+  for (const auto& instance : desired_state.instances) {
+    if (instance.role == "infer" && instance.plane_name == desired_state.plane_name) {
+      return instance.name;
+    }
+  }
+  return std::nullopt;
+}
+
+std::vector<std::string> FindWorkerInstanceNames(const comet::DesiredState& desired_state) {
+  std::vector<std::string> names;
+  for (const auto& instance : desired_state.instances) {
+    if (instance.role == "worker" && instance.plane_name == desired_state.plane_name) {
+      names.push_back(instance.name);
+    }
+  }
+  return names;
+}
+
+std::optional<comet::RuntimeProcessStatus> FindInstanceRuntimeStatus(
+    const std::vector<comet::RuntimeProcessStatus>& statuses,
+    const std::string& instance_name) {
+  for (const auto& status : statuses) {
+    if (status.instance_name == instance_name) {
+      return status;
+    }
+  }
+  return std::nullopt;
+}
+
+bool ProbeControllerTargetOk(
+    const std::optional<ControllerEndpointTarget>& target,
+    const std::string& path) {
+  if (!target.has_value()) {
+    return false;
+  }
+  try {
+    const HttpResponse response = SendControllerHttpRequest(*target, "GET", path);
+    return response.status_code >= 200 && response.status_code < 300;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+std::optional<comet::RuntimeStatus> BuildPlaneScopedRuntimeStatus(
+    const comet::DesiredState& desired_state,
+    const comet::HostObservation& observation) {
+  const auto infer_instance_name = FindInferInstanceName(desired_state);
+  if (!infer_instance_name.has_value()) {
+    return std::nullopt;
+  }
+
+  const auto instance_statuses = ParseInstanceRuntimeStatuses(observation);
+  const auto infer_status = FindInstanceRuntimeStatus(instance_statuses, *infer_instance_name);
+  if (!infer_status.has_value()) {
+    return std::nullopt;
+  }
+
+  comet::RuntimeStatus runtime;
+  if (!observation.runtime_status_json.empty()) {
+    try {
+      const auto parsed = comet::DeserializeRuntimeStatusJson(observation.runtime_status_json);
+      if (parsed.plane_name == desired_state.plane_name &&
+          parsed.instance_name == *infer_instance_name) {
+        runtime = parsed;
+      }
+    } catch (const std::exception&) {
+    }
+  }
+
+  const auto worker_instance_names = FindWorkerInstanceNames(desired_state);
+  int ready_workers = 0;
+  for (const auto& worker_name : worker_instance_names) {
+    const auto worker_status = FindInstanceRuntimeStatus(instance_statuses, worker_name);
+    if (worker_status.has_value() && worker_status->ready) {
+      ++ready_workers;
+    }
+  }
+
+  runtime.plane_name = desired_state.plane_name;
+  runtime.control_root = desired_state.control_root;
+  runtime.primary_infer_node = desired_state.inference.primary_infer_node;
+  runtime.instance_name = infer_status->instance_name;
+  runtime.instance_role = infer_status->instance_role;
+  runtime.node_name = infer_status->node_name;
+  runtime.runtime_backend =
+      desired_state.inference.runtime_engine == "vllm" ? "worker-vllm" : runtime.runtime_backend;
+  runtime.runtime_phase = infer_status->runtime_phase;
+  runtime.enabled_gpu_nodes = static_cast<int>(worker_instance_names.size());
+  runtime.registry_entries = ready_workers;
+  runtime.runtime_pid = infer_status->runtime_pid;
+  runtime.engine_pid = infer_status->engine_pid;
+  runtime.supervisor_pid = infer_status->runtime_pid;
+  runtime.active_model_id = desired_state.bootstrap_model.model_id;
+  runtime.active_served_model_name = desired_state.bootstrap_model.served_model_name;
+  runtime.cached_local_model_path = infer_status->model_path;
+  runtime.model_path = infer_status->model_path;
+  runtime.gpu_device = infer_status->gpu_device;
+  runtime.started_at = infer_status->started_at;
+  runtime.last_activity_at = infer_status->last_activity_at;
+  runtime.gateway_listen = "0.0.0.0:" + std::to_string(desired_state.gateway.listen_port);
+  runtime.gateway_health_url =
+      "http://127.0.0.1:" + std::to_string(desired_state.gateway.listen_port) + "/health";
+  runtime.upstream_models_url =
+      "http://127.0.0.1:" + std::to_string(desired_state.gateway.listen_port) + "/v1/models";
+  runtime.inference_health_url = runtime.gateway_health_url;
+  runtime.active_model_ready = true;
+  runtime.gateway_plan_ready = true;
+  const auto target = ParseInteractionTarget(runtime.gateway_listen, desired_state.gateway.listen_port);
+  runtime.gateway_ready = ProbeControllerTargetOk(target, "/health");
+  runtime.inference_ready = ProbeControllerTargetOk(target, "/v1/models");
+  runtime.launch_ready =
+      runtime.gateway_ready &&
+      runtime.inference_ready &&
+      ready_workers >= std::max(0, desired_state.worker_group.expected_workers);
+  runtime.ready =
+      runtime.active_model_ready && runtime.gateway_ready && runtime.inference_ready &&
+      runtime.launch_ready;
+  return runtime;
+}
+
 std::string CurrentControllerPlatform() {
 #if defined(_WIN32)
   return "windows";
@@ -1813,10 +1934,17 @@ PlaneInteractionResolution ResolvePlaneInteraction(
     observation_matches_plane =
         resolution.observation.has_value() &&
         ObservationMatchesPlane(*resolution.observation, plane_name);
-    if (observation_matches_plane &&
+    if (observation_matches_plane) {
+      resolution.runtime_status =
+          BuildPlaneScopedRuntimeStatus(*desired_state, *resolution.observation);
+    }
+    if (!resolution.runtime_status.has_value() &&
+        observation_matches_plane &&
         !resolution.observation->runtime_status_json.empty()) {
       resolution.runtime_status =
           comet::DeserializeRuntimeStatusJson(resolution.observation->runtime_status_json);
+    }
+    if (resolution.runtime_status.has_value()) {
       resolution.target = ParseInteractionTarget(
           resolution.runtime_status->gateway_listen,
           desired_state->gateway.listen_port);

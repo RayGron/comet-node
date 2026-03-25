@@ -791,6 +791,11 @@ bool ComposeProjectHasContainers(const std::string& compose_file_path) {
   return output.find_first_not_of(" \t\r\n") != std::string::npos;
 }
 
+bool IsSharedManagedDiskImagePath(const std::string& image_path) {
+  return image_path.find("/disk-images/") != std::string::npos &&
+         image_path.find("/shared/") != std::string::npos;
+}
+
 void RunComposeCommand(
     const std::string& compose_file_path,
     const std::string& subcommand,
@@ -4612,6 +4617,7 @@ void PersistDiskRuntimeStateForRemovedDisks(
 void RemoveRealDiskMount(
     const comet::DiskRuntimeState& runtime_state,
     const std::optional<std::string>& runtime_root) {
+  bool shared_image_removal_deferred = false;
   std::optional<std::string> mounted_source;
   if (!runtime_state.mount_point.empty() && IsPathMounted(runtime_state.mount_point)) {
     mounted_source = CurrentMountSource(runtime_state.mount_point);
@@ -4640,8 +4646,18 @@ void RemoveRealDiskMount(
     if (loop_device.has_value() && !loop_device->empty()) {
       if (!RunCommandOk(
               "/usr/sbin/losetup -d " + ShellQuote(*loop_device) + " >/dev/null 2>&1")) {
-        throw std::runtime_error(
-            "failed to detach loop device '" + *loop_device + "'");
+        const auto still_attached =
+            runtime_state.image_path.empty()
+                ? std::nullopt
+                : DetectExistingLoopDevice(runtime_state.image_path);
+        if (IsSharedManagedDiskImagePath(runtime_state.image_path) &&
+            still_attached.has_value() &&
+            (!runtime_state.mount_point.empty() && !IsPathMounted(runtime_state.mount_point))) {
+          shared_image_removal_deferred = true;
+        } else {
+          throw std::runtime_error(
+              "failed to detach loop device '" + *loop_device + "'");
+        }
       }
     }
   }
@@ -4650,7 +4666,7 @@ void RemoveRealDiskMount(
     RemoveDiskDirectory(runtime_state.mount_point, runtime_root);
   }
 
-  if (!runtime_state.image_path.empty()) {
+  if (!runtime_state.image_path.empty() && !shared_image_removal_deferred) {
     const std::filesystem::path image_path(runtime_state.image_path);
     if (!runtime_root.has_value() || IsUnderRoot(image_path, runtime_root)) {
       std::error_code error;

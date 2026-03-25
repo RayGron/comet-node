@@ -771,13 +771,15 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
   infer.private_disk_name = infer.name + "-private";
   infer.shared_disk_name = state.plane_shared_disk_name;
   infer.private_disk_size_gb = OptionalInt(infer_json, "private_disk_gb", 80);
+  const bool use_vllm_runtime = state.inference.runtime_engine == "vllm";
+
   infer.environment = {
       {"COMET_PLANE_NAME", state.plane_name},
       {"COMET_INSTANCE_NAME", infer.name},
       {"COMET_INSTANCE_ROLE", "infer"},
       {"COMET_NODE_NAME", infer.node_name},
       {"COMET_INFER_BOOT_MODE", "launch-runtime"},
-      {"COMET_INFER_RUNTIME_BACKEND", "auto"},
+      {"COMET_INFER_RUNTIME_BACKEND", use_vllm_runtime ? "worker-vllm" : "auto"},
       {"COMET_CONTROLLER_URL", "http://controller.internal:8080"},
       {"COMET_CONTROL_ROOT", state.control_root},
       {"COMET_INFER_RUNTIME_CONFIG", state.control_root + "/infer-runtime.json"},
@@ -932,7 +934,7 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
         {"COMET_INSTANCE_ROLE", "worker"},
         {"COMET_NODE_NAME", worker.node_name},
         {"COMET_GPU_DEVICE", worker.gpu_device.value_or("")},
-        {"COMET_WORKER_BOOT_MODE", "llama-load"},
+        {"COMET_WORKER_BOOT_MODE", use_vllm_runtime ? "vllm-openai" : "llama-load"},
         {"COMET_CONTROL_ROOT", state.control_root},
         {"COMET_SHARED_DISK_PATH", "/comet/shared"},
         {"COMET_PRIVATE_DISK_PATH", "/comet/private"},

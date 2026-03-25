@@ -5,10 +5,8 @@
   "plane_mode": "llm",
   "placement_target": "local",
   "bootstrap_model": {
-    "model_id": "qwen3.5-27b-q4-k-m",
-    "served_model_name": "qwen3.5-27b",
-    "source_url": "https://huggingface.co/bartowski/Qwen_Qwen3.5-27B-GGUF/resolve/main/Qwen_Qwen3.5-27B-Q4_K_M.gguf?download=true",
-    "target_filename": "Qwen_Qwen3.5-27B-Q4_K_M.gguf"
+    "model_id": "Qwen/Qwen3.5-27B",
+    "served_model_name": "qwen3.5-27b"
   },
   "interaction": {
     "system_prompt": "You are Vesper QW35. Reply concisely and directly. If preferred_language is provided, always reply in that language. If preferred_language is absent, reply in the same language as the user's last message. Never default to Chinese unless the user explicitly requests Chinese.",
@@ -37,24 +35,46 @@
   },
   "inference": {
     "primary_infer_node": "local-hostd",
-    "runtime_engine": "llama.cpp",
+    "runtime_engine": "vllm",
+    "worker_group_id": "qwen35-27b-workers",
+    "distributed_backend": "vllm",
+    "worker_selection_policy": "prefer-free-then-share",
     "net_if": "eth0",
     "models_root": "/comet/shared/models",
     "model_cache_dir": "/comet/shared/models/cache",
     "runtime_log_dir": "/comet/shared/logs/infer",
-    "api_port": 8000,
-    "max_model_len": 4096,
+    "api_port": 18093,
+    "max_model_len": 8192,
     "tensor_parallel_size": 1,
     "pipeline_parallel_size": 1,
-    "max_num_seqs": 16,
-    "gpu_memory_utilization": 0.9,
+    "max_num_seqs": 8,
+    "gpu_memory_utilization": 0.85,
     "enforce_eager": false,
-    "gguf_cache_dir": "/comet/shared/models/gguf",
-    "infer_log_dir": "/comet/shared/logs/infer",
-    "llama_port": 8000,
-    "llama_ctx_size": 4096,
-    "llama_threads": 4,
-    "llama_gpu_layers": 99
+    "rendezvous_port": 29503
+  },
+  "worker_group": {
+    "group_id": "qwen35-27b-workers",
+    "infer_instance_name": "infer-qwen35-27b",
+    "distributed_backend": "vllm",
+    "rendezvous_host": "infer-qwen35-27b",
+    "rendezvous_port": 29503,
+    "expected_workers": 1,
+    "worker_selection_policy": "prefer-free-then-share",
+    "members": [
+      {
+        "name": "worker-qwen35-27b",
+        "node_name": "local-hostd",
+        "gpu_device": "0",
+        "rank": 0,
+        "gpu_fraction": 1.0,
+        "share_mode": "exclusive",
+        "priority": 100,
+        "preemptible": false,
+        "memory_cap_mb": 65536,
+        "enabled": true,
+        "leader": true
+      }
+    ]
   },
   "gateway": {
     "listen_port": 18083,
@@ -66,18 +86,21 @@
       "node_name": "local-hostd",
       "gpu_device": "0",
       "gpu_fraction": 1.0,
-      "memory_cap_mb": 28672
+      "memory_cap_mb": 65536
     }
   ],
   "nodes": [
     {
       "name": "local-hostd",
       "platform": "linux",
+      "execution_mode": "mixed",
       "gpu_devices": [
-        "0"
+        "0",
+        "1"
       ],
       "gpu_memory_mb": {
-        "0": 32607
+        "0": 97887,
+        "1": 97887
       }
     }
   ],
@@ -90,7 +113,7 @@
       "node_name": "local-hostd",
       "host_path": "/var/lib/comet/disks/planes/qwen35-27b/shared",
       "container_path": "/comet/shared",
-      "size_gb": 48
+      "size_gb": 96
     },
     {
       "name": "infer-qwen35-27b-private",
@@ -129,11 +152,11 @@
         "COMET_INSTANCE_ROLE": "infer",
         "COMET_NODE_NAME": "local-hostd",
         "COMET_INFER_BOOT_MODE": "launch-runtime",
-        "COMET_INFER_RUNTIME_BACKEND": "auto",
+        "COMET_INFER_RUNTIME_BACKEND": "worker-vllm",
         "COMET_CONTROLLER_URL": "http://controller.internal:8080",
         "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-27b",
         "COMET_INFER_RUNTIME_CONFIG": "/comet/shared/control/qwen35-27b/infer-runtime.json",
-        "COMET_INFERENCE_PORT": "8000",
+        "COMET_INFERENCE_PORT": "18093",
         "COMET_GATEWAY_PORT": "18083",
         "COMET_SHARED_DISK_PATH": "/comet/shared",
         "COMET_PRIVATE_DISK_PATH": "/comet/private"
@@ -150,20 +173,17 @@
       "role": "worker",
       "plane_name": "qwen35-27b",
       "node_name": "local-hostd",
-      "image": "comet/worker-runtime:dev",
+      "image": "comet/worker-vllm-runtime:dev",
       "command": "/runtime/worker/entrypoint.sh",
       "private_disk_name": "worker-qwen35-27b-private",
       "shared_disk_name": "plane-qwen35-27b-shared",
-      "depends_on": [
-        "infer-qwen35-27b"
-      ],
       "environment": {
         "COMET_PLANE_NAME": "qwen35-27b",
         "COMET_INSTANCE_NAME": "worker-qwen35-27b",
         "COMET_INSTANCE_ROLE": "worker",
         "COMET_NODE_NAME": "local-hostd",
         "COMET_GPU_DEVICE": "0",
-        "COMET_WORKER_BOOT_MODE": "llama-load",
+        "COMET_WORKER_BOOT_MODE": "vllm-openai",
         "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-27b",
         "COMET_SHARED_DISK_PATH": "/comet/shared",
         "COMET_PRIVATE_DISK_PATH": "/comet/private",
@@ -181,7 +201,7 @@
       },
       "gpu_device": "0",
       "gpu_fraction": 1.0,
-      "memory_cap_mb": 28672,
+      "memory_cap_mb": 65536,
       "private_disk_size_gb": 12
     }
   ]

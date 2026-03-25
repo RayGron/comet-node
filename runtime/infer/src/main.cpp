@@ -1973,6 +1973,52 @@ bool ProbeUrl(const std::string& url) {
   return response.rfind("HTTP/1.1 200", 0) == 0 || response.rfind("HTTP/1.0 200", 0) == 0;
 }
 
+bool ProbeModelsUrl(const std::string& url) {
+  constexpr std::string_view kHttpPrefix = "http://";
+  if (url.rfind(std::string(kHttpPrefix), 0) != 0) {
+    return false;
+  }
+  const UpstreamTarget target = ParseHttpUrl(url);
+  const int fd = ConnectTcpHost(target.host, target.port);
+  if (fd < 0) {
+    return false;
+  }
+
+  const std::string request =
+      "GET /v1/models HTTP/1.1\r\nHost: " + target.host +
+      "\r\nConnection: close\r\n\r\n";
+  if (send(fd, request.c_str(), request.size(), 0) < 0) {
+    close(fd);
+    return false;
+  }
+
+  std::string response;
+  std::array<char, 4096> buffer{};
+  while (true) {
+    const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
+    if (read_count <= 0) {
+      break;
+    }
+    response.append(buffer.data(), static_cast<std::size_t>(read_count));
+    if (response.size() > 65536) {
+      break;
+    }
+  }
+  close(fd);
+  if (!(response.rfind("HTTP/1.1 200", 0) == 0 || response.rfind("HTTP/1.0 200", 0) == 0)) {
+    return false;
+  }
+  const std::size_t body_pos = response.find("\r\n\r\n");
+  if (body_pos == std::string::npos) {
+    return false;
+  }
+  json payload = json::parse(response.substr(body_pos + 4), nullptr, false);
+  if (!payload.is_object() || !payload.contains("data") || !payload.at("data").is_array()) {
+    return false;
+  }
+  return !payload.at("data").empty();
+}
+
 void PrintConfigSummary(const RuntimeConfig& config) {
   std::cout << "infer runtime config: OK\n";
   std::cout << "plane_name=" << config.plane_name << "\n";
@@ -2575,9 +2621,13 @@ class LocalRuntime {
     }
     if (dynamic_upstream_ || upstream_.has_value()) {
       const std::string health_url = RuntimeUpstreamHealthUrl(config_);
-      return !health_url.empty() && ProbeUrl(health_url);
+      const std::string models_url = RuntimeUpstreamModelsUrl(config_);
+      return !health_url.empty() && !models_url.empty() && ProbeUrl(health_url) &&
+          ProbeModelsUrl(models_url);
     }
-    return ProbeUrl("http://127.0.0.1:" + std::to_string(config_.api_port) + "/health");
+    const std::string base_url =
+        "http://127.0.0.1:" + std::to_string(config_.api_port);
+    return ProbeUrl(base_url + "/health") && ProbeModelsUrl(base_url + "/v1/models");
   }
 
   bool GatewayReady() const {

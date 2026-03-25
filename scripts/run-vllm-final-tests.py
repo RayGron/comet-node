@@ -144,18 +144,15 @@ class Campaign:
             "local_dir=os.environ['MODEL_DIR'], "
             "local_dir_use_symlinks=False)"
         )
-        env = os.environ.copy()
-        env["MODEL_ID"] = model_id
-        env["MODEL_DIR"] = str(local_path)
         subprocess.run(
             self.docker_cmd
             + [
                 "run",
                 "--rm",
                 "-e",
-                "MODEL_ID",
+                f"MODEL_ID={model_id}",
                 "-e",
-                "MODEL_DIR",
+                f"MODEL_DIR={local_path}",
                 "-v",
                 f"{mount_root}:{mount_root}",
                 "comet/worker-vllm-runtime:dev",
@@ -164,8 +161,58 @@ class Campaign:
                 code,
             ],
             check=True,
-            env=env,
         )
+
+    def hostd_state_root(self, node_name: str) -> pathlib.Path:
+        if node_name == "local-hostd":
+            return pathlib.Path("/var/lib/comet-node/hostd-state")
+        return pathlib.Path(f"/var/lib/comet-node/{node_name}-state")
+
+    def apply_next_assignment(self, node_name: str):
+        subprocess.run(
+            [
+                *(self.sudo_prefix or []),
+                str(self.hostd_bin),
+                "apply-next-assignment",
+                "--db",
+                str(self.controller_db),
+                "--node",
+                node_name,
+                "--runtime-root",
+                str(self.runtime_root),
+                "--state-root",
+                str(self.hostd_state_root(node_name)),
+                "--compose-mode",
+                "exec",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def report_observed_state(self, node_name: str):
+        subprocess.run(
+            [
+                *(self.sudo_prefix or []),
+                str(self.hostd_bin),
+                "report-observed-state",
+                "--db",
+                str(self.controller_db),
+                "--node",
+                node_name,
+                "--state-root",
+                str(self.hostd_state_root(node_name)),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def pump_nodes(self, node_names):
+        for node_name in node_names:
+            self.apply_next_assignment(node_name)
+        for node_name in node_names:
+            self.report_observed_state(node_name)
 
     def delete_plane(self, plane_name: str):
         try:
@@ -197,10 +244,12 @@ class Campaign:
         )
         self.planes_to_cleanup.append(state["plane_name"])
 
-    def wait_ready(self, plane_name: str, timeout=7200, require_workers=None, require_primary=None):
+    def wait_ready(self, plane_name: str, timeout=7200, require_workers=None, require_primary=None, node_names=None):
         deadline = time.time() + timeout
         last_payload = None
         while time.time() < deadline:
+            if node_names:
+                self.pump_nodes(node_names)
             try:
                 payload = self.request_json(
                     "GET",
@@ -930,7 +979,13 @@ class Campaign:
             (artifacts_dir / "desired-state.json").write_text(json.dumps(state, indent=2) + "\n")
             start_ts = time.time()
             self.apply_plane(state)
-            status = self.wait_ready(state["plane_name"], timeout=10800, require_workers=2, require_primary="local-hostd")
+            status = self.wait_ready(
+                state["plane_name"],
+                timeout=10800,
+                require_workers=2,
+                require_primary="local-hostd",
+                node_names=["local-hostd"],
+            )
             startup_ms = round((time.time() - start_ts) * 1000, 2)
             model_id = self.request_json("GET", f"/api/v1/planes/{state['plane_name']}/interaction/models")["data"][0]["id"]
             prompts = {
@@ -1030,8 +1085,20 @@ class Campaign:
             start_ts = time.time()
             self.apply_plane(state_a)
             self.apply_plane(state_b)
-            status_a = self.wait_ready(plane_a, timeout=7200, require_workers=1, require_primary="local-hostd")
-            status_b = self.wait_ready(plane_b, timeout=7200, require_workers=1, require_primary="local-hostd")
+            status_a = self.wait_ready(
+                plane_a,
+                timeout=7200,
+                require_workers=1,
+                require_primary="local-hostd",
+                node_names=["local-hostd"],
+            )
+            status_b = self.wait_ready(
+                plane_b,
+                timeout=7200,
+                require_workers=1,
+                require_primary="local-hostd",
+                node_names=["local-hostd"],
+            )
             startup_ms = round((time.time() - start_ts) * 1000, 2)
             model_a = self.request_json("GET", f"/api/v1/planes/{plane_a}/interaction/models")["data"][0]["id"]
             model_b = self.request_json("GET", f"/api/v1/planes/{plane_b}/interaction/models")["data"][0]["id"]
@@ -1149,7 +1216,13 @@ class Campaign:
             (artifacts_dir / "desired-state.json").write_text(json.dumps(state, indent=2) + "\n")
             start_ts = time.time()
             self.apply_plane(state)
-            status = self.wait_ready(plane_name, timeout=10800, require_workers=2, require_primary="infer-hostd")
+            status = self.wait_ready(
+                plane_name,
+                timeout=10800,
+                require_workers=2,
+                require_primary="infer-hostd",
+                node_names=["infer-hostd", "worker-hostd-a", "worker-hostd-b"],
+            )
             startup_ms = round((time.time() - start_ts) * 1000, 2)
             model_id = self.request_json("GET", f"/api/v1/planes/{plane_name}/interaction/models")["data"][0]["id"]
             prompts = {
@@ -1247,8 +1320,20 @@ class Campaign:
             start_ts = time.time()
             self.apply_plane(state_a)
             self.apply_plane(state_b)
-            status_a = self.wait_ready(plane_a, timeout=7200, require_workers=1, require_primary="infer-hostd")
-            status_b = self.wait_ready(plane_b, timeout=7200, require_workers=1, require_primary="infer-hostd")
+            status_a = self.wait_ready(
+                plane_a,
+                timeout=7200,
+                require_workers=1,
+                require_primary="infer-hostd",
+                node_names=["infer-hostd", "worker-hostd-a", "worker-hostd-b"],
+            )
+            status_b = self.wait_ready(
+                plane_b,
+                timeout=7200,
+                require_workers=1,
+                require_primary="infer-hostd",
+                node_names=["infer-hostd", "worker-hostd-a", "worker-hostd-b"],
+            )
             startup_ms = round((time.time() - start_ts) * 1000, 2)
             model_a = self.request_json("GET", f"/api/v1/planes/{plane_a}/interaction/models")["data"][0]["id"]
             model_b = self.request_json("GET", f"/api/v1/planes/{plane_b}/interaction/models")["data"][0]["id"]

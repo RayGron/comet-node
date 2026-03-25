@@ -288,6 +288,26 @@ def probe(url: str) -> bool:
         return False
 
 
+def probe_models(url: str, served_model_name: str) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=3) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError, json.JSONDecodeError):
+        return False
+
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        return False
+    if not served_model_name:
+        return True
+    return any(
+        isinstance(item, dict) and item.get("id") == served_model_name
+        for item in data
+    )
+
+
 def build_command(model_ref: str, served_model_name: str, port: int) -> list[str]:
     tokenizer_ref = env("COMET_VLLM_TOKENIZER", model_ref)
     command = [
@@ -373,9 +393,13 @@ def main() -> int:
     upstream_file = worker_upstream_path(control_root)
     worker_group_member_file = worker_group_member_path(control_root, instance_name)
     health_url = f"http://127.0.0.1:{port}/health"
+    models_url = f"http://127.0.0.1:{port}/v1/models"
     leader_health_url = env("COMET_WORKER_LEADER_API_BASE_URL", "").rstrip("/")
+    leader_models_url = env("COMET_WORKER_LEADER_API_BASE_URL", "").rstrip("/")
     if leader_health_url:
         leader_health_url = f"{leader_health_url}/health"
+    if leader_models_url:
+        leader_models_url = f"{leader_models_url}/v1/models"
     child_env = os.environ.copy()
     instance_name = env("COMET_INSTANCE_NAME", "worker")
     node_name = env("COMET_NODE_NAME")
@@ -442,10 +466,12 @@ def main() -> int:
         )
 
     while child.poll() is None and not STOP_REQUESTED:
-        healthy = probe(health_url)
+        healthy = probe(health_url) and probe_models(models_url, served_model_name)
         leader_healthy = healthy
         if env_bool("COMET_VLLM_HEADLESS", False) and leader_health_url:
             leader_healthy = probe(leader_health_url)
+            if leader_healthy and leader_models_url:
+                leader_healthy = probe_models(leader_models_url, served_model_name)
         ready = member_ready(leader_health=leader_healthy, child_alive=child.poll() is None)
         now = utc_now_iso()
         set_ready(ready)

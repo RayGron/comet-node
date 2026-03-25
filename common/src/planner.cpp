@@ -34,11 +34,28 @@ int WorkerPublishedHostPort(
   return kWorkerPublishedPortBase + static_cast<int>(offset);
 }
 
+int WorkerPublishedHostPort(
+    const DesiredState& state,
+    const std::string& instance_name) {
+  const uint32_t offset =
+      StableWorkerPortHash(state.plane_name + ":" + instance_name) % kWorkerPublishedPortSpan;
+  return kWorkerPublishedPortBase + static_cast<int>(offset);
+}
+
 int WorkerPublishedRendezvousHostPort(
     const DesiredState& state,
     const InstanceSpec& instance) {
   const uint32_t offset = StableWorkerPortHash(
                               state.plane_name + ":" + instance.name + ":rendezvous") %
+      kWorkerRendezvousPublishedPortSpan;
+  return kWorkerRendezvousPublishedPortBase + static_cast<int>(offset);
+}
+
+int WorkerPublishedRendezvousHostPort(
+    const DesiredState& state,
+    const std::string& instance_name) {
+  const uint32_t offset =
+      StableWorkerPortHash(state.plane_name + ":" + instance_name + ":rendezvous") %
       kWorkerRendezvousPublishedPortSpan;
   return kWorkerRendezvousPublishedPortBase + static_cast<int>(offset);
 }
@@ -70,6 +87,20 @@ const WorkerGroupMemberSpec* FindWorkerGroupMember(
     return nullptr;
   }
   return &*it;
+}
+
+const WorkerGroupMemberSpec* FindLeaderWorkerGroupMember(const DesiredState& state) {
+  const auto it = std::find_if(
+      state.worker_group.members.begin(),
+      state.worker_group.members.end(),
+      [&](const WorkerGroupMemberSpec& member) { return member.leader; });
+  if (it != state.worker_group.members.end()) {
+    return &*it;
+  }
+  if (!state.worker_group.members.empty()) {
+    return &state.worker_group.members.front();
+  }
+  return nullptr;
 }
 
 ComposeService BuildComposeService(
@@ -120,9 +151,18 @@ ComposeService BuildComposeService(
           std::to_string(state.worker_group.rendezvous_port);
     } else if (instance.role == InstanceRole::Worker) {
       const auto* worker_group_member = FindWorkerGroupMember(state, instance.name);
+      const auto* leader_worker_group_member = FindLeaderWorkerGroupMember(state);
       const int published_host_port = WorkerPublishedHostPort(state, instance);
       const int published_rendezvous_host_port =
           WorkerPublishedRendezvousHostPort(state, instance);
+      const int leader_published_host_port =
+          leader_worker_group_member != nullptr
+              ? WorkerPublishedHostPort(state, leader_worker_group_member->name)
+              : published_host_port;
+      const int leader_published_rendezvous_host_port =
+          leader_worker_group_member != nullptr
+              ? WorkerPublishedRendezvousHostPort(state, leader_worker_group_member->name)
+              : published_rendezvous_host_port;
       const bool worker_group_leader =
           worker_group_member != nullptr && worker_group_member->leader;
       const bool distributed_runtime =
@@ -164,13 +204,13 @@ ComposeService BuildComposeService(
       service.environment["COMET_VLLM_DISTRIBUTED_EXECUTOR_BACKEND"] = "mp";
       service.environment["COMET_VLLM_DISTRIBUTED_MASTER_ADDR"] = "host.docker.internal";
       service.environment["COMET_VLLM_DISTRIBUTED_MASTER_PORT"] =
-          std::to_string(published_rendezvous_host_port);
+          std::to_string(leader_published_rendezvous_host_port);
       service.environment["COMET_VLLM_DISTRIBUTED_NNODES"] =
           std::to_string(std::max(1, state.worker_group.expected_workers));
       service.environment["COMET_VLLM_DISTRIBUTED_NODE_RANK"] = "0";
       service.environment["COMET_VLLM_HEADLESS"] = "0";
       service.environment["COMET_WORKER_LEADER_API_BASE_URL"] =
-          "http://host.docker.internal:" + std::to_string(published_host_port);
+          "http://host.docker.internal:" + std::to_string(leader_published_host_port);
       if (worker_group_member != nullptr) {
         service.environment["COMET_WORKER_GROUP_RANK"] =
             std::to_string(worker_group_member->rank);

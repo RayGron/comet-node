@@ -14,8 +14,6 @@ bool UsesVllmRuntime(const DesiredState& state) {
 
 constexpr int kWorkerPublishedPortBase = 20000;
 constexpr int kWorkerPublishedPortSpan = 20000;
-constexpr int kWorkerRendezvousPublishedPortBase = 40000;
-constexpr int kWorkerRendezvousPublishedPortSpan = 20000;
 
 uint32_t StableWorkerPortHash(const std::string& value) {
   uint32_t hash = 2166136261u;
@@ -32,32 +30,6 @@ int WorkerPublishedHostPort(
   const uint32_t offset =
       StableWorkerPortHash(state.plane_name + ":" + instance.name) % kWorkerPublishedPortSpan;
   return kWorkerPublishedPortBase + static_cast<int>(offset);
-}
-
-int WorkerPublishedHostPort(
-    const DesiredState& state,
-    const std::string& instance_name) {
-  const uint32_t offset =
-      StableWorkerPortHash(state.plane_name + ":" + instance_name) % kWorkerPublishedPortSpan;
-  return kWorkerPublishedPortBase + static_cast<int>(offset);
-}
-
-int WorkerPublishedRendezvousHostPort(
-    const DesiredState& state,
-    const InstanceSpec& instance) {
-  const uint32_t offset = StableWorkerPortHash(
-                              state.plane_name + ":" + instance.name + ":rendezvous") %
-      kWorkerRendezvousPublishedPortSpan;
-  return kWorkerRendezvousPublishedPortBase + static_cast<int>(offset);
-}
-
-int WorkerPublishedRendezvousHostPort(
-    const DesiredState& state,
-    const std::string& instance_name) {
-  const uint32_t offset =
-      StableWorkerPortHash(state.plane_name + ":" + instance_name + ":rendezvous") %
-      kWorkerRendezvousPublishedPortSpan;
-  return kWorkerRendezvousPublishedPortBase + static_cast<int>(offset);
 }
 
 const DiskSpec& FindDiskByName(
@@ -113,9 +85,6 @@ ComposeService BuildComposeService(
   service.image = instance.image;
   service.command = instance.command;
   const bool use_vllm = UsesVllmRuntime(state);
-  if (use_vllm) {
-    service.extra_hosts.push_back("host.docker.internal:host-gateway");
-  }
   if (use_vllm && instance.role == InstanceRole::Worker &&
       service.image == "comet/worker-runtime:dev") {
     service.image = "comet/worker-vllm-runtime:dev";
@@ -153,16 +122,6 @@ ComposeService BuildComposeService(
       const auto* worker_group_member = FindWorkerGroupMember(state, instance.name);
       const auto* leader_worker_group_member = FindLeaderWorkerGroupMember(state);
       const int published_host_port = WorkerPublishedHostPort(state, instance);
-      const int published_rendezvous_host_port =
-          WorkerPublishedRendezvousHostPort(state, instance);
-      const int leader_published_host_port =
-          leader_worker_group_member != nullptr
-              ? WorkerPublishedHostPort(state, leader_worker_group_member->name)
-              : published_host_port;
-      const int leader_published_rendezvous_host_port =
-          leader_worker_group_member != nullptr
-              ? WorkerPublishedRendezvousHostPort(state, leader_worker_group_member->name)
-              : published_rendezvous_host_port;
       const bool worker_group_leader =
           worker_group_member != nullptr && worker_group_member->leader;
       const bool distributed_runtime =
@@ -197,22 +156,26 @@ ComposeService BuildComposeService(
           std::to_string(state.worker_group.rendezvous_port);
       service.environment["COMET_WORKER_ADVERTISED_BASE_URL"] =
           worker_group_leader
-              ? "http://host.docker.internal:" + std::to_string(published_host_port)
+              ? "http://" + instance.name + ":" + std::to_string(state.inference.api_port)
               : "";
-      service.environment["VLLM_HOST_IP"] = "host.docker.internal";
-      service.environment["VLLM_PORT"] = std::to_string(published_rendezvous_host_port);
+      service.environment["VLLM_HOST_IP"] = instance.name;
+      service.environment["VLLM_PORT"] =
+          std::to_string(state.worker_group.rendezvous_port);
       service.environment["COMET_VLLM_DISTRIBUTED_RUNTIME"] =
           distributed_runtime ? "1" : "0";
       service.environment["COMET_VLLM_DISTRIBUTED_EXECUTOR_BACKEND"] = "mp";
-      service.environment["COMET_VLLM_DISTRIBUTED_MASTER_ADDR"] = "host.docker.internal";
+      service.environment["COMET_VLLM_DISTRIBUTED_MASTER_ADDR"] =
+          leader_worker_group_member != nullptr ? leader_worker_group_member->name : instance.name;
       service.environment["COMET_VLLM_DISTRIBUTED_MASTER_PORT"] =
-          std::to_string(leader_published_rendezvous_host_port);
+          std::to_string(state.worker_group.rendezvous_port);
       service.environment["COMET_VLLM_DISTRIBUTED_NNODES"] =
           std::to_string(std::max(1, state.worker_group.expected_workers));
       service.environment["COMET_VLLM_DISTRIBUTED_NODE_RANK"] = "0";
       service.environment["COMET_VLLM_HEADLESS"] = "0";
       service.environment["COMET_WORKER_LEADER_API_BASE_URL"] =
-          "http://host.docker.internal:" + std::to_string(leader_published_host_port);
+          "http://" +
+          (leader_worker_group_member != nullptr ? leader_worker_group_member->name : instance.name) +
+          ":" + std::to_string(state.inference.api_port);
       if (worker_group_member != nullptr) {
         service.environment["COMET_WORKER_GROUP_RANK"] =
             std::to_string(worker_group_member->rank);
@@ -232,12 +195,6 @@ ComposeService BuildComposeService(
       if (worker_group_leader || !distributed_runtime) {
         service.published_ports.push_back(
             PublishedPort{"0.0.0.0", published_host_port, state.inference.api_port});
-      }
-      if (distributed_runtime) {
-        service.published_ports.push_back(PublishedPort{
-            "0.0.0.0",
-            published_rendezvous_host_port,
-            state.worker_group.rendezvous_port});
       }
     }
   }

@@ -791,6 +791,29 @@ bool ComposeProjectHasContainers(const std::string& compose_file_path) {
   return output.find_first_not_of(" \t\r\n") != std::string::npos;
 }
 
+std::string PlaneMeshNetworkName(const std::string& plane_name) {
+  return "comet-" + plane_name + "-mesh";
+}
+
+void EnsureComposeMeshNetworkAvailable(
+    const comet::NodeComposePlan& compose_plan,
+    ComposeMode compose_mode) {
+  if (compose_mode != ComposeMode::Exec) {
+    return;
+  }
+  const std::string network_name = PlaneMeshNetworkName(compose_plan.plane_name);
+  const std::string inspect_command =
+      ResolvedDockerCommand() + " network inspect " + ShellQuote(network_name) + " >/dev/null 2>&1";
+  if (RunCommandOk(inspect_command)) {
+    return;
+  }
+  const std::string create_command =
+      ResolvedDockerCommand() + " network create " + ShellQuote(network_name) + " >/dev/null";
+  if (!RunCommandOk(create_command)) {
+    throw std::runtime_error("failed to create compose mesh network: " + network_name);
+  }
+}
+
 bool IsSharedManagedDiskImagePath(const std::string& image_path) {
   return image_path.find("/disk-images/") != std::string::npos &&
          image_path.find("/shared/") != std::string::npos;
@@ -4362,6 +4385,7 @@ void ApplyNodePlan(
                 desired_node_state.plane_name,
                 plan.node_name));
         EnsureComposeImagesAvailable(compose_plan, compose_mode);
+        EnsureComposeMeshNetworkAvailable(compose_plan, compose_mode);
         RunComposeCommand(operation.target, "up -d", compose_mode);
         PrintOperationApplied(
             operation,

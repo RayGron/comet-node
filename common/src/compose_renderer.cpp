@@ -48,6 +48,8 @@ void RenderHealthcheckTest(
 
 std::string RenderComposeYaml(const NodeComposePlan& plan) {
   std::ostringstream out;
+  const std::string mesh_network_key = "plane-mesh";
+  const std::string mesh_network_name = "comet-" + plan.plane_name + "-mesh";
 
   out << "name: comet-" << plan.plane_name << "-" << plan.node_name << "\n";
   out << "services:\n";
@@ -114,6 +116,11 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
       }
     }
 
+    out << "    networks:\n";
+    out << "      " << mesh_network_key << ":\n";
+    out << "        aliases:\n";
+    out << "          - " << service.name << "\n";
+
     if (service.gpu_device.has_value()) {
       out << "    gpus:\n";
       out << "      - driver: nvidia\n";
@@ -129,10 +136,15 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
 
     out << "    healthcheck:\n";
     RenderHealthcheckTest(out, "      ", service.healthcheck);
-    out << "      interval: 15s\n";
-    out << "      timeout: 5s\n";
-    out << "      retries: 10\n";
+      out << "      interval: 15s\n";
+      out << "      timeout: 5s\n";
+      out << "      retries: 10\n";
   }
+
+  out << "networks:\n";
+  out << "  " << mesh_network_key << ":\n";
+  out << "    external: true\n";
+  out << "    name: " << mesh_network_name << "\n";
 
   return out.str();
 }

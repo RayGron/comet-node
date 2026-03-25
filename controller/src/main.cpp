@@ -2445,8 +2445,11 @@ InteractionSessionResult ExecuteInteractionSession(
           std::chrono::milliseconds(250 * (attempt + 1)));
     }
     if (upstream.status_code != 200) {
+      const std::string upstream_detail =
+          upstream.body.empty() ? std::string{} : (": " + upstream.body);
       throw std::runtime_error(
-          "upstream interaction request failed with status " + std::to_string(upstream.status_code));
+          "upstream interaction request failed with status " +
+          std::to_string(upstream.status_code) + upstream_detail);
     }
     const json upstream_payload = upstream.body.empty() ? json::object() : json::parse(upstream.body);
     const auto segment_finished_at = std::chrono::steady_clock::now();
@@ -2600,6 +2603,15 @@ HttpResponse ProxyInteractionJson(
       }
       std::this_thread::sleep_for(
           std::chrono::milliseconds(250 * (attempt + 1)));
+    }
+    if (upstream.status_code >= 400) {
+      return BuildPlaneInteractionError(
+          upstream.status_code,
+          resolution.status_payload,
+          upstream.body.empty()
+              ? ("upstream interaction request failed with status " +
+                 std::to_string(upstream.status_code))
+              : upstream.body);
     }
     return upstream;
   } catch (const std::exception& error) {

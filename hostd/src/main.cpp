@@ -4160,8 +4160,16 @@ void ApplyNodePlan(
         const auto runtime_state =
             backend == nullptr ? std::nullopt
                                : backend->LoadDiskRuntimeState(disk_name, disk_node_name);
+        const bool is_plane_shared_disk = std::any_of(
+            desired_node_state.disks.begin(),
+            desired_node_state.disks.end(),
+            [&](const comet::DiskSpec& disk) {
+              return disk.name == disk_name &&
+                     disk.node_name == disk_node_name &&
+                     disk.kind == comet::DiskKind::PlaneShared;
+            });
         const bool delegated_shared_remove =
-            disk_name == desired_node_state.plane_shared_disk_name &&
+            is_plane_shared_disk &&
             disk_node_name != desired_node_state.inference.primary_infer_node;
         bool removed = false;
         const bool mounted_now = IsPathMounted(operation.details);

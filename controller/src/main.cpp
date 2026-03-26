@@ -127,6 +127,30 @@ enum class WebUiComposeMode {
   Exec,
 };
 
+std::string NormalizeWebUiControllerUpstreamForCompose(
+    const std::string& controller_upstream,
+    WebUiComposeMode compose_mode) {
+  if (compose_mode != WebUiComposeMode::Exec) {
+    return controller_upstream;
+  }
+
+  const std::vector<std::pair<std::string, std::string>> prefixes = {
+      {"http://127.0.0.1", "http://host.docker.internal"},
+      {"https://127.0.0.1", "https://host.docker.internal"},
+      {"http://localhost", "http://host.docker.internal"},
+      {"https://localhost", "https://host.docker.internal"},
+      {"http://0.0.0.0", "http://host.docker.internal"},
+      {"https://0.0.0.0", "https://host.docker.internal"},
+  };
+
+  for (const auto& [prefix, replacement] : prefixes) {
+    if (controller_upstream.rfind(prefix, 0) == 0) {
+      return replacement + controller_upstream.substr(prefix.size());
+    }
+  }
+  return controller_upstream;
+}
+
 struct HttpRequest {
   std::string method = "GET";
   std::string path = "/";
@@ -14875,15 +14899,18 @@ int EnsureWebUi(
     const std::string& controller_upstream,
     WebUiComposeMode compose_mode) {
   const std::string image = DefaultWebUiImage();
+  const std::string effective_controller_upstream =
+      NormalizeWebUiControllerUpstreamForCompose(controller_upstream, compose_mode);
   const std::string compose_path = WebUiComposePath(web_ui_root);
   WriteTextFile(
       compose_path,
-      RenderWebUiComposeYaml(image, listen_port, controller_upstream));
+      RenderWebUiComposeYaml(image, listen_port, effective_controller_upstream));
 
   json state{
       {"image", image},
       {"listen_port", listen_port},
-      {"controller_upstream", controller_upstream},
+      {"controller_upstream", effective_controller_upstream},
+      {"requested_controller_upstream", controller_upstream},
       {"compose_path", compose_path},
       {"web_ui_root", web_ui_root},
       {"materialized", true},
@@ -14907,7 +14934,8 @@ int EnsureWebUi(
       json{
           {"web_ui_root", web_ui_root},
           {"listen_port", listen_port},
-          {"controller_upstream", controller_upstream},
+          {"controller_upstream", effective_controller_upstream},
+          {"requested_controller_upstream", controller_upstream},
           {"compose_mode", compose_mode == WebUiComposeMode::Exec ? "exec" : "skip"},
       });
 
@@ -14916,7 +14944,10 @@ int EnsureWebUi(
   std::cout << "compose_path=" << compose_path << "\n";
   std::cout << "image=" << image << "\n";
   std::cout << "listen_port=" << listen_port << "\n";
-  std::cout << "controller_upstream=" << controller_upstream << "\n";
+  std::cout << "controller_upstream=" << effective_controller_upstream << "\n";
+  if (effective_controller_upstream != controller_upstream) {
+    std::cout << "requested_controller_upstream=" << controller_upstream << "\n";
+  }
   std::cout << "compose_mode="
             << (compose_mode == WebUiComposeMode::Exec ? "exec" : "skip") << "\n";
   return 0;

@@ -662,13 +662,57 @@ Then:
 - `config/comet-node-config.json` is the machine-level storage config for managed disks and
   heavy cached model files
 
+External agent/client integrations should target the controller-owned plane interaction contract
+documented in [docs/external-inference-contract.md](./docs/external-inference-contract.md).
+The raw plane `/v1/*` gateway is a runtime implementation detail, not the supported external API.
+
+Single-node planes should now prefer plane-level placement aliases instead of hardcoding a host
+name into every config:
+
+- default local host name is `local-hostd` when `--node` is not provided
+- single-node example planes should use `placement_target: "local"`
+- explicit pinning is still available through `placement_target: "node:<name>"`
+- existing `node_name` fields inside rendered instances, disks, and runtime GPU nodes are
+  normalized from that placement target
+
+Large local models can now be referenced directly instead of copied into plane-owned storage.
+For example, a plane can point at a preloaded shared-storage model directory with:
+
+```json
+"bootstrap_model": {
+  "model_id": "Qwen/Qwen3.5-122B-A10B-FP8",
+  "materialization_mode": "reference",
+  "local_path": "/mnt/shared-storage/models/vllm/Qwen/Qwen3.5-122B-A10B-FP8",
+  "served_model_name": "qwen3.5-122b-a10b"
+}
+```
+
+`materialization_mode: "reference"` tells `hostd` to verify the path and publish it into
+`active-model.json` without copying the model into the plane shared disk. This is the preferred
+path for very large local directory models such as vLLM/Hugging Face snapshots. The existing
+default remains `materialization_mode: "copy"` for GGUF files and smaller artifacts.
+
+The operator UI now also has a model-library surface:
+
+- list discovered local models through `GET /api/v1/model-library`
+- enqueue downloads through `POST /api/v1/model-library/download`
+- delete an unreferenced model through `DELETE /api/v1/model-library`
+- enter one `source_url` or multiple `source_urls[]` values for multi-file model downloads
+- protect models that are referenced by an active plane from accidental deletion
+
+The plane detail UI now splits runtime data into `Status` and `Interaction` tabs for LLM planes.
+The left sidebar also includes a `Models` panel for browsing discovered local models and active
+download jobs.
+
 For CPU-only validation on a host where the worker runtime should not offload layers to GPU yet:
 
 ```bash
 ./scripts/run-plane.sh qwen35-9b-min --cpu
 ```
 
-For single-node local demo work, install the local host with a node name that matches the bundle, for example `--node node-a`.
+For single-node local demo work, you no longer need to force a bundle-specific node name like
+`node-a`. The default local install path uses `local-hostd`, and example planes should use
+`placement_target: "local"` unless they intentionally need `placement_target: "node:<name>"`.
 
 Primary remote hostd flow:
 

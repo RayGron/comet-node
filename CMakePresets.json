@@ -13,6 +13,7 @@
       "binaryDir": "${sourceDir}/build/linux/x64",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux",
         "COMET_SKIP_VCPKG_TOOLCHAIN": "ON",
         "VCPKG_TARGET_TRIPLET": "x64-linux",
@@ -26,6 +27,7 @@
       "binaryDir": "${sourceDir}/build/linux/arm64",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/arm64-linux",
         "COMET_SKIP_VCPKG_TOOLCHAIN": "ON",
         "VCPKG_TARGET_TRIPLET": "arm64-linux",

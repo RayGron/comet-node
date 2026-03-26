@@ -14,7 +14,8 @@ bool UsesVllmRuntime(const DesiredState& state) {
 
 std::optional<ComposeVolume> BuildDirectModelCacheVolume(const DesiredState& state) {
   if (!UsesVllmRuntime(state) || !state.bootstrap_model.has_value() ||
-      !state.bootstrap_model->local_path.has_value()) {
+      !state.bootstrap_model->local_path.has_value() ||
+      state.bootstrap_model->materialization_mode != "reference") {
     return std::nullopt;
   }
   const std::string& local_path = *state.bootstrap_model->local_path;

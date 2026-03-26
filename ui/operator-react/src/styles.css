@@ -248,6 +248,22 @@ body {
   gap: 12px;
 }
 
+.panel-subtitle {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.model-library-list,
+.model-library-jobs {
+  max-height: 280px;
+  overflow: auto;
+}
+
+.model-source-textarea {
+  min-height: 132px;
+}
+
 .onboarding-card {
   display: grid;
   gap: 14px;

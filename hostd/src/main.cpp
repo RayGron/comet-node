@@ -2031,6 +2031,32 @@ void BootstrapPlaneModelIfNeeded(
 
   const auto& bootstrap_model = *state.bootstrap_model;
   const bool use_vllm_runtime = state.inference.runtime_engine == "vllm";
+  if (bootstrap_model.materialization_mode == "reference" &&
+      bootstrap_model.local_path.has_value() &&
+      !bootstrap_model.local_path->empty()) {
+    const std::filesystem::path reference_path(*bootstrap_model.local_path);
+    std::error_code error;
+    if (!std::filesystem::exists(reference_path, error) || error) {
+      throw std::runtime_error(
+          "bootstrap model reference path does not exist: " + *bootstrap_model.local_path);
+    }
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        BuildAssignmentProgressPayload(
+            "using-model-reference",
+            "Using model reference",
+            "Using the configured model path directly without copying it into the plane shared disk.",
+            72,
+            state.plane_name,
+            node_name));
+    WriteBootstrapActiveModel(
+        state,
+        node_name,
+        *bootstrap_model.local_path,
+        *bootstrap_model.local_path);
+    return;
+  }
   if (use_vllm_runtime && bootstrap_model.local_path.has_value() &&
       !bootstrap_model.local_path->empty() &&
       LooksLikeReadySharedModelDirectory(*bootstrap_model.local_path)) {

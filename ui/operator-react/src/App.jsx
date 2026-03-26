@@ -38,6 +38,10 @@ function planePath(planeName, suffix = "") {
     : `/api/v1/planes/${encoded}`;
 }
 
+function modelLibraryPath(suffix = "") {
+  return suffix ? `/api/v1/model-library/${suffix}` : "/api/v1/model-library";
+}
+
 function interactionPath(planeName, suffix) {
   return planePath(planeName, `interaction/${suffix}`);
 }
@@ -307,12 +311,41 @@ function bootstrapModelTargetPath(desiredState) {
   if (!bootstrapModel) {
     return "n/a";
   }
+  if (bootstrapModel.materialization_mode === "reference" && bootstrapModel.local_path) {
+    return bootstrapModel.local_path;
+  }
+  if (Array.isArray(bootstrapModel.source_urls) && bootstrapModel.source_urls.length > 1) {
+    return `${desiredState?.inference?.model_cache_dir || desiredState?.inference?.gguf_cache_dir || "/comet/shared/models/cache"}/multipart`;
+  }
   const targetFilename =
     bootstrapModel.target_filename ||
     bootstrapModel.local_path?.split("/").pop() ||
     bootstrapModel.source_url?.split("/").pop() ||
     "model.gguf";
   return `${desiredState?.inference?.gguf_cache_dir || "/comet/shared/models/gguf"}/${targetFilename}`;
+}
+
+function bootstrapModelSourceLabel(bootstrapModel) {
+  if (!bootstrapModel) {
+    return "not configured";
+  }
+  if (bootstrapModel.materialization_mode === "reference" && bootstrapModel.local_path) {
+    return `reference: ${bootstrapModel.local_path}`;
+  }
+  if (Array.isArray(bootstrapModel.source_urls) && bootstrapModel.source_urls.length > 0) {
+    return `${bootstrapModel.source_urls.length} remote part${bootstrapModel.source_urls.length === 1 ? "" : "s"}`;
+  }
+  return bootstrapModel.local_path || bootstrapModel.source_url || "not configured";
+}
+
+function modelLibraryItemSummary(item) {
+  if (!item) {
+    return "unknown";
+  }
+  const kind = item.kind || "artifact";
+  const size = compactBytes(item.size_bytes);
+  const parts = item.part_count > 1 ? ` / ${item.part_count} parts` : "";
+  return `${kind} / ${size}${parts}`;
 }
 
 function interactionReasonMessage(status) {
@@ -488,6 +521,7 @@ function buildNewPlaneTemplate() {
       bootstrap_model: {
         model_id: "model-id",
         served_model_name: "model-id",
+        materialization_mode: "copy",
         local_path: "/abs/path/to/model.gguf",
         source_url: null,
         target_filename: "model.gguf",
@@ -964,6 +998,7 @@ function App() {
   const [rebalancePlan, setRebalancePlan] = useState(null);
   const [events, setEvents] = useState([]);
   const [interactionStatus, setInteractionStatus] = useState(null);
+  const [modelLibrary, setModelLibrary] = useState({ items: [], roots: [], jobs: [] });
   const [selectedTab, setSelectedTab] = useState("status");
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
@@ -977,6 +1012,13 @@ function App() {
   const [bundlePath, setBundlePath] = useState("");
   const [bundleBusy, setBundleBusy] = useState("");
   const [bundleOutput, setBundleOutput] = useState("");
+  const [modelLibraryBusy, setModelLibraryBusy] = useState("");
+  const [modelDownloadForm, setModelDownloadForm] = useState({
+    modelId: "",
+    targetRoot: "",
+    targetSubdir: "",
+    sourceUrls: "",
+  });
   const [apiError, setApiError] = useState("");
   const [apiHealthy, setApiHealthy] = useState(false);
   const [streamHealthy, setStreamHealthy] = useState(false);
@@ -1016,6 +1058,15 @@ function App() {
       });
     }
     return nextPlane;
+  }
+
+  async function refreshModelLibrary() {
+    const payload = await fetchJson(modelLibraryPath());
+    setModelLibrary({
+      items: Array.isArray(payload.items) ? payload.items : [],
+      roots: Array.isArray(payload.roots) ? payload.roots : [],
+      jobs: Array.isArray(payload.jobs) ? payload.jobs : [],
+    });
   }
 
   async function refreshAll(planeOverride) {
@@ -1087,6 +1138,65 @@ function App() {
       setApiError(error.message || String(error));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function deleteModelLibraryEntry(entry) {
+    if (!entry?.path) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete model artifact ${entry.name || entry.path}? This removes the underlying data from disk.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setModelLibraryBusy(`delete:${entry.path}`);
+    try {
+      await fetchJson(modelLibraryPath(), {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path: entry.path }),
+      });
+      await refreshModelLibrary();
+      await refreshAll(selectedPlane);
+    } finally {
+      setModelLibraryBusy("");
+    }
+  }
+
+  async function enqueueModelLibraryDownload() {
+    const sourceUrls = modelDownloadForm.sourceUrls
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (!modelDownloadForm.targetRoot.trim() || sourceUrls.length === 0) {
+      return;
+    }
+    setModelLibraryBusy("download");
+    try {
+      await fetchJson(modelLibraryPath("download"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model_id: modelDownloadForm.modelId.trim() || undefined,
+          target_root: modelDownloadForm.targetRoot.trim(),
+          target_subdir: modelDownloadForm.targetSubdir.trim() || undefined,
+          source_urls: sourceUrls,
+        }),
+      });
+      setModelDownloadForm((current) => ({
+        ...current,
+        sourceUrls: "",
+      }));
+      await refreshModelLibrary();
+      await refreshAll(selectedPlane);
+    } finally {
+      setModelLibraryBusy("");
     }
   }
 
@@ -1470,6 +1580,7 @@ function App() {
 
   useEffect(() => {
     refreshAll(initialPlane);
+    refreshModelLibrary().catch(() => {});
     return () => {
       if (refreshTimerRef.current) {
         clearTimeout(refreshTimerRef.current);
@@ -1657,6 +1768,16 @@ function App() {
   }, [desiredState, interactionStatus]);
 
   useEffect(() => {
+    if (modelDownloadForm.targetRoot || !Array.isArray(modelLibrary.roots) || modelLibrary.roots.length === 0) {
+      return;
+    }
+    setModelDownloadForm((current) => ({
+      ...current,
+      targetRoot: modelLibrary.roots[0],
+    }));
+  }, [modelDownloadForm.targetRoot, modelLibrary.roots]);
+
+  useEffect(() => {
     if (!llmPlane && selectedTab === "interaction") {
       setSelectedTab("status");
     }
@@ -1831,6 +1952,137 @@ function App() {
                 );
               })
             )}
+          </div>
+          <div className="bundle-workflow model-library-panel">
+            <div className="section-label">Models</div>
+            <div className="panel-subtitle">Discovered local model artifacts and download queue</div>
+            <div className="list-column model-library-list">
+              {(modelLibrary.items || []).length === 0 ? (
+                <EmptyState title="No discovered models" detail="Add a model URL below or point a plane at a local_path to seed library roots." />
+              ) : (
+                modelLibrary.items.map((item) => (
+                  <article className="list-card" key={item.path}>
+                    <div className="card-row">
+                      <strong>{item.name}</strong>
+                      <span className="tag">{modelLibraryItemSummary(item)}</span>
+                    </div>
+                    <div className="list-detail">
+                      <div>{item.path}</div>
+                      <div>root {item.root || "n/a"}</div>
+                      {Array.isArray(item.referenced_by) && item.referenced_by.length > 0 ? (
+                        <div>used by {item.referenced_by.join(", ")}</div>
+                      ) : (
+                        <div>not referenced by any plane</div>
+                      )}
+                    </div>
+                    <div className="toolbar">
+                      <button
+                        className="ghost-button compact-button danger-button"
+                        type="button"
+                        disabled={modelLibraryBusy !== "" || item.deletable === false}
+                        onClick={() => deleteModelLibraryEntry(item)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+            {(modelLibrary.jobs || []).length > 0 ? (
+              <div className="list-column model-library-jobs">
+                {modelLibrary.jobs.map((job) => (
+                  <article className="list-card" key={job.id}>
+                    <div className="card-row">
+                      <strong>{job.model_id || job.id}</strong>
+                      <span className="tag">{job.status}</span>
+                    </div>
+                    <div className="list-detail">
+                      <div>{job.target_root}{job.target_subdir ? `/${job.target_subdir}` : ""}</div>
+                      <div>{compactBytes(job.bytes_done)} / {compactBytes(job.bytes_total)}</div>
+                      {job.current_item ? <div>{job.current_item}</div> : null}
+                      {job.error_message ? <div>{job.error_message}</div> : null}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+            <label className="field-label" htmlFor="model-target-root">
+              Target root
+            </label>
+            <input
+              id="model-target-root"
+              className="text-input"
+              type="text"
+              value={modelDownloadForm.targetRoot}
+              onChange={(event) =>
+                setModelDownloadForm((current) => ({ ...current, targetRoot: event.target.value }))
+              }
+              placeholder="/abs/path/to/model/library"
+              spellCheck="false"
+            />
+            <label className="field-label" htmlFor="model-target-subdir">
+              Target subdir
+            </label>
+            <input
+              id="model-target-subdir"
+              className="text-input"
+              type="text"
+              value={modelDownloadForm.targetSubdir}
+              onChange={(event) =>
+                setModelDownloadForm((current) => ({ ...current, targetSubdir: event.target.value }))
+              }
+              placeholder="Qwen/Qwen3.5-122B-A10B-FP8"
+              spellCheck="false"
+            />
+            <label className="field-label" htmlFor="model-id-input">
+              Model id
+            </label>
+            <input
+              id="model-id-input"
+              className="text-input"
+              type="text"
+              value={modelDownloadForm.modelId}
+              onChange={(event) =>
+                setModelDownloadForm((current) => ({ ...current, modelId: event.target.value }))
+              }
+              placeholder="Qwen/Qwen3.5-122B-A10B-FP8"
+              spellCheck="false"
+            />
+            <label className="field-label" htmlFor="model-source-urls">
+              Source URL(s)
+            </label>
+            <textarea
+              id="model-source-urls"
+              className="editor-textarea model-source-textarea"
+              value={modelDownloadForm.sourceUrls}
+              onChange={(event) =>
+                setModelDownloadForm((current) => ({ ...current, sourceUrls: event.target.value }))
+              }
+              placeholder="One URL per line. Multipart models are supported."
+            />
+            <div className="toolbar">
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={
+                  modelLibraryBusy !== "" ||
+                  !modelDownloadForm.targetRoot.trim() ||
+                  !modelDownloadForm.sourceUrls.trim()
+                }
+                onClick={enqueueModelLibraryDownload}
+              >
+                Download model
+              </button>
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={modelLibraryBusy !== ""}
+                onClick={() => refreshModelLibrary()}
+              >
+                Refresh models
+              </button>
+            </div>
           </div>
           {planes.length > 0 ? (
             <div className="bundle-workflow">
@@ -2012,7 +2264,7 @@ function App() {
                       <div className="metric-row"><span>Pending restart</span><strong>{planeRecord.staged_update ? "yes" : "no"}</strong></div>
                       <div className="metric-row"><span>Shared disk</span><strong>{desiredState?.plane_shared_disk_name || "n/a"}</strong></div>
                       <div className="metric-row"><span>Control root</span><strong>{desiredState?.control_root || "n/a"}</strong></div>
-                      <div className="metric-row"><span>Bootstrap source</span><strong>{desiredState?.bootstrap_model?.local_path || desiredState?.bootstrap_model?.source_url || "not configured"}</strong></div>
+                      <div className="metric-row"><span>Bootstrap source</span><strong>{bootstrapModelSourceLabel(desiredState?.bootstrap_model)}</strong></div>
                       <div className="metric-row"><span>Bootstrap target</span><strong>{bootstrapModelTargetPath(desiredState)}</strong></div>
                     </div>
                   </div>

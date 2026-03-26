@@ -21,10 +21,12 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <functional>
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -234,6 +236,10 @@ std::optional<long long> TimestampAgeSeconds(const std::string& timestamp_text);
 std::string Trim(const std::string& value);
 
 std::string NormalizeLanguageCode(const std::string& value);
+
+std::optional<std::string> FindQueryString(
+    const HttpRequest& request,
+    const std::string& key);
 
 HttpResponse BuildJsonResponse(
     int status_code,
@@ -3756,6 +3762,7 @@ json BuildBootstrapModelPayloadItem(
   }
   json item{
       {"model_id", bootstrap_model->model_id},
+      {"materialization_mode", bootstrap_model->materialization_mode},
       {"served_model_name",
        bootstrap_model->served_model_name.has_value() ? json(*bootstrap_model->served_model_name)
                                                       : json(nullptr)},
@@ -4584,6 +4591,718 @@ json ParseJsonRequestBody(const HttpRequest& request) {
     return json::object();
   }
   return json::parse(request.body);
+}
+
+struct ModelLibraryEntry {
+  std::string path;
+  std::string name;
+  std::string kind;
+  std::string format;
+  std::string root;
+  std::vector<std::string> paths;
+  std::uintmax_t size_bytes = 0;
+  int part_count = 1;
+  std::vector<std::string> referenced_by;
+  bool deletable = true;
+};
+
+struct ModelLibraryDownloadJob {
+  std::string id;
+  std::string status = "queued";
+  std::string model_id;
+  std::string target_root;
+  std::string target_subdir;
+  std::vector<std::string> source_urls;
+  std::vector<std::string> target_paths;
+  std::string current_item;
+  std::optional<std::uintmax_t> bytes_total;
+  std::uintmax_t bytes_done = 0;
+  int part_count = 0;
+  std::string error_message;
+  std::string created_at;
+  std::string updated_at;
+};
+
+std::mutex g_model_library_jobs_mutex;
+std::map<std::string, ModelLibraryDownloadJob> g_model_library_jobs;
+std::atomic<std::uint64_t> g_model_library_job_counter{0};
+
+bool EndsWithIgnoreCase(const std::string& value, const std::string& suffix) {
+  if (value.size() < suffix.size()) {
+    return false;
+  }
+  const std::size_t offset = value.size() - suffix.size();
+  for (std::size_t index = 0; index < suffix.size(); ++index) {
+    if (std::tolower(static_cast<unsigned char>(value[offset + index])) !=
+        std::tolower(static_cast<unsigned char>(suffix[index]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool IsAllDigits(const std::string& value) {
+  return !value.empty() &&
+         std::all_of(
+             value.begin(),
+             value.end(),
+             [](unsigned char ch) { return std::isdigit(ch) != 0; });
+}
+
+std::string NormalizePathString(const std::filesystem::path& path) {
+  return path.lexically_normal().string();
+}
+
+bool IsUsableAbsoluteHostPath(const std::string& value) {
+  return !value.empty() && value.front() == '/' && value.rfind("/comet/", 0) != 0;
+}
+
+std::string FilenameFromUrlForModelLibrary(const std::string& source_url) {
+  std::string trimmed = source_url;
+  const auto query_pos = trimmed.find('?');
+  if (query_pos != std::string::npos) {
+    trimmed = trimmed.substr(0, query_pos);
+  }
+  const auto fragment_pos = trimmed.find('#');
+  if (fragment_pos != std::string::npos) {
+    trimmed = trimmed.substr(0, fragment_pos);
+  }
+  const auto slash_pos = trimmed.find_last_of('/');
+  const std::string filename =
+      slash_pos == std::string::npos ? trimmed : trimmed.substr(slash_pos + 1);
+  if (filename.empty()) {
+    throw std::runtime_error("failed to infer filename from URL: " + source_url);
+  }
+  return filename;
+}
+
+std::optional<std::uintmax_t> ProbeContentLengthForModelLibrary(const std::string& source_url) {
+  const std::string temp_headers =
+      (std::filesystem::temp_directory_path() /
+       ("comet-model-head-" + std::to_string(::getpid()) + "-" +
+        std::to_string(g_model_library_job_counter.fetch_add(1)) + ".txt"))
+          .string();
+  const std::string command = "/usr/bin/curl -fsSLI " + std::string("'") + source_url + "' > '" +
+                              temp_headers + "' 2>/dev/null || true";
+  std::system(command.c_str());
+  std::ifstream input(temp_headers);
+  std::filesystem::remove(temp_headers);
+  std::string line;
+  while (std::getline(input, line)) {
+    const std::string trimmed = Trim(line);
+    const auto colon = trimmed.find(':');
+    if (colon == std::string::npos) {
+      continue;
+    }
+    const std::string key = trimmed.substr(0, colon);
+    if (Lowercase(key) != "content-length") {
+      continue;
+    }
+    try {
+      return static_cast<std::uintmax_t>(std::stoull(Trim(trimmed.substr(colon + 1))));
+    } catch (...) {
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::uintmax_t> FileSizeIfExistsForModelLibrary(const std::filesystem::path& path) {
+  std::error_code error;
+  if (!std::filesystem::exists(path, error) || error) {
+    return std::nullopt;
+  }
+  if (std::filesystem::is_regular_file(path, error)) {
+    const auto size = std::filesystem::file_size(path, error);
+    return error ? std::nullopt : std::optional<std::uintmax_t>(size);
+  }
+  if (!std::filesystem::is_directory(path, error) || error) {
+    return std::nullopt;
+  }
+  std::uintmax_t total = 0;
+  for (std::filesystem::recursive_directory_iterator iterator(
+           path,
+           std::filesystem::directory_options::skip_permission_denied,
+           error);
+       !error && iterator != std::filesystem::recursive_directory_iterator();
+       iterator.increment(error)) {
+    if (!iterator->is_regular_file(error) || error) {
+      error.clear();
+      continue;
+    }
+    total += iterator->file_size(error);
+    if (error) {
+      return std::nullopt;
+    }
+  }
+  return error ? std::nullopt : std::optional<std::uintmax_t>(total);
+}
+
+bool LooksLikeRecognizedModelDirectoryForLibrary(const std::filesystem::path& path) {
+  std::error_code error;
+  if (!std::filesystem::exists(path, error) || error ||
+      !std::filesystem::is_directory(path, error) || error) {
+    return false;
+  }
+  return std::filesystem::exists(path / "config.json", error) ||
+         std::filesystem::exists(path / "params.json", error);
+}
+
+bool ParseMultipartGgufFilename(
+    const std::string& filename,
+    std::string* prefix,
+    int* part_index,
+    int* part_total) {
+  if (!EndsWithIgnoreCase(filename, ".gguf")) {
+    return false;
+  }
+  const std::string stem = filename.substr(0, filename.size() - 5);
+  const auto of_pos = stem.rfind("-of-");
+  if (of_pos == std::string::npos) {
+    return false;
+  }
+  const auto part_sep = stem.rfind('-', of_pos - 1);
+  if (part_sep == std::string::npos) {
+    return false;
+  }
+  const std::string part_index_text = stem.substr(part_sep + 1, of_pos - (part_sep + 1));
+  const std::string part_total_text = stem.substr(of_pos + 4);
+  if (!IsAllDigits(part_index_text) || !IsAllDigits(part_total_text)) {
+    return false;
+  }
+  if (prefix != nullptr) {
+    *prefix = stem.substr(0, part_sep);
+  }
+  if (part_index != nullptr) {
+    *part_index = std::stoi(part_index_text);
+  }
+  if (part_total != nullptr) {
+    *part_total = std::stoi(part_total_text);
+  }
+  return true;
+}
+
+std::vector<std::string> DiscoverModelLibraryRoots(
+    const std::vector<comet::DesiredState>& desired_states) {
+  std::set<std::string> roots;
+  if (const char* env_value = std::getenv("COMET_NODE_MODEL_LIBRARY_ROOTS");
+      env_value != nullptr && *env_value != '\0') {
+    std::string current;
+    for (char ch : std::string(env_value)) {
+      if (ch == ':' || ch == ';') {
+        const std::string trimmed = Trim(current);
+        if (IsUsableAbsoluteHostPath(trimmed)) {
+          roots.insert(NormalizePathString(trimmed));
+        }
+        current.clear();
+      } else {
+        current.push_back(ch);
+      }
+    }
+    const std::string trimmed = Trim(current);
+    if (IsUsableAbsoluteHostPath(trimmed)) {
+      roots.insert(NormalizePathString(trimmed));
+    }
+  }
+  for (const auto& desired_state : desired_states) {
+    if (!desired_state.bootstrap_model.has_value() ||
+        !desired_state.bootstrap_model->local_path.has_value()) {
+      continue;
+    }
+    const std::string& local_path = *desired_state.bootstrap_model->local_path;
+    if (!IsUsableAbsoluteHostPath(local_path)) {
+      continue;
+    }
+    std::filesystem::path path(local_path);
+    std::error_code error;
+    if (std::filesystem::exists(path, error) && !error && std::filesystem::is_regular_file(path, error)) {
+      roots.insert(NormalizePathString(path.parent_path()));
+      continue;
+    }
+    if (!error && std::filesystem::exists(path) && std::filesystem::is_directory(path, error) && !error) {
+      roots.insert(NormalizePathString(path.parent_path()));
+      continue;
+    }
+    roots.insert(NormalizePathString(path.parent_path()));
+  }
+  return std::vector<std::string>(roots.begin(), roots.end());
+}
+
+std::map<std::string, std::vector<std::string>> BuildModelReferenceMap(
+    const std::vector<comet::DesiredState>& desired_states) {
+  std::map<std::string, std::vector<std::string>> references;
+  for (const auto& desired_state : desired_states) {
+    if (!desired_state.bootstrap_model.has_value() ||
+        !desired_state.bootstrap_model->local_path.has_value()) {
+      continue;
+    }
+    const std::string& local_path = *desired_state.bootstrap_model->local_path;
+    if (!IsUsableAbsoluteHostPath(local_path)) {
+      continue;
+    }
+    references[NormalizePathString(local_path)].push_back(desired_state.plane_name);
+  }
+  return references;
+}
+
+json BuildModelLibraryJobPayload(const ModelLibraryDownloadJob& job) {
+  return json{
+      {"id", job.id},
+      {"status", job.status},
+      {"model_id", job.model_id},
+      {"target_root", job.target_root},
+      {"target_subdir", job.target_subdir},
+      {"source_urls", job.source_urls},
+      {"target_paths", job.target_paths},
+      {"current_item", job.current_item},
+      {"bytes_total", job.bytes_total.has_value() ? json(*job.bytes_total) : json(nullptr)},
+      {"bytes_done", job.bytes_done},
+      {"part_count", job.part_count},
+      {"error_message", job.error_message.empty() ? json(nullptr) : json(job.error_message)},
+      {"created_at", job.created_at},
+      {"updated_at", job.updated_at},
+  };
+}
+
+void UpdateModelLibraryJob(
+    const std::string& job_id,
+    const std::function<void(ModelLibraryDownloadJob&)>& update) {
+  std::lock_guard<std::mutex> lock(g_model_library_jobs_mutex);
+  const auto it = g_model_library_jobs.find(job_id);
+  if (it == g_model_library_jobs.end()) {
+    return;
+  }
+  update(it->second);
+  it->second.updated_at = UtcNowSqlTimestamp();
+}
+
+std::vector<ModelLibraryEntry> ScanModelLibraryEntries(const std::string& db_path) {
+  comet::ControllerStore store(db_path);
+  const auto desired_states = store.LoadDesiredStates();
+  const auto roots = DiscoverModelLibraryRoots(desired_states);
+  const auto reference_map = BuildModelReferenceMap(desired_states);
+
+  struct MultipartGroup {
+    std::string root;
+    std::string name;
+    std::vector<std::string> paths;
+    std::uintmax_t size_bytes = 0;
+    int part_total = 0;
+  };
+
+  std::map<std::string, ModelLibraryEntry> entries_by_path;
+  std::map<std::string, MultipartGroup> multipart_groups;
+
+  for (const auto& root_text : roots) {
+    const std::filesystem::path root(root_text);
+    std::error_code error;
+    if (!std::filesystem::exists(root, error) || error ||
+        !std::filesystem::is_directory(root, error) || error) {
+      continue;
+    }
+    for (std::filesystem::recursive_directory_iterator iterator(
+             root,
+             std::filesystem::directory_options::skip_permission_denied,
+             error);
+         !error && iterator != std::filesystem::recursive_directory_iterator();
+         iterator.increment(error)) {
+      if (error) {
+        break;
+      }
+      const auto depth = iterator.depth();
+      if (depth > 4) {
+        iterator.disable_recursion_pending();
+        continue;
+      }
+      const std::filesystem::path current_path = iterator->path();
+      const std::string current_name = current_path.filename().string();
+      if (!current_name.empty() && current_name.front() == '.') {
+        if (iterator->is_directory(error)) {
+          iterator.disable_recursion_pending();
+        }
+        error.clear();
+        continue;
+      }
+      if (iterator->is_directory(error)) {
+        error.clear();
+        if (!LooksLikeRecognizedModelDirectoryForLibrary(current_path)) {
+          continue;
+        }
+        iterator.disable_recursion_pending();
+        ModelLibraryEntry entry;
+        entry.path = NormalizePathString(current_path);
+        entry.name = current_path.filename().string();
+        entry.kind = "directory";
+        entry.format = "model-directory";
+        entry.root = root_text;
+        entry.paths = {entry.path};
+        entry.size_bytes = FileSizeIfExistsForModelLibrary(current_path).value_or(0);
+        const auto reference_it = reference_map.find(entry.path);
+        if (reference_it != reference_map.end()) {
+          entry.referenced_by = reference_it->second;
+          entry.deletable = false;
+        }
+        entries_by_path[entry.path] = std::move(entry);
+        continue;
+      }
+      if (!iterator->is_regular_file(error)) {
+        error.clear();
+        continue;
+      }
+      error.clear();
+      if (!EndsWithIgnoreCase(current_name, ".gguf")) {
+        continue;
+      }
+      std::string multipart_prefix;
+      int part_index = 0;
+      int part_total = 0;
+      if (ParseMultipartGgufFilename(current_name, &multipart_prefix, &part_index, &part_total)) {
+        const std::string group_key =
+            NormalizePathString(current_path.parent_path() / multipart_prefix);
+        auto& group = multipart_groups[group_key];
+        group.root = root_text;
+        group.name = multipart_prefix;
+        group.part_total = std::max(group.part_total, part_total);
+        group.paths.push_back(NormalizePathString(current_path));
+        group.size_bytes += iterator->file_size(error);
+        continue;
+      }
+      ModelLibraryEntry entry;
+      entry.path = NormalizePathString(current_path);
+      entry.name = current_name;
+      entry.kind = "file";
+      entry.format = "gguf";
+      entry.root = root_text;
+      entry.paths = {entry.path};
+      entry.size_bytes = iterator->file_size(error);
+      const auto reference_it = reference_map.find(entry.path);
+      if (reference_it != reference_map.end()) {
+        entry.referenced_by = reference_it->second;
+        entry.deletable = false;
+      }
+      entries_by_path[entry.path] = std::move(entry);
+    }
+  }
+
+  for (auto& [group_key, group] : multipart_groups) {
+    std::sort(group.paths.begin(), group.paths.end());
+    group.paths.erase(std::unique(group.paths.begin(), group.paths.end()), group.paths.end());
+    if (group.paths.empty()) {
+      continue;
+    }
+    ModelLibraryEntry entry;
+    entry.path = group.paths.front();
+    entry.name = group.name;
+    entry.kind = "multipart-gguf";
+    entry.format = "gguf";
+    entry.root = group.root;
+    entry.paths = group.paths;
+    entry.size_bytes = group.size_bytes;
+    entry.part_count = static_cast<int>(group.paths.size());
+    bool referenced = false;
+    for (const auto& path : group.paths) {
+      const auto reference_it = reference_map.find(path);
+      if (reference_it == reference_map.end()) {
+        continue;
+      }
+      referenced = true;
+      entry.referenced_by.insert(
+          entry.referenced_by.end(),
+          reference_it->second.begin(),
+          reference_it->second.end());
+    }
+    if (const auto reference_it = reference_map.find(group_key); reference_it != reference_map.end()) {
+      referenced = true;
+      entry.referenced_by.insert(
+          entry.referenced_by.end(),
+          reference_it->second.begin(),
+          reference_it->second.end());
+    }
+    if (referenced) {
+      std::sort(entry.referenced_by.begin(), entry.referenced_by.end());
+      entry.referenced_by.erase(
+          std::unique(entry.referenced_by.begin(), entry.referenced_by.end()),
+          entry.referenced_by.end());
+      entry.deletable = false;
+    }
+    entries_by_path[group_key] = std::move(entry);
+  }
+
+  std::vector<ModelLibraryEntry> entries;
+  entries.reserve(entries_by_path.size());
+  for (auto& [_, entry] : entries_by_path) {
+    entries.push_back(std::move(entry));
+  }
+  std::sort(
+      entries.begin(),
+      entries.end(),
+      [](const ModelLibraryEntry& left, const ModelLibraryEntry& right) {
+        if (left.root != right.root) {
+          return left.root < right.root;
+        }
+        return left.name < right.name;
+      });
+  return entries;
+}
+
+json BuildModelLibraryPayload(const std::string& db_path) {
+  comet::ControllerStore store(db_path);
+  const auto desired_states = store.LoadDesiredStates();
+  const auto roots = DiscoverModelLibraryRoots(desired_states);
+  const auto entries = ScanModelLibraryEntries(db_path);
+  json items = json::array();
+  for (const auto& entry : entries) {
+    items.push_back(json{
+        {"path", entry.path},
+        {"name", entry.name},
+        {"kind", entry.kind},
+        {"format", entry.format},
+        {"root", entry.root},
+        {"paths", entry.paths},
+        {"size_bytes", entry.size_bytes},
+        {"part_count", entry.part_count},
+        {"referenced_by", entry.referenced_by},
+        {"deletable", entry.deletable},
+    });
+  }
+  json jobs = json::array();
+  {
+    std::lock_guard<std::mutex> lock(g_model_library_jobs_mutex);
+    for (const auto& [_, job] : g_model_library_jobs) {
+      jobs.push_back(BuildModelLibraryJobPayload(job));
+    }
+  }
+  return json{
+      {"items", items},
+      {"roots", roots},
+      {"jobs", jobs},
+  };
+}
+
+std::string GenerateModelLibraryJobId() {
+  return "mdl-" + std::to_string(static_cast<unsigned long long>(std::time(nullptr))) + "-" +
+         std::to_string(static_cast<unsigned long long>(g_model_library_job_counter.fetch_add(1)));
+}
+
+void DownloadModelLibraryFile(
+    const std::string& job_id,
+    const std::string& source_url,
+    const std::filesystem::path& target_path,
+    std::uintmax_t aggregate_prefix,
+    const std::optional<std::uintmax_t>& aggregate_total) {
+  std::filesystem::create_directories(target_path.parent_path());
+  const std::filesystem::path temp_path = target_path.string() + ".part";
+  std::filesystem::remove(temp_path);
+  const auto content_length = ProbeContentLengthForModelLibrary(source_url);
+  auto future = std::async(
+      std::launch::async,
+      [temp_path_text = temp_path.string(), source_url]() {
+        const std::string command = "/usr/bin/curl -fL --silent --show-error --output '" +
+                                    temp_path_text + "' '" + source_url + "'";
+        return std::system(command.c_str());
+      });
+  while (future.wait_for(std::chrono::milliseconds(500)) != std::future_status::ready) {
+    const auto bytes_done = FileSizeIfExistsForModelLibrary(temp_path).value_or(0);
+    UpdateModelLibraryJob(
+        job_id,
+        [&](ModelLibraryDownloadJob& job) {
+          job.bytes_done = aggregate_prefix + bytes_done;
+          job.bytes_total = aggregate_total;
+          job.current_item = target_path.filename().string();
+          job.status = "running";
+        });
+  }
+  const int rc = future.get();
+  if (rc != 0) {
+    throw std::runtime_error("failed to download model artifact from " + source_url);
+  }
+  std::filesystem::rename(temp_path, target_path);
+  const auto final_size = FileSizeIfExistsForModelLibrary(target_path).value_or(0);
+  UpdateModelLibraryJob(
+      job_id,
+      [&](ModelLibraryDownloadJob& job) {
+        job.bytes_done = aggregate_prefix + final_size;
+        job.bytes_total = aggregate_total;
+        job.current_item = target_path.filename().string();
+      });
+}
+
+void StartModelLibraryDownloadJob(const std::string& job_id) {
+  std::thread([job_id]() {
+    try {
+      ModelLibraryDownloadJob snapshot;
+      {
+        std::lock_guard<std::mutex> lock(g_model_library_jobs_mutex);
+        snapshot = g_model_library_jobs.at(job_id);
+      }
+      std::optional<std::uintmax_t> aggregate_total = std::uintmax_t{0};
+      for (const auto& source_url : snapshot.source_urls) {
+        const auto content_length = ProbeContentLengthForModelLibrary(source_url);
+        if (!content_length.has_value()) {
+          aggregate_total = std::nullopt;
+          break;
+        }
+        *aggregate_total += *content_length;
+      }
+      UpdateModelLibraryJob(
+          job_id,
+          [&](ModelLibraryDownloadJob& job) {
+            job.status = "running";
+            job.bytes_total = aggregate_total;
+          });
+      std::uintmax_t aggregate_prefix = 0;
+      for (std::size_t index = 0; index < snapshot.source_urls.size(); ++index) {
+        const std::filesystem::path target_path(snapshot.target_paths.at(index));
+        DownloadModelLibraryFile(
+            job_id,
+            snapshot.source_urls.at(index),
+            target_path,
+            aggregate_prefix,
+            aggregate_total);
+        aggregate_prefix += FileSizeIfExistsForModelLibrary(target_path).value_or(0);
+      }
+      UpdateModelLibraryJob(
+          job_id,
+          [&](ModelLibraryDownloadJob& job) {
+            job.status = "completed";
+            job.bytes_done = aggregate_prefix;
+            job.bytes_total = aggregate_total;
+            job.current_item.clear();
+          });
+    } catch (const std::exception& error) {
+      UpdateModelLibraryJob(
+          job_id,
+          [&](ModelLibraryDownloadJob& job) {
+            job.status = "failed";
+            job.error_message = error.what();
+            job.current_item.clear();
+          });
+    }
+  }).detach();
+}
+
+HttpResponse EnqueueModelLibraryDownload(const HttpRequest& request) {
+  const json body = ParseJsonRequestBody(request);
+  const std::string target_root = body.value("target_root", std::string{});
+  const std::string target_subdir = body.value("target_subdir", std::string{});
+  const std::string model_id = body.value("model_id", std::string{});
+  const std::string source_url = body.value("source_url", std::string{});
+  std::vector<std::string> source_urls;
+  if (body.contains("source_urls") && body.at("source_urls").is_array()) {
+    source_urls = body.at("source_urls").get<std::vector<std::string>>();
+  } else if (!source_url.empty()) {
+    source_urls.push_back(source_url);
+  }
+  if (target_root.empty() || !IsUsableAbsoluteHostPath(target_root)) {
+    return BuildJsonResponse(
+        400,
+        json{{"status", "bad_request"}, {"message", "target_root must be an absolute host path"}});
+  }
+  if (source_urls.empty()) {
+    return BuildJsonResponse(
+        400,
+        json{{"status", "bad_request"}, {"message", "source_url or source_urls is required"}});
+  }
+  std::filesystem::path destination_root(target_root);
+  if (!target_subdir.empty()) {
+    destination_root /= target_subdir;
+  }
+  std::vector<std::string> target_paths;
+  target_paths.reserve(source_urls.size());
+  try {
+    for (std::size_t index = 0; index < source_urls.size(); ++index) {
+      const auto filename =
+          source_urls.size() == 1 && body.contains("target_filename") &&
+                  body.at("target_filename").is_string() &&
+                  !body.at("target_filename").get<std::string>().empty()
+              ? body.at("target_filename").get<std::string>()
+              : FilenameFromUrlForModelLibrary(source_urls.at(index));
+      target_paths.push_back(NormalizePathString(destination_root / filename));
+    }
+  } catch (const std::exception& error) {
+    return BuildJsonResponse(
+        400,
+        json{{"status", "bad_request"}, {"message", error.what()}});
+  }
+  const std::string job_id = GenerateModelLibraryJobId();
+  ModelLibraryDownloadJob job;
+  job.id = job_id;
+  job.model_id = model_id;
+  job.target_root = NormalizePathString(std::filesystem::path(target_root));
+  job.target_subdir = target_subdir;
+  job.source_urls = source_urls;
+  job.target_paths = target_paths;
+  job.part_count = static_cast<int>(source_urls.size());
+  job.created_at = UtcNowSqlTimestamp();
+  job.updated_at = job.created_at;
+  {
+    std::lock_guard<std::mutex> lock(g_model_library_jobs_mutex);
+    g_model_library_jobs.emplace(job_id, job);
+  }
+  StartModelLibraryDownloadJob(job_id);
+  return BuildJsonResponse(202, json{{"status", "accepted"}, {"job", BuildModelLibraryJobPayload(job)}});
+}
+
+HttpResponse DeleteModelLibraryEntryByPath(
+    const std::string& db_path,
+    const HttpRequest& request) {
+  json body = json::object();
+  if (!request.body.empty()) {
+    body = ParseJsonRequestBody(request);
+  }
+  const std::string path = [&]() {
+    if (body.contains("path") && body.at("path").is_string()) {
+      return body.at("path").get<std::string>();
+    }
+    const auto query = FindQueryString(request, "path");
+    return query.value_or(std::string{});
+  }();
+  if (path.empty() || !IsUsableAbsoluteHostPath(path)) {
+    return BuildJsonResponse(
+        400,
+        json{{"status", "bad_request"}, {"message", "path must be an absolute host path"}});
+  }
+  const auto entries = ScanModelLibraryEntries(db_path);
+  const auto it = std::find_if(
+      entries.begin(),
+      entries.end(),
+      [&](const ModelLibraryEntry& entry) { return entry.path == NormalizePathString(path); });
+  if (it == entries.end()) {
+    return BuildJsonResponse(
+        404,
+        json{{"status", "not_found"}, {"message", "model entry not found"}});
+  }
+  if (!it->deletable) {
+    return BuildJsonResponse(
+        409,
+        json{{"status", "conflict"},
+             {"message", "model is referenced by one or more planes"},
+             {"referenced_by", it->referenced_by}});
+  }
+  std::vector<std::string> deleted_paths;
+  std::error_code error;
+  if (it->kind == "directory") {
+    std::filesystem::remove_all(it->path, error);
+    if (error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.message()}});
+    }
+    deleted_paths.push_back(it->path);
+  } else {
+    for (const auto& current_path : it->paths) {
+      std::filesystem::remove(current_path, error);
+      if (error) {
+        return BuildJsonResponse(
+            500,
+            json{{"status", "internal_error"}, {"message", error.message()}});
+      }
+      deleted_paths.push_back(current_path);
+    }
+  }
+  return BuildJsonResponse(
+      200,
+      json{{"status", "deleted"}, {"path", it->path}, {"deleted_paths", deleted_paths}});
 }
 
 std::string BuildHostRequestAad(
@@ -7160,6 +7879,39 @@ HttpResponse HandleControllerRequest(
           json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
     }
   }
+  if (request.path == "/api/v1/model-library") {
+    if (request.method == "GET") {
+      try {
+        return BuildJsonResponse(200, BuildModelLibraryPayload(db_path));
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+      }
+    }
+    if (request.method == "DELETE") {
+      try {
+        return DeleteModelLibraryEntryByPath(db_path, request);
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+      }
+    }
+    return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+  }
+  if (request.path == "/api/v1/model-library/download") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      return EnqueueModelLibraryDownload(request);
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
   if (request.path == "/api/v1/planes") {
     if (request.method == "GET") {
       try {
@@ -7877,7 +8629,7 @@ int ServeControllerApi(
   if (ui_root.has_value()) {
     std::cout << "ui_root=" << ui_root->string() << "\n";
   }
-  std::cout << "routes=/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/planes/<plane>/interaction/status,/api/v1/planes/<plane>/interaction/models,/api/v1/planes/<plane>/interaction/chat/completions,/api/v1/planes/<plane>/interaction/chat/completions/stream,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key\n";
+  std::cout << "routes=/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/model-library,/api/v1/model-library/download,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/planes/<plane>/interaction/status,/api/v1/planes/<plane>/interaction/models,/api/v1/planes/<plane>/interaction/chat/completions,/api/v1/planes/<plane>/interaction/chat/completions/stream,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key\n";
   std::cout.flush();
 
   while (!g_stop_requested.load()) {

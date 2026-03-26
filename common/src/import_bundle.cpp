@@ -532,6 +532,10 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
   if (const auto bootstrap_model = OptionalObject(plane_json, "bootstrap_model")) {
     BootstrapModelSpec spec;
     spec.model_id = OptionalString(*bootstrap_model, "model_id", "");
+    spec.materialization_mode = OptionalString(
+        *bootstrap_model,
+        "materialization_mode",
+        spec.materialization_mode);
     if (const auto served_model_name = OptionalStringOpt(*bootstrap_model, "served_model_name")) {
       spec.served_model_name = *served_model_name;
     }

@@ -143,6 +143,7 @@ json ToJson(const RuntimeGpuNode& gpu_node) {
 json ToJson(const BootstrapModelSpec& bootstrap_model) {
   json result = {
       {"model_id", bootstrap_model.model_id},
+      {"materialization_mode", bootstrap_model.materialization_mode},
   };
   if (bootstrap_model.served_model_name.has_value()) {
     result["served_model_name"] = *bootstrap_model.served_model_name;
@@ -369,6 +370,8 @@ InstanceSpec InstanceSpecFromJson(const json& value) {
 BootstrapModelSpec BootstrapModelSpecFromJson(const json& value) {
   BootstrapModelSpec bootstrap_model;
   bootstrap_model.model_id = value.value("model_id", std::string{});
+  bootstrap_model.materialization_mode =
+      value.value("materialization_mode", bootstrap_model.materialization_mode);
   if (value.contains("served_model_name") && !value.at("served_model_name").is_null()) {
     bootstrap_model.served_model_name = value.at("served_model_name").get<std::string>();
   }

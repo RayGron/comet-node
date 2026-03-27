@@ -1,80 +1,28 @@
-#include <errno.h>
-#include <csignal>
-
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <cctype>
-#include <cstdint>
-#include <ctime>
-#include <cstddef>
-#include <cstring>
-#include <exception>
-#include <filesystem>
-#include <fstream>
-#include <future>
-#include <functional>
-#include <iomanip>
-#include <iostream>
-#include <map>
-#include <mutex>
-#include <optional>
-#include <set>
-#include <sstream>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <thread>
-#include <vector>
-
-#include <nlohmann/json.hpp>
-
-#include "controller_command_line.h"
-#include "host_registry_service.h"
-#include "web_ui_service.h"
-#include "comet/compose_renderer.h"
-#include "comet/crypto_utils.h"
-#include "comet/demo_state.h"
-#include "comet/execution_plan.h"
-#include "comet/import_bundle.h"
-#include "comet/infer_runtime_config.h"
-#include "comet/models.h"
-#include "comet/planner.h"
-#include "comet/platform_compat.h"
-#include "comet/reconcile.h"
-#include "comet/runtime_status.h"
-#include "comet/scheduling_policy.h"
-#include "comet/sqlite_store.h"
-#include "comet/state_json.h"
+#include "controller_main_includes.h"
 
 namespace {
 
 using nlohmann::json;
 using SocketHandle = comet::platform::SocketHandle;
-using PollFd = comet::platform::PollFd;
+
+using ControllerCli = comet::controller::ControllerCli;
 using ControllerCommandLine = comet::controller::ControllerCommandLine;
+using ControllerEndpointTarget = comet::controller::ControllerEndpointTarget;
+using ControllerHttpServer = comet::controller::ControllerHttpServer;
+using ControllerHttpRouter = comet::controller::ControllerHttpRouter;
+using ControllerHttpServerSupport = comet::controller::ControllerHttpServerSupport;
+using ControllerNetworkManager = comet::controller::ControllerNetworkManager;
+
 using HostRegistryService = comet::controller::HostRegistryService;
+using InteractionCompletionPolicy = comet::controller::InteractionCompletionPolicy;
+
+using PlaneService = comet::controller::PlaneService;
+using PlaneInteractionResolution = comet::controller::PlaneInteractionResolution;
+
+using ResolvedInteractionPolicy = comet::controller::ResolvedInteractionPolicy;
+using SchedulerService = comet::controller::SchedulerService;
 using WebUiComposeMode = comet::controller::WebUiComposeMode;
 using WebUiService = comet::controller::WebUiService;
-
-std::string SocketErrorMessage() {
-  return comet::platform::LastSocketErrorMessage();
-}
-
-void CloseSocketHandle(const SocketHandle fd) {
-  if (comet::platform::IsSocketValid(fd)) {
-    comet::platform::CloseSocket(fd);
-  }
-}
-
-void ShutdownAndCloseSocket(const SocketHandle fd) {
-  if (comet::platform::IsSocketValid(fd)) {
-    comet::platform::ShutdownSocket(fd);
-    comet::platform::CloseSocket(fd);
-  }
-}
 
 std::string DefaultDbPath() {
   return (std::filesystem::path("var") / "controller.sqlite").string();
@@ -112,43 +60,9 @@ int VerificationTimeoutSeconds() {
   return 45;
 }
 
-std::string DefaultListenHost() {
-  return "127.0.0.1";
-}
-
-int DefaultListenPort() {
-  return 18080;
-}
-
 std::string DefaultUiRoot() {
   return (std::filesystem::path("var") / "ui").string();
 }
-
-std::atomic<bool> g_stop_requested{false};
-
-struct HttpRequest {
-  std::string method = "GET";
-  std::string path = "/";
-  std::map<std::string, std::string> headers;
-  std::map<std::string, std::string> query_params;
-  std::string body;
-};
-
-struct HttpResponse {
-  int status_code = 200;
-  std::string content_type = "application/json";
-  std::string body;
-  std::map<std::string, std::string> headers;
-};
-
-struct SseStreamRequest {
-  std::optional<std::string> plane_name;
-  std::optional<std::string> node_name;
-  std::optional<std::string> worker_name;
-  std::optional<std::string> category;
-  int limit = 100;
-  std::optional<int> last_event_id;
-};
 
 thread_local const HttpRequest* g_current_http_request = nullptr;
 
@@ -238,7 +152,15 @@ std::string Trim(const std::string& value);
 
 std::string NormalizeLanguageCode(const std::string& value);
 
+nlohmann::json BuildUserPayload(const comet::UserRecord& user);
+nlohmann::json BuildInvitePayload(const comet::RegistrationInviteRecord& invite);
+nlohmann::json BuildSshKeyPayload(const comet::UserSshKeyRecord& ssh_key);
+
 std::optional<std::string> FindQueryString(
+    const HttpRequest& request,
+    const std::string& key);
+
+std::optional<int> FindQueryInt(
     const HttpRequest& request,
     const std::string& key);
 
@@ -246,6 +168,94 @@ HttpResponse BuildJsonResponse(
     int status_code,
     const json& payload,
     const std::map<std::string, std::string>& headers = {});
+
+json ParseJsonRequestBody(const HttpRequest& request);
+
+std::string ResolveArtifactsRoot(
+    const std::optional<std::string>& artifacts_root_arg,
+    const std::string& fallback_artifacts_root);
+
+json BuildControllerStatePayload(
+    const std::string& db_path,
+    const std::optional<std::string>& plane_name);
+json BuildPlanesPayload(const std::string& db_path);
+json BuildModelLibraryPayload(const std::string& db_path);
+json BuildDashboardPayload(
+    const std::string& db_path,
+    int stale_after_seconds,
+    const std::optional<std::string>& plane_name);
+json BuildHostAssignmentsPayload(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name);
+json BuildHostObservationsPayload(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& plane_name,
+    int stale_after_seconds);
+json BuildHostHealthPayload(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name,
+    int stale_after_seconds);
+json BuildDiskStatePayload(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& plane_name);
+json BuildRolloutActionsPayload(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& plane_name);
+json BuildRebalancePlanPayload(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name,
+    int stale_after_seconds,
+    const std::optional<std::string>& plane_name);
+json BuildEventsPayload(
+    const std::string& db_path,
+    const std::optional<std::string>& plane_name,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& worker_name,
+    const std::optional<std::string>& category,
+    int limit);
+json BuildNodeAvailabilityPayload(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name);
+HttpResponse EnqueueModelLibraryDownload(const HttpRequest& request);
+HttpResponse DeleteModelLibraryEntryByPath(
+    const std::string& db_path,
+    const HttpRequest& request);
+
+comet::controller::ControllerActionResult ExecuteUpsertPlaneStateAction(
+    const std::string& db_path,
+    const std::string& desired_state_json,
+    const std::string& artifacts_root,
+    const std::optional<std::string>& expected_plane_name,
+    const std::string& source);
+comet::controller::ControllerActionResult ExecuteStartPlaneAction(
+    const std::string& db_path,
+    const std::string& plane_name);
+comet::controller::ControllerActionResult ExecuteStopPlaneAction(
+    const std::string& db_path,
+    const std::string& plane_name);
+comet::controller::ControllerActionResult ExecuteDeletePlaneAction(
+    const std::string& db_path,
+    const std::string& plane_name);
+comet::controller::ControllerActionResult ExecuteSetNodeAvailabilityAction(
+    const std::string& db_path,
+    const std::string& node_name,
+    comet::NodeAvailability availability,
+    const std::optional<std::string>& status_message);
+comet::controller::ControllerActionResult ExecuteValidateBundleAction(
+    const std::string& bundle_dir);
+comet::controller::ControllerActionResult ExecutePreviewBundleAction(
+    const std::string& bundle_dir,
+    const std::optional<std::string>& node_name);
+comet::controller::ControllerActionResult ExecuteImportBundleAction(
+    const std::string& db_path,
+    const std::string& bundle_dir);
+comet::controller::ControllerActionResult ExecuteApplyBundleAction(
+    const std::string& db_path,
+    const std::string& bundle_dir,
+    const std::string& artifacts_root);
 
 SchedulerRuntimeView LoadSchedulerRuntimeView(
     comet::ControllerStore& store,
@@ -257,9 +267,48 @@ void PrintAssignmentDispatchSummary(
     const std::vector<comet::HostObservation>& observations,
     int stale_after_seconds);
 
+void PrintStateSummary(const comet::DesiredState& state);
+
 void PrintSchedulerDecisionSummary(const comet::DesiredState& state);
 
 void PrintRolloutGateSummary(const comet::SchedulingPolicyReport& scheduling_report);
+
+SchedulerService MakeSchedulerService(
+    const std::string& db_path,
+    const std::string& artifacts_root);
+
+std::optional<comet::HostAssignment> FindLatestHostAssignmentForPlane(
+    const std::vector<comet::HostAssignment>& assignments,
+    const std::string& plane_name);
+
+std::vector<comet::HostAssignment> BuildStopPlaneAssignments(
+    const comet::DesiredState& desired_state,
+    int desired_generation,
+    const std::string& artifacts_root,
+    const std::vector<comet::NodeAvailabilityOverride>& availability_overrides);
+
+std::vector<comet::HostAssignment> BuildDeletePlaneAssignments(
+    const comet::DesiredState& desired_state,
+    int desired_generation,
+    const std::string& artifacts_root);
+
+int ShowRolloutActions(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& plane_name);
+
+int ShowRebalancePlan(
+    const std::string& db_path,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& plane_name);
+
+int ShowEvents(
+    const std::string& db_path,
+    const std::optional<std::string>& plane_name,
+    const std::optional<std::string>& node_name,
+    const std::optional<std::string>& worker_name,
+    const std::optional<std::string>& category,
+    int limit);
 
 void MaterializeComposeArtifacts(
     const comet::DesiredState& desired_state,
@@ -298,1201 +347,6 @@ std::string Lowercase(std::string value) {
       value.begin(),
       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   return value;
-}
-
-std::map<std::string, std::string> ParseQueryParams(const std::string& query_text) {
-  const auto decode_component = [](const std::string& value) {
-    std::string decoded;
-    decoded.reserve(value.size());
-    for (std::size_t i = 0; i < value.size(); ++i) {
-      if (value[i] == '+' ) {
-        decoded.push_back(' ');
-        continue;
-      }
-      if (value[i] == '%' && i + 2 < value.size()) {
-        const std::string hex = value.substr(i + 1, 2);
-        char* end = nullptr;
-        const long code = std::strtol(hex.c_str(), &end, 16);
-        if (end != nullptr && *end == '\0') {
-          decoded.push_back(static_cast<char>(code));
-          i += 2;
-          continue;
-        }
-      }
-      decoded.push_back(value[i]);
-    }
-    return decoded;
-  };
-
-  std::map<std::string, std::string> params;
-  std::size_t offset = 0;
-  while (offset <= query_text.size()) {
-    const std::size_t next = query_text.find('&', offset);
-    const std::string pair = query_text.substr(
-        offset,
-        next == std::string::npos ? std::string::npos : next - offset);
-    if (!pair.empty()) {
-      const std::size_t equals = pair.find('=');
-      if (equals == std::string::npos) {
-        params.emplace(decode_component(pair), "");
-      } else {
-        params.emplace(
-            decode_component(pair.substr(0, equals)),
-            decode_component(pair.substr(equals + 1)));
-      }
-    }
-    if (next == std::string::npos) {
-      break;
-    }
-    offset = next + 1;
-  }
-  return params;
-}
-
-std::string UrlEncode(std::string_view value) {
-  std::ostringstream encoded;
-  for (const unsigned char ch : value) {
-    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-        (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' || ch == '~' ||
-        ch == '/' || ch == ':') {
-      encoded << static_cast<char>(ch);
-    } else if (ch == ' ') {
-      encoded << '+';
-    } else {
-      encoded << '%' << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
-              << static_cast<int>(ch) << std::nouppercase << std::dec;
-    }
-  }
-  return encoded.str();
-}
-
-std::string BuildQueryString(
-    const std::vector<std::pair<std::string, std::string>>& params) {
-  std::ostringstream query;
-  bool first = true;
-  for (const auto& [key, value] : params) {
-    if (value.empty()) {
-      continue;
-    }
-    query << (first ? '?' : '&') << UrlEncode(key) << '=' << UrlEncode(value);
-    first = false;
-  }
-  return query.str();
-}
-
-HttpRequest ParseHttpRequest(const std::string& request_text) {
-  HttpRequest request;
-  const std::size_t headers_end = request_text.find("\r\n\r\n");
-  const std::string header_text =
-      headers_end == std::string::npos ? request_text : request_text.substr(0, headers_end);
-  request.body =
-      headers_end == std::string::npos ? std::string{} : request_text.substr(headers_end + 4);
-
-  const std::size_t line_end = header_text.find("\r\n");
-  const std::string first_line =
-      line_end == std::string::npos ? header_text : header_text.substr(0, line_end);
-  std::stringstream stream(first_line);
-  stream >> request.method >> request.path;
-  if (request.path.empty()) {
-    request.path = "/";
-  }
-  const std::size_t query = request.path.find('?');
-  if (query != std::string::npos) {
-    request.query_params = ParseQueryParams(request.path.substr(query + 1));
-    request.path = request.path.substr(0, query);
-  }
-
-  std::size_t offset = line_end == std::string::npos ? header_text.size() : line_end + 2;
-  while (offset < header_text.size()) {
-    const std::size_t next = header_text.find("\r\n", offset);
-    const std::string line = header_text.substr(
-        offset,
-        next == std::string::npos ? std::string::npos : next - offset);
-    const std::size_t colon = line.find(':');
-    if (colon != std::string::npos) {
-      request.headers.emplace(
-          Lowercase(Trim(line.substr(0, colon))),
-          Trim(line.substr(colon + 1)));
-    }
-    if (next == std::string::npos) {
-      break;
-    }
-    offset = next + 2;
-  }
-  return request;
-}
-
-std::size_t ExpectedRequestBytes(const std::string& request_text) {
-  const std::size_t headers_end = request_text.find("\r\n\r\n");
-  if (headers_end == std::string::npos) {
-    return 0;
-  }
-  const std::string header_text = request_text.substr(0, headers_end);
-  std::size_t offset = 0;
-  std::size_t content_length = 0;
-  while (offset < header_text.size()) {
-    const std::size_t next = header_text.find("\r\n", offset);
-    const std::string line = header_text.substr(
-        offset,
-        next == std::string::npos ? std::string::npos : next - offset);
-    const std::size_t colon = line.find(':');
-    if (colon != std::string::npos) {
-      const std::string key = Lowercase(Trim(line.substr(0, colon)));
-      const std::string value = Trim(line.substr(colon + 1));
-      if (key == "content-length") {
-        content_length = static_cast<std::size_t>(std::stoul(value));
-        break;
-      }
-    }
-    if (next == std::string::npos) {
-      break;
-    }
-    offset = next + 2;
-  }
-  return headers_end + 4 + content_length;
-}
-
-std::string ReasonPhrase(int status_code) {
-  switch (status_code) {
-    case 200:
-      return "OK";
-    case 400:
-      return "Bad Request";
-    case 404:
-      return "Not Found";
-    case 405:
-      return "Method Not Allowed";
-    case 409:
-      return "Conflict";
-    case 422:
-      return "Unprocessable Content";
-    case 500:
-      return "Internal Server Error";
-    case 502:
-      return "Bad Gateway";
-    case 503:
-      return "Service Unavailable";
-    case 504:
-      return "Gateway Timeout";
-    default:
-      return "Response";
-  }
-}
-
-void SendHttpResponse(SocketHandle client_fd, const HttpResponse& response) {
-  std::ostringstream out;
-  out << "HTTP/1.1 " << response.status_code << " " << ReasonPhrase(response.status_code) << "\r\n";
-  out << "Content-Type: " << response.content_type << "\r\n";
-  for (const auto& [key, value] : response.headers) {
-    if (Lowercase(key) == "content-type") {
-      continue;
-    }
-    out << key << ": " << value << "\r\n";
-  }
-  out << "Content-Length: " << response.body.size() << "\r\n";
-  out << "Connection: close\r\n\r\n";
-  out << response.body;
-  const std::string payload = out.str();
-  const char* data = payload.c_str();
-  std::size_t remaining = payload.size();
-  while (remaining > 0) {
-    const ssize_t written = send(client_fd, data, remaining, 0);
-    if (written <= 0) {
-      break;
-    }
-    data += written;
-    remaining -= static_cast<std::size_t>(written);
-  }
-}
-
-bool SendAll(SocketHandle fd, const std::string& payload) {
-  const char* data = payload.c_str();
-  std::size_t remaining = payload.size();
-  while (remaining > 0) {
-    const ssize_t written = send(fd, data, remaining, 0);
-    if (written <= 0) {
-      return false;
-    }
-    data += written;
-    remaining -= static_cast<std::size_t>(written);
-  }
-  return true;
-}
-
-bool SendSseHeaders(
-    SocketHandle client_fd,
-    const std::map<std::string, std::string>& headers = {}) {
-  std::ostringstream out;
-  out << "HTTP/1.1 200 OK\r\n";
-  out << "Content-Type: text/event-stream\r\n";
-  out << "Cache-Control: no-cache\r\n";
-  for (const auto& [key, value] : headers) {
-    if (Lowercase(key) == "content-type") {
-      continue;
-    }
-    out << key << ": " << value << "\r\n";
-  }
-  out << "Connection: keep-alive\r\n";
-  out << "X-Accel-Buffering: no\r\n\r\n";
-  return SendAll(client_fd, out.str());
-}
-
-bool SendSseEventFrame(
-    SocketHandle client_fd,
-    int event_id,
-    const std::string& event_name,
-    const std::string& payload) {
-  std::ostringstream frame;
-  frame << "id: " << event_id << "\n";
-  frame << "event: " << event_name << "\n";
-  std::stringstream lines(payload);
-  std::string line;
-  while (std::getline(lines, line)) {
-    frame << "data: " << line << "\n";
-  }
-  if (!payload.empty() && payload.back() == '\n') {
-    frame << "data:\n";
-  }
-  frame << "\n";
-  return SendAll(client_fd, frame.str());
-}
-
-bool SendSseCommentFrame(SocketHandle client_fd, const std::string& message) {
-  return SendAll(client_fd, ":" + message + "\n\n");
-}
-
-struct ControllerEndpointTarget {
-  std::string raw;
-  std::string host;
-  int port = DefaultListenPort();
-  std::string base_path;
-};
-
-std::optional<std::string> LoadControllerTargetConfig() {
-  const char* xdg_config_home = std::getenv("XDG_CONFIG_HOME");
-  std::filesystem::path config_path;
-  if (xdg_config_home != nullptr && *xdg_config_home != '\0') {
-    config_path = std::filesystem::path(xdg_config_home) / "comet" / "controller";
-  } else {
-    const char* home = std::getenv("HOME");
-    if (home == nullptr || *home == '\0') {
-      return std::nullopt;
-    }
-    config_path = std::filesystem::path(home) / ".config" / "comet" / "controller";
-  }
-  if (!std::filesystem::exists(config_path)) {
-    return std::nullopt;
-  }
-  std::ifstream in(config_path);
-  std::stringstream buffer;
-  buffer << in.rdbuf();
-  const std::string value = Trim(buffer.str());
-  if (value.empty()) {
-    return std::nullopt;
-  }
-  return value;
-}
-
-std::optional<std::string> ResolveControllerTarget(
-    const std::optional<std::string>& explicit_target,
-    const std::optional<std::string>& db_arg) {
-  if (db_arg.has_value()) {
-    return std::nullopt;
-  }
-  if (explicit_target.has_value()) {
-    return explicit_target;
-  }
-  if (const char* env_target = std::getenv("COMET_CONTROLLER");
-      env_target != nullptr && *env_target != '\0') {
-    return std::string(env_target);
-  }
-  return LoadControllerTargetConfig();
-}
-
-ControllerEndpointTarget ParseControllerEndpointTarget(const std::string& raw_target) {
-  std::string target = Trim(raw_target);
-  if (target.empty()) {
-    throw std::runtime_error("empty controller target");
-  }
-
-  ControllerEndpointTarget parsed;
-  parsed.raw = target;
-  if (target.rfind("http://", 0) == 0) {
-    target = target.substr(7);
-  } else if (target.rfind("https://", 0) == 0) {
-    throw std::runtime_error("https controller targets are not supported yet");
-  }
-
-  const std::size_t slash = target.find('/');
-  if (slash != std::string::npos) {
-    parsed.base_path = target.substr(slash);
-    target = target.substr(0, slash);
-    if (parsed.base_path == "/") {
-      parsed.base_path.clear();
-    }
-  }
-
-  const std::size_t colon = target.rfind(':');
-  if (colon != std::string::npos) {
-    parsed.host = target.substr(0, colon);
-    parsed.port = std::stoi(target.substr(colon + 1));
-  } else {
-    parsed.host = target;
-  }
-  if (parsed.host.empty()) {
-    throw std::runtime_error("invalid controller target '" + raw_target + "'");
-  }
-  return parsed;
-}
-
-HttpResponse ParseHttpResponse(const std::string& response_text) {
-  HttpResponse response;
-  const std::size_t headers_end = response_text.find("\r\n\r\n");
-  const std::string header_text =
-      headers_end == std::string::npos ? response_text : response_text.substr(0, headers_end);
-  response.body =
-      headers_end == std::string::npos ? std::string{} : response_text.substr(headers_end + 4);
-
-  const std::size_t line_end = header_text.find("\r\n");
-  const std::string first_line =
-      line_end == std::string::npos ? header_text : header_text.substr(0, line_end);
-  std::stringstream stream(first_line);
-  std::string http_version;
-  stream >> http_version >> response.status_code;
-
-  std::size_t offset = line_end == std::string::npos ? header_text.size() : line_end + 2;
-  while (offset < header_text.size()) {
-    const std::size_t next = header_text.find("\r\n", offset);
-    const std::string line = header_text.substr(
-        offset,
-        next == std::string::npos ? std::string::npos : next - offset);
-    const std::size_t colon = line.find(':');
-    if (colon != std::string::npos) {
-      const std::string key = Lowercase(Trim(line.substr(0, colon)));
-      const std::string value = Trim(line.substr(colon + 1));
-      response.headers[key] = value;
-      if (key == "content-type") {
-        response.content_type = value;
-      }
-    }
-    if (next == std::string::npos) {
-      break;
-    }
-    offset = next + 2;
-  }
-  return response;
-}
-
-std::optional<std::string> FindHttpHeaderValue(
-    const std::string& header_text,
-    const std::string& header_name) {
-  const std::size_t line_end = header_text.find("\r\n");
-  std::size_t offset = line_end == std::string::npos ? header_text.size() : line_end + 2;
-  while (offset < header_text.size()) {
-    const std::size_t next = header_text.find("\r\n", offset);
-    const std::string line = header_text.substr(
-        offset,
-        next == std::string::npos ? std::string::npos : next - offset);
-    const std::size_t colon = line.find(':');
-    if (colon != std::string::npos) {
-      const std::string key = Lowercase(Trim(line.substr(0, colon)));
-      if (key == Lowercase(header_name)) {
-        return Trim(line.substr(colon + 1));
-      }
-    }
-    if (next == std::string::npos) {
-      break;
-    }
-    offset = next + 2;
-  }
-  return std::nullopt;
-}
-
-bool DecodeAvailableChunkedHttpBody(
-    std::string& encoded,
-    std::string* decoded,
-    bool* stream_finished) {
-  bool progressed = false;
-  while (true) {
-    const std::size_t line_end = encoded.find("\r\n");
-    if (line_end == std::string::npos) {
-      return progressed;
-    }
-    std::string chunk_size_text = encoded.substr(0, line_end);
-    const std::size_t extensions = chunk_size_text.find(';');
-    if (extensions != std::string::npos) {
-      chunk_size_text = chunk_size_text.substr(0, extensions);
-    }
-    chunk_size_text = Trim(chunk_size_text);
-    std::size_t chunk_size = 0;
-    try {
-      chunk_size = static_cast<std::size_t>(std::stoull(chunk_size_text, nullptr, 16));
-    } catch (const std::exception&) {
-      throw std::runtime_error("invalid HTTP chunk size '" + chunk_size_text + "'");
-    }
-
-    const std::size_t chunk_data_begin = line_end + 2;
-    if (chunk_size == 0) {
-      if (encoded.size() < chunk_data_begin + 2) {
-        return progressed;
-      }
-      encoded.erase(0, chunk_data_begin + 2);
-      *stream_finished = true;
-      return true;
-    }
-
-    if (encoded.size() < chunk_data_begin + chunk_size + 2) {
-      return progressed;
-    }
-    decoded->append(encoded, chunk_data_begin, chunk_size);
-    encoded.erase(0, chunk_data_begin + chunk_size + 2);
-    progressed = true;
-  }
-}
-
-HttpResponse SendControllerHttpRequest(
-    const ControllerEndpointTarget& target,
-    const std::string& method,
-    const std::string& path_and_query,
-    const std::string& body = "",
-    const std::vector<std::pair<std::string, std::string>>& headers = {}) {
-  comet::platform::EnsureSocketsInitialized();
-
-  addrinfo hints{};
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  addrinfo* results = nullptr;
-  const std::string port_text = std::to_string(target.port);
-  const int lookup = getaddrinfo(target.host.c_str(), port_text.c_str(), &hints, &results);
-  if (lookup != 0) {
-    throw std::runtime_error(
-        "failed to resolve controller target '" + target.raw + "': " + gai_strerror(lookup));
-  }
-
-  SocketHandle fd = comet::platform::kInvalidSocket;
-  for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
-    fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-    if (!comet::platform::IsSocketValid(fd)) {
-      continue;
-    }
-    if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
-      break;
-    }
-    CloseSocketHandle(fd);
-    fd = comet::platform::kInvalidSocket;
-  }
-  freeaddrinfo(results);
-  if (!comet::platform::IsSocketValid(fd)) {
-    throw std::runtime_error("failed to connect to controller target '" + target.raw + "'");
-  }
-
-  const std::string request_path = target.base_path + path_and_query;
-  std::ostringstream request;
-  request << method << " " << request_path << " HTTP/1.1\r\n";
-  request << "Host: " << target.host << ":" << target.port << "\r\n";
-  request << "Connection: close\r\n";
-  for (const auto& [key, value] : headers) {
-    request << key << ": " << value << "\r\n";
-  }
-  if (!body.empty()) {
-    if (std::none_of(
-            headers.begin(),
-            headers.end(),
-            [](const auto& header) { return Lowercase(header.first) == "content-type"; })) {
-      request << "Content-Type: application/json\r\n";
-    }
-    request << "Content-Length: " << body.size() << "\r\n";
-  }
-  request << "\r\n";
-  request << body;
-
-  const std::string request_text = request.str();
-  const char* data = request_text.c_str();
-  std::size_t remaining = request_text.size();
-  while (remaining > 0) {
-    const ssize_t written = send(fd, data, remaining, 0);
-    if (written <= 0) {
-      const std::string error = SocketErrorMessage();
-      CloseSocketHandle(fd);
-      throw std::runtime_error("failed to write HTTP request: " + error);
-    }
-    data += written;
-    remaining -= static_cast<std::size_t>(written);
-  }
-
-  std::string response_text;
-  std::array<char, 8192> buffer{};
-  while (true) {
-    const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
-    if (read_count < 0) {
-      const std::string error = SocketErrorMessage();
-      CloseSocketHandle(fd);
-      throw std::runtime_error("failed to read HTTP response: " + error);
-    }
-    if (read_count == 0) {
-      break;
-    }
-    response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
-  }
-  CloseSocketHandle(fd);
-  return ParseHttpResponse(response_text);
-}
-
-json SendControllerJsonRequest(
-    const ControllerEndpointTarget& target,
-    const std::string& method,
-    const std::string& path,
-    const std::vector<std::pair<std::string, std::string>>& params = {}) {
-  const HttpResponse response =
-      SendControllerHttpRequest(target, method, path + BuildQueryString(params));
-  json payload = response.body.empty() ? json::object() : json::parse(response.body);
-  payload["_http_status"] = response.status_code;
-  return payload;
-}
-
-struct PlaneInteractionResolution {
-  comet::DesiredState desired_state;
-  std::optional<comet::PlaneRecord> plane_record;
-  std::optional<comet::HostObservation> observation;
-  std::optional<comet::RuntimeStatus> runtime_status;
-  std::optional<ControllerEndpointTarget> target;
-  json status_payload;
-};
-
-struct InteractionCompletionPolicy {
-  std::string response_mode = "normal";
-  int max_tokens = 512;
-  std::optional<int> target_completion_tokens;
-  int max_continuations = 3;
-  int max_total_completion_tokens = 1536;
-  int max_elapsed_time_ms = 180000;
-  std::string semantic_goal;
-  std::string completion_marker = "[[TASK_COMPLETE]]";
-  bool require_completion_marker = false;
-};
-
-struct ResolvedInteractionPolicy {
-  InteractionCompletionPolicy policy;
-  std::string mode = "default";
-  bool repository_analysis = false;
-  bool long_form = false;
-};
-
-struct InteractionSegmentSummary {
-  int index = 0;
-  int continuation_index = 0;
-  std::string text;
-  std::string finish_reason = "stop";
-  int prompt_tokens = 0;
-  int completion_tokens = 0;
-  int total_tokens = 0;
-  int latency_ms = 0;
-  bool marker_seen = false;
-};
-
-struct InteractionSessionResult {
-  std::string session_id;
-  std::string model;
-  std::string content;
-  std::vector<InteractionSegmentSummary> segments;
-  int total_prompt_tokens = 0;
-  int total_completion_tokens = 0;
-  int total_tokens = 0;
-  int total_latency_ms = 0;
-  int continuation_count = 0;
-  std::string completion_status = "in_progress";
-  std::string stop_reason;
-  std::string final_finish_reason = "stop";
-  bool marker_seen = false;
-};
-
-struct CompletionMarkerFilterState {
-  std::string pending;
-  bool marker_seen = false;
-};
-
-struct InteractionSseFrame {
-  std::string event_name = "message";
-  std::string data;
-};
-
-struct StreamedInteractionSegmentResult {
-  InteractionSegmentSummary summary;
-  std::string cleaned_text;
-};
-
-struct InteractionRequestContext {
-  std::string request_id;
-  json payload = json::object();
-  bool structured_output_json = false;
-  std::string normalized_model;
-};
-
-std::string GenerateInteractionRequestId() {
-  static std::atomic<unsigned long long> counter{0};
-  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::system_clock::now().time_since_epoch())
-                       .count();
-  return "req-" + std::to_string(now) + "-" + std::to_string(++counter);
-}
-
-std::map<std::string, std::string> BuildInteractionResponseHeaders(
-    const std::string& request_id) {
-  return {
-      {"X-Comet-Request-Id", request_id},
-  };
-}
-
-std::string ResolveInteractionServedModelName(
-    const PlaneInteractionResolution& resolution) {
-  if (resolution.runtime_status.has_value() &&
-      !resolution.runtime_status->active_served_model_name.empty()) {
-    return resolution.runtime_status->active_served_model_name;
-  }
-  return resolution.status_payload.value("served_model_name", std::string{});
-}
-
-std::string ResolveInteractionActiveModelId(
-    const PlaneInteractionResolution& resolution) {
-  if (resolution.runtime_status.has_value() &&
-      !resolution.runtime_status->active_model_id.empty()) {
-    return resolution.runtime_status->active_model_id;
-  }
-  return resolution.status_payload.value("active_model_id", std::string{});
-}
-
-json BuildInteractionContractMetadata(
-    const PlaneInteractionResolution& resolution,
-    const std::string& request_id,
-    const std::optional<std::string>& session_id = std::nullopt,
-    const std::optional<int>& segment_count = std::nullopt,
-    const std::optional<int>& continuation_count = std::nullopt) {
-  json metadata{
-      {"request_id", request_id},
-      {"plane_name", resolution.status_payload.value("plane_name", std::string{})},
-      {"served_model_name", ResolveInteractionServedModelName(resolution)},
-      {"active_model_id", ResolveInteractionActiveModelId(resolution)},
-      {"reason", resolution.status_payload.value("reason", std::string{})},
-  };
-  if (session_id.has_value()) {
-    metadata["session_id"] = *session_id;
-  }
-  if (segment_count.has_value()) {
-    metadata["segment_count"] = *segment_count;
-  }
-  if (continuation_count.has_value()) {
-    metadata["continuation_count"] = *continuation_count;
-  }
-  if (resolution.desired_state.interaction.has_value()) {
-    if (resolution.desired_state.interaction->completion_policy.has_value()) {
-      metadata["completion_policy"] = json{
-          {"response_mode",
-           resolution.desired_state.interaction->completion_policy->response_mode},
-          {"max_tokens",
-           resolution.desired_state.interaction->completion_policy->max_tokens},
-      };
-    }
-    if (resolution.desired_state.interaction->long_completion_policy.has_value()) {
-      metadata["long_completion_policy"] = json{
-          {"response_mode",
-           resolution.desired_state.interaction->long_completion_policy->response_mode},
-          {"max_tokens",
-           resolution.desired_state.interaction->long_completion_policy->max_tokens},
-      };
-    }
-    if (resolution.desired_state.interaction->analysis_completion_policy.has_value()) {
-      metadata["analysis_completion_policy"] = json{
-          {"response_mode",
-           resolution.desired_state.interaction->analysis_completion_policy->response_mode},
-          {"max_tokens",
-           resolution.desired_state.interaction->analysis_completion_policy->max_tokens},
-      };
-    }
-    if (resolution.desired_state.interaction->analysis_long_completion_policy
-            .has_value()) {
-      metadata["analysis_long_completion_policy"] = json{
-          {"response_mode",
-           resolution.desired_state.interaction->analysis_long_completion_policy
-               ->response_mode},
-          {"max_tokens",
-           resolution.desired_state.interaction->analysis_long_completion_policy
-               ->max_tokens},
-      };
-    }
-  }
-  return metadata;
-}
-
-HttpResponse BuildStandaloneInteractionContractError(
-    int status_code,
-    const std::string& request_id,
-    const std::string& code,
-    const std::string& message,
-    bool retryable,
-    const std::optional<std::string>& plane_name = std::nullopt,
-    const std::optional<std::string>& reason = std::nullopt,
-    const std::optional<std::string>& served_model_name = std::nullopt,
-    const std::optional<std::string>& active_model_id = std::nullopt,
-    const json& details = json::object()) {
-  json payload{
-      {"request_id", request_id},
-      {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
-      {"reason", reason.has_value() ? json(*reason) : json(nullptr)},
-      {"served_model_name",
-       served_model_name.has_value() ? json(*served_model_name) : json(nullptr)},
-      {"active_model_id",
-       active_model_id.has_value() ? json(*active_model_id) : json(nullptr)},
-      {"error",
-       json{
-           {"code", code},
-           {"message", message},
-           {"retryable", retryable},
-       }},
-      {"comet",
-       json{
-           {"request_id", request_id},
-           {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
-           {"served_model_name",
-            served_model_name.has_value() ? json(*served_model_name) : json(nullptr)},
-           {"active_model_id",
-            active_model_id.has_value() ? json(*active_model_id) : json(nullptr)},
-       }},
-  };
-  if (!details.empty()) {
-    payload["error"]["details"] = details;
-  }
-  return BuildJsonResponse(
-      status_code,
-      payload,
-      BuildInteractionResponseHeaders(request_id));
-}
-
-int ClampInteractionPolicyValue(int value, int minimum_value, int maximum_value) {
-  return std::max(minimum_value, std::min(value, maximum_value));
-}
-
-InteractionCompletionPolicy NormalizeConfiguredInteractionCompletionPolicy(
-    const comet::InteractionSettings::CompletionPolicy& configured_policy) {
-  InteractionCompletionPolicy policy;
-  const std::string normalized_mode =
-      NormalizeLanguageCode(configured_policy.response_mode);
-  if (!normalized_mode.empty()) {
-    policy.response_mode = normalized_mode;
-  }
-  policy.max_tokens =
-      ClampInteractionPolicyValue(configured_policy.max_tokens, 1, 2048);
-  if (configured_policy.target_completion_tokens.has_value()) {
-    policy.target_completion_tokens = ClampInteractionPolicyValue(
-        *configured_policy.target_completion_tokens, 1, 16384);
-  }
-  policy.max_continuations =
-      ClampInteractionPolicyValue(configured_policy.max_continuations, 0, 8);
-  policy.max_total_completion_tokens = ClampInteractionPolicyValue(
-      configured_policy.max_total_completion_tokens,
-      policy.max_tokens,
-      16384);
-  policy.max_elapsed_time_ms = ClampInteractionPolicyValue(
-      configured_policy.max_elapsed_time_ms, 1000, 600000);
-  if (configured_policy.semantic_goal.has_value()) {
-    policy.semantic_goal = Trim(*configured_policy.semantic_goal);
-  }
-  if (policy.target_completion_tokens.has_value()) {
-    policy.max_total_completion_tokens = std::max(
-        policy.max_total_completion_tokens,
-        *policy.target_completion_tokens);
-  }
-  policy.require_completion_marker =
-      !policy.semantic_goal.empty() ||
-      policy.target_completion_tokens.has_value() ||
-      policy.response_mode == "long" ||
-      policy.response_mode == "very_long";
-  return policy;
-}
-
-InteractionCompletionPolicy DefaultChatInteractionCompletionPolicy() {
-  comet::InteractionSettings::CompletionPolicy configured_policy;
-  configured_policy.response_mode = "normal";
-  configured_policy.max_tokens = 512;
-  configured_policy.max_continuations = 0;
-  configured_policy.max_total_completion_tokens = 512;
-  configured_policy.max_elapsed_time_ms = 30000;
-  return NormalizeConfiguredInteractionCompletionPolicy(configured_policy);
-}
-
-std::string LastUserMessageContent(const json& payload) {
-  if (!payload.contains("messages") || !payload.at("messages").is_array()) {
-    return "";
-  }
-  const auto& messages = payload.at("messages");
-  for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-    if ((*it).is_object() &&
-        (*it).value("role", std::string{}) == "user" &&
-        (*it).contains("content") &&
-        (*it).at("content").is_string()) {
-      return (*it).at("content").get<std::string>();
-    }
-  }
-  return "";
-}
-
-bool ContainsAnySubstring(const std::string& haystack, const std::vector<std::string>& needles) {
-  for (const auto& needle : needles) {
-    if (!needle.empty() && haystack.find(needle) != std::string::npos) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool LooksLikeLongFormTaskRequest(const std::string& text) {
-  const std::string normalized = NormalizeLanguageCode(text);
-  const std::size_t text_length = normalized.size();
-  if (text_length >= 280) {
-    return true;
-  }
-  static const std::vector<std::string> explicit_long_markers = {
-      "несколько сообщений", "разбивай на несколько сообщений", "разбей на несколько сообщений",
-      "продолжай в нескольких сообщениях", "in several messages", "multiple messages",
-      "split across multiple messages", "continue in multiple messages",
-      "2048 слов", "1024 слов", "1536 слов", "2048 words", "1024 words", "1536 words",
-      "2048 токен", "1024 токен", "2048 token", "1024 token",
-  };
-  if (ContainsAnySubstring(normalized, explicit_long_markers)) {
-    return true;
-  }
-  static const std::vector<std::string> long_form_keywords = {
-      "напиши историю", "напиши рассказ", "напиши эссе", "напиши статью",
-      "подробный план", "подробно опиши", "развернуто опиши", "детально опиши",
-      "историю", "рассказ", "эссе", "статью", "гайд", "руководство",
-      "write a story", "write an essay", "write an article", "write a guide",
-      "detailed plan", "detailed analysis", "long-form", "long form",
-      "структуру проекта", "архитектуру проекта", "изучи весь проект",
-      "объясни проект", "проследи путь", "по всему репозиторию",
-      "repository-wide", "repo-wide", "entire repository", "whole repository",
-      "cross-file", "cross file", "project structure", "project architecture",
-      "trace the path", "explain the repository", "analyze the whole project",
-  };
-  return ContainsAnySubstring(normalized, long_form_keywords);
-}
-
-bool LooksLikeRepositoryAnalysisRequest(const std::string& text) {
-  const std::string normalized = NormalizeLanguageCode(text);
-  static const std::vector<std::string> analysis_markers = {
-      "репозитор", "структур", "архитектур", "по проекту", "по репозиторию",
-      "изучи проект", "изучи репозиторий", "кодовая база", "проследи путь",
-      "cross-file", "cross file", "repo-wide", "repository-wide",
-      "repository", "repo ", "project structure", "project architecture",
-      "trace the path", "analyze the project", "analyze the repository",
-      "codebase", "code base", "grounded in files", "with file references",
-  };
-  return ContainsAnySubstring(normalized, analysis_markers);
-}
-
-ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
-    const comet::DesiredState& desired_state,
-    const json& payload) {
-  ResolvedInteractionPolicy resolved;
-  const std::string last_user_message = LastUserMessageContent(payload);
-  const bool long_form_task = LooksLikeLongFormTaskRequest(last_user_message);
-  const bool repository_analysis =
-      LooksLikeRepositoryAnalysisRequest(last_user_message);
-  resolved.repository_analysis = repository_analysis;
-  resolved.long_form = long_form_task;
-  if (desired_state.interaction.has_value()) {
-    const auto& interaction = *desired_state.interaction;
-    if (repository_analysis && long_form_task &&
-        interaction.analysis_long_completion_policy.has_value()) {
-      resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
-          *interaction.analysis_long_completion_policy);
-      resolved.mode = "analysis-long";
-      return resolved;
-    }
-    if (repository_analysis && !long_form_task &&
-        interaction.analysis_completion_policy.has_value()) {
-      resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
-          *interaction.analysis_completion_policy);
-      resolved.mode = "analysis-default";
-      return resolved;
-    }
-    if (long_form_task && interaction.long_completion_policy.has_value()) {
-      resolved.policy =
-          NormalizeConfiguredInteractionCompletionPolicy(*interaction.long_completion_policy);
-      resolved.mode = "long";
-      return resolved;
-    }
-    if (!long_form_task &&
-        interaction.completion_policy.has_value() &&
-        NormalizeLanguageCode(interaction.completion_policy->response_mode) != "long" &&
-        NormalizeLanguageCode(interaction.completion_policy->response_mode) != "very_long") {
-      resolved.policy =
-          NormalizeConfiguredInteractionCompletionPolicy(*interaction.completion_policy);
-      resolved.mode = "default";
-      return resolved;
-    }
-    if (long_form_task &&
-        interaction.completion_policy.has_value() &&
-        (NormalizeLanguageCode(interaction.completion_policy->response_mode) == "long" ||
-         NormalizeLanguageCode(interaction.completion_policy->response_mode) == "very_long")) {
-      resolved.policy =
-          NormalizeConfiguredInteractionCompletionPolicy(*interaction.completion_policy);
-      resolved.mode = "long";
-      return resolved;
-    }
-  }
-  resolved.policy = DefaultChatInteractionCompletionPolicy();
-  resolved.mode = repository_analysis
-                      ? (long_form_task ? "analysis-long-fallback"
-                                        : "analysis-default-fallback")
-                      : (long_form_task ? "long-fallback"
-                                        : "default-fallback");
-  return resolved;
-}
-
-std::string BuildRepositoryAnalysisInstruction() {
-  return "Repository analysis requirement: answer only from the repository or codebase evidence provided in the request. "
-         "Cite concrete file paths for repo-specific claims. If evidence is insufficient, say exactly what is unknown. "
-         "Do not claim lack of filesystem access when repository context is already present.";
-}
-
-std::string GenerateInteractionSessionId() {
-  static std::atomic<unsigned long long> counter{0};
-  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::system_clock::now().time_since_epoch())
-                       .count();
-  return "sess-" + std::to_string(now) + "-" + std::to_string(++counter);
-}
-
-std::string BuildSemanticCompletionInstruction(const InteractionCompletionPolicy& policy) {
-  std::ostringstream instruction;
-  instruction << "Semantic completion protocol:\n"
-              << "- You may need multiple assistant segments to finish this task.\n"
-              << "- End the final segment with the exact marker " << policy.completion_marker
-              << " on its own line only when the task is fully complete.\n"
-              << "- If the task is not complete in this segment, do not output the marker.\n"
-              << "- For continuation segments, continue exactly where you stopped without repeating prior text unless recap is explicitly requested.\n"
-              << "- Respect the user's requested length and scope. Once the requested artifact is complete, stop instead of adding optional extra sections.\n"
-              << "- When you have satisfied the user's requested structure and length, emit the marker immediately on its own line and end the response.\n"
-              << "- Do not emit tool calls, tool requests, or waiting states in this phase.\n";
-  if (!policy.semantic_goal.empty()) {
-    instruction << "- Task completion goal: " << policy.semantic_goal << "\n";
-  }
-  if (policy.target_completion_tokens.has_value()) {
-    instruction << "- Aim for at least " << *policy.target_completion_tokens
-                << " completion tokens before marking the task complete.\n";
-  }
-  return instruction.str();
-}
-
-std::string BuildContinuationPrompt(
-    const InteractionCompletionPolicy& policy,
-    bool natural_stop_without_marker,
-    const std::string& trailing_excerpt = "",
-    int remaining_completion_tokens = 0) {
-  std::ostringstream prompt;
-  if (natural_stop_without_marker) {
-    prompt << "Your previous segment stopped before you proved the task was complete. "
-           << "If the task is already complete, reply with only " << policy.completion_marker
-           << ". Otherwise continue exactly where you stopped.";
-  } else {
-    prompt << "Continue exactly where you stopped.";
-  }
-  if (!trailing_excerpt.empty()) {
-    prompt << " The last visible excerpt from your previous segment was:\n"
-           << trailing_excerpt
-           << "\nContinue immediately after that excerpt.";
-  }
-  if (remaining_completion_tokens > 0) {
-    prompt << " You have approximately " << remaining_completion_tokens
-           << " completion tokens remaining across all future segments.";
-    if (remaining_completion_tokens <= policy.max_tokens) {
-      prompt << " Finish the remaining required content and conclude in this segment if possible.";
-    } else {
-      prompt << " Prioritize the remaining required sections and avoid optional expansion.";
-    }
-  }
-  prompt << " Do not repeat prior text. Emit " << policy.completion_marker
-         << " on its own line only in the final segment when the task is fully complete."
-         << " Do not restart the outline, recap earlier sections, or add extra filler once the requested artifact is complete.";
-  return prompt.str();
-}
-
-bool IsUtf8ContinuationByte(unsigned char value);
-
-std::string Utf8SafeSuffix(const std::string& value, std::size_t max_bytes) {
-  if (value.size() <= max_bytes) {
-    return value;
-  }
-  std::size_t start = value.size() - max_bytes;
-  while (start < value.size() &&
-         IsUtf8ContinuationByte(static_cast<unsigned char>(value[start]))) {
-    ++start;
-  }
-  return value.substr(start);
-}
-
-bool SessionReachedTargetLength(
-    const InteractionCompletionPolicy& policy,
-    int total_completion_tokens) {
-  return !policy.target_completion_tokens.has_value() ||
-         total_completion_tokens >= *policy.target_completion_tokens;
-}
-
-bool CanCompleteOnNaturalStop(
-    const InteractionCompletionPolicy& policy,
-    const InteractionSegmentSummary& summary) {
-  if (policy.require_completion_marker) {
-    return false;
-  }
-  return summary.finish_reason != "length" && !Trim(summary.text).empty();
-}
-
-std::string RemoveCompletionMarkers(
-    const std::string& input,
-    const std::string& marker,
-    bool* marker_seen) {
-  std::string output = input;
-  std::size_t position = std::string::npos;
-  while ((position = output.find(marker)) != std::string::npos) {
-    if (marker_seen != nullptr) {
-      *marker_seen = true;
-    }
-    output.erase(position, marker.size());
-  }
-  return output;
-}
-
-bool IsUtf8ContinuationByte(unsigned char value) {
-  return (value & 0xC0) == 0x80;
-}
-
-std::size_t Utf8SequenceLength(unsigned char lead) {
-  if ((lead & 0x80) == 0) {
-    return 1;
-  }
-  if ((lead & 0xE0) == 0xC0) {
-    return 2;
-  }
-  if ((lead & 0xF0) == 0xE0) {
-    return 3;
-  }
-  if ((lead & 0xF8) == 0xF0) {
-    return 4;
-  }
-  return 0;
-}
-
-std::size_t ValidUtf8PrefixLength(const std::string& value) {
-  std::size_t index = 0;
-  while (index < value.size()) {
-    const unsigned char lead = static_cast<unsigned char>(value[index]);
-    const std::size_t sequence_length = Utf8SequenceLength(lead);
-    if (sequence_length == 0) {
-      break;
-    }
-    if (index + sequence_length > value.size()) {
-      break;
-    }
-    bool valid = true;
-    for (std::size_t offset = 1; offset < sequence_length; ++offset) {
-      if (!IsUtf8ContinuationByte(static_cast<unsigned char>(value[index + offset]))) {
-        valid = false;
-        break;
-      }
-    }
-    if (!valid) {
-      break;
-    }
-    index += sequence_length;
-  }
-  return index;
-}
-
-std::string ConsumeCompletionMarkerFilteredChunk(
-    CompletionMarkerFilterState& state,
-    const std::string& chunk,
-    const std::string& marker,
-    bool final_flush) {
-  state.pending += chunk;
-  std::string emitted;
-  while (true) {
-    const std::size_t marker_pos = state.pending.find(marker);
-    if (marker_pos != std::string::npos) {
-      emitted += state.pending.substr(0, marker_pos);
-      state.pending.erase(0, marker_pos + marker.size());
-      state.marker_seen = true;
-      continue;
-    }
-    if (final_flush) {
-      emitted += state.pending;
-      state.pending.clear();
-      break;
-    }
-    if (state.pending.size() > marker.size()) {
-      const std::size_t safe_prefix = state.pending.size() - marker.size() + 1;
-      const std::string candidate = state.pending.substr(0, safe_prefix);
-      const std::size_t valid_prefix = ValidUtf8PrefixLength(candidate);
-      if (valid_prefix == 0) {
-        break;
-      }
-      emitted += state.pending.substr(0, valid_prefix);
-      state.pending.erase(0, valid_prefix);
-    }
-    break;
-  }
-  return emitted;
-}
-
-bool TryConsumeSseFrame(std::string& buffer, InteractionSseFrame* frame) {
-  const std::size_t separator = buffer.find("\n\n");
-  if (separator == std::string::npos) {
-    return false;
-  }
-  const std::string raw_frame = buffer.substr(0, separator);
-  buffer.erase(0, separator + 2);
-  frame->event_name = "message";
-  frame->data.clear();
-  std::stringstream stream(raw_frame);
-  std::string line;
-  std::vector<std::string> data_lines;
-  while (std::getline(stream, line)) {
-    if (!line.empty() && line.back() == '\r') {
-      line.pop_back();
-    }
-    const std::string trimmed_line = Trim(line);
-    if (line.empty() || line[0] == ':') {
-      continue;
-    }
-    if (!trimmed_line.empty()) {
-      const std::size_t extensions = trimmed_line.find(';');
-      const std::string chunk_size_candidate =
-          Trim(trimmed_line.substr(0, extensions == std::string::npos ? trimmed_line.size()
-                                                                      : extensions));
-      const bool looks_like_chunk_size =
-          !chunk_size_candidate.empty() &&
-          std::all_of(
-              chunk_size_candidate.begin(),
-              chunk_size_candidate.end(),
-              [](unsigned char ch) { return std::isxdigit(ch) != 0; });
-      if (looks_like_chunk_size) {
-        continue;
-      }
-    }
-    if (line.rfind("event:", 0) == 0) {
-      frame->event_name = Trim(line.substr(6));
-      continue;
-    }
-    if (line.rfind("data:", 0) == 0) {
-      const std::size_t offset = line.size() > 5 && line[5] == ' ' ? 6 : 5;
-      data_lines.push_back(line.substr(offset));
-    }
-  }
-  for (std::size_t index = 0; index < data_lines.size(); ++index) {
-    if (index > 0) {
-      frame->data.push_back('\n');
-    }
-    frame->data += data_lines[index];
-  }
-  return true;
 }
 
 std::string NormalizeLanguageCode(const std::string& value) {
@@ -1595,12 +449,13 @@ std::string BuildInteractionUpstreamBody(
         *resolution.desired_state.interaction->analysis_system_prompt);
   }
   if (resolved_policy.repository_analysis) {
-    system_instruction_parts.push_back(BuildRepositoryAnalysisInstruction());
+    system_instruction_parts.push_back(comet::controller::BuildRepositoryAnalysisInstruction());
   }
   system_instruction_parts.push_back(
       BuildLanguageInstruction(resolution.desired_state, preferred_language));
   if (policy.require_completion_marker || policy.max_continuations > 0) {
-    system_instruction_parts.push_back(BuildSemanticCompletionInstruction(policy));
+    system_instruction_parts.push_back(
+        comet::controller::BuildSemanticCompletionInstruction(policy));
   }
   if (structured_output_json) {
     system_instruction_parts.push_back(
@@ -1943,1126 +798,398 @@ void ValidateDesiredStateForControllerAdmission(const comet::DesiredState& desir
   }
 }
 
-PlaneInteractionResolution ResolvePlaneInteraction(
-    const std::string& db_path,
-    const std::string& plane_name) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-
-  const auto desired_state = store.LoadDesiredState(plane_name);
-  if (!desired_state.has_value()) {
-    throw std::runtime_error("plane '" + plane_name + "' not found");
-  }
-  PlaneInteractionResolution resolution;
-  resolution.desired_state = *desired_state;
-  resolution.plane_record = store.LoadPlane(plane_name);
-  const std::string primary_node = desired_state->inference.primary_infer_node;
-  bool observation_matches_plane = false;
-  if (!primary_node.empty()) {
-    resolution.observation = store.LoadHostObservation(primary_node);
-    bool infer_runtime_present = false;
-    if (resolution.observation.has_value()) {
-      if (const auto infer_instance_name = FindInferInstanceName(*desired_state);
-          infer_instance_name.has_value()) {
-        const auto instance_statuses = ParseInstanceRuntimeStatuses(*resolution.observation);
-        infer_runtime_present = std::any_of(
-            instance_statuses.begin(),
-            instance_statuses.end(),
-            [&](const comet::RuntimeProcessStatus& status) {
-              return status.instance_name == *infer_instance_name;
-            });
-      }
-    }
-    if (resolution.observation.has_value()) {
-      try {
-        observation_matches_plane =
-            ObservationMatchesPlane(*resolution.observation, plane_name) || infer_runtime_present;
-      } catch (const std::exception&) {
-        observation_matches_plane = infer_runtime_present;
-      }
-    }
-    if (observation_matches_plane) {
-      resolution.runtime_status =
-          BuildPlaneScopedRuntimeStatus(*desired_state, *resolution.observation);
-    }
-    if (!resolution.runtime_status.has_value() &&
-        observation_matches_plane &&
-        !resolution.observation->runtime_status_json.empty()) {
-      resolution.runtime_status =
-          comet::DeserializeRuntimeStatusJson(resolution.observation->runtime_status_json);
-    }
-    if (resolution.runtime_status.has_value()) {
-      resolution.target = ParseInteractionTarget(
-          resolution.runtime_status->gateway_listen,
-          desired_state->gateway.listen_port);
-    }
-  }
-
-  const bool llm_plane = desired_state->plane_mode == comet::PlaneMode::Llm;
-  const bool running_plane =
-      resolution.plane_record.has_value() && resolution.plane_record->state == "running";
-  const int expected_worker_members =
-      std::max(0, desired_state->worker_group.expected_workers);
-  int ready_worker_members = CountReadyWorkerMembers(store, *desired_state);
-
-  if (!resolution.target.has_value()) {
-    resolution.target = ParseInteractionTarget(
-        desired_state->gateway.listen_host + ":" +
-            std::to_string(desired_state->gateway.listen_port),
-        desired_state->gateway.listen_port);
-  }
-
-  if (!resolution.runtime_status.has_value() && resolution.target.has_value()) {
-    comet::RuntimeStatus runtime;
-    runtime.plane_name = desired_state->plane_name;
-    runtime.control_root = desired_state->control_root;
-    runtime.primary_infer_node = desired_state->inference.primary_infer_node;
-    runtime.runtime_backend =
-        desired_state->inference.runtime_engine == "vllm" ? "worker-vllm"
-                                                          : desired_state->inference.runtime_engine;
-    if (const auto infer_instance_name = FindInferInstanceName(*desired_state);
-        infer_instance_name.has_value()) {
-      runtime.instance_name = *infer_instance_name;
-      runtime.instance_role = "infer";
-      runtime.node_name = desired_state->inference.primary_infer_node;
-    }
-    if (desired_state->bootstrap_model.has_value()) {
-      runtime.active_model_id = desired_state->bootstrap_model->model_id;
-      runtime.active_served_model_name =
-          desired_state->bootstrap_model->served_model_name.value_or(std::string{});
-      runtime.cached_local_model_path =
-          desired_state->bootstrap_model->local_path.value_or(std::string{});
-      runtime.model_path = runtime.cached_local_model_path;
-      runtime.active_model_ready = !runtime.active_model_id.empty();
-    }
-    runtime.gateway_listen =
-        desired_state->gateway.listen_host + ":" +
-        std::to_string(desired_state->gateway.listen_port);
-    runtime.gateway_health_url =
-        "http://127.0.0.1:" + std::to_string(desired_state->gateway.listen_port) + "/health";
-    runtime.upstream_models_url =
-        "http://127.0.0.1:" + std::to_string(desired_state->gateway.listen_port) + "/v1/models";
-    runtime.inference_health_url = runtime.upstream_models_url;
-    runtime.gateway_plan_ready = true;
-    runtime.gateway_ready = ProbeControllerTargetOk(resolution.target, "/health");
-    runtime.inference_ready = ProbeControllerTargetOk(resolution.target, "/v1/models");
-    resolution.runtime_status = std::move(runtime);
-  }
-
-  if (ready_worker_members == 0 &&
-      resolution.runtime_status.has_value() &&
-      resolution.runtime_status->inference_ready) {
-    ready_worker_members = expected_worker_members;
-  }
-
-  if (resolution.runtime_status.has_value()) {
-    resolution.runtime_status->registry_entries =
-        std::max(resolution.runtime_status->registry_entries, ready_worker_members);
-    resolution.runtime_status->launch_ready =
-        resolution.runtime_status->active_model_ready &&
-        resolution.runtime_status->inference_ready &&
-        resolution.runtime_status->gateway_ready &&
-        ready_worker_members >= expected_worker_members;
-    resolution.runtime_status->ready = resolution.runtime_status->launch_ready;
-  }
-  const bool observation_ready =
-      observation_matches_plane ||
-      (resolution.runtime_status.has_value() &&
-       (resolution.runtime_status->gateway_ready || resolution.runtime_status->inference_ready));
-  const bool worker_group_degraded =
-      expected_worker_members > 0 &&
-      ready_worker_members > 0 &&
-      ready_worker_members < expected_worker_members;
-  const auto local_runtime_blocker =
-      DescribeUnsupportedControllerLocalRuntime(*desired_state, primary_node);
-  const bool runtime_ready =
-      resolution.runtime_status.has_value() &&
-      resolution.runtime_status->active_model_ready &&
-      resolution.runtime_status->inference_ready &&
-      resolution.runtime_status->gateway_ready &&
-      resolution.runtime_status->launch_ready;
-  std::string reason = "ready";
-  if (!llm_plane) {
-    reason = "plane_mode_compute";
-  } else if (!running_plane) {
-    reason = "plane_not_running";
-  } else if (local_runtime_blocker.has_value()) {
-    reason = "unsupported_local_runtime";
-  } else if (!observation_ready) {
-    reason = "no_observation";
-  } else if (resolution.observation->status == comet::HostObservationStatus::Failed) {
-    reason = "runtime_start_failed";
-  } else if (!resolution.runtime_status.has_value()) {
-    reason = "runtime_status_missing";
-  } else if (!resolution.runtime_status->active_model_ready) {
-    reason = "active_model_missing";
-  } else if (expected_worker_members > 0 &&
-             ready_worker_members < expected_worker_members) {
-    reason = "worker_group_partial";
-  } else if (!resolution.runtime_status->gateway_ready) {
-    reason = "gateway_not_ready";
-  } else if (!resolution.runtime_status->inference_ready) {
-    reason = desired_state->inference.runtime_engine == "vllm"
-                 ? "distributed_bootstrap_pending"
-                 : "inference_not_ready";
-  } else if (!resolution.target.has_value()) {
-    reason = "gateway_target_missing";
-  }
-
-  resolution.status_payload = json{
-      {"plane_name", plane_name},
-      {"plane_mode", comet::ToString(desired_state->plane_mode)},
-      {"interaction_enabled", llm_plane},
-      {"ready", llm_plane && running_plane && observation_ready && runtime_ready &&
-                    resolution.target.has_value()},
-      {"reason", reason},
-      {"plane_state",
-       resolution.plane_record.has_value() ? json(resolution.plane_record->state) : json(nullptr)},
-      {"primary_infer_node",
-       primary_node.empty() ? json(nullptr) : json(primary_node)},
-      {"worker_group_id",
-       desired_state->worker_group.group_id.empty()
-           ? json(nullptr)
-           : json(desired_state->worker_group.group_id)},
-      {"worker_group_expected", expected_worker_members},
-      {"worker_group_ready", ready_worker_members},
-      {"degraded", worker_group_degraded},
-      {"active_model_id",
-       resolution.runtime_status.has_value() &&
-               !resolution.runtime_status->active_model_id.empty()
-           ? json(resolution.runtime_status->active_model_id)
-           : json(nullptr)},
-      {"served_model_name",
-       resolution.runtime_status.has_value() &&
-               !resolution.runtime_status->active_served_model_name.empty()
-           ? json(resolution.runtime_status->active_served_model_name)
-           : json(nullptr)},
-      {"default_response_language",
-       resolution.desired_state.interaction.has_value()
-           ? json(resolution.desired_state.interaction->default_response_language)
-           : json(nullptr)},
-      {"supported_response_languages",
-       resolution.desired_state.interaction.has_value()
-           ? json(resolution.desired_state.interaction->supported_response_languages)
-           : json(json::array())},
-      {"follow_user_language",
-       resolution.desired_state.interaction.has_value()
-           ? json(resolution.desired_state.interaction->follow_user_language)
-           : json(true)},
-      {"analysis_system_prompt_configured",
-       resolution.desired_state.interaction.has_value() &&
-               resolution.desired_state.interaction->analysis_system_prompt.has_value() &&
-               !resolution.desired_state.interaction->analysis_system_prompt->empty()
-           ? json(true)
-           : json(false)},
-      {"completion_policy",
-       resolution.desired_state.interaction.has_value() &&
-               resolution.desired_state.interaction->completion_policy.has_value()
-           ? json{
-                 {"response_mode",
-                  resolution.desired_state.interaction->completion_policy->response_mode},
-                 {"max_tokens",
-                  resolution.desired_state.interaction->completion_policy->max_tokens},
-                 {"target_completion_tokens",
-                  resolution.desired_state.interaction->completion_policy
-                          ->target_completion_tokens.has_value()
-                      ? json(*resolution.desired_state.interaction->completion_policy
-                                  ->target_completion_tokens)
-                      : json(nullptr)},
-                 {"max_continuations",
-                  resolution.desired_state.interaction->completion_policy->max_continuations},
-                 {"max_total_completion_tokens",
-                  resolution.desired_state.interaction->completion_policy
-                      ->max_total_completion_tokens},
-                 {"max_elapsed_time_ms",
-                  resolution.desired_state.interaction->completion_policy
-                      ->max_elapsed_time_ms},
-                 {"semantic_goal",
-                  resolution.desired_state.interaction->completion_policy->semantic_goal
-                          .has_value()
-                      ? json(*resolution.desired_state.interaction->completion_policy
-                                  ->semantic_goal)
-                      : json(nullptr)},
-             }
-           : json(nullptr)},
-      {"long_completion_policy",
-       resolution.desired_state.interaction.has_value() &&
-               resolution.desired_state.interaction->long_completion_policy.has_value()
-           ? json{
-                 {"response_mode",
-                  resolution.desired_state.interaction->long_completion_policy->response_mode},
-                 {"max_tokens",
-                  resolution.desired_state.interaction->long_completion_policy->max_tokens},
-                 {"target_completion_tokens",
-                  resolution.desired_state.interaction->long_completion_policy
-                          ->target_completion_tokens.has_value()
-                      ? json(*resolution.desired_state.interaction->long_completion_policy
-                                  ->target_completion_tokens)
-                      : json(nullptr)},
-                 {"max_continuations",
-                  resolution.desired_state.interaction->long_completion_policy
-                      ->max_continuations},
-                 {"max_total_completion_tokens",
-                  resolution.desired_state.interaction->long_completion_policy
-                      ->max_total_completion_tokens},
-                 {"max_elapsed_time_ms",
-                  resolution.desired_state.interaction->long_completion_policy
-                      ->max_elapsed_time_ms},
-                 {"semantic_goal",
-                  resolution.desired_state.interaction->long_completion_policy->semantic_goal
-                          .has_value()
-                      ? json(*resolution.desired_state.interaction->long_completion_policy
-                                  ->semantic_goal)
-                      : json(nullptr)},
-             }
-           : json(nullptr)},
-      {"analysis_completion_policy",
-       resolution.desired_state.interaction.has_value() &&
-               resolution.desired_state.interaction->analysis_completion_policy.has_value()
-           ? json{
-                 {"response_mode",
-                  resolution.desired_state.interaction->analysis_completion_policy
-                      ->response_mode},
-                 {"max_tokens",
-                  resolution.desired_state.interaction->analysis_completion_policy
-                      ->max_tokens},
-                 {"target_completion_tokens",
-                  resolution.desired_state.interaction->analysis_completion_policy
-                          ->target_completion_tokens.has_value()
-                      ? json(*resolution.desired_state.interaction
-                                  ->analysis_completion_policy
-                                  ->target_completion_tokens)
-                      : json(nullptr)},
-                 {"max_continuations",
-                  resolution.desired_state.interaction->analysis_completion_policy
-                      ->max_continuations},
-                 {"max_total_completion_tokens",
-                  resolution.desired_state.interaction->analysis_completion_policy
-                      ->max_total_completion_tokens},
-                 {"max_elapsed_time_ms",
-                  resolution.desired_state.interaction->analysis_completion_policy
-                      ->max_elapsed_time_ms},
-                 {"semantic_goal",
-                  resolution.desired_state.interaction->analysis_completion_policy
-                              ->semantic_goal.has_value()
-                      ? json(*resolution.desired_state.interaction
-                                  ->analysis_completion_policy
-                                  ->semantic_goal)
-                      : json(nullptr)},
-             }
-           : json(nullptr)},
-      {"analysis_long_completion_policy",
-       resolution.desired_state.interaction.has_value() &&
-               resolution.desired_state.interaction->analysis_long_completion_policy
-                   .has_value()
-           ? json{
-                 {"response_mode",
-                  resolution.desired_state.interaction
-                      ->analysis_long_completion_policy->response_mode},
-                 {"max_tokens",
-                  resolution.desired_state.interaction
-                      ->analysis_long_completion_policy->max_tokens},
-                 {"target_completion_tokens",
-                  resolution.desired_state.interaction
-                              ->analysis_long_completion_policy
-                              ->target_completion_tokens.has_value()
-                      ? json(*resolution.desired_state.interaction
-                                  ->analysis_long_completion_policy
-                                  ->target_completion_tokens)
-                      : json(nullptr)},
-                 {"max_continuations",
-                  resolution.desired_state.interaction
-                      ->analysis_long_completion_policy->max_continuations},
-                 {"max_total_completion_tokens",
-                  resolution.desired_state.interaction
-                      ->analysis_long_completion_policy
-                      ->max_total_completion_tokens},
-                 {"max_elapsed_time_ms",
-                  resolution.desired_state.interaction
-                      ->analysis_long_completion_policy->max_elapsed_time_ms},
-                 {"semantic_goal",
-                  resolution.desired_state.interaction
-                              ->analysis_long_completion_policy
-                              ->semantic_goal.has_value()
-                      ? json(*resolution.desired_state.interaction
-                                  ->analysis_long_completion_policy
-                                  ->semantic_goal)
-                      : json(nullptr)},
-             }
-           : json(nullptr)},
-      {"gateway_listen",
-       resolution.runtime_status.has_value() &&
-               !resolution.runtime_status->gateway_listen.empty()
-           ? json(resolution.runtime_status->gateway_listen)
-           : json(nullptr)},
-      {"gateway_target",
-       resolution.target.has_value()
-           ? json(resolution.target->host + ":" + std::to_string(resolution.target->port))
-           : json(nullptr)},
-      {"runtime_status",
-       resolution.runtime_status.has_value()
-           ? json::parse(comet::SerializeRuntimeStatusJson(*resolution.runtime_status))
-           : json(nullptr)},
-      {"failure_detail",
-       reason == "unsupported_local_runtime"
-           ? json(*local_runtime_blocker)
-           : (reason == "runtime_start_failed" && resolution.observation.has_value() &&
-                      !resolution.observation->status_message.empty()
-                  ? json(resolution.observation->status_message)
-                  : json(nullptr))},
-  };
-  return resolution;
-}
-
-json ParseInteractionPayload(const std::string& body) {
-  return body.empty() ? json::object() : json::parse(body);
-}
-
-HttpResponse BuildPlaneInteractionContractError(
-    int status_code,
-    const PlaneInteractionResolution& resolution,
-    const std::string& request_id,
-    const std::string& code,
-    const std::string& message,
-    bool retryable,
-    const json& details = json::object()) {
-  json payload = resolution.status_payload;
-  payload["request_id"] = request_id;
-  payload["error"] = json{
-      {"code", code},
-      {"message", message},
-      {"retryable", retryable},
-  };
-  payload["comet"] = BuildInteractionContractMetadata(resolution, request_id);
-  if (!details.empty()) {
-    payload["error"]["details"] = details;
-  }
-  return BuildJsonResponse(
-      status_code,
-      payload,
-      BuildInteractionResponseHeaders(request_id));
-}
-
-bool PayloadContainsUnsupportedInteractionField(
-    const json& payload,
-    std::string* field_name) {
-  static const std::vector<std::string> unsupported_fields = {
-      "tools",
-      "tool_choice",
-      "functions",
-      "function_call",
-  };
-  for (const auto& field : unsupported_fields) {
-    if (payload.contains(field)) {
-      if (field_name != nullptr) {
-        *field_name = field;
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
-std::optional<HttpResponse> ValidateAndNormalizeInteractionRequest(
-    const PlaneInteractionResolution& resolution,
-    const std::string& request_id,
-    const json& original_payload,
-    InteractionRequestContext* context) {
-  if (context == nullptr) {
-    throw std::invalid_argument("interaction request context is required");
-  }
-  if (!original_payload.is_object()) {
-    return BuildPlaneInteractionContractError(
-        400,
-        resolution,
-        request_id,
-        "malformed_request",
-        "interaction request body must be a JSON object",
-        false);
-  }
-
-  json payload = original_payload;
-  std::string unsupported_field;
-  if (PayloadContainsUnsupportedInteractionField(payload, &unsupported_field)) {
-    return BuildPlaneInteractionContractError(
-        400,
-        resolution,
-        request_id,
-        "unsupported_field",
-        "interaction request field '" + unsupported_field + "' is not supported by comet-node",
-        false,
-        json{{"field", unsupported_field}});
-  }
-
-  if (payload.contains("response_format")) {
-    if (payload.at("response_format").is_object()) {
-      const std::string response_format_type =
-          payload.at("response_format").value("type", std::string{});
-      if (response_format_type == "json_object") {
-        context->structured_output_json = true;
-      } else {
-        return BuildPlaneInteractionContractError(
-            400,
-            resolution,
-            request_id,
-            "unsupported_response_format",
-            "only response_format.type=json_object is supported",
-            false,
-            json{{"field", "response_format"},
-                 {"supported_type", "json_object"},
-                 {"received_type", response_format_type}});
-      }
-    } else {
-      return BuildPlaneInteractionContractError(
-          400,
-          resolution,
-          request_id,
-          "malformed_request",
-          "response_format must be an object",
-          false,
-          json{{"field", "response_format"}});
-    }
-  }
-
-  if (!payload.contains("messages") || !payload.at("messages").is_array()) {
-    return BuildPlaneInteractionContractError(
-        400,
-        resolution,
-        request_id,
-        "malformed_request",
-        "chat completion request is missing messages array",
-        false,
-        json{{"field", "messages"}});
-  }
-
-  const std::string served_model_name = ResolveInteractionServedModelName(resolution);
-  const std::string active_model_id = ResolveInteractionActiveModelId(resolution);
-  if (payload.contains("model") && !payload.at("model").is_null()) {
-    if (!payload.at("model").is_string()) {
-      return BuildPlaneInteractionContractError(
-          400,
-          resolution,
-          request_id,
-          "malformed_request",
-          "model must be a string when provided",
-          false,
-          json{{"field", "model"}});
-    }
-    const std::string requested_model = payload.at("model").get<std::string>();
-    const bool matches_served =
-        !served_model_name.empty() && requested_model == served_model_name;
-    const bool matches_root =
-        !active_model_id.empty() && requested_model == active_model_id;
-    if (!requested_model.empty() && !matches_served && !matches_root) {
-      return BuildPlaneInteractionContractError(
-          409,
-          resolution,
-          request_id,
-          "model_mismatch",
-          "requested model does not match the active model for this plane",
-          false,
-          json{
-              {"requested_model", requested_model},
-              {"served_model_name", served_model_name},
-              {"active_model_id", active_model_id},
-          });
-    }
-  }
-  if (!served_model_name.empty()) {
-    payload["model"] = served_model_name;
-    context->normalized_model = served_model_name;
-  } else if (!active_model_id.empty()) {
-    payload["model"] = active_model_id;
-    context->normalized_model = active_model_id;
-  }
-
-  context->request_id = request_id;
-  context->payload = std::move(payload);
-  return std::nullopt;
-}
-
-std::string RemoveThinkBlocks(std::string value) {
-  while (true) {
-    const std::size_t begin = value.find("<think>");
-    if (begin == std::string::npos) {
-      return value;
-    }
-    const std::size_t end = value.find("</think>", begin);
-    if (end == std::string::npos) {
-      return value.substr(0, begin);
-    }
-    value.erase(begin, end + std::string("</think>").size() - begin);
-  }
-}
-
-std::vector<std::string> SplitParagraphs(const std::string& value) {
-  std::vector<std::string> paragraphs;
-  std::string current;
-  bool last_blank = false;
-  std::istringstream input(value);
-  std::string line;
-  while (std::getline(input, line)) {
-    const bool blank = Trim(line).empty();
-    if (blank) {
-      if (!current.empty()) {
-        paragraphs.push_back(Trim(current));
-        current.clear();
-      }
-      last_blank = true;
-      continue;
-    }
-    if (!current.empty()) {
-      current += last_blank ? "\n" : "\n";
-    }
-    current += line;
-    last_blank = false;
-  }
-  if (!current.empty()) {
-    paragraphs.push_back(Trim(current));
-  }
-  return paragraphs;
-}
-
-bool StartsWithReasoningPreamble(const std::string& text) {
-  const std::string lowered = Lowercase(Trim(text));
-  return lowered.rfind("thinking process:", 0) == 0 || lowered.rfind("reasoning:", 0) == 0 ||
-         lowered.rfind("analysis:", 0) == 0 || lowered.rfind("chain of thought:", 0) == 0;
-}
-
-std::string SanitizeInteractionText(std::string text) {
-  text = RemoveThinkBlocks(std::move(text));
-  text = Trim(text);
-  if (StartsWithReasoningPreamble(text)) {
-    const auto paragraphs = SplitParagraphs(text);
-    for (auto it = paragraphs.rbegin(); it != paragraphs.rend(); ++it) {
-      const std::string candidate = Trim(*it);
-      if (candidate.empty()) {
-        continue;
-      }
-      const std::string lowered = Lowercase(candidate);
-      if (StartsWithReasoningPreamble(candidate) || lowered.rfind("1.", 0) == 0 ||
-          lowered.rfind("2.", 0) == 0 || lowered.rfind("3.", 0) == 0 ||
-          lowered.rfind("* ", 0) == 0) {
-        continue;
-      }
-      return candidate;
-    }
-  }
-  return text;
-}
-
-std::string ExtractInteractionText(const json& payload) {
-  if (!payload.contains("choices") || !payload.at("choices").is_array() ||
-      payload.at("choices").empty()) {
-    throw std::runtime_error("upstream interaction response did not include choices");
-  }
-  const json& choice = payload.at("choices").at(0);
-  if (choice.contains("message") && choice.at("message").is_object()) {
-    return SanitizeInteractionText(choice.at("message").value("content", std::string{}));
-  }
-  return SanitizeInteractionText(choice.value("text", std::string{}));
-}
-
-std::string ExtractInteractionFinishReason(const json& payload) {
-  if (!payload.contains("choices") || !payload.at("choices").is_array() ||
-      payload.at("choices").empty()) {
-    return "stop";
-  }
-  const json& choice = payload.at("choices").at(0);
-  return choice.value("finish_reason", std::string{"stop"});
-}
-
-json ExtractInteractionUsage(const json& payload) {
-  if (!payload.contains("usage") || !payload.at("usage").is_object()) {
-    return json{
-        {"prompt_tokens", 0},
-        {"completion_tokens", 0},
-        {"total_tokens", 0},
-    };
-  }
-  const json& usage = payload.at("usage");
-  return json{
-      {"prompt_tokens", usage.value("prompt_tokens", 0)},
-      {"completion_tokens", usage.value("completion_tokens", 0)},
-      {"total_tokens", usage.value("total_tokens", 0)},
-  };
-}
-
-json BuildContinuationPayload(
-    const json& original_payload,
-    const std::string& accumulated_text,
-    const InteractionCompletionPolicy& policy,
-    bool natural_stop_without_marker,
-    int total_completion_tokens) {
-  json payload = original_payload;
-  json messages = json::array();
-  if (payload.contains("messages") && payload.at("messages").is_array()) {
-    for (const auto& message : payload.at("messages")) {
-      messages.push_back(message);
-    }
-  }
-  const std::string recent_assistant_context =
-      accumulated_text.empty() ? std::string{} : Utf8SafeSuffix(accumulated_text, 4096);
-  const std::string trailing_excerpt =
-      accumulated_text.empty() ? std::string{} : Utf8SafeSuffix(accumulated_text, 256);
-  const int remaining_completion_tokens =
-      std::max(0, policy.max_total_completion_tokens - total_completion_tokens);
-  if (!recent_assistant_context.empty()) {
-    messages.push_back(json{
-        {"role", "assistant"},
-        {"content", recent_assistant_context},
-    });
-  }
-  messages.push_back(json{
-      {"role", "user"},
-      {"content",
-       BuildContinuationPrompt(
-           policy,
-           natural_stop_without_marker,
-           trailing_excerpt,
-           remaining_completion_tokens)},
-  });
-  payload["messages"] = messages;
-  return payload;
-}
-
-json BuildInteractionSessionPayload(const InteractionSessionResult& result) {
-  json segments = json::array();
-  for (const auto& segment : result.segments) {
-    segments.push_back(json{
-        {"index", segment.index},
-        {"continuation_index", segment.continuation_index},
-        {"finish_reason", segment.finish_reason},
-        {"usage",
-         json{
-             {"prompt_tokens", segment.prompt_tokens},
-             {"completion_tokens", segment.completion_tokens},
-             {"total_tokens", segment.total_tokens},
-         }},
-        {"latency_ms", segment.latency_ms},
-        {"marker_seen", segment.marker_seen},
-    });
-  }
-  return json{
-      {"id", result.session_id},
-      {"status", result.completion_status},
-      {"stop_reason", result.stop_reason},
-      {"segment_count", static_cast<int>(result.segments.size())},
-      {"continuation_count", result.continuation_count},
-      {"finish_reason", result.final_finish_reason},
-      {"usage",
-       json{
-           {"prompt_tokens", result.total_prompt_tokens},
-           {"completion_tokens", result.total_completion_tokens},
-           {"total_tokens", result.total_tokens},
-       }},
-      {"latency_ms", result.total_latency_ms},
-      {"marker_seen", result.marker_seen},
-      {"segments", std::move(segments)},
-  };
-}
-
-std::optional<json> ParseStructuredOutputObject(const std::string& text) {
-  json parsed = json::parse(text, nullptr, false);
-  if (parsed.is_discarded() || !parsed.is_object()) {
-    return std::nullopt;
-  }
-  return parsed;
-}
-
-HttpResponse BuildInteractionSessionResponse(
-    const PlaneInteractionResolution& resolution,
-    const InteractionRequestContext& request_context,
-    const InteractionSessionResult& result) {
-  const json session_payload = BuildInteractionSessionPayload(result);
-  if (request_context.structured_output_json) {
-    if (result.completion_status != "completed") {
-      return BuildPlaneInteractionContractError(
-          422,
-          resolution,
-          request_context.request_id,
-          "structured_output_truncated",
-          "structured output session ended before a valid JSON object was completed",
-          true,
-          json{
-              {"completion_status", result.completion_status},
-              {"stop_reason", result.stop_reason},
-              {"session", session_payload},
-          });
-    }
-    const auto parsed_json = ParseStructuredOutputObject(result.content);
-    if (!parsed_json.has_value()) {
-      return BuildPlaneInteractionContractError(
-          422,
-          resolution,
-          request_context.request_id,
-          "structured_output_malformed",
-          "structured output session did not produce a valid JSON object",
-          true,
-          json{
-              {"completion_status", result.completion_status},
-              {"stop_reason", result.stop_reason},
-              {"content_excerpt",
-               result.content.size() > 512
-                   ? result.content.substr(0, 512) + "...[truncated]"
-                   : result.content},
-              {"session", session_payload},
-          });
-    }
-    return BuildJsonResponse(
-        200,
-        json{
-            {"id", "chatcmpl-comet-session"},
-            {"object", "chat.completion"},
-            {"request_id", request_context.request_id},
-            {"model", result.model},
-            {"choices",
-             json::array({json{
-                 {"index", 0},
-                 {"message", json{{"role", "assistant"}, {"content", result.content}}},
-                 {"finish_reason", "stop"},
-             }})},
-            {"usage", session_payload.at("usage")},
-            {"session", session_payload},
-            {"comet",
-             BuildInteractionContractMetadata(
-                 resolution,
-                 request_context.request_id,
-                 result.session_id,
-                 static_cast<int>(result.segments.size()),
-                 result.continuation_count)},
-            {"structured_output",
-             json{
-                 {"mode", "json_object"},
-                 {"valid", true},
-                 {"json", *parsed_json},
-             }},
-        },
-        BuildInteractionResponseHeaders(request_context.request_id));
-  }
-  return BuildJsonResponse(
-      200,
-      json{
-          {"id", "chatcmpl-comet-session"},
-          {"object", "chat.completion"},
-          {"request_id", request_context.request_id},
-          {"model", result.model},
-          {"choices",
-           json::array({json{
-               {"index", 0},
-               {"message", json{{"role", "assistant"}, {"content", result.content}}},
-               {"finish_reason", result.completion_status == "completed" ? "stop" : "length"},
-           }})},
-          {"usage", session_payload.at("usage")},
-          {"session", session_payload},
-          {"comet",
-           BuildInteractionContractMetadata(
-               resolution,
-               request_context.request_id,
-               result.session_id,
-               static_cast<int>(result.segments.size()),
-               result.continuation_count)},
+InteractionHttpService MakeInteractionHttpService() {
+  return InteractionHttpService({
+      [&](int status_code,
+          const json& payload,
+          const std::map<std::string, std::string>& headers) {
+        return BuildJsonResponse(status_code, payload, headers);
       },
-      BuildInteractionResponseHeaders(request_context.request_id));
+      [](const PlaneInteractionResolution& resolution,
+         json payload,
+         bool force_stream,
+         const ResolvedInteractionPolicy& resolved_policy,
+         bool structured_output_json) {
+        return BuildInteractionUpstreamBody(
+            resolution,
+            std::move(payload),
+            force_stream,
+            resolved_policy,
+            structured_output_json);
+      },
+      [](const comet::DesiredState& desired_state) {
+        return FindInferInstanceName(desired_state);
+      },
+      [](const comet::HostObservation& observation) {
+        return ParseInstanceRuntimeStatuses(observation);
+      },
+      [](const comet::HostObservation& observation,
+         const std::string& plane_name) {
+        return ObservationMatchesPlane(observation, plane_name);
+      },
+      [](const comet::DesiredState& desired_state,
+         const comet::HostObservation& observation) {
+        return BuildPlaneScopedRuntimeStatus(desired_state, observation);
+      },
+      [](const std::string& gateway_listen, int fallback_port) {
+        return ParseInteractionTarget(gateway_listen, fallback_port);
+      },
+      [](comet::ControllerStore& store, const comet::DesiredState& desired_state) {
+        return CountReadyWorkerMembers(store, desired_state);
+      },
+      [](const std::optional<ControllerEndpointTarget>& target,
+         const std::string& path) {
+        return ProbeControllerTargetOk(target, path);
+      },
+      [](const comet::DesiredState& desired_state, const std::string& node_name) {
+        return DescribeUnsupportedControllerLocalRuntime(desired_state, node_name);
+      },
+      [](const ControllerEndpointTarget& target,
+         const std::string& method,
+         const std::string& path,
+         const std::string& body,
+         const std::vector<std::pair<std::string, std::string>>& headers) {
+        return SendControllerHttpRequest(target, method, path, body, headers);
+      },
+      [](SocketHandle client_fd, const HttpResponse& response) {
+        ControllerNetworkManager::SendHttpResponse(client_fd, response);
+      },
+      [](SocketHandle client_fd) {
+        ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+      },
+      [](SocketHandle client_fd,
+         const std::map<std::string, std::string>& headers) {
+        return ControllerNetworkManager::SendSseHeaders(client_fd, headers);
+      },
+      [](SocketHandle fd, const std::string& payload) {
+        return ControllerNetworkManager::SendAll(fd, payload);
+      },
+  });
 }
 
-InteractionSessionResult ExecuteInteractionSession(
-    const PlaneInteractionResolution& resolution,
-    const InteractionRequestContext& request_context) {
-  const json& original_payload = request_context.payload;
-  const ResolvedInteractionPolicy resolved_policy =
-      ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload);
-  const InteractionCompletionPolicy& policy = resolved_policy.policy;
-  InteractionSessionResult result;
-  result.session_id = GenerateInteractionSessionId();
-  const auto session_started_at = std::chrono::steady_clock::now();
-
-  json current_payload = original_payload;
-  for (int segment_index = 0;; ++segment_index) {
-    const auto segment_started_at = std::chrono::steady_clock::now();
-    HttpResponse upstream;
-    std::string upstream_body;
-    constexpr int kMaxAttempts = 3;
-    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
-      upstream_body = BuildInteractionUpstreamBody(
-          resolution,
-          current_payload,
-          false,
-          resolved_policy,
-          request_context.structured_output_json);
-      upstream = SendControllerHttpRequest(
-          *resolution.target,
-          "POST",
-          "/v1/chat/completions",
-          upstream_body,
-          {{"Accept", "application/json"},
-           {"X-Comet-Request-Id", request_context.request_id}});
-      if (upstream.status_code == 200 || upstream.status_code < 500 ||
-          attempt + 1 == kMaxAttempts) {
-        break;
-      }
-      std::this_thread::sleep_for(
-          std::chrono::milliseconds(250 * (attempt + 1)));
-    }
-    if (upstream.status_code != 200) {
-      const std::string upstream_detail =
-          upstream.body.empty() ? std::string{} : (": " + upstream.body);
-      const std::string request_excerpt =
-          upstream_body.size() > 1024 ? upstream_body.substr(0, 1024) + "...[truncated]"
-                                      : upstream_body;
-      throw std::runtime_error(
-          "upstream interaction request failed with status " +
-          std::to_string(upstream.status_code) + " target=" +
-          resolution.target->raw + " request=" + request_excerpt + upstream_detail);
-    }
-    const json upstream_payload = upstream.body.empty() ? json::object() : json::parse(upstream.body);
-    const auto segment_finished_at = std::chrono::steady_clock::now();
-    const json usage = ExtractInteractionUsage(upstream_payload);
-    bool marker_seen_in_segment = false;
-    const std::string clean_text = RemoveCompletionMarkers(
-        ExtractInteractionText(upstream_payload),
-        policy.completion_marker,
-        &marker_seen_in_segment);
-    InteractionSegmentSummary summary;
-    summary.index = segment_index;
-    summary.continuation_index = segment_index;
-    summary.text = clean_text;
-    summary.finish_reason = ExtractInteractionFinishReason(upstream_payload);
-    summary.prompt_tokens = usage.value("prompt_tokens", 0);
-    summary.completion_tokens = usage.value("completion_tokens", 0);
-    summary.total_tokens = usage.value("total_tokens", 0);
-    summary.latency_ms = static_cast<int>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            segment_finished_at - segment_started_at)
-            .count());
-    summary.marker_seen = marker_seen_in_segment;
-    result.model = upstream_payload.value("model", result.model);
-    result.content += clean_text;
-    result.segments.push_back(summary);
-    result.total_prompt_tokens += summary.prompt_tokens;
-    result.total_completion_tokens += summary.completion_tokens;
-    result.total_tokens += summary.total_tokens;
-    result.total_latency_ms = static_cast<int>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            segment_finished_at - session_started_at)
-            .count());
-    result.final_finish_reason = summary.finish_reason;
-    result.marker_seen = result.marker_seen || marker_seen_in_segment;
-
-    if (result.marker_seen &&
-        SessionReachedTargetLength(policy, result.total_completion_tokens)) {
-      result.completion_status = "completed";
-      result.stop_reason = "semantic_completion_marker";
-      break;
-    }
-    if (CanCompleteOnNaturalStop(policy, summary) &&
-        SessionReachedTargetLength(policy, result.total_completion_tokens)) {
-      result.completion_status = "completed";
-      result.stop_reason = "natural_stop";
-      break;
-    }
-
-    if (result.total_completion_tokens >= policy.max_total_completion_tokens) {
-      result.completion_status = "incomplete_due_to_limits";
-      result.stop_reason = "max_total_completion_tokens_reached";
-      break;
-    }
-    if (result.total_latency_ms >= policy.max_elapsed_time_ms) {
-      result.completion_status = "incomplete_due_to_limits";
-      result.stop_reason = "max_elapsed_time_ms_reached";
-      break;
-    }
-    if (segment_index >= policy.max_continuations) {
-      result.completion_status = "incomplete_due_to_limits";
-      result.stop_reason = "max_continuations_reached";
-      break;
-    }
-
-    result.continuation_count = segment_index + 1;
-    current_payload = BuildContinuationPayload(
-        original_payload,
-        result.content,
-        policy,
-        summary.finish_reason != "length",
-        result.total_completion_tokens);
-  }
-
-  if (result.completion_status == "in_progress") {
-    result.completion_status = "failed";
-    result.stop_reason = "session_state_unresolved";
-  }
-  return result;
+HostdHttpService MakeHostdHttpService() {
+  return HostdHttpService({
+      [&](int status_code,
+          const json& payload,
+          const std::map<std::string, std::string>& headers) {
+        return BuildJsonResponse(status_code, payload, headers);
+      },
+      []() { return UtcNowSqlTimestamp(); },
+      [](int seconds) { return SqlTimestampAfterSeconds(seconds); },
+      [](const std::string& timestamp_text) {
+        return TimestampAgeSeconds(timestamp_text);
+      },
+      [](comet::ControllerStore& store,
+         const std::string& event_type,
+         const std::string& message,
+         const json& payload,
+         const std::string& node_name,
+         const std::string& severity) {
+        AppendControllerEvent(
+            store,
+            "host-registry",
+            event_type,
+            message,
+            payload,
+            "",
+            node_name,
+            "",
+            std::nullopt,
+            std::nullopt,
+            severity);
+      },
+  });
 }
 
-bool SendInteractionSseEvent(
-    int client_fd,
-    const std::string& event_name,
-    const json& payload) {
-  std::ostringstream frame;
-  frame << "event: " << event_name << "\n";
-  std::stringstream lines(payload.dump().append("\n"));
-  std::string line;
-  while (std::getline(lines, line)) {
-    if (!line.empty() && line.back() == '\r') {
-      line.pop_back();
-    }
-    frame << "data: " << line << "\n";
-  }
-  frame << "\n";
-  return SendAll(client_fd, frame.str());
+AuthHttpService MakeAuthHttpService(AuthSupportService& auth_support) {
+  return AuthHttpService({
+      [&](int status_code,
+          const json& payload,
+          const std::map<std::string, std::string>& headers) {
+        return BuildJsonResponse(status_code, payload, headers);
+      },
+      [](const comet::UserRecord& user) { return BuildUserPayload(user); },
+      [](const comet::RegistrationInviteRecord& invite) {
+        return BuildInvitePayload(invite);
+      },
+      [](const comet::UserSshKeyRecord& ssh_key) {
+        return BuildSshKeyPayload(ssh_key);
+      },
+      [&](comet::ControllerStore& store, const HttpRequest& request) {
+        return auth_support.AuthenticateControllerUserSession(
+            store, request, std::optional<std::string>("web"));
+      },
+      [&](comet::ControllerStore& store, const HttpRequest& request) {
+        return auth_support.RequireControllerAdminUser(store, request);
+      },
+      [&](const HttpRequest& request) {
+        return auth_support.ResolveWebAuthnRpId(request);
+      },
+      [&](const HttpRequest& request) {
+        return auth_support.ResolveWebAuthnOrigin(request);
+      },
+      [&]() { return auth_support.ResolveWebAuthnRpName(); },
+      [&](const std::string& action, const json& payload) {
+        return auth_support.RunWebAuthnHelper(action, payload);
+      },
+      [&](const std::string& token, const HttpRequest& request) {
+        return auth_support.SessionCookieHeader(token, request);
+      },
+      [&](const HttpRequest& request) {
+        return auth_support.ClearSessionCookieHeader(request);
+      },
+      [&](comet::ControllerStore& store,
+          int user_id,
+          const std::string& session_kind,
+          const std::string& plane_name) {
+        return auth_support.CreateControllerSession(
+            store, user_id, session_kind, plane_name);
+      },
+      []() { return UtcNowSqlTimestamp(); },
+      [](int seconds) { return SqlTimestampAfterSeconds(seconds); },
+      [](const std::string& value) { return Trim(value); },
+      [&](const std::string& username,
+          const std::string& plane_name,
+          const std::string& challenge_token,
+          const std::string& expires_at) {
+        return auth_support.BuildSshChallengeMessage(
+            username, plane_name, challenge_token, expires_at);
+      },
+      [&](const std::string& value) {
+        return auth_support.SanitizeTokenForPath(value);
+      },
+      [&](const std::string& public_key) {
+        return auth_support.ComputeSshPublicKeyFingerprint(public_key);
+      },
+      [&](const std::string& username,
+          const std::string& public_key,
+          const std::string& message,
+          const std::string& signature) {
+        return auth_support.VerifySshDetachedSignature(
+            username, public_key, message, signature);
+      },
+      [&](const std::string& flow_id) -> std::optional<PendingWebAuthnFlow> {
+        return auth_support.LoadPendingWebAuthnFlow(flow_id);
+      },
+      [&](const PendingWebAuthnFlow& flow) {
+        auth_support.SavePendingWebAuthnFlow(flow);
+      },
+      [&](const std::string& flow_id) {
+        auth_support.ErasePendingWebAuthnFlow(flow_id);
+      },
+      [&](const std::string& challenge_id) -> std::optional<PendingSshChallenge> {
+        return auth_support.LoadPendingSshChallenge(challenge_id);
+      },
+      [&](const PendingSshChallenge& challenge) {
+        auth_support.SavePendingSshChallenge(challenge);
+      },
+      [&](const std::string& challenge_id) {
+        auth_support.ErasePendingSshChallenge(challenge_id);
+      },
+  });
 }
 
-bool SendInteractionSseDone(int client_fd) {
-  return SendAll(client_fd, "data: [DONE]\n\n");
+PlaneHttpService MakePlaneHttpService() {
+  return PlaneHttpService({
+      [&](int status_code,
+          const json& payload,
+          const std::map<std::string, std::string>& headers) {
+        return BuildJsonResponse(status_code, payload, headers);
+      },
+      [](const HttpRequest& request) { return ParseJsonRequestBody(request); },
+      [](const HttpRequest& request, const std::string& key) {
+        return FindQueryString(request, key);
+      },
+      [](const HttpRequest& request, const std::string& key) {
+        return FindQueryInt(request, key);
+      },
+      [](const std::optional<std::string>& artifacts_root_arg,
+         const std::string& fallback_artifacts_root) {
+        return ResolveArtifactsRoot(artifacts_root_arg, fallback_artifacts_root);
+      },
+      [](const std::string& db_path) { return BuildPlanesPayload(db_path); },
+      [](const std::string& db_path,
+         int stale_after_seconds,
+         const std::optional<std::string>& plane_name) {
+        return BuildDashboardPayload(db_path, stale_after_seconds, plane_name);
+      },
+      [](const std::string& db_path, const std::optional<std::string>& plane_name) {
+        return BuildControllerStatePayload(db_path, plane_name);
+      },
+      [](const comet::controller::ControllerActionResult& result) {
+        return comet::controller::BuildControllerActionPayload(result);
+      },
+      [](const std::string& db_path,
+         const std::string& desired_state_json,
+         const std::string& artifacts_root,
+         const std::optional<std::string>& plane_name,
+         const std::string& source) {
+        return ExecuteUpsertPlaneStateAction(
+            db_path,
+            desired_state_json,
+            artifacts_root,
+            plane_name,
+            source);
+      },
+      [](const std::string& db_path, const std::string& plane_name) {
+        return ExecuteStartPlaneAction(db_path, plane_name);
+      },
+      [](const std::string& db_path, const std::string& plane_name) {
+        return ExecuteStopPlaneAction(db_path, plane_name);
+      },
+      [](const std::string& db_path, const std::string& plane_name) {
+        return ExecuteDeletePlaneAction(db_path, plane_name);
+      },
+      []() { return DefaultStaleAfterSeconds(); },
+  });
 }
 
-HttpResponse ProxyInteractionJson(
-    const PlaneInteractionResolution& resolution,
-    const std::string& request_id,
-    const std::string& method,
-    const std::string& path,
-    const std::string& body = "") {
-  if (!resolution.status_payload.value("interaction_enabled", false)) {
-    return BuildPlaneInteractionContractError(
-        409,
-        resolution,
-        request_id,
-        "interaction_disabled",
-        "interaction is available only for plane_mode=llm",
-        false);
-  }
-  if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
-    return BuildPlaneInteractionContractError(
-        409,
-        resolution,
-        request_id,
-        "plane_not_ready",
-        "plane interaction target is not ready",
-        true);
-  }
-  try {
-    std::string upstream_body = body;
-    bool structured_output_json = false;
-    if (method == "POST") {
-      InteractionRequestContext request_context;
-      if (const auto validation_error = ValidateAndNormalizeInteractionRequest(
-              resolution,
-              request_id,
-              ParseInteractionPayload(body),
-              &request_context)) {
-        return *validation_error;
-      }
-      structured_output_json = request_context.structured_output_json;
-      const ResolvedInteractionPolicy resolved_policy =
-          ResolveInteractionCompletionPolicy(
-              resolution.desired_state,
-              request_context.payload);
-      upstream_body = BuildInteractionUpstreamBody(
-          resolution,
-          request_context.payload,
-          false,
-          resolved_policy,
-          structured_output_json);
-    }
-    HttpResponse upstream;
-    constexpr int kMaxAttempts = 3;
-    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
-      try {
-        upstream = SendControllerHttpRequest(
-            *resolution.target,
-            method,
-            path,
-            upstream_body,
-            {{"Accept", "application/json"},
-             {"X-Comet-Request-Id", request_id}});
-        if (upstream.status_code < 500 || attempt + 1 == kMaxAttempts) {
-          break;
-        }
-      } catch (const std::exception&) {
-        if (attempt + 1 == kMaxAttempts) {
-          throw;
-        }
-      }
-      std::this_thread::sleep_for(
-          std::chrono::milliseconds(250 * (attempt + 1)));
-    }
-    if (upstream.status_code >= 400) {
-      return BuildPlaneInteractionContractError(
-          upstream.status_code >= 500 ? 503 : upstream.status_code,
-          resolution,
-          request_id,
-          upstream.status_code >= 500 ? "upstream_unavailable" : "upstream_request_failed",
-          upstream.body.empty()
-              ? ("upstream interaction request failed with status " +
-                 std::to_string(upstream.status_code))
-              : upstream.body,
-          upstream.status_code >= 500);
-    }
-    upstream.headers["x-comet-request-id"] = request_id;
-    if (path == "/v1/models" && !upstream.body.empty()) {
-      json payload = json::parse(upstream.body);
-      payload["request_id"] = request_id;
-      payload["comet"] = BuildInteractionContractMetadata(resolution, request_id);
-      return BuildJsonResponse(
-          200,
-          payload,
-          BuildInteractionResponseHeaders(request_id));
-    }
-    return upstream;
-  } catch (const std::exception& error) {
-    const std::string lowered = Lowercase(error.what());
-    const bool timeout_like =
-        lowered.find("timed out") != std::string::npos ||
-        lowered.find("timeout") != std::string::npos;
-    return BuildPlaneInteractionContractError(
-        timeout_like ? 504 : 502,
-        resolution,
-        request_id,
-        timeout_like ? "upstream_timeout" : "upstream_invalid_response",
-        error.what(),
-        true);
-  }
+ModelLibraryHttpService MakeModelLibraryHttpService() {
+  return ModelLibraryHttpService({
+      [&](int status_code,
+          const json& payload,
+          const std::map<std::string, std::string>& headers) {
+        return BuildJsonResponse(status_code, payload, headers);
+      },
+      [](const std::string& db_path) {
+        return BuildModelLibraryPayload(db_path);
+      },
+      [](const std::string& db_path, const HttpRequest& request) {
+        return DeleteModelLibraryEntryByPath(db_path, request);
+      },
+      [](const HttpRequest& request) {
+        return EnqueueModelLibraryDownload(request);
+      },
+  });
 }
 
-SocketHandle CreateListenSocket(const std::string& host, int port) {
-  comet::platform::EnsureSocketsInitialized();
+BundleHttpService MakeBundleHttpService() {
+  return BundleHttpService({
+      [&](int status_code,
+          const json& payload,
+          const std::map<std::string, std::string>& headers) {
+        return BuildJsonResponse(status_code, payload, headers);
+      },
+      [](const HttpRequest& request, const std::string& key) {
+        return FindQueryString(request, key);
+      },
+      [](const std::optional<std::string>& artifacts_root_arg,
+         const std::string& fallback_artifacts_root) {
+        return ResolveArtifactsRoot(artifacts_root_arg, fallback_artifacts_root);
+      },
+      [](const comet::controller::ControllerActionResult& result) {
+        return comet::controller::BuildControllerActionPayload(result);
+      },
+      [](const std::string& bundle_dir) {
+        return ExecuteValidateBundleAction(bundle_dir);
+      },
+      [](const std::string& bundle_dir,
+         const std::optional<std::string>& node_name) {
+        return ExecutePreviewBundleAction(bundle_dir, node_name);
+      },
+      [](const std::string& db_path, const std::string& bundle_dir) {
+        return ExecuteImportBundleAction(db_path, bundle_dir);
+      },
+      [](const std::string& db_path,
+         const std::string& bundle_dir,
+         const std::string& artifacts_root) {
+        return ExecuteApplyBundleAction(db_path, bundle_dir, artifacts_root);
+      },
+  });
+}
 
-  const SocketHandle fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (!comet::platform::IsSocketValid(fd)) {
-    throw std::runtime_error("failed to create server socket");
-  }
+ReadModelHttpService MakeReadModelHttpService() {
+  return ReadModelHttpService({
+      [&](int status_code,
+          const json& payload,
+          const std::map<std::string, std::string>& headers) {
+        return BuildJsonResponse(status_code, payload, headers);
+      },
+      [](const HttpRequest& request, const std::string& key) {
+        return FindQueryString(request, key);
+      },
+      [](const HttpRequest& request, const std::string& key) {
+        return FindQueryInt(request, key);
+      },
+      []() { return DefaultStaleAfterSeconds(); },
+      [](const std::string& db_path, const std::optional<std::string>& node_name) {
+        return BuildHostAssignmentsPayload(db_path, node_name);
+      },
+      [](const std::string& db_path,
+         const std::optional<std::string>& node_name,
+         const std::optional<std::string>& plane_name,
+         int stale_after_seconds) {
+        return BuildHostObservationsPayload(
+            db_path, node_name, plane_name, stale_after_seconds);
+      },
+      [](const std::string& db_path,
+         const std::optional<std::string>& node_name,
+         int stale_after_seconds) {
+        return BuildHostHealthPayload(db_path, node_name, stale_after_seconds);
+      },
+      [](const std::string& db_path,
+         const std::optional<std::string>& node_name,
+         const std::optional<std::string>& plane_name) {
+        return BuildDiskStatePayload(db_path, node_name, plane_name);
+      },
+      [](const std::string& db_path,
+         const std::optional<std::string>& node_name,
+         const std::optional<std::string>& plane_name) {
+        return BuildRolloutActionsPayload(db_path, node_name, plane_name);
+      },
+      [](const std::string& db_path,
+         const std::optional<std::string>& node_name,
+         int stale_after_seconds,
+         const std::optional<std::string>& plane_name) {
+        return BuildRebalancePlanPayload(
+            db_path, node_name, stale_after_seconds, plane_name);
+      },
+      [](const std::string& db_path,
+         const std::optional<std::string>& plane_name,
+         const std::optional<std::string>& node_name,
+         const std::optional<std::string>& worker_name,
+         const std::optional<std::string>& category,
+         int limit) {
+        return BuildEventsPayload(
+            db_path, plane_name, node_name, worker_name, category, limit);
+      },
+  });
+}
 
-  int yes = 1;
-#if defined(_WIN32)
-  setsockopt(
-      fd,
-      SOL_SOCKET,
-      SO_REUSEADDR,
-      reinterpret_cast<const char*>(&yes),
-      sizeof(yes));
-#else
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-#endif
-
-  sockaddr_in addr{};
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons(static_cast<uint16_t>(port));
-  if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
-    CloseSocketHandle(fd);
-    throw std::runtime_error("invalid listen host '" + host + "'");
-  }
-
-  if (bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-    const std::string error = SocketErrorMessage();
-    CloseSocketHandle(fd);
-    throw std::runtime_error("failed to bind " + host + ":" + std::to_string(port) + ": " + error);
-  }
-  if (listen(fd, 64) != 0) {
-    const std::string error = SocketErrorMessage();
-    CloseSocketHandle(fd);
-    throw std::runtime_error("failed to listen on " + host + ":" + std::to_string(port) + ": " + error);
-  }
-  return fd;
+SchedulerHttpService MakeSchedulerHttpService() {
+  return SchedulerHttpService({
+      [&](int status_code,
+          const json& payload,
+          const std::map<std::string, std::string>& headers) {
+        return BuildJsonResponse(status_code, payload, headers);
+      },
+      [](const HttpRequest& request, const std::string& key) {
+        return FindQueryString(request, key);
+      },
+      [](const HttpRequest& request, const std::string& key) {
+        return FindQueryInt(request, key);
+      },
+      [](const std::optional<std::string>& artifacts_root_arg,
+         const std::string& fallback_artifacts_root) {
+        return ResolveArtifactsRoot(artifacts_root_arg, fallback_artifacts_root);
+      },
+      [](const comet::controller::ControllerActionResult& result) {
+        return comet::controller::BuildControllerActionPayload(result);
+      },
+      [](const std::string& db_path, const std::optional<std::string>& node_name) {
+        return BuildNodeAvailabilityPayload(db_path, node_name);
+      },
+      [](const std::string& db_path,
+         const std::string& node_name,
+         comet::NodeAvailability availability,
+         const std::optional<std::string>& status_message) {
+        return ExecuteSetNodeAvailabilityAction(
+            db_path, node_name, availability, status_message);
+      },
+      [](const std::string& db_path, const std::string& artifacts_root) {
+        return MakeSchedulerService(db_path, artifacts_root);
+      },
+  });
 }
 
 json BuildControllerHealthPayload(const std::string& db_path) {
@@ -3260,188 +1387,6 @@ std::optional<int> FindQueryInt(
   return std::stoi(*value);
 }
 
-std::optional<std::string> FindHeaderString(
-    const HttpRequest& request,
-    const std::string& key) {
-  const auto it = request.headers.find(Lowercase(key));
-  if (it == request.headers.end() || it->second.empty()) {
-    return std::nullopt;
-  }
-  return it->second;
-}
-
-std::optional<std::string> FindCookieValue(
-    const HttpRequest& request,
-    const std::string& key) {
-  const auto cookie_header = FindHeaderString(request, "cookie");
-  if (!cookie_header.has_value()) {
-    return std::nullopt;
-  }
-  std::istringstream input(*cookie_header);
-  std::string item;
-  while (std::getline(input, item, ';')) {
-    const auto equals = item.find('=');
-    if (equals == std::string::npos) {
-      continue;
-    }
-    std::string name = item.substr(0, equals);
-    std::string value = item.substr(equals + 1);
-    while (!name.empty() && std::isspace(static_cast<unsigned char>(name.front()))) {
-      name.erase(name.begin());
-    }
-    while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) {
-      name.pop_back();
-    }
-    if (name == key && !value.empty()) {
-      return value;
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> FindBearerToken(const HttpRequest& request) {
-  const auto authorization = FindHeaderString(request, "authorization");
-  if (!authorization.has_value()) {
-    return std::nullopt;
-  }
-  constexpr std::string_view kPrefix = "bearer ";
-  const std::string lowered = Lowercase(*authorization);
-  if (lowered.rfind(std::string(kPrefix), 0) != 0) {
-    return std::nullopt;
-  }
-  const std::string token = authorization->substr(kPrefix.size());
-  return token.empty() ? std::nullopt : std::optional<std::string>(token);
-}
-
-std::optional<std::string> FindControllerSessionToken(const HttpRequest& request) {
-  if (const auto header_token = FindHeaderString(request, "x-comet-session-token");
-      header_token.has_value()) {
-    return header_token;
-  }
-  if (const auto cookie_token = FindCookieValue(request, "comet.sid"); cookie_token.has_value()) {
-    return cookie_token;
-  }
-  return FindBearerToken(request);
-}
-
-std::string SanitizeTokenForPath(const std::string& value) {
-  std::string out;
-  out.reserve(value.size());
-  for (unsigned char ch : value) {
-    if (std::isalnum(ch) || ch == '-' || ch == '_') {
-      out.push_back(static_cast<char>(ch));
-    } else {
-      out.push_back('_');
-    }
-  }
-  return out;
-}
-
-bool RunCommand(const std::string& command) {
-  const int rc = std::system(command.c_str());
-  return rc == 0;
-}
-
-std::string EscapeShellArg(const std::string& value) {
-  std::string escaped = "'";
-  for (char ch : value) {
-    if (ch == '\'') {
-      escaped += "'\\''";
-    } else {
-      escaped.push_back(ch);
-    }
-  }
-  escaped.push_back('\'');
-  return escaped;
-}
-
-std::string ComputeSshPublicKeyFingerprint(const std::string& public_key) {
-  const std::filesystem::path temp_dir =
-      std::filesystem::temp_directory_path() /
-      ("comet-ssh-key-" + SanitizeTokenForPath(comet::RandomTokenBase64(12)));
-  std::filesystem::create_directories(temp_dir);
-  const std::filesystem::path key_path = temp_dir / "key.pub";
-  try {
-    {
-      std::ofstream out(key_path);
-      out << public_key << "\n";
-    }
-    const std::string command =
-        "ssh-keygen -lf " + EscapeShellArg(key_path.string()) + " 2>/dev/null";
-    std::array<char, 512> buffer{};
-    std::string output;
-    FILE* pipe = popen(command.c_str(), "r");
-    if (pipe == nullptr) {
-      throw std::runtime_error("failed to spawn ssh-keygen for fingerprint");
-    }
-    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
-      output += buffer.data();
-    }
-    const int rc = pclose(pipe);
-    if (rc != 0 || output.empty()) {
-      throw std::runtime_error("ssh-keygen rejected SSH public key");
-    }
-    std::istringstream input(output);
-    std::string bits;
-    std::string fingerprint;
-    input >> bits >> fingerprint;
-    if (fingerprint.empty()) {
-      throw std::runtime_error("failed to parse SSH key fingerprint");
-    }
-    std::filesystem::remove_all(temp_dir);
-    return fingerprint;
-  } catch (...) {
-    std::filesystem::remove_all(temp_dir);
-    throw;
-  }
-}
-
-bool VerifySshDetachedSignature(
-    const std::string& principal,
-    const std::string& public_key,
-    const std::string& message,
-    const std::string& signature_text) {
-  const std::filesystem::path temp_dir =
-      std::filesystem::temp_directory_path() /
-      ("comet-ssh-verify-" + SanitizeTokenForPath(comet::RandomTokenBase64(12)));
-  std::filesystem::create_directories(temp_dir);
-  const std::filesystem::path allowed_signers_path = temp_dir / "allowed_signers";
-  const std::filesystem::path message_path = temp_dir / "message.txt";
-  const std::filesystem::path signature_path = temp_dir / "signature.txt";
-  try {
-    {
-      std::ofstream out(allowed_signers_path);
-      out << principal << " " << public_key << "\n";
-    }
-    {
-      std::ofstream out(message_path);
-      out << message;
-    }
-    {
-      std::ofstream out(signature_path);
-      out << signature_text;
-    }
-    const std::string command =
-        "ssh-keygen -Y verify"
-        " -f " + EscapeShellArg(allowed_signers_path.string()) +
-        " -I " + EscapeShellArg(principal) +
-        " -n " + EscapeShellArg("comet-plane-auth") +
-        " -s " + EscapeShellArg(signature_path.string()) +
-        " < " + EscapeShellArg(message_path.string()) +
-        " >/dev/null 2>/dev/null";
-    const bool verified = RunCommand(command);
-    std::filesystem::remove_all(temp_dir);
-    return verified;
-  } catch (...) {
-    std::filesystem::remove_all(temp_dir);
-    throw;
-  }
-}
-
-bool StartsWithPath(const std::string& value, const std::string& prefix) {
-  return value.size() >= prefix.size() && value.compare(0, prefix.size(), prefix) == 0;
-}
-
 struct HostAssignmentsViewData {
   std::string db_path;
   std::optional<std::string> node_name;
@@ -3456,22 +1401,6 @@ struct HostObservationsViewData {
   std::vector<comet::HostObservation> observations;
 };
 
-int BrowserSessionLifetimeSeconds() {
-  return 12 * 60 * 60;
-}
-
-int InviteLifetimeSeconds() {
-  return 60 * 60;
-}
-
-int SshChallengeLifetimeSeconds() {
-  return 5 * 60;
-}
-
-int SshSessionLifetimeSeconds() {
-  return 60 * 60;
-}
-
 json BuildUserPayload(const comet::UserRecord& user) {
   return json{
       {"id", user.id},
@@ -3479,27 +1408,6 @@ json BuildUserPayload(const comet::UserRecord& user) {
       {"role", user.role},
       {"created_at", user.created_at},
       {"last_login_at", user.last_login_at.empty() ? json(nullptr) : json(user.last_login_at)},
-  };
-}
-
-json BuildWebAuthnCredentialPayload(const comet::WebAuthnCredentialRecord& credential) {
-  json transports = json::array();
-  try {
-    transports = credential.transports_json.empty()
-                     ? json::array()
-                     : json::parse(credential.transports_json);
-  } catch (...) {
-    transports = json::array();
-  }
-  return json{
-      {"id", credential.id},
-      {"user_id", credential.user_id},
-      {"credential_id", credential.credential_id},
-      {"public_key", credential.public_key},
-      {"counter", credential.counter},
-      {"transports", transports},
-      {"created_at", credential.created_at},
-      {"last_used_at", credential.last_used_at.empty() ? json(nullptr) : json(credential.last_used_at)},
   };
 }
 
@@ -3527,303 +1435,6 @@ json BuildSshKeyPayload(const comet::UserSshKeyRecord& ssh_key) {
       {"revoked_at", ssh_key.revoked_at.empty() ? json(nullptr) : json(ssh_key.revoked_at)},
       {"last_used_at", ssh_key.last_used_at.empty() ? json(nullptr) : json(ssh_key.last_used_at)},
   };
-}
-
-std::optional<std::pair<comet::UserRecord, comet::AuthSessionRecord>> AuthenticateControllerUserSession(
-    comet::ControllerStore& store,
-    const HttpRequest& request,
-    const std::optional<std::string>& session_kind = std::optional<std::string>("web")) {
-  const auto token = FindControllerSessionToken(request);
-  if (!token.has_value()) {
-    return std::nullopt;
-  }
-  const auto session = store.LoadActiveAuthSession(*token, session_kind);
-  if (!session.has_value()) {
-    return std::nullopt;
-  }
-  const auto user = store.LoadUserById(session->user_id);
-  if (!user.has_value()) {
-    return std::nullopt;
-  }
-  store.TouchAuthSession(session->token, UtcNowSqlTimestamp());
-  return std::make_pair(*user, *session);
-}
-
-std::optional<comet::UserRecord> RequireControllerAdminUser(
-    comet::ControllerStore& store,
-    const HttpRequest& request) {
-  const auto session = AuthenticateControllerUserSession(store, request);
-  if (!session.has_value() || session->first.role != "admin") {
-    return std::nullopt;
-  }
-  return session->first;
-}
-
-std::string BuildSshChallengeMessage(
-    const std::string& username,
-    const std::string& plane_name,
-    const std::string& challenge_token,
-    const std::string& expires_at) {
-  return "comet-plane-auth\n" + username + "\n" + plane_name + "\n" + challenge_token + "\n" +
-         expires_at + "\n";
-}
-
-struct PendingWebAuthnFlow {
-  std::string flow_id;
-  std::string flow_kind;
-  std::string username;
-  std::string password_hash;
-  std::string invite_token;
-  int user_id = 0;
-  std::string challenge;
-  std::string rp_id;
-  std::string origin;
-  std::string expires_at;
-};
-
-struct PendingSshChallenge {
-  std::string challenge_id;
-  int user_id = 0;
-  int ssh_key_id = 0;
-  std::string username;
-  std::string plane_name;
-  std::string fingerprint;
-  std::string challenge_token;
-  std::string message;
-  std::string expires_at;
-};
-
-std::mutex g_pending_webauthn_mutex;
-std::map<std::string, PendingWebAuthnFlow> g_pending_webauthn_flows;
-std::mutex g_pending_ssh_mutex;
-std::map<std::string, PendingSshChallenge> g_pending_ssh_challenges;
-
-std::optional<std::string> GetEnvString(const char* key) {
-  if (const char* value = std::getenv(key); value != nullptr && value[0] != '\0') {
-    return std::string(value);
-  }
-  return std::nullopt;
-}
-
-std::string RequestHostHeader(const HttpRequest& request) {
-  if (const auto forwarded = FindHeaderString(request, "x-forwarded-host"); forwarded.has_value()) {
-    return *forwarded;
-  }
-  if (const auto host = FindHeaderString(request, "host"); host.has_value()) {
-    return *host;
-  }
-  return "127.0.0.1:18081";
-}
-
-std::string HostWithoutPort(const std::string& host_header) {
-  if (host_header.empty()) {
-    return host_header;
-  }
-  if (host_header.front() == '[') {
-    const auto close = host_header.find(']');
-    return close == std::string::npos ? host_header : host_header.substr(1, close - 1);
-  }
-  const auto colon = host_header.find(':');
-  return colon == std::string::npos ? host_header : host_header.substr(0, colon);
-}
-
-std::string RequestScheme(const HttpRequest& request) {
-  if (const auto forwarded = FindHeaderString(request, "x-forwarded-proto"); forwarded.has_value()) {
-    return Lowercase(*forwarded);
-  }
-  return "http";
-}
-
-std::string ResolveWebAuthnRpId(const HttpRequest& request) {
-  if (const auto env = GetEnvString("COMET_WEBAUTHN_RP_ID"); env.has_value()) {
-    return *env;
-  }
-  return HostWithoutPort(RequestHostHeader(request));
-}
-
-std::string ResolveWebAuthnOrigin(const HttpRequest& request) {
-  if (const auto env = GetEnvString("COMET_WEBAUTHN_ORIGIN"); env.has_value()) {
-    return *env;
-  }
-  return RequestScheme(request) + "://" + RequestHostHeader(request);
-}
-
-std::string ResolveWebAuthnRpName() {
-  return GetEnvString("COMET_WEBAUTHN_RP_NAME").value_or("comet-node");
-}
-
-std::filesystem::path ResolveWebAuthnHelperPath() {
-  if (const auto env = GetEnvString("COMET_WEBAUTHN_HELPER"); env.has_value()) {
-    return std::filesystem::path(*env);
-  }
-  std::vector<std::filesystem::path> roots;
-  auto append_ancestors = [&roots](std::filesystem::path path) {
-    std::error_code error;
-    path = std::filesystem::weakly_canonical(path, error);
-    if (error || path.empty()) {
-      error.clear();
-      path = path.lexically_normal();
-    }
-    while (!path.empty()) {
-      if (std::find(roots.begin(), roots.end(), path) == roots.end()) {
-        roots.push_back(path);
-      }
-      const auto parent = path.parent_path();
-      if (parent == path) {
-        break;
-      }
-      path = parent;
-    }
-  };
-  append_ancestors(std::filesystem::current_path());
-  std::error_code error;
-  const std::filesystem::path proc_exe = std::filesystem::read_symlink("/proc/self/exe", error);
-  if (!error && !proc_exe.empty()) {
-    append_ancestors(proc_exe.parent_path());
-  }
-  for (const auto& root : roots) {
-    const auto candidate =
-        root / "ui" / "operator-react" / "scripts" / "webauthn-helper.mjs";
-    if (std::filesystem::exists(candidate)) {
-      return candidate;
-    }
-  }
-  throw std::runtime_error("failed to locate WebAuthn helper script");
-}
-
-json RunWebAuthnHelper(const std::string& action, const json& payload) {
-  const std::filesystem::path temp_dir =
-      std::filesystem::temp_directory_path() /
-      ("comet-webauthn-" + SanitizeTokenForPath(comet::RandomTokenBase64(12)));
-  std::filesystem::create_directories(temp_dir);
-  const std::filesystem::path input_path = temp_dir / "input.json";
-  const std::filesystem::path output_path = temp_dir / "output.json";
-  const std::filesystem::path error_path = temp_dir / "stderr.txt";
-  try {
-    {
-      std::ofstream out(input_path);
-      out << payload.dump();
-    }
-    const std::string node_bin = GetEnvString("COMET_NODE_BIN").value_or("node");
-    const std::string command =
-        EscapeShellArg(node_bin) + " " +
-        EscapeShellArg(ResolveWebAuthnHelperPath().string()) + " " +
-        EscapeShellArg(action) + " " +
-        EscapeShellArg(input_path.string()) + " > " +
-        EscapeShellArg(output_path.string()) + " 2> " +
-        EscapeShellArg(error_path.string());
-    if (!RunCommand(command)) {
-      std::ifstream error_input(error_path);
-      std::string error_message;
-      if (error_input.is_open()) {
-        std::ostringstream buffer;
-        buffer << error_input.rdbuf();
-        error_message = Trim(buffer.str());
-      }
-      if (error_message.empty()) {
-        throw std::runtime_error("WebAuthn helper command failed");
-      }
-      throw std::runtime_error("WebAuthn helper command failed: " + error_message);
-    }
-    std::ifstream input(output_path);
-    if (!input.is_open()) {
-      throw std::runtime_error("failed to open WebAuthn helper output");
-    }
-    json result = json::parse(input, nullptr, true, true);
-    std::filesystem::remove_all(temp_dir);
-    return result;
-  } catch (...) {
-    std::filesystem::remove_all(temp_dir);
-    throw;
-  }
-}
-
-void CleanupExpiredPendingAuthFlows() {
-  const std::string now = UtcNowSqlTimestamp();
-  {
-    std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
-    for (auto it = g_pending_webauthn_flows.begin(); it != g_pending_webauthn_flows.end();) {
-      if (it->second.expires_at < now) {
-        it = g_pending_webauthn_flows.erase(it);
-      } else {
-        ++it;
-      }
-    }
-  }
-  {
-    std::lock_guard<std::mutex> lock(g_pending_ssh_mutex);
-    for (auto it = g_pending_ssh_challenges.begin(); it != g_pending_ssh_challenges.end();) {
-      if (it->second.expires_at < now) {
-        it = g_pending_ssh_challenges.erase(it);
-      } else {
-        ++it;
-      }
-    }
-  }
-}
-
-std::string SessionCookieHeader(const std::string& token, const HttpRequest& request) {
-  std::string value = "comet.sid=" + token + "; Path=/; HttpOnly; SameSite=Strict";
-  if (RequestScheme(request) == "https") {
-    value += "; Secure";
-  }
-  return value;
-}
-
-std::string ClearSessionCookieHeader(const HttpRequest& request) {
-  std::string value =
-      "comet.sid=; Path=/; HttpOnly; SameSite=Strict; Expires=Thu, 01 Jan 1970 00:00:00 GMT";
-  if (RequestScheme(request) == "https") {
-    value += "; Secure";
-  }
-  return value;
-}
-
-std::string CreateControllerSession(
-    comet::ControllerStore& store,
-    int user_id,
-    const std::string& session_kind,
-    const std::string& plane_name = "") {
-  const std::string now = UtcNowSqlTimestamp();
-  const std::string token = comet::RandomTokenBase64(32);
-  store.InsertAuthSession(comet::AuthSessionRecord{
-      token,
-      user_id,
-      session_kind,
-      plane_name,
-      SqlTimestampAfterSeconds(
-          session_kind == "ssh" ? SshSessionLifetimeSeconds() : BrowserSessionLifetimeSeconds()),
-      now,
-      "",
-      now,
-  });
-  store.UpdateUserLastLoginAt(user_id, now);
-  return token;
-}
-
-std::optional<std::pair<comet::UserRecord, comet::AuthSessionRecord>> AuthenticateProtectedPlaneRequest(
-    comet::ControllerStore& store,
-    const HttpRequest& request,
-    const std::string& plane_name) {
-  if (const auto web_session = AuthenticateControllerUserSession(store, request, std::optional<std::string>("web"));
-      web_session.has_value()) {
-    return web_session;
-  }
-  const auto token = FindControllerSessionToken(request);
-  if (!token.has_value()) {
-    return std::nullopt;
-  }
-  const auto ssh_session =
-      store.LoadActiveAuthSession(*token, std::optional<std::string>("ssh"), plane_name);
-  if (!ssh_session.has_value()) {
-    return std::nullopt;
-  }
-  const auto user = store.LoadUserById(ssh_session->user_id);
-  if (!user.has_value()) {
-    return std::nullopt;
-  }
-  store.TouchAuthSession(ssh_session->token, UtcNowSqlTimestamp());
-  return std::make_pair(*user, *ssh_session);
 }
 
 struct HostHealthViewData {
@@ -4217,27 +1828,6 @@ json BuildEventPayloadItem(const comet::EventRecord& event) {
   };
 }
 
-json BuildAssignmentPayloadItem(const comet::HostAssignment& assignment) {
-  json progress = nullptr;
-  if (!assignment.progress_json.empty() && assignment.progress_json != "{}") {
-    progress = json::parse(assignment.progress_json);
-  }
-  return json{
-      {"id", assignment.id},
-      {"node_name", assignment.node_name},
-      {"plane_name", assignment.plane_name},
-      {"desired_generation", assignment.desired_generation},
-      {"attempt_count", assignment.attempt_count},
-      {"max_attempts", assignment.max_attempts},
-      {"assignment_type", assignment.assignment_type},
-      {"desired_state_json", assignment.desired_state_json},
-      {"artifacts_root", assignment.artifacts_root},
-      {"status", comet::ToString(assignment.status)},
-      {"status_message", assignment.status_message},
-      {"progress", progress},
-  };
-}
-
 json BuildBootstrapModelPayloadItem(
     const std::optional<comet::BootstrapModelSpec>& bootstrap_model) {
   if (!bootstrap_model.has_value()) {
@@ -4264,66 +1854,6 @@ json BuildBootstrapModelPayloadItem(
        bootstrap_model->sha256.has_value() ? json(*bootstrap_model->sha256) : json(nullptr)},
   };
   return item;
-}
-
-comet::HostObservation ParseHostObservationPayload(const json& payload) {
-  comet::HostObservation observation;
-  observation.node_name = payload.value("node_name", std::string{});
-  observation.plane_name = payload.value("plane_name", std::string{});
-  if (payload.contains("applied_generation") && !payload.at("applied_generation").is_null()) {
-    observation.applied_generation = payload.at("applied_generation").get<int>();
-  }
-  if (payload.contains("last_assignment_id") && !payload.at("last_assignment_id").is_null()) {
-    observation.last_assignment_id = payload.at("last_assignment_id").get<int>();
-  }
-  observation.status =
-      comet::ParseHostObservationStatus(payload.value("status", std::string("idle")));
-  observation.status_message = payload.value("status_message", std::string{});
-  observation.observed_state_json = payload.value("observed_state_json", std::string{});
-  observation.runtime_status_json = payload.value("runtime_status_json", std::string{});
-  observation.instance_runtime_json = payload.value("instance_runtime_json", std::string{});
-  observation.gpu_telemetry_json = payload.value("gpu_telemetry_json", std::string{});
-  observation.disk_telemetry_json = payload.value("disk_telemetry_json", std::string{});
-  observation.network_telemetry_json = payload.value("network_telemetry_json", std::string{});
-  observation.cpu_telemetry_json = payload.value("cpu_telemetry_json", std::string{});
-  observation.heartbeat_at = payload.value("heartbeat_at", std::string{});
-  return observation;
-}
-
-json BuildDiskRuntimeStatePayloadItem(const comet::DiskRuntimeState& state) {
-  return json{
-      {"disk_name", state.disk_name},
-      {"plane_name", state.plane_name},
-      {"node_name", state.node_name},
-      {"image_path", state.image_path},
-      {"filesystem_type", state.filesystem_type},
-      {"loop_device", state.loop_device},
-      {"mount_point", state.mount_point},
-      {"runtime_state", state.runtime_state},
-      {"attached_at", state.attached_at},
-      {"mounted_at", state.mounted_at},
-      {"last_verified_at", state.last_verified_at},
-      {"status_message", state.status_message},
-      {"updated_at", state.updated_at},
-  };
-}
-
-comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const json& payload) {
-  comet::DiskRuntimeState state;
-  state.disk_name = payload.value("disk_name", std::string{});
-  state.plane_name = payload.value("plane_name", std::string{});
-  state.node_name = payload.value("node_name", std::string{});
-  state.image_path = payload.value("image_path", std::string{});
-  state.filesystem_type = payload.value("filesystem_type", std::string{});
-  state.loop_device = payload.value("loop_device", std::string{});
-  state.mount_point = payload.value("mount_point", std::string{});
-  state.runtime_state = payload.value("runtime_state", std::string{});
-  state.attached_at = payload.value("attached_at", std::string{});
-  state.mounted_at = payload.value("mounted_at", std::string{});
-  state.last_verified_at = payload.value("last_verified_at", std::string{});
-  state.status_message = payload.value("status_message", std::string{});
-  state.updated_at = payload.value("updated_at", std::string{});
-  return state;
 }
 
 json BuildHostAssignmentsPayload(
@@ -5368,16 +2898,6 @@ int SetNodeAvailability(
 
 int RetryHostAssignment(const std::string& db_path, int assignment_id);
 
-int StartPlane(const std::string& db_path, const std::string& plane_name);
-
-int StopPlane(const std::string& db_path, const std::string& plane_name);
-
-struct ControllerActionResult {
-  std::string action_name;
-  int exit_code = 0;
-  std::string output;
-};
-
 HttpResponse BuildJsonResponse(
     int status_code,
     const json& payload,
@@ -5397,7 +2917,10 @@ HttpResponse BuildJsonResponse(
       if (!enriched.contains("error") || !enriched.at("error").is_object()) {
         json error{
             {"code", enriched.value("status", "error")},
-            {"message", enriched.value("message", ReasonPhrase(status_code))},
+            {"message",
+             enriched.value(
+                 "message",
+                 ControllerNetworkManager::ReasonPhrase(status_code))},
         };
         if (enriched.contains("details")) {
           error["details"] = enriched["details"];
@@ -5408,7 +2931,9 @@ HttpResponse BuildJsonResponse(
           enriched["error"]["code"] = enriched.value("status", "error");
         }
         if (!enriched["error"].contains("message")) {
-          enriched["error"]["message"] = enriched.value("message", ReasonPhrase(status_code));
+          enriched["error"]["message"] = enriched.value(
+              "message",
+              ControllerNetworkManager::ReasonPhrase(status_code));
         }
       }
       enriched["status"] = "error";
@@ -5928,7 +3453,6 @@ void DownloadModelLibraryFile(
   std::filesystem::create_directories(target_path.parent_path());
   const std::filesystem::path temp_path = target_path.string() + ".part";
   std::filesystem::remove(temp_path);
-  const auto content_length = ProbeContentLengthForModelLibrary(source_url);
   auto future = std::async(
       std::launch::async,
       [temp_path_text = temp_path.string(), source_url]() {
@@ -6140,58 +3664,6 @@ HttpResponse DeleteModelLibraryEntryByPath(
       json{{"status", "deleted"}, {"path", it->path}, {"deleted_paths", deleted_paths}});
 }
 
-std::string BuildHostRequestAad(
-    const std::string& message_type,
-    const std::string& node_name,
-    std::int64_t sequence_number) {
-  return "request\n" + message_type + "\n" + node_name + "\n" + std::to_string(sequence_number);
-}
-
-std::string BuildHostResponseAad(
-    const std::string& message_type,
-    const std::string& node_name,
-    std::int64_t sequence_number) {
-  return "response\n" + message_type + "\n" + node_name + "\n" + std::to_string(sequence_number);
-}
-
-std::optional<comet::RegisteredHostRecord> AuthenticateHostSession(
-    comet::ControllerStore& store,
-    const HttpRequest& request,
-    const std::optional<std::string>& expected_node_name = std::nullopt) {
-  const auto token_it = request.headers.find("x-comet-host-session");
-  if (token_it == request.headers.end() || token_it->second.empty()) {
-    return std::nullopt;
-  }
-  const auto node_name_it = request.headers.find("x-comet-host-node");
-  if (node_name_it == request.headers.end() || node_name_it->second.empty()) {
-    return std::nullopt;
-  }
-  const auto host = store.LoadRegisteredHost(node_name_it->second);
-  if (!host.has_value()) {
-    return std::nullopt;
-  }
-  if (expected_node_name.has_value() && *expected_node_name != host->node_name) {
-    return std::nullopt;
-  }
-  if (host->registration_state != "registered") {
-    return std::nullopt;
-  }
-  if (!host->session_expires_at.empty()) {
-    const auto expires_age = TimestampAgeSeconds(host->session_expires_at);
-    if (expires_age.has_value() && *expires_age >= 0) {
-      return std::nullopt;
-    }
-  }
-  if (host->session_token.empty() || host->session_token != token_it->second) {
-    return std::nullopt;
-  }
-  return host;
-}
-
-constexpr int HostSessionLifetimeSeconds() {
-  return 600;
-}
-
 std::string SqlTimestampAfterSeconds(int seconds) {
   const std::time_t future = std::time(nullptr) + seconds;
   std::tm tm{};
@@ -6226,57 +3698,6 @@ std::string FormatDisplayTimestamp(const std::string& value) {
   std::ostringstream output;
   output << std::put_time(&*parsed, "%d/%m/%Y %H:%M:%S");
   return output.str();
-}
-
-json ParseEncryptedHostRequestBody(
-    comet::ControllerStore& store,
-    const HttpRequest& request,
-    comet::RegisteredHostRecord* host,
-    const std::string& message_type) {
-  const json body = ParseJsonRequestBody(request);
-  if (!body.value("encrypted", false)) {
-    return body;
-  }
-  const std::int64_t sequence_number = body.value("sequence_number", static_cast<std::int64_t>(0));
-  if (sequence_number <= host->session_host_sequence) {
-    throw std::runtime_error("stale or replayed host session request");
-  }
-  const comet::EncryptedEnvelope envelope{
-      body.value("nonce", std::string{}),
-      body.value("ciphertext", std::string{}),
-  };
-  const std::string decrypted = comet::DecryptEnvelopeBase64(
-      envelope,
-      host->session_token,
-      BuildHostRequestAad(message_type, host->node_name, sequence_number));
-  host->session_host_sequence = sequence_number;
-  host->session_expires_at = SqlTimestampAfterSeconds(HostSessionLifetimeSeconds());
-  store.UpsertRegisteredHost(*host);
-  if (decrypted.empty()) {
-    return json::object();
-  }
-  return json::parse(decrypted);
-}
-
-HttpResponse BuildEncryptedHostResponse(
-    comet::ControllerStore& store,
-    comet::RegisteredHostRecord* host,
-    const std::string& message_type,
-    const json& payload) {
-  host->session_controller_sequence += 1;
-  store.UpsertRegisteredHost(*host);
-  const comet::EncryptedEnvelope envelope = comet::EncryptEnvelopeBase64(
-      payload.dump(),
-      host->session_token,
-      BuildHostResponseAad(message_type, host->node_name, host->session_controller_sequence));
-  return BuildJsonResponse(
-      200,
-      json{
-          {"encrypted", true},
-          {"sequence_number", host->session_controller_sequence},
-          {"nonce", envelope.nonce_base64},
-          {"ciphertext", envelope.ciphertext_base64},
-      });
 }
 
 std::string GuessContentType(const std::filesystem::path& file_path) {
@@ -6358,31 +3779,7 @@ HttpResponse BuildStaticFileResponse(const std::filesystem::path& file_path) {
   }
   std::ostringstream buffer;
   buffer << input.rdbuf();
-  return HttpResponse{200, GuessContentType(file_path), buffer.str()};
-}
-
-ControllerActionResult RunControllerActionResult(
-    const std::string& action_name,
-    const std::function<int()>& action) {
-  std::ostringstream captured_stdout;
-  auto* const original_stdout = std::cout.rdbuf(captured_stdout.rdbuf());
-  try {
-    const int exit_code = action();
-    std::cout.rdbuf(original_stdout);
-    return ControllerActionResult{action_name, exit_code, captured_stdout.str()};
-  } catch (...) {
-    std::cout.rdbuf(original_stdout);
-    throw;
-  }
-}
-
-json BuildControllerActionPayload(const ControllerActionResult& result) {
-  return json{
-      {"status", result.exit_code == 0 ? "ok" : "failed"},
-      {"action", result.action_name},
-      {"exit_code", result.exit_code},
-      {"output", result.output},
-  };
+  return HttpResponse{200, GuessContentType(file_path), buffer.str(), {}};
 }
 
 int EmitRemoteJsonPayload(const json& payload) {
@@ -6417,40 +3814,33 @@ int EmitRemoteControllerActionPayload(const json& payload) {
   return sanitized.value("exit_code", 0);
 }
 
-int EmitControllerActionResult(const ControllerActionResult& result) {
-  std::cout << result.output;
-  return result.exit_code;
-}
-
-int DeletePlane(const std::string& db_path, const std::string& plane_name);
-
-ControllerActionResult ExecuteValidateBundleAction(const std::string& bundle_dir) {
-  return RunControllerActionResult(
+comet::controller::ControllerActionResult ExecuteValidateBundleAction(const std::string& bundle_dir) {
+  return comet::controller::RunControllerActionResult(
       "validate-bundle",
       [&]() { return ValidateBundle(bundle_dir); });
 }
 
-ControllerActionResult ExecutePreviewBundleAction(
+comet::controller::ControllerActionResult ExecutePreviewBundleAction(
     const std::string& bundle_dir,
     const std::optional<std::string>& node_name) {
-  return RunControllerActionResult(
+  return comet::controller::RunControllerActionResult(
       "preview-bundle",
       [&]() { return PreviewBundle(bundle_dir, node_name); });
 }
 
-ControllerActionResult ExecuteImportBundleAction(
+comet::controller::ControllerActionResult ExecuteImportBundleAction(
     const std::string& db_path,
     const std::string& bundle_dir) {
-  return RunControllerActionResult(
+  return comet::controller::RunControllerActionResult(
       "import-bundle",
       [&]() { return ImportBundle(db_path, bundle_dir); });
 }
 
-ControllerActionResult ExecuteApplyBundleAction(
+comet::controller::ControllerActionResult ExecuteApplyBundleAction(
     const std::string& db_path,
     const std::string& bundle_dir,
     const std::string& artifacts_root) {
-  return RunControllerActionResult(
+  return comet::controller::RunControllerActionResult(
       "apply-bundle",
       [&]() { return ApplyBundle(db_path, bundle_dir, artifacts_root); });
 }
@@ -6526,13 +3916,13 @@ int ApplyDesiredState(
   return 0;
 }
 
-ControllerActionResult ExecuteUpsertPlaneStateAction(
+comet::controller::ControllerActionResult ExecuteUpsertPlaneStateAction(
     const std::string& db_path,
     const std::string& desired_state_json,
     const std::string& artifacts_root,
     const std::optional<std::string>& expected_plane_name,
     const std::string& source_label) {
-  return RunControllerActionResult(
+  return comet::controller::RunControllerActionResult(
       "upsert-plane-state",
       [&]() {
         const auto desired_state = comet::DeserializeDesiredStateJson(desired_state_json);
@@ -6546,90 +3936,155 @@ ControllerActionResult ExecuteUpsertPlaneStateAction(
       });
 }
 
-ControllerActionResult ExecuteSchedulerTickAction(
-    const std::string& db_path,
-    const std::string& artifacts_root) {
-  return RunControllerActionResult(
-      "scheduler-tick",
-      [&]() { return SchedulerTick(db_path, artifacts_root); });
-}
-
-ControllerActionResult ExecuteReconcileRebalanceProposalsAction(
-    const std::string& db_path,
-    const std::string& artifacts_root) {
-  return RunControllerActionResult(
-      "reconcile-rebalance-proposals",
-      [&]() { return ReconcileRebalanceProposals(db_path, artifacts_root); });
-}
-
-ControllerActionResult ExecuteReconcileRolloutActionsAction(
-    const std::string& db_path,
-    const std::string& artifacts_root) {
-  return RunControllerActionResult(
-      "reconcile-rollout-actions",
-      [&]() { return ReconcileRolloutActions(db_path, artifacts_root); });
-}
-
-ControllerActionResult ExecuteApplyRebalanceProposalAction(
-    const std::string& db_path,
-    const std::string& worker_name,
-    const std::string& artifacts_root) {
-  return RunControllerActionResult(
-      "apply-rebalance-proposal",
-      [&]() { return ApplyRebalanceProposal(db_path, worker_name, artifacts_root); });
-}
-
-ControllerActionResult ExecuteSetRolloutActionStatusAction(
-    const std::string& db_path,
-    int action_id,
-    comet::RolloutActionStatus status,
-    const std::optional<std::string>& status_message) {
-  return RunControllerActionResult(
-      "set-rollout-action-status",
-      [&]() { return SetRolloutActionStatus(db_path, action_id, status, status_message); });
-}
-
-ControllerActionResult ExecuteEnqueueRolloutEvictionAction(
-    const std::string& db_path,
-    int action_id) {
-  return RunControllerActionResult(
-      "enqueue-rollout-eviction",
-      [&]() { return EnqueueRolloutEviction(db_path, action_id); });
-}
-
-ControllerActionResult ExecuteApplyReadyRolloutActionAction(
-    const std::string& db_path,
-    int action_id,
-    const std::string& artifacts_root) {
-  return RunControllerActionResult(
-      "apply-ready-rollout-action",
-      [&]() { return ApplyReadyRolloutAction(db_path, action_id, artifacts_root); });
-}
-
-ControllerActionResult ExecuteSetNodeAvailabilityAction(
+comet::controller::ControllerActionResult ExecuteSetNodeAvailabilityAction(
     const std::string& db_path,
     const std::string& node_name,
     comet::NodeAvailability availability,
     const std::optional<std::string>& status_message) {
-  return RunControllerActionResult(
+  return comet::controller::RunControllerActionResult(
       "set-node-availability",
       [&]() { return SetNodeAvailability(db_path, node_name, availability, status_message); });
 }
 
-ControllerActionResult ExecuteRetryHostAssignmentAction(
+comet::controller::ControllerActionResult ExecuteRetryHostAssignmentAction(
     const std::string& db_path,
     int assignment_id) {
-  return RunControllerActionResult(
+  return comet::controller::RunControllerActionResult(
       "retry-host-assignment",
       [&]() { return RetryHostAssignment(db_path, assignment_id); });
 }
 
-ControllerActionResult ExecuteStartPlaneAction(
+PlaneService MakePlaneService(const std::string& db_path) {
+  return PlaneService(
+      db_path,
+      [](const std::string& value) { return FormatDisplayTimestamp(value); },
+      [](const comet::DesiredState& state) { PrintStateSummary(state); },
+      [](comet::ControllerStore& store, comet::DesiredState* desired_state) {
+        ApplyRegisteredHostExecutionModes(store, desired_state);
+        ResolveDesiredStateDynamicPlacements(store, desired_state);
+        ValidateDesiredStateForControllerAdmission(*desired_state);
+        ValidateDesiredStateExecutionModes(*desired_state);
+      },
+      [](comet::ControllerStore& store,
+         const std::string& category,
+         const std::string& event_type,
+         const std::string& message,
+         const json& payload,
+         const std::string& plane_name) {
+        AppendControllerEvent(store, category, event_type, message, payload, plane_name);
+      },
+      [](comet::ControllerStore& store, const std::string& plane_name) {
+        return CanFinalizeDeletedPlane(store, plane_name);
+      },
+      [](const std::vector<comet::HostAssignment>& assignments, const std::string& plane_name) {
+        return FindLatestHostAssignmentForPlane(assignments, plane_name);
+      },
+      [](const comet::DesiredState& desired_state,
+         const std::string& artifacts_root,
+         int desired_generation,
+         const std::vector<comet::NodeAvailabilityOverride>& availability_overrides,
+         const std::vector<comet::HostObservation>& observations,
+         const comet::SchedulingPolicyReport& scheduling_report) {
+        return BuildHostAssignments(
+            desired_state,
+            artifacts_root,
+            desired_generation,
+            availability_overrides,
+            observations,
+            scheduling_report);
+      },
+      [](const comet::DesiredState& desired_state,
+         int desired_generation,
+         const std::string& artifacts_root,
+         const std::vector<comet::NodeAvailabilityOverride>& availability_overrides) {
+        return BuildStopPlaneAssignments(
+            desired_state,
+            desired_generation,
+            artifacts_root,
+            availability_overrides);
+      },
+      [](const comet::DesiredState& desired_state,
+         int desired_generation,
+         const std::string& artifacts_root) {
+        return BuildDeletePlaneAssignments(
+            desired_state,
+            desired_generation,
+            artifacts_root);
+      },
+      []() { return DefaultArtifactsRoot(); });
+}
+
+SchedulerService MakeSchedulerService(
+    const std::string& db_path,
+    const std::string& artifacts_root) {
+  return SchedulerService(
+      [&](const std::optional<std::string>& node_name,
+          const std::optional<std::string>& plane_name) {
+        return ShowRolloutActions(db_path, node_name, plane_name);
+      },
+      [&](const std::optional<std::string>& node_name,
+          const std::optional<std::string>& plane_name) {
+        return ShowRebalancePlan(db_path, node_name, plane_name);
+      },
+      [&](const std::optional<std::string>& plane_name,
+          const std::optional<std::string>& node_name,
+          const std::optional<std::string>& worker_name,
+          const std::optional<std::string>& category,
+          int limit) {
+        return ShowEvents(db_path, plane_name, node_name, worker_name, category, limit);
+      },
+      [&](const std::string& worker_name) {
+        return comet::controller::RunControllerActionResult(
+            "apply-rebalance-proposal",
+            [&]() { return ApplyRebalanceProposal(db_path, worker_name, artifacts_root); });
+      },
+      [&]() {
+        return comet::controller::RunControllerActionResult(
+            "reconcile-rebalance-proposals",
+            [&]() { return ReconcileRebalanceProposals(db_path, artifacts_root); });
+      },
+      [&]() {
+        return comet::controller::RunControllerActionResult(
+            "scheduler-tick",
+            [&]() { return SchedulerTick(db_path, artifacts_root); });
+      },
+      [&](int action_id,
+          const std::string& requested_status,
+          const std::optional<std::string>& message) {
+        return comet::controller::RunControllerActionResult(
+            "set-rollout-action-status",
+            [&]() {
+              return SetRolloutActionStatus(
+                  db_path,
+                  action_id,
+                  comet::ParseRolloutActionStatus(requested_status),
+                  message);
+            });
+      },
+      [&](int action_id) {
+        return comet::controller::RunControllerActionResult(
+            "enqueue-rollout-eviction",
+            [&]() { return EnqueueRolloutEviction(db_path, action_id); });
+      },
+      [&]() {
+        return comet::controller::RunControllerActionResult(
+            "reconcile-rollout-actions",
+            [&]() { return ReconcileRolloutActions(db_path, artifacts_root); });
+      },
+      [&](int action_id) {
+        return comet::controller::RunControllerActionResult(
+            "apply-ready-rollout-action",
+            [&]() { return ApplyReadyRolloutAction(db_path, action_id, artifacts_root); });
+      });
+}
+
+comet::controller::ControllerActionResult ExecuteStartPlaneAction(
     const std::string& db_path,
     const std::string& plane_name) {
-  return RunControllerActionResult(
+  PlaneService plane_service = MakePlaneService(db_path);
+  return comet::controller::RunControllerActionResult(
       "start-plane",
-      [&]() { return StartPlane(db_path, plane_name); });
+      [&]() { return plane_service.StartPlane(plane_name); });
 }
 
 HostRegistryService MakeHostRegistryService(const std::string& db_path) {
@@ -6656,39 +4111,41 @@ HostRegistryService MakeHostRegistryService(const std::string& db_path) {
       });
 }
 
-ControllerActionResult ExecuteStopPlaneAction(
+comet::controller::ControllerActionResult ExecuteStopPlaneAction(
     const std::string& db_path,
     const std::string& plane_name) {
-  return RunControllerActionResult(
+  PlaneService plane_service = MakePlaneService(db_path);
+  return comet::controller::RunControllerActionResult(
       "stop-plane",
-      [&]() { return StopPlane(db_path, plane_name); });
+      [&]() { return plane_service.StopPlane(plane_name); });
 }
 
-ControllerActionResult ExecuteDeletePlaneAction(
+comet::controller::ControllerActionResult ExecuteDeletePlaneAction(
     const std::string& db_path,
     const std::string& plane_name) {
-  return RunControllerActionResult(
+  PlaneService plane_service = MakePlaneService(db_path);
+  return comet::controller::RunControllerActionResult(
       "delete-plane",
-      [&]() { return DeletePlane(db_path, plane_name); });
+      [&]() { return plane_service.DeletePlane(plane_name); });
 }
 
-ControllerActionResult ExecuteRevokeHostdAction(
+comet::controller::ControllerActionResult ExecuteRevokeHostdAction(
     const std::string& db_path,
     const std::string& node_name,
     const std::optional<std::string>& status_message) {
   const auto service = MakeHostRegistryService(db_path);
-  return RunControllerActionResult(
+  return comet::controller::RunControllerActionResult(
       "revoke-hostd",
       [&]() { return service.RevokeHost(node_name, status_message); });
 }
 
-ControllerActionResult ExecuteRotateHostdKeyAction(
+comet::controller::ControllerActionResult ExecuteRotateHostdKeyAction(
     const std::string& db_path,
     const std::string& node_name,
     const std::string& public_key_base64,
     const std::optional<std::string>& status_message) {
   const auto service = MakeHostRegistryService(db_path);
-  return RunControllerActionResult(
+  return comet::controller::RunControllerActionResult(
       "rotate-hostd-key",
       [&]() { return service.RotateHostKey(node_name, public_key_base64, status_message); });
 }
@@ -6718,7 +4175,7 @@ int ExecuteRemoteControllerCommand(
     if (!plane_name.has_value()) {
       throw std::runtime_error("missing required --plane for remote show-plane");
     }
-    std::cout << SendControllerJsonRequest(target, "GET", "/api/v1/planes/" + UrlEncode(*plane_name))
+    std::cout << SendControllerJsonRequest(target, "GET", "/api/v1/planes/" + ControllerHttpServerSupport::UrlEncode(*plane_name))
                      .dump(2)
               << "\n";
     return 0;
@@ -6731,7 +4188,7 @@ int ExecuteRemoteControllerCommand(
         SendControllerJsonRequest(
             target,
             "POST",
-            "/api/v1/planes/" + UrlEncode(*plane_name) + "/start"));
+            "/api/v1/planes/" + ControllerHttpServerSupport::UrlEncode(*plane_name) + "/start"));
   }
   if (command == "stop-plane") {
     if (!plane_name.has_value()) {
@@ -6741,7 +4198,7 @@ int ExecuteRemoteControllerCommand(
         SendControllerJsonRequest(
             target,
             "POST",
-            "/api/v1/planes/" + UrlEncode(*plane_name) + "/stop"));
+            "/api/v1/planes/" + ControllerHttpServerSupport::UrlEncode(*plane_name) + "/stop"));
   }
   if (command == "delete-plane") {
     if (!plane_name.has_value()) {
@@ -6751,7 +4208,7 @@ int ExecuteRemoteControllerCommand(
         SendControllerJsonRequest(
             target,
             "DELETE",
-            "/api/v1/planes/" + UrlEncode(*plane_name)));
+            "/api/v1/planes/" + ControllerHttpServerSupport::UrlEncode(*plane_name)));
   }
   if (command == "show-state") {
     return EmitRemoteJsonPayload(
@@ -6774,7 +4231,7 @@ int ExecuteRemoteControllerCommand(
         SendControllerJsonRequest(
             target,
             "POST",
-            "/api/v1/hostd/hosts/" + UrlEncode(*node_name) + "/revoke",
+            "/api/v1/hostd/hosts/" + ControllerHttpServerSupport::UrlEncode(*node_name) + "/revoke",
             {{"message", message.value_or("")}}));
   }
   if (command == "rotate-hostd-key") {
@@ -6791,7 +4248,7 @@ int ExecuteRemoteControllerCommand(
         SendControllerJsonRequest(
             target,
             "POST",
-            "/api/v1/hostd/hosts/" + UrlEncode(*node_name) + "/rotate-key",
+            "/api/v1/hostd/hosts/" + ControllerHttpServerSupport::UrlEncode(*node_name) + "/rotate-key",
             json{
                 {"public_key_base64", *public_key},
                 {"message", message.value_or("")},
@@ -7035,3356 +4492,6 @@ int ExecuteRemoteControllerCommand(
   std::cerr << "error: command '" << command
             << "' is not available through --controller yet\n";
   return 1;
-}
-
-std::string BuildSseEventName(const comet::EventRecord& event) {
-  if (!event.category.empty() && !event.event_type.empty()) {
-    return event.category + "." + event.event_type;
-  }
-  if (!event.category.empty()) {
-    return event.category;
-  }
-  if (!event.event_type.empty()) {
-    return event.event_type;
-  }
-  return "event";
-}
-
-SseStreamRequest ParseSseStreamRequest(const HttpRequest& request) {
-  SseStreamRequest stream_request;
-  stream_request.plane_name = FindQueryString(request, "plane");
-  stream_request.node_name = FindQueryString(request, "node");
-  stream_request.worker_name = FindQueryString(request, "worker");
-  stream_request.category = FindQueryString(request, "category");
-  stream_request.limit = FindQueryInt(request, "limit").value_or(100);
-  stream_request.last_event_id = FindQueryInt(request, "since_id");
-  if (!stream_request.last_event_id.has_value()) {
-    const auto header_value = FindHeaderString(request, "last-event-id");
-    if (header_value.has_value()) {
-      stream_request.last_event_id = std::stoi(*header_value);
-    }
-  }
-  return stream_request;
-}
-
-void StreamEventsSse(
-    SocketHandle client_fd,
-    const std::string& db_path,
-    const HttpRequest& request) {
-  const SseStreamRequest stream_request = ParseSseStreamRequest(request);
-  int last_event_id = stream_request.last_event_id.value_or(0);
-  if (!SendSseHeaders(client_fd)) {
-    ShutdownAndCloseSocket(client_fd);
-    return;
-  }
-  if (!SendSseCommentFrame(client_fd, " connected")) {
-    ShutdownAndCloseSocket(client_fd);
-    return;
-  }
-
-  auto last_keepalive = std::chrono::steady_clock::now();
-  while (!g_stop_requested.load()) {
-    comet::ControllerStore store(db_path);
-    store.Initialize();
-    const auto events = store.LoadEvents(
-        stream_request.plane_name,
-        stream_request.node_name,
-        stream_request.worker_name,
-        stream_request.category,
-        stream_request.limit,
-        last_event_id > 0 ? std::optional<int>(last_event_id) : std::nullopt,
-        true);
-    for (const auto& event : events) {
-      const std::string payload = BuildEventPayloadItem(event).dump();
-      if (!SendSseEventFrame(client_fd, event.id, BuildSseEventName(event), payload)) {
-        ShutdownAndCloseSocket(client_fd);
-        return;
-      }
-      last_event_id = std::max(last_event_id, event.id);
-      last_keepalive = std::chrono::steady_clock::now();
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    if (now - last_keepalive >= std::chrono::seconds(5)) {
-      if (!SendSseCommentFrame(client_fd, " keepalive")) {
-        ShutdownAndCloseSocket(client_fd);
-        return;
-      }
-      last_keepalive = now;
-    }
-
-    PollFd fd_state{};
-    fd_state.fd = client_fd;
-    fd_state.events = POLLIN | POLLERR | POLLHUP;
-    const int poll_result = comet::platform::Poll(&fd_state, 1, 1000);
-    if (poll_result < 0) {
-      if (comet::platform::LastSocketErrorWasInterrupted()) {
-        continue;
-      }
-      break;
-    }
-    if (poll_result == 0) {
-      continue;
-    }
-    if ((fd_state.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-      break;
-    }
-    if ((fd_state.revents & POLLIN) != 0) {
-      char scratch[1];
-      const ssize_t read_count = recv(client_fd, scratch, sizeof(scratch), MSG_PEEK);
-      if (read_count <= 0) {
-        break;
-      }
-    }
-  }
-
-  ShutdownAndCloseSocket(client_fd);
-}
-
-std::optional<std::string> ParseInteractionStreamPlaneName(const HttpRequest& request) {
-  if (request.method != "POST") {
-    return std::nullopt;
-  }
-  constexpr std::string_view kPrefix = "/api/v1/planes/";
-  constexpr std::string_view kSuffix = "/interaction/chat/completions/stream";
-  if (request.path.rfind(std::string(kPrefix), 0) != 0) {
-    return std::nullopt;
-  }
-  if (request.path.size() <= kPrefix.size() + kSuffix.size()) {
-    return std::nullopt;
-  }
-  if (request.path.substr(request.path.size() - kSuffix.size()) != kSuffix) {
-    return std::nullopt;
-  }
-  return request.path.substr(
-      kPrefix.size(),
-      request.path.size() - kPrefix.size() - kSuffix.size());
-}
-
-SocketHandle ConnectHttpTarget(const ControllerEndpointTarget& target) {
-  comet::platform::EnsureSocketsInitialized();
-
-  addrinfo hints{};
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  addrinfo* results = nullptr;
-  const std::string port_text = std::to_string(target.port);
-  const int lookup = getaddrinfo(target.host.c_str(), port_text.c_str(), &hints, &results);
-  if (lookup != 0) {
-    throw std::runtime_error(
-        "failed to resolve proxy target '" + target.raw + "': " + gai_strerror(lookup));
-  }
-  SocketHandle fd = comet::platform::kInvalidSocket;
-  for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
-    fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-    if (!comet::platform::IsSocketValid(fd)) {
-      continue;
-    }
-    if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
-      break;
-    }
-    CloseSocketHandle(fd);
-    fd = comet::platform::kInvalidSocket;
-  }
-  freeaddrinfo(results);
-  if (!comet::platform::IsSocketValid(fd)) {
-    throw std::runtime_error("failed to connect to proxy target '" + target.raw + "'");
-  }
-  return fd;
-}
-
-void StreamPlaneInteractionSse(
-    SocketHandle client_fd,
-    const std::string& db_path,
-    const HttpRequest& request) {
-  const std::string request_id = GenerateInteractionRequestId();
-  if (request.method != "POST") {
-    SendHttpResponse(
-        client_fd,
-        BuildStandaloneInteractionContractError(
-            405,
-            request_id,
-            "method_not_allowed",
-            "interaction stream endpoint accepts POST only",
-            false));
-    ShutdownAndCloseSocket(client_fd);
-    return;
-  }
-  const auto plane_name = ParseInteractionStreamPlaneName(request);
-  if (!plane_name.has_value()) {
-    SendHttpResponse(
-        client_fd,
-        BuildStandaloneInteractionContractError(
-            404,
-            request_id,
-            "plane_not_found",
-            "plane not found for interaction stream path",
-            false));
-    ShutdownAndCloseSocket(client_fd);
-    return;
-  }
-
-  PlaneInteractionResolution resolution;
-  InteractionRequestContext request_context;
-  try {
-    resolution = ResolvePlaneInteraction(db_path, *plane_name);
-    if (!resolution.status_payload.value("interaction_enabled", false)) {
-      SendHttpResponse(
-          client_fd,
-          BuildPlaneInteractionContractError(
-              409,
-              resolution,
-              request_id,
-              "interaction_disabled",
-              "interaction is available only for plane_mode=llm",
-              false));
-      ShutdownAndCloseSocket(client_fd);
-      return;
-    }
-    if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
-      SendHttpResponse(
-          client_fd,
-          BuildPlaneInteractionContractError(
-              409,
-              resolution,
-              request_id,
-              "plane_not_ready",
-              "plane interaction target is not ready",
-              true));
-      ShutdownAndCloseSocket(client_fd);
-      return;
-    }
-    if (const auto validation_error = ValidateAndNormalizeInteractionRequest(
-            resolution,
-            request_id,
-            ParseInteractionPayload(request.body),
-            &request_context)) {
-      SendHttpResponse(client_fd, *validation_error);
-      ShutdownAndCloseSocket(client_fd);
-      return;
-    }
-  } catch (const json::exception& error) {
-    SendHttpResponse(
-        client_fd,
-        BuildStandaloneInteractionContractError(
-            400,
-            request_id,
-            "malformed_request",
-            error.what(),
-            false,
-            plane_name));
-    ShutdownAndCloseSocket(client_fd);
-    return;
-  } catch (const std::exception& error) {
-    SendHttpResponse(
-        client_fd,
-        BuildStandaloneInteractionContractError(
-            404,
-            request_id,
-            "plane_not_found",
-            error.what(),
-            false,
-            plane_name));
-    ShutdownAndCloseSocket(client_fd);
-    return;
-  }
-
-  const json& original_payload = request_context.payload;
-  const ResolvedInteractionPolicy resolved_policy =
-      ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload);
-  const InteractionCompletionPolicy& policy = resolved_policy.policy;
-  InteractionSessionResult session;
-  session.session_id = GenerateInteractionSessionId();
-  const auto session_started_at = std::chrono::steady_clock::now();
-
-  auto stream_single_segment =
-      [&](const json& payload, int segment_index) -> StreamedInteractionSegmentResult {
-    StreamedInteractionSegmentResult result;
-    result.summary.index = segment_index;
-    result.summary.continuation_index = segment_index;
-    int upstream_fd = -1;
-    const auto segment_started_at = std::chrono::steady_clock::now();
-    try {
-      upstream_fd = ConnectHttpTarget(*resolution.target);
-      const std::string body = BuildInteractionUpstreamBody(
-          resolution,
-          payload,
-          true,
-          resolved_policy,
-          request_context.structured_output_json);
-      std::ostringstream upstream_request;
-      upstream_request << "POST /v1/chat/completions HTTP/1.1\r\n";
-      upstream_request << "Host: " << resolution.target->host << ":" << resolution.target->port
-                       << "\r\n";
-      upstream_request << "Connection: close\r\n";
-      upstream_request << "Accept: text/event-stream\r\n";
-      upstream_request << "X-Comet-Request-Id: " << request_id << "\r\n";
-      upstream_request << "Content-Type: application/json\r\n";
-      upstream_request << "Content-Length: " << body.size() << "\r\n\r\n";
-      upstream_request << body;
-      if (!SendAll(upstream_fd, upstream_request.str())) {
-        throw std::runtime_error("failed to write upstream interaction request");
-      }
-
-      std::string response_text;
-      std::array<char, 8192> buffer{};
-      std::size_t header_end = std::string::npos;
-      while (header_end == std::string::npos) {
-        const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
-        if (read_count <= 0) {
-          break;
-        }
-        response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
-        header_end = response_text.find("\r\n\r\n");
-      }
-      if (header_end == std::string::npos) {
-        throw std::runtime_error("upstream interaction response ended before headers");
-      }
-
-      const std::string header_text = response_text.substr(0, header_end);
-      HttpResponse upstream = ParseHttpResponse(response_text);
-      const bool chunked_transfer =
-          FindHttpHeaderValue(header_text, "transfer-encoding").has_value() &&
-          Lowercase(*FindHttpHeaderValue(header_text, "transfer-encoding")).find("chunked") !=
-              std::string::npos;
-      if (upstream.status_code != 200 ||
-          upstream.content_type.find("text/event-stream") == std::string::npos) {
-        while (true) {
-          const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
-          if (read_count <= 0) {
-            break;
-          }
-          response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
-        }
-        upstream = ParseHttpResponse(response_text);
-        throw std::runtime_error(
-            "upstream interaction request failed: " +
-            (upstream.body.empty() ? std::to_string(upstream.status_code) : upstream.body));
-      }
-
-      CompletionMarkerFilterState filter_state;
-      json complete_payload = json::object();
-      bool saw_complete = false;
-      bool upstream_stream_finished = false;
-      std::string openai_stream_raw_text;
-      std::string openai_stream_emitted_text;
-      std::string transport_buffer = upstream.body;
-      std::string sse_buffer;
-      if (chunked_transfer) {
-        DecodeAvailableChunkedHttpBody(
-            transport_buffer, &sse_buffer, &upstream_stream_finished);
-      } else {
-        sse_buffer = std::move(transport_buffer);
-      }
-      const auto emit_openai_stream_progress =
-          [&](const std::string& model_name, bool final_flush) {
-            std::string visible_text;
-            const std::size_t think_close = openai_stream_raw_text.rfind("</think>");
-            if (think_close != std::string::npos) {
-              visible_text = openai_stream_raw_text.substr(think_close + std::string("</think>").size());
-            } else {
-              const std::string trimmed = Trim(openai_stream_raw_text);
-              if (!final_flush &&
-                  (openai_stream_raw_text.find("<think>") != std::string::npos ||
-                   StartsWithReasoningPreamble(trimmed))) {
-                return;
-              }
-              visible_text = openai_stream_raw_text;
-            }
-            bool marker_seen = false;
-            visible_text = RemoveCompletionMarkers(
-                visible_text, policy.completion_marker, &marker_seen);
-            filter_state.marker_seen = filter_state.marker_seen || marker_seen;
-            visible_text = SanitizeInteractionText(visible_text);
-            if (visible_text.empty()) {
-              return;
-            }
-            if (visible_text.size() < openai_stream_emitted_text.size() ||
-                visible_text.compare(0, openai_stream_emitted_text.size(), openai_stream_emitted_text) !=
-                    0) {
-              if (!final_flush || !openai_stream_emitted_text.empty()) {
-                return;
-              }
-            }
-            const std::string delta = visible_text.substr(openai_stream_emitted_text.size());
-            if (delta.empty()) {
-              return;
-            }
-            openai_stream_emitted_text = visible_text;
-            result.cleaned_text += delta;
-            if (!SendInteractionSseEvent(
-                    client_fd,
-                    "delta",
-                    json{
-                        {"request_id", request_id},
-                        {"session_id", session.session_id},
-                        {"segment_index", segment_index},
-                        {"continuation_index", segment_index},
-                        {"model", model_name},
-                        {"delta", delta},
-                    })) {
-              throw std::runtime_error("failed to write downstream delta");
-            }
-          };
-      const auto handle_frame = [&](const InteractionSseFrame& frame) {
-        if (frame.data == "[DONE]") {
-          emit_openai_stream_progress(session.model, true);
-          if (!saw_complete) {
-            complete_payload = json{
-                {"model", session.model},
-                {"finish_reason", "stop"},
-                {"usage",
-                 json{
-                     {"prompt_tokens", 0},
-                     {"completion_tokens", 0},
-                     {"total_tokens", 0},
-                 }},
-            };
-            saw_complete = true;
-          }
-          return false;
-        }
-        if (frame.event_name == "message") {
-          if (frame.data.empty()) {
-            return true;
-          }
-          const json chunk_payload = json::parse(frame.data);
-          if (session.model.empty()) {
-            session.model = chunk_payload.value("model", std::string{});
-          }
-          if (chunk_payload.contains("choices") && chunk_payload.at("choices").is_array() &&
-              !chunk_payload.at("choices").empty()) {
-            const json& choice = chunk_payload.at("choices").at(0);
-            std::string delta_text;
-            if (choice.contains("delta") && choice.at("delta").is_object()) {
-              delta_text = choice.at("delta").value("content", std::string{});
-            }
-            openai_stream_raw_text += delta_text;
-            emit_openai_stream_progress(chunk_payload.value("model", std::string{}), false);
-            if (choice.contains("finish_reason") && !choice.at("finish_reason").is_null()) {
-              emit_openai_stream_progress(chunk_payload.value("model", std::string{}), true);
-              complete_payload = json{
-                  {"model", chunk_payload.value("model", std::string{})},
-                  {"finish_reason", choice.value("finish_reason", std::string{"stop"})},
-                  {"usage", ExtractInteractionUsage(chunk_payload)},
-              };
-              saw_complete = true;
-            }
-          }
-          return true;
-        }
-        if (frame.event_name == "delta") {
-          if (frame.data.empty()) {
-            return true;
-          }
-          const json delta_payload = json::parse(frame.data);
-          const std::string filtered = ConsumeCompletionMarkerFilteredChunk(
-              filter_state,
-              delta_payload.value("delta", std::string{}),
-              policy.completion_marker,
-              false);
-          if (!filtered.empty()) {
-            result.cleaned_text += filtered;
-            if (!SendInteractionSseEvent(
-                    client_fd,
-                    "delta",
-                    json{
-                        {"request_id", request_id},
-                        {"session_id", session.session_id},
-                        {"segment_index", segment_index},
-                        {"continuation_index", segment_index},
-                        {"model", delta_payload.value("model", std::string{})},
-                        {"delta", filtered},
-                    })) {
-              throw std::runtime_error("failed to write downstream delta");
-            }
-          }
-          return true;
-        }
-        if (frame.event_name == "complete") {
-          complete_payload = json::parse(frame.data);
-          saw_complete = true;
-          return true;
-        }
-        if (frame.event_name == "error") {
-          const json error_payload = json::parse(frame.data);
-          throw std::runtime_error(
-              error_payload.value("message", std::string{"upstream stream error"}));
-        }
-        return true;
-      };
-
-      const auto drain_frames = [&](bool final_chunk) {
-        if (chunked_transfer) {
-          DecodeAvailableChunkedHttpBody(
-              transport_buffer, &sse_buffer, &upstream_stream_finished);
-        }
-        if (final_chunk && !sse_buffer.empty() &&
-            sse_buffer.find("\n\n") == std::string::npos) {
-          sse_buffer.append("\n\n");
-        }
-        InteractionSseFrame frame;
-        while (TryConsumeSseFrame(sse_buffer, &frame)) {
-          if (!handle_frame(frame)) {
-            break;
-          }
-        }
-      };
-
-      while (true) {
-        drain_frames(false);
-        if (saw_complete && sse_buffer.find("[DONE]") != std::string::npos) {
-          break;
-        }
-        if (chunked_transfer && upstream_stream_finished) {
-          drain_frames(true);
-          break;
-        }
-        const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
-        if (read_count <= 0) {
-          drain_frames(true);
-          break;
-        }
-        if (chunked_transfer) {
-          transport_buffer.append(buffer.data(), static_cast<std::size_t>(read_count));
-        } else {
-          sse_buffer.append(buffer.data(), static_cast<std::size_t>(read_count));
-        }
-      }
-
-      const std::string final_filtered = ConsumeCompletionMarkerFilteredChunk(
-          filter_state,
-          std::string{},
-          policy.completion_marker,
-          true);
-      if (!final_filtered.empty()) {
-        result.cleaned_text += final_filtered;
-        if (!SendInteractionSseEvent(
-                client_fd,
-                "delta",
-                json{
-                    {"request_id", request_id},
-                    {"session_id", session.session_id},
-                    {"segment_index", segment_index},
-                    {"continuation_index", segment_index},
-                    {"delta", final_filtered},
-                })) {
-          throw std::runtime_error("failed to flush downstream delta");
-        }
-      }
-      if (!saw_complete) {
-        if (Trim(result.cleaned_text).empty()) {
-          const HttpResponse fallback = SendControllerHttpRequest(
-              *resolution.target,
-              "POST",
-              "/v1/chat/completions",
-              BuildInteractionUpstreamBody(
-                  resolution,
-                  payload,
-                  false,
-                  resolved_policy,
-                  request_context.structured_output_json),
-              {{"Accept", "application/json"},
-               {"X-Comet-Request-Id", request_id}});
-          if (fallback.status_code == 200 && !fallback.body.empty()) {
-            const json fallback_payload = json::parse(fallback.body);
-            bool marker_seen_in_fallback = false;
-            const std::string fallback_text = RemoveCompletionMarkers(
-                ExtractInteractionText(fallback_payload),
-                policy.completion_marker,
-                &marker_seen_in_fallback);
-            if (!fallback_text.empty()) {
-              result.cleaned_text += fallback_text;
-              if (!SendInteractionSseEvent(
-                      client_fd,
-                      "delta",
-                      json{
-                          {"request_id", request_id},
-                          {"session_id", session.session_id},
-                          {"segment_index", segment_index},
-                          {"continuation_index", segment_index},
-                          {"model", fallback_payload.value("model", std::string{})},
-                          {"delta", fallback_text},
-                      })) {
-                throw std::runtime_error("failed to write downstream fallback delta");
-              }
-            }
-            filter_state.marker_seen = filter_state.marker_seen || marker_seen_in_fallback;
-            complete_payload = fallback_payload;
-            saw_complete = true;
-          }
-        }
-        if (!saw_complete && !Trim(result.cleaned_text).empty()) {
-          complete_payload = json{
-              {"model", session.model},
-              {"finish_reason", "length"},
-              {"usage",
-               json{
-                   {"prompt_tokens", 0},
-                   {"completion_tokens", 0},
-                   {"total_tokens", 0},
-               }},
-          };
-          saw_complete = true;
-        }
-        if (!saw_complete) {
-          throw std::runtime_error("upstream interaction stream ended without completion event");
-        }
-      }
-
-      const auto segment_finished_at = std::chrono::steady_clock::now();
-      const json usage = complete_payload.value("usage", json::object());
-      result.summary.text = result.cleaned_text;
-      result.summary.finish_reason = complete_payload.value("finish_reason", std::string{"stop"});
-      result.summary.prompt_tokens = usage.value("prompt_tokens", 0);
-      result.summary.completion_tokens = usage.value("completion_tokens", 0);
-      result.summary.total_tokens = usage.value("total_tokens", 0);
-      result.summary.latency_ms = complete_payload.value(
-          "latency_ms",
-          static_cast<int>(
-              std::chrono::duration_cast<std::chrono::milliseconds>(
-                  segment_finished_at - segment_started_at)
-                  .count()));
-      result.summary.marker_seen = filter_state.marker_seen;
-      if (session.model.empty()) {
-        session.model = complete_payload.value("model", std::string{});
-      }
-      ShutdownAndCloseSocket(upstream_fd);
-      return result;
-    } catch (...) {
-      if (comet::platform::IsSocketValid(upstream_fd)) {
-        ShutdownAndCloseSocket(upstream_fd);
-      }
-      if (Trim(result.cleaned_text).empty()) {
-        try {
-          const HttpResponse fallback = SendControllerHttpRequest(
-              *resolution.target,
-              "POST",
-              "/v1/chat/completions",
-              BuildInteractionUpstreamBody(
-                  resolution,
-                  payload,
-                  false,
-                  resolved_policy,
-                  request_context.structured_output_json),
-              {{"Accept", "application/json"},
-               {"X-Comet-Request-Id", request_id}});
-          if (fallback.status_code == 200 && !fallback.body.empty()) {
-            const json fallback_payload = json::parse(fallback.body);
-            bool marker_seen_in_fallback = false;
-            const std::string fallback_text = RemoveCompletionMarkers(
-                ExtractInteractionText(fallback_payload),
-                policy.completion_marker,
-                &marker_seen_in_fallback);
-            if (!fallback_text.empty()) {
-              result.cleaned_text = fallback_text;
-              if (!SendInteractionSseEvent(
-                      client_fd,
-                      "delta",
-                      json{
-                          {"request_id", request_id},
-                          {"session_id", session.session_id},
-                          {"segment_index", segment_index},
-                          {"continuation_index", segment_index},
-                          {"model", fallback_payload.value("model", std::string{})},
-                          {"delta", fallback_text},
-                      })) {
-                throw std::runtime_error("failed to write downstream fallback delta");
-              }
-            }
-            const json usage = ExtractInteractionUsage(fallback_payload);
-            const auto segment_finished_at = std::chrono::steady_clock::now();
-            result.summary.text = result.cleaned_text;
-            result.summary.finish_reason = ExtractInteractionFinishReason(fallback_payload);
-            result.summary.prompt_tokens = usage.value("prompt_tokens", 0);
-            result.summary.completion_tokens = usage.value("completion_tokens", 0);
-            result.summary.total_tokens = usage.value("total_tokens", 0);
-            result.summary.latency_ms = static_cast<int>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    segment_finished_at - segment_started_at)
-                    .count());
-            result.summary.marker_seen = marker_seen_in_fallback;
-            if (session.model.empty()) {
-              session.model = fallback_payload.value("model", std::string{});
-            }
-            return result;
-          }
-        } catch (...) {
-        }
-      }
-      throw;
-    }
-  };
-
-  if (!SendSseHeaders(client_fd, BuildInteractionResponseHeaders(request_id))) {
-    ShutdownAndCloseSocket(client_fd);
-    return;
-  }
-
-  try {
-    if (!SendInteractionSseEvent(
-            client_fd,
-            "session_started",
-            json{
-                {"request_id", request_id},
-                {"session_id", session.session_id},
-                {"plane_name", plane_name.value_or(std::string{})},
-                {"served_model_name", ResolveInteractionServedModelName(resolution)},
-                {"active_model_id", ResolveInteractionActiveModelId(resolution)},
-            })) {
-      throw std::runtime_error("failed to write session_started");
-    }
-    json current_payload = original_payload;
-    for (int segment_index = 0;; ++segment_index) {
-      if (!SendInteractionSseEvent(
-              client_fd,
-              "segment_started",
-              json{
-                  {"request_id", request_id},
-                  {"session_id", session.session_id},
-                  {"segment_index", segment_index},
-                  {"continuation_index", segment_index},
-              })) {
-        throw std::runtime_error("failed to write segment_started");
-      }
-
-      const StreamedInteractionSegmentResult segment =
-          stream_single_segment(current_payload, segment_index);
-      session.content += segment.cleaned_text;
-      session.segments.push_back(segment.summary);
-      session.total_prompt_tokens += segment.summary.prompt_tokens;
-      session.total_completion_tokens += segment.summary.completion_tokens;
-      session.total_tokens += segment.summary.total_tokens;
-      session.total_latency_ms = static_cast<int>(
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::steady_clock::now() - session_started_at)
-              .count());
-      session.final_finish_reason = segment.summary.finish_reason;
-      session.marker_seen = session.marker_seen || segment.summary.marker_seen;
-
-      if (!SendInteractionSseEvent(
-              client_fd,
-              "segment_complete",
-              json{
-                  {"request_id", request_id},
-                  {"session_id", session.session_id},
-                  {"segment_index", segment_index},
-                  {"continuation_index", segment_index},
-                  {"finish_reason", segment.summary.finish_reason},
-                  {"usage",
-                   json{
-                       {"prompt_tokens", segment.summary.prompt_tokens},
-                       {"completion_tokens", segment.summary.completion_tokens},
-                       {"total_tokens", segment.summary.total_tokens},
-                   }},
-                  {"latency_ms", segment.summary.latency_ms},
-                  {"marker_seen", segment.summary.marker_seen},
-              })) {
-        throw std::runtime_error("failed to write segment_complete");
-      }
-
-      if (session.marker_seen &&
-          SessionReachedTargetLength(policy, session.total_completion_tokens)) {
-        session.completion_status = "completed";
-        session.stop_reason = "semantic_completion_marker";
-        break;
-      }
-      if (CanCompleteOnNaturalStop(policy, segment.summary) &&
-          SessionReachedTargetLength(policy, session.total_completion_tokens)) {
-        session.completion_status = "completed";
-        session.stop_reason = "natural_stop";
-        break;
-      }
-      if (session.total_completion_tokens >= policy.max_total_completion_tokens) {
-        session.completion_status = "incomplete_due_to_limits";
-        session.stop_reason = "max_total_completion_tokens_reached";
-        break;
-      }
-      if (session.total_latency_ms >= policy.max_elapsed_time_ms) {
-        session.completion_status = "incomplete_due_to_limits";
-        session.stop_reason = "max_elapsed_time_ms_reached";
-        break;
-      }
-      if (segment_index >= policy.max_continuations) {
-        session.completion_status = "incomplete_due_to_limits";
-        session.stop_reason = "max_continuations_reached";
-        break;
-      }
-
-      session.continuation_count = segment_index + 1;
-      if (!SendInteractionSseEvent(
-              client_fd,
-              "continuation_started",
-              json{
-                  {"request_id", request_id},
-                  {"session_id", session.session_id},
-                  {"continuation_index", session.continuation_count},
-                  {"reason",
-                   segment.summary.finish_reason == "length"
-                       ? "segment_hit_token_limit"
-                       : "semantic_completion_not_confirmed"},
-              })) {
-        throw std::runtime_error("failed to write continuation_started");
-      }
-      current_payload = BuildContinuationPayload(
-          original_payload,
-          session.content,
-          policy,
-          segment.summary.finish_reason != "length",
-          session.total_completion_tokens);
-    }
-
-    if (session.completion_status == "in_progress") {
-      session.completion_status = "failed";
-      session.stop_reason = "session_state_unresolved";
-    }
-
-    const json session_payload = BuildInteractionSessionPayload(session);
-    if (request_context.structured_output_json) {
-      if (session.completion_status != "completed") {
-        SendInteractionSseEvent(
-            client_fd,
-            "session_failed",
-            json{
-                {"request_id", request_id},
-                {"session_id", session.session_id},
-                {"status", "failed"},
-                {"error",
-                 json{
-                     {"code", "structured_output_truncated"},
-                     {"message",
-                      "structured output session ended before a valid JSON object was completed"},
-                     {"retryable", true},
-                 }},
-                {"session", session_payload},
-            });
-        SendInteractionSseEvent(
-            client_fd,
-            "error",
-            json{
-                {"request_id", request_id},
-                {"error",
-                 json{
-                     {"code", "structured_output_truncated"},
-                     {"message",
-                      "structured output session ended before a valid JSON object was completed"},
-                     {"retryable", true},
-                 }},
-                {"plane_name", plane_name.value_or(std::string{})},
-            });
-        SendInteractionSseDone(client_fd);
-        ShutdownAndCloseSocket(client_fd);
-        return;
-      }
-      const auto parsed_json = ParseStructuredOutputObject(session.content);
-      if (!parsed_json.has_value()) {
-        SendInteractionSseEvent(
-            client_fd,
-            "session_failed",
-            json{
-                {"request_id", request_id},
-                {"session_id", session.session_id},
-                {"status", "failed"},
-                {"error",
-                 json{
-                     {"code", "structured_output_malformed"},
-                     {"message",
-                      "structured output session did not produce a valid JSON object"},
-                     {"retryable", true},
-                 }},
-                {"session", session_payload},
-            });
-        SendInteractionSseEvent(
-            client_fd,
-            "error",
-            json{
-                {"request_id", request_id},
-                {"error",
-                 json{
-                     {"code", "structured_output_malformed"},
-                     {"message",
-                      "structured output session did not produce a valid JSON object"},
-                     {"retryable", true},
-                 }},
-                {"plane_name", plane_name.value_or(std::string{})},
-            });
-        SendInteractionSseDone(client_fd);
-        ShutdownAndCloseSocket(client_fd);
-        return;
-      }
-    }
-    SendInteractionSseEvent(
-        client_fd,
-        "session_complete",
-        json{
-            {"request_id", request_id},
-            {"session", session_payload},
-            {"comet",
-             BuildInteractionContractMetadata(
-                 resolution,
-                 request_id,
-                 session.session_id,
-                 static_cast<int>(session.segments.size()),
-                 session.continuation_count)},
-        });
-    SendInteractionSseEvent(
-        client_fd,
-        "complete",
-        json{
-            {"request_id", request_id},
-            {"model", session.model},
-            {"finish_reason", session.completion_status == "completed" ? "stop" : "length"},
-            {"latency_ms", session.total_latency_ms},
-            {"usage", session_payload.at("usage")},
-            {"session", session_payload},
-            {"comet",
-             BuildInteractionContractMetadata(
-                 resolution,
-                 request_id,
-                 session.session_id,
-                 static_cast<int>(session.segments.size()),
-                 session.continuation_count)},
-            {"structured_output",
-             request_context.structured_output_json
-                 ? json{
-                       {"mode", "json_object"},
-                       {"valid", true},
-                       {"json", *ParseStructuredOutputObject(session.content)},
-                   }
-                 : json(nullptr)},
-            {"completion_status", session.completion_status},
-            {"stop_reason", session.stop_reason},
-            {"continuation_count", session.continuation_count},
-            {"segment_count", static_cast<int>(session.segments.size())},
-        });
-    SendInteractionSseDone(client_fd);
-  } catch (const std::exception& error) {
-    SendInteractionSseEvent(
-        client_fd,
-        "session_failed",
-        [&]() {
-          const std::string lowered = Lowercase(error.what());
-          const bool timeout_like =
-              lowered.find("timed out") != std::string::npos ||
-              lowered.find("timeout") != std::string::npos;
-          return json{
-              {"request_id", request_id},
-              {"session_id", session.session_id},
-              {"status", "failed"},
-              {"error",
-               json{
-                   {"code", timeout_like ? "upstream_timeout" : "stream_session_failed"},
-                   {"message", error.what()},
-                   {"retryable", true},
-               }},
-              {"message", error.what()},
-              {"segment_count", static_cast<int>(session.segments.size())},
-              {"continuation_count", session.continuation_count},
-          };
-        }());
-    SendInteractionSseEvent(
-        client_fd,
-        "error",
-        [&]() {
-          const std::string lowered = Lowercase(error.what());
-          const bool timeout_like =
-              lowered.find("timed out") != std::string::npos ||
-              lowered.find("timeout") != std::string::npos;
-          return json{
-              {"request_id", request_id},
-              {"error",
-               json{
-                   {"code", timeout_like ? "upstream_timeout" : "stream_session_failed"},
-                   {"message", error.what()},
-                   {"retryable", true},
-               }},
-              {"message", error.what()},
-              {"plane_name", plane_name.value_or(std::string{})},
-          };
-        }());
-    SendInteractionSseDone(client_fd);
-  }
-
-  ShutdownAndCloseSocket(client_fd);
-}
-
-HttpResponse HandleControllerRequest(
-    const std::string& db_path,
-    const std::string& default_artifacts_root,
-    const HttpRequest& request,
-    const std::optional<std::filesystem::path>& ui_root) {
-  const ScopedCurrentHttpRequest scoped_request(request);
-  CleanupExpiredPendingAuthFlows();
-  if (request.path == "/health" || request.path == "/api/v1/health") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    return BuildJsonResponse(200, BuildControllerHealthPayload(db_path));
-  }
-  if (request.path == "/api/v1/auth/state") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto session = AuthenticateControllerUserSession(store, request);
-      return BuildJsonResponse(
-          200,
-          json{
-              {"service", "comet-controller"},
-              {"setup_required", store.LoadUserCount() == 0},
-              {"authenticated", session.has_value()},
-              {"user", session.has_value() ? BuildUserPayload(session->first) : json(nullptr)},
-              {"rp_id", ResolveWebAuthnRpId(request)},
-              {"origin", ResolveWebAuthnOrigin(request)},
-          });
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
-    }
-  }
-  if (request.path == "/api/v1/auth/me") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto session = AuthenticateControllerUserSession(store, request);
-      if (!session.has_value()) {
-        return BuildJsonResponse(
-            401,
-            json{{"status", "unauthorized"}, {"message", "authentication required"}},
-            {{"Set-Cookie", ClearSessionCookieHeader(request)}});
-      }
-      return BuildJsonResponse(200, json{{"user", BuildUserPayload(session->first)}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
-    }
-  }
-  if (request.path == "/api/v1/auth/logout") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      if (const auto token = FindControllerSessionToken(request); token.has_value()) {
-        store.RevokeAuthSession(*token, UtcNowSqlTimestamp());
-      }
-      return BuildJsonResponse(
-          200,
-          json{{"logged_out", true}},
-          {{"Set-Cookie", ClearSessionCookieHeader(request)}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
-    }
-  }
-  if (request.path == "/api/v1/auth/bootstrap/begin") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      const json body = ParseJsonRequestBody(request);
-      const std::string username = Trim(body.value("username", std::string{}));
-      const std::string password = body.value("password", std::string{});
-      if (username.empty() || password.empty()) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "username and password are required"}});
-      }
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      if (store.LoadUserCount() != 0) {
-        return BuildJsonResponse(
-            409,
-            json{{"status", "conflict"}, {"message", "bootstrap is available only when user base is empty"}});
-      }
-      const std::string flow_id = comet::RandomTokenBase64(24);
-      const std::string challenge = comet::RandomTokenBase64(32);
-      const PendingWebAuthnFlow flow{
-          flow_id,
-          "bootstrap",
-          username,
-          comet::HashPassword(password),
-          "",
-          0,
-          challenge,
-          ResolveWebAuthnRpId(request),
-          ResolveWebAuthnOrigin(request),
-          SqlTimestampAfterSeconds(5 * 60),
-      };
-      const json options = RunWebAuthnHelper(
-          "generate-registration-options",
-          json{
-              {"rpName", ResolveWebAuthnRpName()},
-              {"rpID", flow.rp_id},
-              {"userName", username},
-              {"challenge", challenge},
-          });
-      {
-        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
-        g_pending_webauthn_flows[flow_id] = flow;
-      }
-      return BuildJsonResponse(
-          200,
-          json{
-              {"flow_id", flow_id},
-              {"expires_at", flow.expires_at},
-              {"options", options},
-          });
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
-    }
-  }
-  if (request.path == "/api/v1/auth/bootstrap/finish") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      const json body = ParseJsonRequestBody(request);
-      const std::string flow_id = body.value("flow_id", std::string{});
-      if (flow_id.empty() || !body.contains("response")) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "flow_id and response are required"}});
-      }
-      std::optional<PendingWebAuthnFlow> flow;
-      {
-        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
-        const auto it = g_pending_webauthn_flows.find(flow_id);
-        if (it != g_pending_webauthn_flows.end()) {
-          flow = it->second;
-        }
-      }
-      if (!flow.has_value() || flow->flow_kind != "bootstrap" || flow->expires_at < UtcNowSqlTimestamp()) {
-        return BuildJsonResponse(
-            410,
-            json{{"status", "expired"}, {"message", "bootstrap flow is missing or expired"}});
-      }
-      const json verification = RunWebAuthnHelper(
-          "verify-registration",
-          json{
-              {"response", body.at("response")},
-              {"expectedChallenge", flow->challenge},
-              {"expectedOrigin", flow->origin},
-              {"expectedRPID", flow->rp_id},
-          });
-      if (!verification.value("verified", false)) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "WebAuthn registration verification failed"}});
-      }
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto user = store.CreateBootstrapAdmin(flow->username, flow->password_hash);
-      const json credential = verification.at("registrationInfo");
-      store.InsertWebAuthnCredential(comet::WebAuthnCredentialRecord{
-          0,
-          user.id,
-          credential.value("credentialID", std::string{}),
-          credential.value("credentialPublicKey", std::string{}),
-          static_cast<std::uint32_t>(credential.value("counter", 0)),
-          json(credential.value("transports", json::array())).dump(),
-          "",
-          "",
-          "",
-      });
-      const std::string session_token = CreateControllerSession(store, user.id, "web");
-      {
-        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
-        g_pending_webauthn_flows.erase(flow_id);
-      }
-      return BuildJsonResponse(
-          200,
-          json{{"user", BuildUserPayload(user)}},
-          {{"Set-Cookie", SessionCookieHeader(session_token, request)}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/auth/login/begin") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      const json body = ParseJsonRequestBody(request);
-      const std::string username = Trim(body.value("username", std::string{}));
-      if (username.empty()) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "username is required"}});
-      }
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto user = store.LoadUserByUsername(username);
-      if (!user.has_value()) {
-        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "user not found"}});
-      }
-      const auto credentials = store.LoadWebAuthnCredentialsForUser(user->id);
-      if (credentials.empty()) {
-        return BuildJsonResponse(
-            409,
-            json{{"status", "conflict"}, {"message", "user has no registered WebAuthn credentials"}});
-      }
-      json allow_credentials = json::array();
-      for (const auto& credential : credentials) {
-        json transports = json::array();
-        try {
-          transports = credential.transports_json.empty()
-                           ? json::array()
-                           : json::parse(credential.transports_json);
-        } catch (...) {
-          transports = json::array();
-        }
-        allow_credentials.push_back(
-            json{{"id", credential.credential_id}, {"transports", transports}});
-      }
-      const std::string flow_id = comet::RandomTokenBase64(24);
-      const std::string challenge = comet::RandomTokenBase64(32);
-      const PendingWebAuthnFlow flow{
-          flow_id,
-          "login",
-          username,
-          "",
-          "",
-          user->id,
-          challenge,
-          ResolveWebAuthnRpId(request),
-          ResolveWebAuthnOrigin(request),
-          SqlTimestampAfterSeconds(5 * 60),
-      };
-      const json options = RunWebAuthnHelper(
-          "generate-authentication-options",
-          json{
-              {"rpID", flow.rp_id},
-              {"challenge", challenge},
-              {"allowCredentials", allow_credentials},
-          });
-      {
-        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
-        g_pending_webauthn_flows[flow_id] = flow;
-      }
-      return BuildJsonResponse(
-          200,
-          json{{"flow_id", flow_id}, {"expires_at", flow.expires_at}, {"options", options}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
-    }
-  }
-  if (request.path == "/api/v1/auth/login/finish") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      const json body = ParseJsonRequestBody(request);
-      const std::string flow_id = body.value("flow_id", std::string{});
-      if (flow_id.empty() || !body.contains("response")) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "flow_id and response are required"}});
-      }
-      std::optional<PendingWebAuthnFlow> flow;
-      {
-        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
-        const auto it = g_pending_webauthn_flows.find(flow_id);
-        if (it != g_pending_webauthn_flows.end()) {
-          flow = it->second;
-        }
-      }
-      if (!flow.has_value() || flow->flow_kind != "login" || flow->expires_at < UtcNowSqlTimestamp()) {
-        return BuildJsonResponse(
-            410,
-            json{{"status", "expired"}, {"message", "login flow is missing or expired"}});
-      }
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const std::string credential_id = body.at("response").value("id", std::string{});
-      const auto credential = store.LoadWebAuthnCredentialById(credential_id);
-      if (!credential.has_value() || credential->user_id != flow->user_id) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "credential is not registered for this user"}});
-      }
-      const json verification = RunWebAuthnHelper(
-          "verify-authentication",
-          json{
-              {"response", body.at("response")},
-              {"expectedChallenge", flow->challenge},
-              {"expectedOrigin", flow->origin},
-              {"expectedRPID", flow->rp_id},
-              {"credential",
-               {
-                   {"id", credential->credential_id},
-                   {"publicKey", credential->public_key},
-                   {"counter", credential->counter},
-                   {"transports",
-                    credential->transports_json.empty() ? json::array() : json::parse(credential->transports_json)},
-               }},
-          });
-      if (!verification.value("verified", false)) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "WebAuthn authentication verification failed"}});
-      }
-      const json auth_info = verification.at("authenticationInfo");
-      store.UpdateWebAuthnCredentialCounter(
-          credential->credential_id,
-          static_cast<std::uint32_t>(auth_info.value("newCounter", credential->counter)),
-          UtcNowSqlTimestamp());
-      const auto user = store.LoadUserById(flow->user_id);
-      if (!user.has_value()) {
-        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "user not found"}});
-      }
-      const std::string session_token = CreateControllerSession(store, user->id, "web");
-      {
-        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
-        g_pending_webauthn_flows.erase(flow_id);
-      }
-      return BuildJsonResponse(
-          200,
-          json{{"user", BuildUserPayload(*user)}},
-          {{"Set-Cookie", SessionCookieHeader(session_token, request)}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (StartsWithPath(request.path, "/api/v1/auth/invite/")) {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      const std::string token = request.path.substr(std::string("/api/v1/auth/invite/").size());
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto invite = store.LoadRegistrationInviteByToken(token);
-      const bool valid =
-          invite.has_value() && invite->revoked_at.empty() && invite->used_at.empty() &&
-          invite->expires_at >= UtcNowSqlTimestamp();
-      return BuildJsonResponse(
-          valid ? 200 : 404,
-          json{
-              {"valid", valid},
-              {"invite", valid ? BuildInvitePayload(*invite) : json(nullptr)},
-          });
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
-    }
-  }
-  if (request.path == "/api/v1/auth/register/begin") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      const json body = ParseJsonRequestBody(request);
-      const std::string invite_token = body.value("invite_token", std::string{});
-      const std::string username = Trim(body.value("username", std::string{}));
-      const std::string password = body.value("password", std::string{});
-      if (invite_token.empty() || username.empty() || password.empty()) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "invite_token, username, and password are required"}});
-      }
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto invite = store.LoadRegistrationInviteByToken(invite_token);
-      if (!invite.has_value() || !invite->revoked_at.empty() || !invite->used_at.empty() ||
-          invite->expires_at < UtcNowSqlTimestamp()) {
-        return BuildJsonResponse(
-            404,
-            json{{"status", "not_found"}, {"message", "invite is missing, expired, revoked, or already used"}});
-      }
-      if (store.LoadUserByUsername(username).has_value()) {
-        return BuildJsonResponse(
-            409,
-            json{{"status", "conflict"}, {"message", "username is already taken"}});
-      }
-      const std::string flow_id = comet::RandomTokenBase64(24);
-      const std::string challenge = comet::RandomTokenBase64(32);
-      const PendingWebAuthnFlow flow{
-          flow_id,
-          "register",
-          username,
-          comet::HashPassword(password),
-          invite_token,
-          0,
-          challenge,
-          ResolveWebAuthnRpId(request),
-          ResolveWebAuthnOrigin(request),
-          SqlTimestampAfterSeconds(5 * 60),
-      };
-      const json options = RunWebAuthnHelper(
-          "generate-registration-options",
-          json{
-              {"rpName", ResolveWebAuthnRpName()},
-              {"rpID", flow.rp_id},
-              {"userName", username},
-              {"challenge", challenge},
-          });
-      {
-        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
-        g_pending_webauthn_flows[flow_id] = flow;
-      }
-      return BuildJsonResponse(
-          200,
-          json{{"flow_id", flow_id}, {"expires_at", flow.expires_at}, {"options", options}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
-    }
-  }
-  if (request.path == "/api/v1/auth/register/finish") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      const json body = ParseJsonRequestBody(request);
-      const std::string flow_id = body.value("flow_id", std::string{});
-      if (flow_id.empty() || !body.contains("response")) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "flow_id and response are required"}});
-      }
-      std::optional<PendingWebAuthnFlow> flow;
-      {
-        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
-        const auto it = g_pending_webauthn_flows.find(flow_id);
-        if (it != g_pending_webauthn_flows.end()) {
-          flow = it->second;
-        }
-      }
-      if (!flow.has_value() || flow->flow_kind != "register" || flow->expires_at < UtcNowSqlTimestamp()) {
-        return BuildJsonResponse(
-            410,
-            json{{"status", "expired"}, {"message", "registration flow is missing or expired"}});
-      }
-      const json verification = RunWebAuthnHelper(
-          "verify-registration",
-          json{
-              {"response", body.at("response")},
-              {"expectedChallenge", flow->challenge},
-              {"expectedOrigin", flow->origin},
-              {"expectedRPID", flow->rp_id},
-          });
-      if (!verification.value("verified", false)) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "WebAuthn registration verification failed"}});
-      }
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto user = store.CreateInvitedUser(flow->invite_token, flow->username, flow->password_hash);
-      const json credential = verification.at("registrationInfo");
-      store.InsertWebAuthnCredential(comet::WebAuthnCredentialRecord{
-          0,
-          user.id,
-          credential.value("credentialID", std::string{}),
-          credential.value("credentialPublicKey", std::string{}),
-          static_cast<std::uint32_t>(credential.value("counter", 0)),
-          json(credential.value("transports", json::array())).dump(),
-          "",
-          "",
-          "",
-      });
-      const std::string session_token = CreateControllerSession(store, user.id, "web");
-      {
-        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
-        g_pending_webauthn_flows.erase(flow_id);
-      }
-      return BuildJsonResponse(
-          200,
-          json{{"user", BuildUserPayload(user)}},
-          {{"Set-Cookie", SessionCookieHeader(session_token, request)}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/auth/invites") {
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto admin = RequireControllerAdminUser(store, request);
-      if (!admin.has_value()) {
-        return BuildJsonResponse(
-            401,
-            json{{"status", "unauthorized"}, {"message", "admin session is required"}},
-            {{"Set-Cookie", ClearSessionCookieHeader(request)}});
-      }
-      if (request.method == "GET") {
-        json items = json::array();
-        for (const auto& invite : store.LoadActiveRegistrationInvites()) {
-          json item = BuildInvitePayload(invite);
-          item["registration_url"] = ResolveWebAuthnOrigin(request) + "/register/" + invite.token;
-          items.push_back(std::move(item));
-        }
-        return BuildJsonResponse(200, json{{"items", items}});
-      }
-      if (request.method == "POST") {
-        const std::string token = SanitizeTokenForPath(comet::RandomTokenBase64(18));
-        const auto invite =
-            store.CreateRegistrationInvite(admin->id, token, SqlTimestampAfterSeconds(InviteLifetimeSeconds()));
-        json item = BuildInvitePayload(invite);
-        item["registration_url"] = ResolveWebAuthnOrigin(request) + "/register/" + invite.token;
-        return BuildJsonResponse(200, json{{"invite", item}});
-      }
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (StartsWithPath(request.path, "/api/v1/auth/invites/")) {
-    if (request.method != "DELETE") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto admin = RequireControllerAdminUser(store, request);
-      if (!admin.has_value()) {
-        return BuildJsonResponse(
-            401,
-            json{{"status", "unauthorized"}, {"message", "admin session is required"}},
-            {{"Set-Cookie", ClearSessionCookieHeader(request)}});
-      }
-      const int invite_id = std::stoi(request.path.substr(std::string("/api/v1/auth/invites/").size()));
-      const bool revoked = store.RevokeRegistrationInvite(invite_id, UtcNowSqlTimestamp());
-      return BuildJsonResponse(
-          revoked ? 200 : 404,
-          json{{"revoked", revoked}},
-          revoked ? std::map<std::string, std::string>{}
-                  : std::map<std::string, std::string>{});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/auth/ssh-keys") {
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto session = AuthenticateControllerUserSession(store, request);
-      if (!session.has_value()) {
-        return BuildJsonResponse(
-            401,
-            json{{"status", "unauthorized"}, {"message", "authentication required"}},
-            {{"Set-Cookie", ClearSessionCookieHeader(request)}});
-      }
-      if (request.method == "GET") {
-        json items = json::array();
-        for (const auto& key : store.LoadActiveUserSshKeys(session->first.id)) {
-          items.push_back(BuildSshKeyPayload(key));
-        }
-        return BuildJsonResponse(200, json{{"items", items}});
-      }
-      if (request.method == "POST") {
-        const json body = ParseJsonRequestBody(request);
-        const std::string public_key = Trim(body.value("public_key", std::string{}));
-        if (public_key.empty()) {
-          return BuildJsonResponse(
-              400,
-              json{{"status", "bad_request"}, {"message", "public_key is required"}});
-        }
-        const comet::UserSshKeyRecord ssh_key{
-            0,
-            session->first.id,
-            Trim(body.value("label", std::string{})),
-            public_key,
-            ComputeSshPublicKeyFingerprint(public_key),
-            "",
-            "",
-            "",
-        };
-        store.InsertUserSshKey(ssh_key);
-        const auto created =
-            store.LoadActiveUserSshKeyByFingerprint(session->first.id, ssh_key.fingerprint);
-        return BuildJsonResponse(
-            200,
-            json{{"ssh_key", created.has_value() ? BuildSshKeyPayload(*created) : BuildSshKeyPayload(ssh_key)}});
-      }
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (StartsWithPath(request.path, "/api/v1/auth/ssh-keys/")) {
-    if (request.method != "DELETE") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto session = AuthenticateControllerUserSession(store, request);
-      if (!session.has_value()) {
-        return BuildJsonResponse(
-            401,
-            json{{"status", "unauthorized"}, {"message", "authentication required"}},
-            {{"Set-Cookie", ClearSessionCookieHeader(request)}});
-      }
-      const int ssh_key_id = std::stoi(request.path.substr(std::string("/api/v1/auth/ssh-keys/").size()));
-      const auto ssh_key = store.LoadActiveUserSshKeyById(ssh_key_id);
-      if (!ssh_key.has_value() || ssh_key->user_id != session->first.id) {
-        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "SSH key not found"}});
-      }
-      const bool revoked = store.RevokeUserSshKey(ssh_key_id, UtcNowSqlTimestamp());
-      return BuildJsonResponse(revoked ? 200 : 404, json{{"revoked", revoked}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/auth/ssh/challenge") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      const json body = ParseJsonRequestBody(request);
-      const std::string username = Trim(body.value("username", std::string{}));
-      const std::string plane_name = Trim(body.value("plane_name", std::string{}));
-      const std::string fingerprint = Trim(body.value("fingerprint", std::string{}));
-      if (username.empty() || plane_name.empty() || fingerprint.empty()) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "username, plane_name, and fingerprint are required"}});
-      }
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto desired_state = store.LoadDesiredState(plane_name);
-      if (!desired_state.has_value() || !desired_state->protected_plane) {
-        return BuildJsonResponse(
-            404,
-            json{{"status", "not_found"}, {"message", "protected plane not found"}});
-      }
-      const auto user = store.LoadUserByUsername(username);
-      if (!user.has_value()) {
-        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "user not found"}});
-      }
-      const auto ssh_key = store.LoadActiveUserSshKeyByFingerprint(user->id, fingerprint);
-      if (!ssh_key.has_value()) {
-        return BuildJsonResponse(
-            404,
-            json{{"status", "not_found"}, {"message", "SSH key fingerprint not found for user"}});
-      }
-      PendingSshChallenge challenge;
-      challenge.challenge_id = comet::RandomTokenBase64(24);
-      challenge.user_id = user->id;
-      challenge.ssh_key_id = ssh_key->id;
-      challenge.username = user->username;
-      challenge.plane_name = plane_name;
-      challenge.fingerprint = fingerprint;
-      challenge.challenge_token = comet::RandomTokenBase64(24);
-      challenge.expires_at = SqlTimestampAfterSeconds(SshChallengeLifetimeSeconds());
-      challenge.message = BuildSshChallengeMessage(
-          challenge.username,
-          challenge.plane_name,
-          challenge.challenge_token,
-          challenge.expires_at);
-      {
-        std::lock_guard<std::mutex> lock(g_pending_ssh_mutex);
-        g_pending_ssh_challenges[challenge.challenge_id] = challenge;
-      }
-      return BuildJsonResponse(
-          200,
-          json{
-              {"challenge_id", challenge.challenge_id},
-              {"challenge_token", challenge.challenge_token},
-              {"expires_at", challenge.expires_at},
-              {"message", challenge.message},
-          });
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/auth/ssh/verify") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      const json body = ParseJsonRequestBody(request);
-      const std::string challenge_id = body.value("challenge_id", std::string{});
-      const std::string signature = body.value("signature", std::string{});
-      if (challenge_id.empty() || signature.empty()) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "challenge_id and signature are required"}});
-      }
-      std::optional<PendingSshChallenge> challenge;
-      {
-        std::lock_guard<std::mutex> lock(g_pending_ssh_mutex);
-        const auto it = g_pending_ssh_challenges.find(challenge_id);
-        if (it != g_pending_ssh_challenges.end()) {
-          challenge = it->second;
-        }
-      }
-      if (!challenge.has_value() || challenge->expires_at < UtcNowSqlTimestamp()) {
-        return BuildJsonResponse(
-            410,
-            json{{"status", "expired"}, {"message", "SSH challenge is missing or expired"}});
-      }
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto ssh_key = store.LoadActiveUserSshKeyById(challenge->ssh_key_id);
-      if (!ssh_key.has_value()) {
-        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "SSH key not found"}});
-      }
-      if (!VerifySshDetachedSignature(
-              challenge->username,
-              ssh_key->public_key,
-              challenge->message,
-              signature)) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "SSH signature verification failed"}});
-      }
-      store.TouchUserSshKey(ssh_key->id, UtcNowSqlTimestamp());
-      const std::string session_token =
-          CreateControllerSession(store, challenge->user_id, "ssh", challenge->plane_name);
-      {
-        std::lock_guard<std::mutex> lock(g_pending_ssh_mutex);
-        g_pending_ssh_challenges.erase(challenge_id);
-      }
-      return BuildJsonResponse(
-          200,
-          json{
-              {"token", session_token},
-              {"plane_name", challenge->plane_name},
-              {"expires_at", SqlTimestampAfterSeconds(SshSessionLifetimeSeconds())},
-          });
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/hostd/register") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      const json body = ParseJsonRequestBody(request);
-      const std::string node_name = body.value("node_name", std::string{});
-      if (node_name.empty()) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "missing required field 'node_name'"}});
-      }
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      comet::RegisteredHostRecord host;
-      if (const auto current = store.LoadRegisteredHost(node_name); current.has_value()) {
-        host = *current;
-      }
-      host.node_name = node_name;
-      host.advertised_address = body.value("advertised_address", host.advertised_address);
-      host.public_key_base64 = body.value("public_key_base64", host.public_key_base64);
-      host.controller_public_key_fingerprint = body.value(
-          "controller_public_key_fingerprint",
-          host.controller_public_key_fingerprint);
-      host.transport_mode = body.value("transport_mode", host.transport_mode.empty() ? "out" : host.transport_mode);
-      host.execution_mode = body.value(
-          "execution_mode",
-          host.execution_mode.empty() ? std::string("mixed") : host.execution_mode);
-      comet::ParseHostExecutionMode(host.execution_mode);
-      host.registration_state = body.value(
-          "registration_state",
-          host.registration_state.empty() ? "registered" : host.registration_state);
-      host.session_state = body.value(
-          "session_state",
-          host.session_state.empty() ? "disconnected" : host.session_state);
-      host.session_token.clear();
-      host.session_expires_at.clear();
-      host.capabilities_json = body.value("capabilities_json", std::string("{}"));
-      host.status_message = body.value("status_message", std::string("registered via host-agent API"));
-      store.UpsertRegisteredHost(host);
-      AppendControllerEvent(
-          store,
-          "host-registry",
-          "registered",
-          "registered host node",
-          json{{"transport_mode", host.transport_mode}, {"execution_mode", host.execution_mode}},
-          "",
-          node_name);
-      return BuildJsonResponse(
-          200,
-          json{
-              {"service", "comet-controller"},
-              {"node_name", node_name},
-              {"registration_state", host.registration_state},
-          });
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/hostd/hosts") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          MakeHostRegistryService(db_path).BuildPayload(FindQueryString(request, "node")));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (StartsWithPath(request.path, "/api/v1/hostd/hosts/")) {
-    const std::string remainder =
-        request.path.substr(std::string("/api/v1/hostd/hosts/").size());
-    if (remainder.empty()) {
-      return BuildJsonResponse(404, json{{"status", "not_found"}});
-    }
-    const auto revoke_pos = remainder.find("/revoke");
-    if (revoke_pos != std::string::npos &&
-        revoke_pos + std::string("/revoke").size() == remainder.size()) {
-      if (request.method != "POST") {
-        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-      }
-      const std::string node_name = remainder.substr(0, revoke_pos);
-      try {
-        const json body = ParseJsonRequestBody(request);
-        const std::optional<std::string> message =
-            body.contains("message") && body["message"].is_string()
-                ? std::make_optional(body["message"].get<std::string>())
-                : std::nullopt;
-        return BuildJsonResponse(
-            200,
-            BuildControllerActionPayload(
-                ExecuteRevokeHostdAction(db_path, node_name, message)));
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    const auto rotate_pos = remainder.find("/rotate-key");
-    if (rotate_pos != std::string::npos &&
-        rotate_pos + std::string("/rotate-key").size() == remainder.size()) {
-      if (request.method != "POST") {
-        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-      }
-      const std::string node_name = remainder.substr(0, rotate_pos);
-      try {
-        const json body = ParseJsonRequestBody(request);
-        const std::string public_key_base64 = body.value("public_key_base64", std::string{});
-        if (public_key_base64.empty()) {
-          return BuildJsonResponse(
-              400,
-              json{{"status", "bad_request"}, {"message", "missing required field 'public_key_base64'"}}); 
-        }
-        const std::optional<std::string> message =
-            body.contains("message") && body["message"].is_string()
-                ? std::make_optional(body["message"].get<std::string>())
-                : std::nullopt;
-        return BuildJsonResponse(
-            200,
-            BuildControllerActionPayload(
-                ExecuteRotateHostdKeyAction(db_path, node_name, public_key_base64, message)));
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    return BuildJsonResponse(404, json{{"status", "not_found"}});
-  }
-  if (request.path == "/api/v1/hostd/session/open") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      const json body = ParseJsonRequestBody(request);
-      const std::string node_name = body.value("node_name", std::string{});
-      if (node_name.empty()) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "missing required field 'node_name'"}});
-      }
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      auto current = store.LoadRegisteredHost(node_name);
-      if (!current.has_value()) {
-        return BuildJsonResponse(
-            404,
-            json{{"status", "not_found"}, {"message", "host node is not registered"}});
-      }
-      const std::string timestamp = body.value("timestamp", std::string{});
-      const std::string nonce = body.value("nonce", std::string{});
-      const std::string signature = body.value("signature", std::string{});
-      if (timestamp.empty() || nonce.empty() || signature.empty()) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "missing required session handshake fields"}});
-      }
-      if (current->public_key_base64.empty()) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "registered host is missing public key"}});
-      }
-      const std::string signed_message =
-          "hostd-session-open\n" + node_name + "\n" + timestamp + "\n" + nonce;
-      if (!comet::VerifyDetachedBase64(signed_message, signature, current->public_key_base64)) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "invalid host session signature"}});
-      }
-      current->session_state = "connected";
-      current->last_session_at = UtcNowSqlTimestamp();
-      current->session_token = comet::RandomTokenBase64(32);
-      current->session_expires_at = SqlTimestampAfterSeconds(HostSessionLifetimeSeconds());
-      current->session_host_sequence = 0;
-      current->session_controller_sequence = 0;
-      current->status_message = body.value("status_message", std::string("session opened"));
-      store.UpsertRegisteredHost(*current);
-      AppendControllerEvent(
-          store,
-          "host-registry",
-          "session-opened",
-          "opened host-agent session",
-          json::object(),
-          "",
-          node_name);
-      return BuildJsonResponse(
-          200,
-          json{
-              {"service", "comet-controller"},
-              {"node_name", node_name},
-              {"session_state", current->session_state},
-              {"last_session_at", current->last_session_at},
-              {"session_token", current->session_token},
-              {"controller_public_key_fingerprint",
-               current->controller_public_key_fingerprint},
-              {"controller_sequence", current->session_controller_sequence},
-          });
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/hostd/session/heartbeat") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto authenticated = AuthenticateHostSession(store, request);
-      if (!authenticated.has_value()) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
-      }
-      auto current = *authenticated;
-      const json decrypted = ParseEncryptedHostRequestBody(store, request, &current, "session/heartbeat");
-      const std::string node_name =
-          decrypted.value("node_name", current.node_name);
-      if (node_name.empty() || node_name != current.node_name) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "node mismatch for host heartbeat"}});
-      }
-      current.session_state = decrypted.value("session_state", std::string("connected"));
-      current.last_heartbeat_at = UtcNowSqlTimestamp();
-      current.last_session_at = current.last_heartbeat_at;
-      current.status_message = decrypted.value("status_message", std::string("heartbeat"));
-      store.UpsertRegisteredHost(current);
-      return BuildEncryptedHostResponse(
-          store,
-          &current,
-          "session/heartbeat",
-          json{
-              {"service", "comet-controller"},
-              {"node_name", node_name},
-              {"session_state", current.session_state},
-              {"last_heartbeat_at", current.last_heartbeat_at},
-          });
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/hostd/assignments/next") {
-    if (request.method != "GET" && request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      std::optional<std::string> node_name = FindQueryString(request, "node");
-      std::optional<comet::RegisteredHostRecord> authenticated;
-      bool encrypted_request = false;
-      if (request.method == "POST") {
-        authenticated = AuthenticateHostSession(store, request);
-        if (!authenticated.has_value()) {
-          return BuildJsonResponse(
-              403,
-              json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
-        }
-        auto host = *authenticated;
-        const json decrypted = ParseEncryptedHostRequestBody(store, request, &host, "assignments/next");
-        node_name = decrypted.contains("node_name")
-                        ? std::optional<std::string>(decrypted.value("node_name", std::string{}))
-                        : node_name;
-        authenticated = host;
-        encrypted_request = true;
-      }
-      if (!node_name.has_value() || node_name->empty()) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "missing required query parameter 'node'"}});
-      }
-      if (!authenticated.has_value()) {
-        authenticated = AuthenticateHostSession(store, request, *node_name);
-        if (!authenticated.has_value()) {
-          return BuildJsonResponse(
-              403,
-              json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
-        }
-      }
-      const auto assignment = store.ClaimNextHostAssignment(*node_name);
-      const json payload{
-          {"service", "comet-controller"},
-          {"node_name", *node_name},
-          {"assignment", assignment.has_value() ? BuildAssignmentPayloadItem(*assignment) : json(nullptr)},
-      };
-      if (encrypted_request) {
-        auto host = *authenticated;
-        return BuildEncryptedHostResponse(store, &host, "assignments/next", payload);
-      }
-      return BuildJsonResponse(200, payload);
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (StartsWithPath(request.path, "/api/v1/hostd/assignments/")) {
-    const std::string remainder =
-        request.path.substr(std::string("/api/v1/hostd/assignments/").size());
-    const auto slash = remainder.find('/');
-    if (slash == std::string::npos) {
-      return BuildJsonResponse(404, json{{"status", "not_found"}});
-    }
-    const int assignment_id = std::stoi(remainder.substr(0, slash));
-    const std::string action = remainder.substr(slash + 1);
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto assignment = store.LoadHostAssignment(assignment_id);
-      if (!assignment.has_value()) {
-        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "assignment not found"}});
-      }
-      const auto authenticated =
-          AuthenticateHostSession(store, request, assignment->node_name);
-      if (!authenticated.has_value()) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
-      }
-      auto host = *authenticated;
-      const json body = ParseEncryptedHostRequestBody(
-          store,
-          request,
-          &host,
-          "assignments/" + std::to_string(assignment_id) + "/" + action);
-      const std::string status_message = body.value("status_message", std::string{});
-      if (action == "progress") {
-        const bool updated = store.UpdateHostAssignmentProgress(assignment_id, body.dump());
-        return BuildEncryptedHostResponse(
-            store,
-            &host,
-            "assignments/" + std::to_string(assignment_id) + "/progress",
-            json{{"service", "comet-controller"}, {"updated", updated}, {"assignment_id", assignment_id}});
-      }
-      if (action == "applied") {
-        const bool updated = store.TransitionClaimedHostAssignment(
-            assignment_id,
-            comet::HostAssignmentStatus::Applied,
-            status_message);
-        if (updated && assignment->assignment_type == "apply-node-state") {
-          const auto plane_assignments =
-              store.LoadHostAssignments(std::nullopt, std::nullopt, assignment->plane_name);
-          const auto latest_assignments_by_node =
-              BuildLatestPlaneAssignmentsByNode(plane_assignments);
-          const bool converged_generation =
-              std::all_of(
-                  latest_assignments_by_node.begin(),
-                  latest_assignments_by_node.end(),
-                  [&](const auto& entry) {
-                    const auto& candidate = entry.second;
-                    if (candidate.assignment_type != "apply-node-state" ||
-                        candidate.desired_generation != assignment->desired_generation) {
-                      return true;
-                    }
-                    return candidate.status == comet::HostAssignmentStatus::Applied ||
-                           candidate.status == comet::HostAssignmentStatus::Superseded;
-                  });
-          if (converged_generation) {
-            store.UpdatePlaneAppliedGeneration(
-                assignment->plane_name,
-                assignment->desired_generation);
-          }
-        }
-        return BuildEncryptedHostResponse(
-            store,
-            &host,
-            "assignments/" + std::to_string(assignment_id) + "/applied",
-            json{{"service", "comet-controller"}, {"updated", updated}, {"assignment_id", assignment_id}});
-      }
-      if (action == "failed") {
-        const bool retry = body.value("retry", false);
-        const bool updated = retry
-                                 ? store.TransitionClaimedHostAssignment(
-                                       assignment_id,
-                                       comet::HostAssignmentStatus::Pending,
-                                       status_message)
-                                 : store.TransitionClaimedHostAssignment(
-                                       assignment_id,
-                                       comet::HostAssignmentStatus::Failed,
-                                       status_message);
-        return BuildEncryptedHostResponse(
-            store,
-            &host,
-            "assignments/" + std::to_string(assignment_id) + "/failed",
-            json{
-                {"service", "comet-controller"},
-                {"updated", updated},
-                {"assignment_id", assignment_id},
-                {"retry", retry},
-            });
-      }
-      return BuildJsonResponse(404, json{{"status", "not_found"}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/hostd/observations") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto authenticated = AuthenticateHostSession(store, request);
-      if (!authenticated.has_value()) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
-      }
-      auto host = *authenticated;
-      const json body = ParseEncryptedHostRequestBody(store, request, &host, "observations/upsert");
-      const auto observation = ParseHostObservationPayload(body);
-      if (observation.node_name.empty()) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "missing required field 'node_name'"}});
-      }
-      if (host.node_name != observation.node_name) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "node mismatch for host observation"}});
-      }
-      store.UpsertHostObservation(observation);
-      return BuildEncryptedHostResponse(
-          store,
-          &host,
-          "observations/upsert",
-          json{{"service", "comet-controller"}, {"node_name", observation.node_name}, {"updated", true}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/hostd/events") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto authenticated = AuthenticateHostSession(store, request);
-      if (!authenticated.has_value()) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
-      }
-      auto host = *authenticated;
-      const json body = ParseEncryptedHostRequestBody(store, request, &host, "events/append");
-      const std::string node_name = body.value("node_name", std::string{});
-      if (!node_name.empty() && node_name != host.node_name) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "node mismatch for event append"}});
-      }
-      store.AppendEvent(comet::EventRecord{
-          0,
-          body.value("plane_name", std::string{}),
-          body.value("node_name", std::string{}),
-          body.value("worker_name", std::string{}),
-          body.contains("assignment_id") && !body.at("assignment_id").is_null()
-              ? std::optional<int>(body.at("assignment_id").get<int>())
-              : std::nullopt,
-          body.contains("rollout_action_id") && !body.at("rollout_action_id").is_null()
-              ? std::optional<int>(body.at("rollout_action_id").get<int>())
-              : std::nullopt,
-          body.value("category", std::string{}),
-          body.value("event_type", std::string{}),
-          body.value("severity", std::string("info")),
-          body.value("message", std::string{}),
-          body.value("payload_json", std::string("{}")),
-          "",
-      });
-      return BuildEncryptedHostResponse(
-          store,
-          &host,
-          "events/append",
-          json{{"service", "comet-controller"}, {"appended", true}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/hostd/disk-runtime-state") {
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      if (request.method == "GET") {
-        const auto disk_name = FindQueryString(request, "disk_name");
-        const auto node_name = FindQueryString(request, "node");
-        if (!disk_name.has_value() || !node_name.has_value()) {
-          return BuildJsonResponse(
-              400,
-              json{{"status", "bad_request"}, {"message", "missing required query parameters 'disk_name' and 'node'"}});
-        }
-        const auto authenticated = AuthenticateHostSession(store, request, *node_name);
-        if (!authenticated.has_value()) {
-          return BuildJsonResponse(
-              403,
-              json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
-        }
-        const auto runtime_state = store.LoadDiskRuntimeState(*disk_name, *node_name);
-        return BuildJsonResponse(
-            200,
-            json{
-                {"service", "comet-controller"},
-                {"runtime_state", runtime_state.has_value() ? BuildDiskRuntimeStatePayloadItem(*runtime_state) : json(nullptr)},
-            });
-      }
-      if (request.method == "POST") {
-        const auto authenticated = AuthenticateHostSession(store, request);
-        if (!authenticated.has_value()) {
-          return BuildJsonResponse(
-              403,
-              json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
-        }
-        auto host = *authenticated;
-        const json body = ParseEncryptedHostRequestBody(store, request, &host, "disk-runtime-state/upsert");
-        const auto runtime_state = ParseDiskRuntimeStatePayload(body);
-        if (runtime_state.disk_name.empty() || runtime_state.node_name.empty()) {
-          return BuildJsonResponse(
-              400,
-              json{{"status", "bad_request"}, {"message", "missing required fields 'disk_name' and 'node_name'"}});
-        }
-        if (host.node_name != runtime_state.node_name) {
-          return BuildJsonResponse(
-              403,
-              json{{"status", "forbidden"}, {"message", "node mismatch for disk runtime state"}});
-        }
-        store.UpsertDiskRuntimeState(runtime_state);
-        return BuildEncryptedHostResponse(
-            store,
-            &host,
-            "disk-runtime-state/upsert",
-            json{{"service", "comet-controller"}, {"updated", true}, {"disk_name", runtime_state.disk_name}});
-      }
-      if (request.method == "POST" && request.path == "/api/v1/hostd/disk-runtime-state/load") {
-        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-      }
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/hostd/disk-runtime-state/load") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto authenticated = AuthenticateHostSession(store, request);
-      if (!authenticated.has_value()) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "invalid or missing host session"}});
-      }
-      auto host = *authenticated;
-      const json body = ParseEncryptedHostRequestBody(store, request, &host, "disk-runtime-state/load");
-      const std::string disk_name = body.value("disk_name", std::string{});
-      const std::string node_name = body.value("node_name", std::string{});
-      if (disk_name.empty() || node_name.empty()) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", "missing disk_name or node_name"}});
-      }
-      if (host.node_name != node_name) {
-        return BuildJsonResponse(
-            403,
-            json{{"status", "forbidden"}, {"message", "node mismatch for disk runtime load"}});
-      }
-      const auto runtime_state = store.LoadDiskRuntimeState(disk_name, node_name);
-      return BuildEncryptedHostResponse(
-          store,
-          &host,
-          "disk-runtime-state/load",
-          json{
-              {"service", "comet-controller"},
-              {"runtime_state", runtime_state.has_value() ? BuildDiskRuntimeStatePayloadItem(*runtime_state)
-                                                          : json(nullptr)},
-          });
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.method == "GET" && ui_root.has_value()) {
-    if (const auto static_path = ResolveUiRequestPath(*ui_root, request.path);
-        static_path.has_value()) {
-      try {
-        return BuildStaticFileResponse(*static_path);
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-  }
-  if (StartsWithPath(request.path, "/api/v1/") && request.path != "/api/v1/health" &&
-      !StartsWithPath(request.path, "/api/v1/auth/") &&
-      !StartsWithPath(request.path, "/api/v1/hostd/")) {
-    const bool interaction_request =
-        StartsWithPath(request.path, "/api/v1/planes/") &&
-        request.path.find("/interaction/") != std::string::npos;
-    if (!interaction_request) {
-      try {
-        comet::ControllerStore store(db_path);
-        store.Initialize();
-        if (!AuthenticateControllerUserSession(store, request).has_value()) {
-          return BuildJsonResponse(
-              401,
-              json{{"status", "unauthorized"}, {"message", "authentication required"}},
-              {{"Set-Cookie", ClearSessionCookieHeader(request)}});
-        }
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-  }
-  if (request.path == "/api/v1/bundles/validate") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto bundle_dir = FindQueryString(request, "bundle");
-    if (!bundle_dir.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'bundle'"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteValidateBundleAction(*bundle_dir)));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/bundles/preview") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto bundle_dir = FindQueryString(request, "bundle");
-    if (!bundle_dir.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'bundle'"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecutePreviewBundleAction(*bundle_dir, FindQueryString(request, "node"))));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/bundles/import") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto bundle_dir = FindQueryString(request, "bundle");
-    if (!bundle_dir.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'bundle'"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteImportBundleAction(db_path, *bundle_dir)));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/bundles/apply") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto bundle_dir = FindQueryString(request, "bundle");
-    if (!bundle_dir.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'bundle'"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteApplyBundleAction(
-                  db_path,
-                  *bundle_dir,
-                  ResolveArtifactsRoot(
-                      FindQueryString(request, "artifacts_root"),
-                      default_artifacts_root))));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/model-library") {
-    if (request.method == "GET") {
-      try {
-        return BuildJsonResponse(200, BuildModelLibraryPayload(db_path));
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    if (request.method == "DELETE") {
-      try {
-        return DeleteModelLibraryEntryByPath(db_path, request);
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-  }
-  if (request.path == "/api/v1/model-library/download") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return EnqueueModelLibraryDownload(request);
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/planes") {
-    if (request.method == "GET") {
-      try {
-        return BuildJsonResponse(200, BuildPlanesPayload(db_path));
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    if (request.method == "POST") {
-      try {
-        const json body = ParseJsonRequestBody(request);
-        const json desired_state_payload =
-            body.contains("desired_state") ? body.at("desired_state") : body;
-        if (!desired_state_payload.is_object()) {
-          return BuildJsonResponse(
-              400,
-              json{{"status", "bad_request"},
-                   {"message", "request body must contain desired_state object"}});
-        }
-        const std::string artifacts_root = ResolveArtifactsRoot(
-            body.contains("artifacts_root") && body["artifacts_root"].is_string()
-                ? std::optional<std::string>(body["artifacts_root"].get<std::string>())
-                : FindQueryString(request, "artifacts_root"),
-            default_artifacts_root);
-        return BuildJsonResponse(
-            200,
-            BuildControllerActionPayload(
-                ExecuteUpsertPlaneStateAction(
-                    db_path,
-                    desired_state_payload.dump(2),
-                    artifacts_root,
-                    std::nullopt,
-                    "api")));
-      } catch (const std::invalid_argument& error) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}});
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-  }
-  if (StartsWithPath(request.path, "/api/v1/planes/")) {
-    const std::string remainder = request.path.substr(std::string("/api/v1/planes/").size());
-    if (remainder.empty()) {
-      return BuildJsonResponse(404, json{{"status", "not_found"}});
-    }
-    const auto interaction_status_pos = remainder.find("/interaction/status");
-    if (interaction_status_pos != std::string::npos &&
-        interaction_status_pos + std::string("/interaction/status").size() == remainder.size()) {
-      const std::string request_id = GenerateInteractionRequestId();
-      const std::string plane_name = remainder.substr(0, interaction_status_pos);
-      if (request.method != "GET") {
-        return BuildStandaloneInteractionContractError(
-            405,
-            request_id,
-            "method_not_allowed",
-            "interaction status endpoint accepts GET only",
-            false,
-            plane_name);
-      }
-      try {
-        PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, plane_name);
-        if (resolution.desired_state.protected_plane) {
-          comet::ControllerStore store(db_path);
-          store.Initialize();
-          if (!AuthenticateProtectedPlaneRequest(store, request, plane_name).has_value()) {
-            return BuildStandaloneInteractionContractError(
-                401,
-                request_id,
-                "unauthorized",
-                "protected plane requires an authenticated WebAuthn session or SSH API session",
-                false,
-                plane_name);
-          }
-        }
-        json payload = resolution.status_payload;
-        payload["request_id"] = request_id;
-        payload["comet"] = BuildInteractionContractMetadata(resolution, request_id);
-        return BuildJsonResponse(
-            200,
-            payload,
-            BuildInteractionResponseHeaders(request_id));
-      } catch (const std::exception& error) {
-        return BuildStandaloneInteractionContractError(
-            404,
-            request_id,
-            "plane_not_found",
-            error.what(),
-            false,
-            plane_name);
-      }
-    }
-    const auto interaction_models_pos = remainder.find("/interaction/models");
-    if (interaction_models_pos != std::string::npos &&
-        interaction_models_pos + std::string("/interaction/models").size() == remainder.size()) {
-      const std::string request_id = GenerateInteractionRequestId();
-      const std::string plane_name = remainder.substr(0, interaction_models_pos);
-      if (request.method != "GET") {
-        return BuildStandaloneInteractionContractError(
-            405,
-            request_id,
-            "method_not_allowed",
-            "interaction models endpoint accepts GET only",
-            false,
-            plane_name);
-      }
-      try {
-        const PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, plane_name);
-        if (resolution.desired_state.protected_plane) {
-          comet::ControllerStore store(db_path);
-          store.Initialize();
-          if (!AuthenticateProtectedPlaneRequest(store, request, plane_name).has_value()) {
-            return BuildStandaloneInteractionContractError(
-                401,
-                request_id,
-                "unauthorized",
-                "protected plane requires an authenticated WebAuthn session or SSH API session",
-                false,
-                plane_name);
-          }
-        }
-        return ProxyInteractionJson(
-            resolution,
-            request_id,
-            "GET",
-            "/v1/models");
-      } catch (const std::exception& error) {
-        return BuildStandaloneInteractionContractError(
-            404,
-            request_id,
-            "plane_not_found",
-            error.what(),
-            false,
-            plane_name);
-      }
-    }
-    const auto interaction_chat_pos = remainder.find("/interaction/chat/completions");
-    if (interaction_chat_pos != std::string::npos &&
-        interaction_chat_pos + std::string("/interaction/chat/completions").size() ==
-            remainder.size()) {
-      const std::string request_id = GenerateInteractionRequestId();
-      const std::string plane_name = remainder.substr(0, interaction_chat_pos);
-      if (request.method != "POST") {
-        return BuildStandaloneInteractionContractError(
-            405,
-            request_id,
-            "method_not_allowed",
-            "interaction chat completions endpoint accepts POST only",
-            false,
-            plane_name);
-      }
-      try {
-        const PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, plane_name);
-        if (resolution.desired_state.protected_plane) {
-          comet::ControllerStore store(db_path);
-          store.Initialize();
-          if (!AuthenticateProtectedPlaneRequest(store, request, plane_name).has_value()) {
-            return BuildStandaloneInteractionContractError(
-                401,
-                request_id,
-                "unauthorized",
-                "protected plane requires an authenticated WebAuthn session or SSH API session",
-                false,
-                plane_name);
-          }
-        }
-        if (!resolution.status_payload.value("interaction_enabled", false)) {
-          return BuildPlaneInteractionContractError(
-              409,
-              resolution,
-              request_id,
-              "interaction_disabled",
-              "interaction is available only for plane_mode=llm",
-              false);
-        }
-        if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
-          return BuildPlaneInteractionContractError(
-              409,
-              resolution,
-              request_id,
-              "plane_not_ready",
-              "plane interaction target is not ready",
-              true);
-        }
-        InteractionRequestContext request_context;
-        if (const auto validation_error = ValidateAndNormalizeInteractionRequest(
-                resolution,
-                request_id,
-                ParseInteractionPayload(request.body),
-                &request_context)) {
-          return *validation_error;
-        }
-        try {
-          return BuildInteractionSessionResponse(
-              resolution,
-              request_context,
-              ExecuteInteractionSession(resolution, request_context));
-        } catch (const std::exception& error) {
-          const std::string lowered = Lowercase(error.what());
-          const bool timeout_like =
-              lowered.find("timed out") != std::string::npos ||
-              lowered.find("timeout") != std::string::npos;
-          return BuildPlaneInteractionContractError(
-              timeout_like ? 504 : 502,
-              resolution,
-              request_id,
-              timeout_like ? "upstream_timeout" : "upstream_invalid_response",
-              error.what(),
-              true);
-        }
-      } catch (const std::exception& error) {
-        return BuildStandaloneInteractionContractError(
-            404,
-            request_id,
-            "plane_not_found",
-            error.what(),
-            false,
-            plane_name);
-      }
-    }
-    const auto interaction_stream_pos = remainder.find("/interaction/chat/completions/stream");
-    if (interaction_stream_pos != std::string::npos &&
-        interaction_stream_pos + std::string("/interaction/chat/completions/stream").size() ==
-            remainder.size()) {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto start_pos = remainder.find("/start");
-    if (start_pos != std::string::npos &&
-        start_pos + std::string("/start").size() == remainder.size()) {
-      if (request.method != "POST") {
-        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-      }
-      const std::string plane_name = remainder.substr(0, start_pos);
-      try {
-        return BuildJsonResponse(
-            200,
-            BuildControllerActionPayload(
-                ExecuteStartPlaneAction(db_path, plane_name)));
-      } catch (const std::invalid_argument& error) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}});
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    const auto stop_pos = remainder.find("/stop");
-    if (stop_pos != std::string::npos &&
-        stop_pos + std::string("/stop").size() == remainder.size()) {
-      if (request.method != "POST") {
-        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-      }
-      const std::string plane_name = remainder.substr(0, stop_pos);
-      try {
-        return BuildJsonResponse(
-            200,
-            BuildControllerActionPayload(
-                ExecuteStopPlaneAction(db_path, plane_name)));
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    if (request.method == "DELETE" && remainder.find('/') == std::string::npos) {
-      try {
-        return BuildJsonResponse(
-            200,
-            BuildControllerActionPayload(
-                ExecuteDeletePlaneAction(db_path, remainder)));
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    if (request.method == "PUT" && remainder.find('/') == std::string::npos) {
-      try {
-        const json body = ParseJsonRequestBody(request);
-        const json desired_state_payload =
-            body.contains("desired_state") ? body.at("desired_state") : body;
-        if (!desired_state_payload.is_object()) {
-          return BuildJsonResponse(
-              400,
-              json{{"status", "bad_request"},
-                   {"message", "request body must contain desired_state object"}});
-        }
-        const std::string artifacts_root = ResolveArtifactsRoot(
-            body.contains("artifacts_root") && body["artifacts_root"].is_string()
-                ? std::optional<std::string>(body["artifacts_root"].get<std::string>())
-                : FindQueryString(request, "artifacts_root"),
-            default_artifacts_root);
-        return BuildJsonResponse(
-            200,
-            BuildControllerActionPayload(
-                ExecuteUpsertPlaneStateAction(
-                    db_path,
-                    desired_state_payload.dump(2),
-                    artifacts_root,
-                    remainder,
-                    "api")));
-      } catch (const std::invalid_argument& error) {
-        return BuildJsonResponse(
-            400,
-            json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}});
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto dashboard_pos = remainder.find("/dashboard");
-    if (dashboard_pos != std::string::npos &&
-        dashboard_pos + std::string("/dashboard").size() == remainder.size()) {
-      const std::string plane_name = remainder.substr(0, dashboard_pos);
-      try {
-        return BuildJsonResponse(
-            200,
-            BuildDashboardPayload(
-                db_path,
-                FindQueryInt(request, "stale_after").value_or(DefaultStaleAfterSeconds()),
-                plane_name));
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    if (remainder.find('/') != std::string::npos) {
-      return BuildJsonResponse(404, json{{"status", "not_found"}});
-    }
-    try {
-      return BuildJsonResponse(200, BuildControllerStatePayload(db_path, remainder));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/state") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(200, BuildControllerStatePayload(db_path));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-        json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/dashboard") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildDashboardPayload(
-              db_path,
-              FindQueryInt(request, "stale_after").value_or(DefaultStaleAfterSeconds()),
-              FindQueryString(request, "plane")));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/host-assignments") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildHostAssignmentsPayload(db_path, FindQueryString(request, "node")));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/host-observations") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildHostObservationsPayload(
-              db_path,
-              FindQueryString(request, "node"),
-              FindQueryString(request, "plane"),
-              FindQueryInt(request, "stale_after").value_or(DefaultStaleAfterSeconds())));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/host-health") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildHostHealthPayload(
-              db_path,
-              FindQueryString(request, "node"),
-              FindQueryInt(request, "stale_after").value_or(DefaultStaleAfterSeconds())));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/node-availability") {
-    if (request.method == "GET") {
-      try {
-        return BuildJsonResponse(
-            200,
-            BuildNodeAvailabilityPayload(db_path, FindQueryString(request, "node")));
-      } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            500,
-            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-      }
-    }
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto node_name = FindQueryString(request, "node");
-    const auto availability = FindQueryString(request, "availability");
-    if (!node_name.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'node'"}});
-    }
-    if (!availability.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'availability'"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteSetNodeAvailabilityAction(
-                  db_path,
-                  *node_name,
-                  comet::ParseNodeAvailability(*availability),
-                  FindQueryString(request, "message"))));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/disk-state") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildDiskStatePayload(
-              db_path,
-              FindQueryString(request, "node"),
-              FindQueryString(request, "plane")));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/rollout-actions") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildRolloutActionsPayload(
-              db_path,
-              FindQueryString(request, "node"),
-              FindQueryString(request, "plane")));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/rebalance-plan") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildRebalancePlanPayload(
-              db_path,
-              FindQueryString(request, "node"),
-              FindQueryInt(request, "stale_after").value_or(DefaultStaleAfterSeconds()),
-              FindQueryString(request, "plane")));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/events") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildEventsPayload(
-              db_path,
-              FindQueryString(request, "plane"),
-              FindQueryString(request, "node"),
-              FindQueryString(request, "worker"),
-              FindQueryString(request, "category"),
-              FindQueryInt(request, "limit").value_or(100)));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/events/stream") {
-    return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-  }
-  if (request.path == "/api/v1/scheduler-tick") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteSchedulerTickAction(
-                  db_path,
-                  ResolveArtifactsRoot(
-                      FindQueryString(request, "artifacts_root"),
-                      default_artifacts_root))));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/reconcile-rebalance-proposals") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteReconcileRebalanceProposalsAction(
-                  db_path,
-                  ResolveArtifactsRoot(
-                      FindQueryString(request, "artifacts_root"),
-                      default_artifacts_root))));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/reconcile-rollout-actions") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteReconcileRolloutActionsAction(
-                  db_path,
-                  ResolveArtifactsRoot(
-                      FindQueryString(request, "artifacts_root"),
-                      default_artifacts_root))));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/apply-rebalance-proposal") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto worker_name = FindQueryString(request, "worker");
-    if (!worker_name.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'worker'"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteApplyRebalanceProposalAction(
-                  db_path,
-                  *worker_name,
-                  ResolveArtifactsRoot(
-                      FindQueryString(request, "artifacts_root"),
-                      default_artifacts_root))));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/set-rollout-action-status") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto action_id = FindQueryInt(request, "id");
-    const auto status = FindQueryString(request, "status");
-    if (!action_id.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'id'"}});
-    }
-    if (!status.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'status'"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteSetRolloutActionStatusAction(
-                  db_path,
-                  *action_id,
-                  comet::ParseRolloutActionStatus(*status),
-                  FindQueryString(request, "message"))));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/enqueue-rollout-eviction") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto action_id = FindQueryInt(request, "id");
-    if (!action_id.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'id'"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteEnqueueRolloutEvictionAction(db_path, *action_id)));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/apply-ready-rollout-action") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto action_id = FindQueryInt(request, "id");
-    if (!action_id.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'id'"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteApplyReadyRolloutActionAction(
-                  db_path,
-                  *action_id,
-                  ResolveArtifactsRoot(
-                      FindQueryString(request, "artifacts_root"),
-                      default_artifacts_root))));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  if (request.path == "/api/v1/retry-host-assignment") {
-    if (request.method != "POST") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-    }
-    const auto assignment_id = FindQueryInt(request, "id");
-    if (!assignment_id.has_value()) {
-      return BuildJsonResponse(
-          400,
-          json{{"status", "bad_request"}, {"message", "missing required query parameter 'id'"}});
-    }
-    try {
-      return BuildJsonResponse(
-          200,
-          BuildControllerActionPayload(
-              ExecuteRetryHostAssignmentAction(db_path, *assignment_id)));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
-    }
-  }
-  return BuildJsonResponse(
-      404,
-      json{{"status", "not_found"}, {"path", request.path}, {"method", request.method}});
-}
-
-void ControllerSignalHandler(int) {
-  g_stop_requested.store(true);
-}
-
-int ServeControllerApi(
-    const std::string& db_path,
-    const std::string& default_artifacts_root,
-    const std::string& listen_host,
-    int listen_port,
-    const std::optional<std::filesystem::path>& ui_root) {
-  g_stop_requested.store(false);
-  ::signal(SIGINT, ControllerSignalHandler);
-  ::signal(SIGTERM, ControllerSignalHandler);
-
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-
-  const SocketHandle listen_fd = CreateListenSocket(listen_host, listen_port);
-  std::cout << "comet-controller serve\n";
-  std::cout << "listen=" << listen_host << ":" << listen_port << "\n";
-  std::cout << "db=" << db_path << "\n";
-  std::cout << "artifacts_root=" << default_artifacts_root << "\n";
-  if (ui_root.has_value()) {
-    std::cout << "ui_root=" << ui_root->string() << "\n";
-  }
-  std::cout << "routes=/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/model-library,/api/v1/model-library/download,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/planes/<plane>/interaction/status,/api/v1/planes/<plane>/interaction/models,/api/v1/planes/<plane>/interaction/chat/completions,/api/v1/planes/<plane>/interaction/chat/completions/stream,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key\n";
-  std::cout.flush();
-
-  while (!g_stop_requested.load()) {
-    PollFd fd_state{};
-    fd_state.fd = listen_fd;
-    fd_state.events = POLLIN;
-    const int poll_result = comet::platform::Poll(&fd_state, 1, 250);
-    if (poll_result < 0) {
-      if (g_stop_requested.load() || comet::platform::LastSocketErrorWasInterrupted()) {
-        continue;
-      }
-      const std::string error = SocketErrorMessage();
-      CloseSocketHandle(listen_fd);
-      throw std::runtime_error("poll failed: " + error);
-    }
-    if (poll_result == 0) {
-      continue;
-    }
-    if ((fd_state.revents & POLLIN) == 0) {
-      continue;
-    }
-
-    const SocketHandle client_fd = accept(listen_fd, nullptr, nullptr);
-    if (!comet::platform::IsSocketValid(client_fd)) {
-      if (g_stop_requested.load() || comet::platform::LastSocketErrorWasInterrupted()) {
-        continue;
-      }
-      const std::string error = SocketErrorMessage();
-      CloseSocketHandle(listen_fd);
-      throw std::runtime_error("accept failed: " + error);
-    }
-
-    std::string request_data;
-    std::array<char, 8192> buffer{};
-    std::size_t expected_request_bytes = 0;
-    while (true) {
-      const ssize_t read_count = recv(client_fd, buffer.data(), buffer.size(), 0);
-      if (read_count <= 0) {
-        break;
-      }
-      request_data.append(buffer.data(), static_cast<std::size_t>(read_count));
-      if (expected_request_bytes == 0) {
-        expected_request_bytes = ExpectedRequestBytes(request_data);
-      }
-      if (expected_request_bytes != 0 && request_data.size() >= expected_request_bytes) {
-        break;
-      }
-    }
-
-    if (!request_data.empty()) {
-      const HttpRequest request = ParseHttpRequest(request_data);
-      if (request.method == "GET" && request.path == "/api/v1/events/stream") {
-        std::thread(
-            [client_fd, db_path, request]() {
-              StreamEventsSse(client_fd, db_path, request);
-            })
-            .detach();
-        continue;
-      }
-      if (ParseInteractionStreamPlaneName(request).has_value()) {
-        std::thread(
-            [client_fd, db_path, request]() {
-              StreamPlaneInteractionSse(client_fd, db_path, request);
-            })
-            .detach();
-        continue;
-      }
-      std::thread(
-          [client_fd, db_path, default_artifacts_root, request, ui_root]() {
-            try {
-              const HttpResponse response = HandleControllerRequest(
-                  db_path, default_artifacts_root, request, ui_root);
-              SendHttpResponse(client_fd, response);
-            } catch (const std::exception& error) {
-              try {
-                SendHttpResponse(
-                    client_fd,
-                    BuildJsonResponse(
-                        500,
-                        json{
-                            {"status", "error"},
-                            {"message", error.what()},
-                        }));
-              } catch (const std::exception&) {
-              }
-            }
-            ShutdownAndCloseSocket(client_fd);
-          })
-          .detach();
-      continue;
-    }
-    ShutdownAndCloseSocket(client_fd);
-  }
-
-  CloseSocketHandle(listen_fd);
-  return 0;
 }
 
 std::string ResolveDbPath(const std::optional<std::string>& db_arg) {
@@ -13048,6 +7155,7 @@ json BuildDashboardPayload(
 
   for (const auto& [dashboard_node_name, item] : dashboard_nodes) {
     (void)dashboard_node_name;
+    const std::string node_name = item.name;
     const auto observation_it = observation_by_node.find(item.name);
     if (observation_it == observation_by_node.end()) {
       push_alert(
@@ -13055,7 +7163,7 @@ json BuildDashboardPayload(
           "missing-observation",
           "Node has no observation",
           "Controller does not have a recent observation for this node.",
-          item.name);
+          node_name);
       continue;
     }
 
@@ -13067,18 +7175,18 @@ json BuildDashboardPayload(
           "node-health",
           "Node heartbeat is stale",
           "Observed state for this node is stale or failed.",
-          item.name);
+          node_name);
     }
 
     const auto availability =
-        ResolveNodeAvailability(availability_override_map, item.name);
+        ResolveNodeAvailability(availability_override_map, node_name);
     if (availability != comet::NodeAvailability::Active) {
       push_alert(
           "warning",
           "node-availability",
           "Node is not active",
           "Node availability override is blocking normal scheduling.",
-          item.name);
+          node_name);
     }
 
     if (const auto runtime_status = ParseRuntimeStatus(observation_it->second);
@@ -13089,23 +7197,23 @@ json BuildDashboardPayload(
             "runtime-not-ready",
             "Runtime still starting",
             "Node runtime is not launch-ready yet.",
-            item.name);
+            node_name);
       }
     } else {
       const auto fallback = DetermineDashboardRuntimeFallback(
           observation_it->second,
-          item.name,
+          node_name,
           plane_name,
           selected_plane_state,
           view.desired_generation.value_or(0),
           std::count_if(
               view.desired_state->instances.begin(),
               view.desired_state->instances.end(),
-              [&](const auto& instance) { return instance.node_name == item.name; }),
+              [&](const auto& instance) { return instance.node_name == node_name; }),
           std::count_if(
               view.desired_state->disks.begin(),
               view.desired_state->disks.end(),
-              [&](const auto& disk) { return disk.node_name == item.name; }),
+              [&](const auto& disk) { return disk.node_name == node_name; }),
           health);
       if (!fallback.available) {
         push_alert(
@@ -13113,7 +7221,7 @@ json BuildDashboardPayload(
             "runtime-missing",
             "Runtime status missing",
             "No runtime status has been reported yet for this node.",
-            item.name);
+            node_name);
       } else if (!fallback.launch_ready) {
         push_alert(
             "booting",
@@ -16079,257 +10187,6 @@ int ShowState(const std::string& db_path) {
   return 0;
 }
 
-int ListPlanes(const std::string& db_path) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  const auto planes = store.LoadPlanes();
-  if (planes.empty()) {
-    std::cout << "planes: empty\n";
-    return 0;
-  }
-  std::cout << "planes:\n";
-  for (const auto& plane : planes) {
-    std::cout << "  - name=" << plane.name << " state=" << plane.state
-              << " generation=" << plane.generation
-              << " rebalance_iteration=" << plane.rebalance_iteration << "\n";
-  }
-  return 0;
-}
-
-int ShowPlane(const std::string& db_path, const std::string& plane_name) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  const auto state = store.LoadDesiredState(plane_name);
-  const auto plane = store.LoadPlane(plane_name);
-  if (!state.has_value() || !plane.has_value()) {
-    throw std::runtime_error("plane '" + plane_name + "' not found");
-  }
-  std::cout << "plane:\n";
-  std::cout << "  name=" << plane->name << "\n";
-  std::cout << "  state=" << plane->state << "\n";
-  std::cout << "  generation=" << plane->generation << "\n";
-  std::cout << "  rebalance_iteration=" << plane->rebalance_iteration << "\n";
-  std::cout << "  created_at=" << FormatDisplayTimestamp(plane->created_at) << "\n";
-  PrintStateSummary(*state);
-  return 0;
-}
-
-int StartPlane(const std::string& db_path, const std::string& plane_name) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  const auto plane = store.LoadPlane(plane_name);
-  auto desired_state = store.LoadDesiredState(plane_name);
-  if (!plane.has_value()) {
-    throw std::runtime_error("plane '" + plane_name + "' not found");
-  }
-  if (!desired_state.has_value()) {
-    throw std::runtime_error("desired state for plane '" + plane_name + "' not found");
-  }
-  ApplyRegisteredHostExecutionModes(store, &*desired_state);
-  ResolveDesiredStateDynamicPlacements(store, &*desired_state);
-  ValidateDesiredStateForControllerAdmission(*desired_state);
-  ValidateDesiredStateExecutionModes(*desired_state);
-  if (plane->state == "running") {
-    std::cout << "plane already running: " << plane_name << "\n";
-    return 0;
-  }
-  if (!store.UpdatePlaneState(plane_name, "running")) {
-    throw std::runtime_error("failed to update plane state for '" + plane_name + "'");
-  }
-  const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
-  const auto observations = store.LoadHostObservations();
-  const auto scheduling_report = comet::EvaluateSchedulingPolicy(*desired_state);
-  const std::string artifacts_root = [&]() {
-    if (!plane->artifacts_root.empty()) {
-      return plane->artifacts_root;
-    }
-    const auto assignments = store.LoadHostAssignments();
-    const auto plane_assignment = FindLatestHostAssignmentForPlane(assignments, plane_name);
-    return plane_assignment.has_value() ? plane_assignment->artifacts_root : DefaultArtifactsRoot();
-  }();
-  store.ReplaceRolloutActions(
-      desired_state->plane_name, plane->generation, scheduling_report.rollout_actions);
-  store.EnqueueHostAssignments(
-      BuildHostAssignments(
-          *desired_state,
-          artifacts_root,
-          plane->generation,
-          availability_overrides,
-          observations,
-          scheduling_report),
-      "superseded by start-plane lifecycle transition");
-  AppendControllerEvent(
-      store,
-      "plane",
-      "started",
-      "plane lifecycle moved to running and apply assignments were queued",
-      json{
-          {"previous_state", plane->state},
-          {"next_state", "running"},
-          {"desired_generation", plane->generation},
-      },
-      plane_name);
-  std::cout << "plane started: " << plane_name
-            << " desired_generation=" << plane->generation << "\n";
-  return 0;
-}
-
-int StopPlane(const std::string& db_path, const std::string& plane_name) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  const auto plane = store.LoadPlane(plane_name);
-  const auto desired_state = store.LoadDesiredState(plane_name);
-  if (!plane.has_value()) {
-    throw std::runtime_error("plane '" + plane_name + "' not found");
-  }
-  if (!desired_state.has_value()) {
-    throw std::runtime_error("desired state for plane '" + plane_name + "' not found");
-  }
-  if (plane->state == "stopped") {
-    std::cout << "plane already stopped: " << plane_name << "\n";
-    return 0;
-  }
-  const int superseded = store.SupersedeHostAssignmentsForPlane(
-      plane_name,
-      "superseded by stop-plane controller lifecycle transition");
-  const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
-  const std::string artifacts_root = [&]() {
-    if (!plane->artifacts_root.empty()) {
-      return plane->artifacts_root;
-    }
-    const auto assignments = store.LoadHostAssignments();
-    const auto plane_assignment = FindLatestHostAssignmentForPlane(assignments, plane_name);
-    return plane_assignment.has_value() ? plane_assignment->artifacts_root : DefaultArtifactsRoot();
-  }();
-  store.EnqueueHostAssignments(
-      BuildStopPlaneAssignments(
-          *desired_state,
-          plane->generation,
-          artifacts_root,
-          availability_overrides),
-      "superseded by stop-plane lifecycle transition");
-  if (!store.UpdatePlaneState(plane_name, "stopped")) {
-    throw std::runtime_error("failed to update plane state for '" + plane_name + "'");
-  }
-  AppendControllerEvent(
-      store,
-      "plane",
-      "stopped",
-      "plane lifecycle moved to stopped and stop assignments were queued",
-      json{
-          {"previous_state", plane->state},
-          {"next_state", "stopped"},
-          {"superseded_assignments", superseded},
-          {"desired_generation", plane->generation},
-      },
-      plane_name);
-  std::cout << "plane stopped: " << plane_name
-            << " superseded_assignments=" << superseded
-            << " desired_generation=" << plane->generation << "\n";
-  return 0;
-}
-
-int DeletePlane(const std::string& db_path, const std::string& plane_name) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  const auto plane = store.LoadPlane(plane_name);
-  const auto desired_state = store.LoadDesiredState(plane_name);
-  if (!plane.has_value()) {
-    throw std::runtime_error("plane '" + plane_name + "' not found");
-  }
-  if (!desired_state.has_value()) {
-    throw std::runtime_error("desired state for plane '" + plane_name + "' not found");
-  }
-  if (plane->state == "deleting" && CanFinalizeDeletedPlane(store, plane_name)) {
-    store.DeletePlane(plane_name);
-    AppendControllerEvent(
-        store,
-        "plane",
-        "deleted",
-        "plane deleted from controller registry after cleanup convergence",
-        json{
-            {"plane_name", plane_name},
-            {"deleted_generation", plane->generation},
-        },
-        "");
-    std::cout << "plane deleted: " << plane_name
-              << " desired_generation=" << plane->generation << "\n";
-    return 0;
-  }
-
-  const int superseded = store.SupersedeHostAssignmentsForPlane(
-      plane_name,
-      "superseded by delete-plane controller lifecycle transition");
-  const std::string artifacts_root = [&]() {
-    if (!plane->artifacts_root.empty()) {
-      return plane->artifacts_root;
-    }
-    const auto assignments = store.LoadHostAssignments(std::nullopt, std::nullopt, plane_name);
-    const auto plane_assignment = FindLatestHostAssignmentForPlane(assignments, plane_name);
-    return plane_assignment.has_value() ? plane_assignment->artifacts_root : DefaultArtifactsRoot();
-  }();
-  if (!store.UpdatePlaneState(plane_name, "deleting")) {
-    throw std::runtime_error("failed to update plane state for '" + plane_name + "'");
-  }
-  const auto all_observations = store.LoadHostObservations();
-  const auto registered_hosts = store.LoadRegisteredHosts();
-  std::set<std::string> cleanup_nodes;
-  std::vector<std::string> skipped_nodes;
-  for (const auto& node : desired_state->nodes) {
-    const bool has_observation =
-        std::any_of(
-            all_observations.begin(),
-            all_observations.end(),
-            [&](const auto& observation) { return observation.node_name == node.name; });
-    const bool connected_host =
-        std::any_of(
-            registered_hosts.begin(),
-            registered_hosts.end(),
-            [&](const auto& host) {
-              return host.node_name == node.name &&
-                     host.registration_state == "registered" &&
-                     host.session_state == "connected";
-            });
-    if (has_observation || connected_host) {
-      cleanup_nodes.insert(node.name);
-    } else {
-      skipped_nodes.push_back(node.name);
-    }
-  }
-  store.ReplaceRolloutActions(plane_name, plane->generation, {});
-  store.ClearSchedulerPlaneRuntime(plane_name);
-  store.EnqueueHostAssignments(
-      [&]() {
-        comet::DesiredState cleanup_state = *desired_state;
-        std::vector<comet::NodeInventory> nodes;
-        for (const auto& node : cleanup_state.nodes) {
-          if (cleanup_nodes.count(node.name) > 0) {
-            nodes.push_back(node);
-          }
-        }
-        cleanup_state.nodes = std::move(nodes);
-        return BuildDeletePlaneAssignments(cleanup_state, plane->generation, artifacts_root);
-      }(),
-      "superseded by delete-plane lifecycle transition");
-  AppendControllerEvent(
-      store,
-      "plane",
-      "delete-requested",
-      "plane delete was requested and cleanup assignments were queued",
-      json{
-          {"previous_state", plane->state},
-          {"next_state", "deleting"},
-          {"superseded_assignments", superseded},
-          {"desired_generation", plane->generation},
-          {"cleanup_nodes", cleanup_nodes},
-          {"skipped_nodes", skipped_nodes},
-      },
-      plane_name);
-  std::cout << "plane delete started: " << plane_name
-            << " desired_generation=" << plane->generation << "\n";
-  return 0;
-}
-
 int ShowDiskState(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
@@ -16408,7 +10265,12 @@ class ControllerApp final {
       }
 
       const std::string db_path = ResolveDbPath(db_arg);
+      AuthSupportService auth_support;
       HostRegistryService host_registry_service = MakeHostRegistryService(db_path);
+      PlaneService plane_service = MakePlaneService(db_path);
+      SchedulerService scheduler_service = MakeSchedulerService(
+          db_path,
+          ResolveArtifactsRoot(cli_.artifacts_root()));
       WebUiService web_ui_service(
           db_path,
           [](comet::ControllerStore& store,
@@ -16417,361 +10279,192 @@ class ControllerApp final {
              const json& payload) {
             AppendControllerEvent(store, "web-ui", event_type, message, payload);
           });
-
-      if (command == "init-db") {
-        return InitDb(db_path);
-      }
-
-      if (command == "seed-demo") {
-        return SeedDemo(db_path);
-      }
-
-      if (command == "validate-bundle") {
-        const auto bundle_dir = cli_.bundle();
-        if (!bundle_dir.has_value()) {
-          std::cerr << "error: --bundle is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(ExecuteValidateBundleAction(*bundle_dir));
-      }
-
-      if (command == "preview-bundle") {
-        const auto bundle_dir = cli_.bundle();
-        if (!bundle_dir.has_value()) {
-          std::cerr << "error: --bundle is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(ExecutePreviewBundleAction(*bundle_dir, cli_.node()));
-      }
-
-      if (command == "plan-bundle") {
-        const auto bundle_dir = cli_.bundle();
-        if (!bundle_dir.has_value()) {
-          std::cerr << "error: --bundle is required\n";
-          return 1;
-        }
-        return PlanBundle(db_path, *bundle_dir);
-      }
-
-      if (command == "apply-bundle") {
-        const auto bundle_dir = cli_.bundle();
-        if (!bundle_dir.has_value()) {
-          std::cerr << "error: --bundle is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(
-            ExecuteApplyBundleAction(
+      ControllerCli controller_cli(
+          cli_,
+          host_registry_service,
+          plane_service,
+          scheduler_service,
+          web_ui_service,
+          [&]() { return InitDb(db_path); },
+          [&]() { return SeedDemo(db_path); },
+          [&]() { return ShowState(db_path); },
+          [&](const std::optional<std::string>& node_name) {
+            return ShowHostAssignments(db_path, node_name);
+          },
+          [&](const std::optional<std::string>& plane_name,
+              const std::optional<std::string>& node_name,
+              int stale_after_seconds) {
+            return ShowHostObservations(db_path, plane_name, node_name, stale_after_seconds);
+          },
+          [&](const std::optional<std::string>& node_name, int stale_after_seconds) {
+            return ShowHostHealth(db_path, node_name, stale_after_seconds);
+          },
+          [&](const std::optional<std::string>& node_name,
+              const std::optional<std::string>& plane_name) {
+            return ShowDiskState(db_path, node_name, plane_name);
+          },
+          [&](const std::string& bundle_dir) {
+            return comet::controller::EmitControllerActionResult(ExecuteValidateBundleAction(bundle_dir));
+          },
+          [&](const std::string& bundle_dir, const std::optional<std::string>& node_name) {
+            return comet::controller::EmitControllerActionResult(
+                ExecutePreviewBundleAction(bundle_dir, node_name));
+          },
+          [&](const std::string& bundle_dir) { return PlanBundle(db_path, bundle_dir); },
+          [&](const std::string& bundle_dir, const std::string& artifacts_root) {
+            return comet::controller::EmitControllerActionResult(
+                ExecuteApplyBundleAction(db_path, bundle_dir, artifacts_root));
+          },
+          [&](const std::string& state_path, const std::string& artifacts_root) {
+            const auto desired_state = comet::LoadDesiredStateJson(state_path);
+            if (!desired_state.has_value()) {
+              throw std::runtime_error(
+                  "failed to load desired state file '" + state_path + "'");
+            }
+            return ApplyDesiredState(
                 db_path,
-                *bundle_dir,
-                ResolveArtifactsRoot(cli_.artifacts_root())));
-      }
-
-      if (command == "apply-state-file") {
-        const auto state_path = cli_.state_file();
-        if (!state_path.has_value()) {
-          std::cerr << "error: --state is required\n";
-          return 1;
-        }
-        const auto desired_state = comet::LoadDesiredStateJson(*state_path);
-        if (!desired_state.has_value()) {
-          throw std::runtime_error("failed to load desired state file '" + *state_path + "'");
-        }
-        return ApplyDesiredState(
-            db_path,
-            *desired_state,
-            ResolveArtifactsRoot(cli_.artifacts_root()),
-            "state-file:" + *state_path);
-      }
-
-      if (command == "plan-host-ops") {
-        const auto bundle_dir = cli_.bundle();
-        if (!bundle_dir.has_value()) {
-          std::cerr << "error: --bundle is required\n";
-          return 1;
-        }
-        return PlanHostOps(
-            db_path,
-            *bundle_dir,
-            ResolveArtifactsRoot(cli_.artifacts_root()),
-            cli_.node());
-      }
-
-      if (command == "show-state") {
-        return ShowState(db_path);
-      }
-
-      if (command == "show-hostd-hosts") {
-        return host_registry_service.ShowHosts(cli_.node());
-      }
-
-      if (command == "revoke-hostd") {
-        const auto node_name = cli_.node();
-        if (!node_name.has_value()) {
-          std::cerr << "error: --node is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(
-            ExecuteRevokeHostdAction(db_path, *node_name, cli_.message()));
-      }
-
-      if (command == "rotate-hostd-key") {
-        const auto node_name = cli_.node();
-        if (!node_name.has_value()) {
-          std::cerr << "error: --node is required\n";
-          return 1;
-        }
-        const auto public_key = cli_.public_key_base64();
-        if (!public_key.has_value()) {
-          std::cerr << "error: --public-key is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(
-            ExecuteRotateHostdKeyAction(db_path, *node_name, *public_key, cli_.message()));
-      }
-
-      if (command == "list-planes") {
-        return ListPlanes(db_path);
-      }
-
-      if (command == "show-plane") {
-        const auto plane_name = cli_.plane();
-        if (!plane_name.has_value()) {
-          std::cerr << "error: --plane is required\n";
-          return 1;
-        }
-        return ShowPlane(db_path, *plane_name);
-      }
-
-      if (command == "start-plane") {
-        const auto plane_name = cli_.plane();
-        if (!plane_name.has_value()) {
-          std::cerr << "error: --plane is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(ExecuteStartPlaneAction(db_path, *plane_name));
-      }
-
-      if (command == "stop-plane") {
-        const auto plane_name = cli_.plane();
-        if (!plane_name.has_value()) {
-          std::cerr << "error: --plane is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(ExecuteStopPlaneAction(db_path, *plane_name));
-      }
-
-      if (command == "delete-plane") {
-        const auto plane_name = cli_.plane();
-        if (!plane_name.has_value()) {
-          std::cerr << "error: --plane is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(ExecuteDeletePlaneAction(db_path, *plane_name));
-      }
-
-      if (command == "ensure-web-ui") {
-        return web_ui_service.Ensure(
-            WebUiService::ResolveWebUiRoot(cli_.web_ui_root()),
-            cli_.listen_port().value_or(WebUiService::DefaultWebUiPort()),
-            cli_.controller_upstream().value_or(WebUiService::DefaultControllerUpstream()),
-            WebUiService::ResolveComposeMode(cli_.compose_mode()));
-      }
-
-      if (command == "show-web-ui-status") {
-        return web_ui_service.ShowStatus(WebUiService::ResolveWebUiRoot(cli_.web_ui_root()));
-      }
-
-      if (command == "stop-web-ui") {
-        return web_ui_service.Stop(
-            WebUiService::ResolveWebUiRoot(cli_.web_ui_root()),
-            WebUiService::ResolveComposeMode(cli_.compose_mode()));
-      }
-
-      if (command == "show-host-assignments") {
-        return ShowHostAssignments(db_path, cli_.node());
-      }
-
-      if (command == "show-host-observations") {
-        return ShowHostObservations(
-            db_path,
-            cli_.plane(),
-            cli_.node(),
-            cli_.stale_after().value_or(DefaultStaleAfterSeconds()));
-      }
-
-      if (command == "show-host-health") {
-        return ShowHostHealth(
-            db_path,
-            cli_.node(),
-            cli_.stale_after().value_or(DefaultStaleAfterSeconds()));
-      }
-
-      if (command == "show-disk-state") {
-        return ShowDiskState(db_path, cli_.node(), cli_.plane());
-      }
-
-      if (command == "show-rollout-actions") {
-        return ShowRolloutActions(db_path, cli_.node(), cli_.plane());
-      }
-
-      if (command == "show-rebalance-plan") {
-        return ShowRebalancePlan(db_path, cli_.node(), cli_.plane());
-      }
-
-      if (command == "show-events") {
-        return ShowEvents(
-            db_path,
-            cli_.plane(),
-            cli_.node(),
-            cli_.worker(),
-            cli_.category(),
-            cli_.limit().value_or(100));
-      }
-
-      if (command == "apply-rebalance-proposal") {
-        const auto worker_name = cli_.worker();
-        if (!worker_name.has_value()) {
-          std::cerr << "error: --worker is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(
-            ExecuteApplyRebalanceProposalAction(
+                *desired_state,
+                artifacts_root,
+                "state-file:" + state_path);
+          },
+          [&](const std::string& bundle_dir,
+              const std::string& artifacts_root,
+              const std::optional<std::string>& node_name) {
+            return PlanHostOps(db_path, bundle_dir, artifacts_root, node_name);
+          },
+          [&](const std::optional<std::string>& node_name) {
+            return ShowNodeAvailability(db_path, node_name);
+          },
+          [&](const std::string& node_name,
+              const std::string& availability,
+              const std::optional<std::string>& message) {
+            return comet::controller::EmitControllerActionResult(
+                ExecuteSetNodeAvailabilityAction(
+                    db_path,
+                    node_name,
+                    comet::ParseNodeAvailability(availability),
+                    message));
+          },
+          [&](int assignment_id) {
+            return comet::controller::EmitControllerActionResult(
+                ExecuteRetryHostAssignmentAction(db_path, assignment_id));
+          },
+          [&](const std::string& bundle_dir) {
+            return comet::controller::EmitControllerActionResult(
+                ExecuteImportBundleAction(db_path, bundle_dir));
+          },
+          [&](const std::optional<std::string>& node_name) {
+            return RenderCompose(db_path, node_name);
+          },
+          [&]() { return RenderInferRuntime(db_path); },
+          [&](const std::string& listen_host,
+              int listen_port,
+              const std::optional<std::string>& requested_ui_root,
+              const std::string& artifacts_root) {
+            std::optional<std::filesystem::path> ui_root;
+            if (requested_ui_root.has_value()) {
+              ui_root = std::filesystem::path(*requested_ui_root);
+            } else {
+              const std::filesystem::path default_ui_root = DefaultUiRoot();
+              if (std::filesystem::exists(default_ui_root)) {
+                ui_root = default_ui_root;
+              }
+            }
+            auto interaction_http_service = MakeInteractionHttpService();
+            auto auth_http_service = MakeAuthHttpService(auth_support);
+            auto hostd_http_service = MakeHostdHttpService();
+            auto bundle_http_service = MakeBundleHttpService();
+            auto model_library_http_service = MakeModelLibraryHttpService();
+            auto plane_http_service = MakePlaneHttpService();
+            auto read_model_http_service = MakeReadModelHttpService();
+            auto scheduler_http_service = MakeSchedulerHttpService();
+            ControllerHttpRouter router(
                 db_path,
-                *worker_name,
-                ResolveArtifactsRoot(cli_.artifacts_root())));
-      }
-
-      if (command == "reconcile-rebalance-proposals") {
-        return EmitControllerActionResult(
-            ExecuteReconcileRebalanceProposalsAction(
+                artifacts_root,
+                ui_root,
+                auth_support,
+                {
+                    &auth_http_service,
+                    &hostd_http_service,
+                    &bundle_http_service,
+                    &model_library_http_service,
+                    &plane_http_service,
+                    &read_model_http_service,
+                    &scheduler_http_service,
+                    &interaction_http_service,
+                },
+                {
+                    [&](int status_code,
+                        const json& payload,
+                        const std::map<std::string, std::string>& headers) {
+                      return BuildJsonResponse(status_code, payload, headers);
+                    },
+                    [&](const std::string& health_db_path) {
+                      return BuildControllerHealthPayload(health_db_path);
+                    },
+                    [&](const std::filesystem::path& root,
+                        const std::string& request_path) {
+                      return ResolveUiRequestPath(root, request_path);
+                    },
+                    [&](const std::filesystem::path& file_path) {
+                      return BuildStaticFileResponse(file_path);
+                    },
+                    [&](const std::string& action_db_path, int assignment_id) {
+                      return ExecuteRetryHostAssignmentAction(
+                          action_db_path,
+                          assignment_id);
+                    },
+                });
+            ControllerHttpServer server({
+                [&](const HttpRequest& request) {
+                  const ScopedCurrentHttpRequest scoped_request(request);
+                  return router.HandleRequest(request);
+                },
+                [&](SocketHandle client_fd,
+                   const std::string& interaction_db_path,
+                   const HttpRequest& request) {
+                  interaction_http_service.StreamPlaneInteractionSse(
+                      client_fd,
+                      interaction_db_path,
+                      request);
+                },
+                [](const std::string& method, const std::string& path) {
+                  return comet::controller::ParseInteractionStreamPlaneName(
+                      method,
+                      path);
+                },
+                [](const comet::EventRecord& event) {
+                  return BuildEventPayloadItem(event);
+                },
+            });
+            return server.Serve({
                 db_path,
-                ResolveArtifactsRoot(cli_.artifacts_root())));
+                artifacts_root,
+                listen_host,
+                listen_port,
+                ui_root,
+                "/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/model-library,/api/v1/model-library/download,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/planes/<plane>/interaction/status,/api/v1/planes/<plane>/interaction/models,/api/v1/planes/<plane>/interaction/chat/completions,/api/v1/planes/<plane>/interaction/chat/completions/stream,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key",
+            });
+          },
+          [&](const std::string& node_name, const std::optional<std::string>& status_message) {
+            return comet::controller::EmitControllerActionResult(
+                ExecuteRevokeHostdAction(db_path, node_name, status_message));
+          },
+          [&](const std::string& node_name,
+              const std::string& public_key_base64,
+              const std::optional<std::string>& status_message) {
+            return comet::controller::EmitControllerActionResult(
+                ExecuteRotateHostdKeyAction(
+                    db_path,
+                    node_name,
+                    public_key_base64,
+                    status_message));
+          });
+
+      if (const auto result = controller_cli.TryRun(); result.has_value()) {
+        return *result;
       }
 
-      if (command == "scheduler-tick") {
-        return EmitControllerActionResult(
-            ExecuteSchedulerTickAction(
-                db_path,
-                ResolveArtifactsRoot(cli_.artifacts_root())));
-      }
-
-      if (command == "set-rollout-action-status") {
-        const auto action_id = cli_.id();
-        if (!action_id.has_value()) {
-          std::cerr << "error: --id is required\n";
-          return 1;
-        }
-        const auto requested_status = cli_.status();
-        if (!requested_status.has_value()) {
-          std::cerr << "error: --status is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(
-            ExecuteSetRolloutActionStatusAction(
-                db_path,
-                *action_id,
-                comet::ParseRolloutActionStatus(*requested_status),
-                cli_.message()));
-      }
-
-      if (command == "enqueue-rollout-eviction") {
-        const auto action_id = cli_.id();
-        if (!action_id.has_value()) {
-          std::cerr << "error: --id is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(
-            ExecuteEnqueueRolloutEvictionAction(db_path, *action_id));
-      }
-
-      if (command == "reconcile-rollout-actions") {
-        return EmitControllerActionResult(
-            ExecuteReconcileRolloutActionsAction(
-                db_path,
-                ResolveArtifactsRoot(cli_.artifacts_root())));
-      }
-
-      if (command == "apply-ready-rollout-action") {
-        const auto action_id = cli_.id();
-        if (!action_id.has_value()) {
-          std::cerr << "error: --id is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(
-            ExecuteApplyReadyRolloutActionAction(
-                db_path,
-                *action_id,
-                ResolveArtifactsRoot(cli_.artifacts_root())));
-      }
-
-      if (command == "show-node-availability") {
-        return ShowNodeAvailability(db_path, cli_.node());
-      }
-
-      if (command == "set-node-availability") {
-        const auto requested_node_name = cli_.node();
-        if (!requested_node_name.has_value()) {
-          std::cerr << "error: --node is required\n";
-          return 1;
-        }
-        const auto requested_availability = cli_.availability();
-        if (!requested_availability.has_value()) {
-          std::cerr << "error: --availability is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(
-            ExecuteSetNodeAvailabilityAction(
-                db_path,
-                *requested_node_name,
-                comet::ParseNodeAvailability(*requested_availability),
-                cli_.message()));
-      }
-
-      if (command == "retry-host-assignment") {
-        const auto assignment_id = cli_.id();
-        if (!assignment_id.has_value()) {
-          std::cerr << "error: --id is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(
-            ExecuteRetryHostAssignmentAction(db_path, *assignment_id));
-      }
-
-      if (command == "import-bundle") {
-        const auto bundle_dir = cli_.bundle();
-        if (!bundle_dir.has_value()) {
-          std::cerr << "error: --bundle is required\n";
-          return 1;
-        }
-        return EmitControllerActionResult(ExecuteImportBundleAction(db_path, *bundle_dir));
-      }
-
-      if (command == "render-compose") {
-        return RenderCompose(db_path, cli_.node());
-      }
-
-      if (command == "render-infer-runtime") {
-        return RenderInferRuntime(db_path);
-      }
-
-      if (command == "serve") {
-        std::optional<std::filesystem::path> ui_root;
-        if (const auto requested_ui_root = cli_.ui_root();
-            requested_ui_root.has_value()) {
-          ui_root = std::filesystem::path(*requested_ui_root);
-        } else {
-          const std::filesystem::path default_ui_root = DefaultUiRoot();
-          if (std::filesystem::exists(default_ui_root)) {
-            ui_root = default_ui_root;
-          }
-        }
-        return ServeControllerApi(
-            db_path,
-            ResolveArtifactsRoot(cli_.artifacts_root()),
-            cli_.listen_host().value_or(DefaultListenHost()),
-            cli_.listen_port().value_or(DefaultListenPort()),
-            ui_root);
-      }
     } catch (const std::exception& error) {
       std::cerr << "error: " << error.what() << "\n";
       return 1;

@@ -5,8 +5,10 @@
             "name": "Linux x64",
             "configurationProvider": "ms-vscode.cmake-tools",
             "compilerPath": "/usr/bin/clang++",
-            "compileCommands": [
-                "${workspaceFolder}/build/linux/x64/compile_commands.json"
+            "compileCommands": "${workspaceFolder}/build/linux/x64/compile_commands.json",
+            "includePath": [
+                "${workspaceFolder}/common/include",
+                "${workspaceFolder}/vcpkg_installed/x64-linux-root/x64-linux/include"
             ],
             "cppStandard": "c++20",
             "intelliSenseMode": "linux-clang-x64"
@@ -15,8 +17,10 @@
             "name": "MacOS arm64",
             "configurationProvider": "ms-vscode.cmake-tools",
             "compilerPath": "/usr/bin/clang++",
-            "compileCommands": [
-                "${workspaceFolder}/build/macos/arm64/compile_commands.json"
+            "compileCommands": "${workspaceFolder}/build/macos/arm64/compile_commands.json",
+            "includePath": [
+                "${workspaceFolder}/common/include",
+                "${workspaceFolder}/vcpkg_installed/arm64-osx-root/arm64-osx/include"
             ],
             "cppStandard": "c++20",
             "intelliSenseMode": "macos-clang-arm64"

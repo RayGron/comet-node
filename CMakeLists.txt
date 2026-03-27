@@ -162,8 +162,28 @@ comet_enable_strict_warnings(comet-common)
 
 add_executable(
   comet-controller
+  controller/src/auth_http_service.cpp
+  controller/src/auth_support_service.cpp
+  controller/src/bundle_http_service.cpp
+  controller/src/controller_cli.cpp
+  controller/src/controller_action.cpp
   controller/src/controller_command_line.cpp
+  controller/src/controller_http_server.cpp
+  controller/src/controller_http_router.cpp
+  controller/src/controller_network_manager.cpp
+  controller/src/controller_http_server_support.cpp
+  controller/src/controller_http_transport.cpp
+  controller/src/controller_remote_client.cpp
   controller/src/host_registry_service.cpp
+  controller/src/hostd_http_service.cpp
+  controller/src/interaction_http_service.cpp
+  controller/src/interaction_service.cpp
+  controller/src/model_library_http_service.cpp
+  controller/src/plane_http_service.cpp
+  controller/src/read_model_http_service.cpp
+  controller/src/scheduler_http_service.cpp
+  controller/src/plane_service.cpp
+  controller/src/scheduler_service.cpp
   controller/src/web_ui_service.cpp
   controller/src/main.cpp
 )

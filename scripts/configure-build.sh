@@ -27,7 +27,10 @@ case "${build_type}" in
     ;;
 esac
 
-eval "$("${script_dir}/resolve-build-target.sh" "${target_os}" "${target_arch}")"
+if ! resolved_target="$("${script_dir}/resolve-build-target.sh" "${target_os}" "${target_arch}")"; then
+  exit 1
+fi
+eval "${resolved_target}"
 
 detect_cuda_root() {
   local candidate=""

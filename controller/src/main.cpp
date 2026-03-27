@@ -4006,6 +4006,7 @@ json RunWebAuthnHelper(const std::string& action, const json& payload) {
   std::filesystem::create_directories(temp_dir);
   const std::filesystem::path input_path = temp_dir / "input.json";
   const std::filesystem::path output_path = temp_dir / "output.json";
+  const std::filesystem::path error_path = temp_dir / "stderr.txt";
   try {
     {
       std::ofstream out(input_path);
@@ -4017,9 +4018,20 @@ json RunWebAuthnHelper(const std::string& action, const json& payload) {
         EscapeShellArg(ResolveWebAuthnHelperPath().string()) + " " +
         EscapeShellArg(action) + " " +
         EscapeShellArg(input_path.string()) + " > " +
-        EscapeShellArg(output_path.string());
+        EscapeShellArg(output_path.string()) + " 2> " +
+        EscapeShellArg(error_path.string());
     if (!RunCommand(command)) {
-      throw std::runtime_error("WebAuthn helper command failed");
+      std::ifstream error_input(error_path);
+      std::string error_message;
+      if (error_input.is_open()) {
+        std::ostringstream buffer;
+        buffer << error_input.rdbuf();
+        error_message = Trim(buffer.str());
+      }
+      if (error_message.empty()) {
+        throw std::runtime_error("WebAuthn helper command failed");
+      }
+      throw std::runtime_error("WebAuthn helper command failed: " + error_message);
     }
     std::ifstream input(output_path);
     if (!input.is_open()) {

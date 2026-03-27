@@ -15,6 +15,24 @@ function toBase64Url(bytes) {
   return Buffer.from(bytes).toString("base64url");
 }
 
+async function verifyWithChallengeFallback(verifyFn, input) {
+  try {
+    return await verifyFn(input.expectedChallenge);
+  } catch (error) {
+    const fallbackChallenge = Buffer.from(
+      input.expectedChallenge,
+      "utf8",
+    ).toString("base64url");
+    if (
+      !input.expectedChallenge ||
+      fallbackChallenge === input.expectedChallenge
+    ) {
+      throw error;
+    }
+    return await verifyFn(fallbackChallenge);
+  }
+}
+
 async function main() {
   const [, , action, inputPath] = process.argv;
   if (!action || !inputPath) {
@@ -43,13 +61,17 @@ async function main() {
       },
     });
   } else if (action === "verify-registration") {
-    const verification = await verifyRegistrationResponse({
-      response: input.response,
-      expectedChallenge: input.expectedChallenge,
-      expectedOrigin: input.expectedOrigin,
-      expectedRPID: input.expectedRPID,
-      requireUserVerification: true,
-    });
+    const verification = await verifyWithChallengeFallback(
+      async (expectedChallenge) =>
+        verifyRegistrationResponse({
+          response: input.response,
+          expectedChallenge,
+          expectedOrigin: input.expectedOrigin,
+          expectedRPID: input.expectedRPID,
+          requireUserVerification: true,
+        }),
+      input,
+    );
     output = {
       verified: verification.verified,
       registrationInfo: verification.verified
@@ -78,19 +100,23 @@ async function main() {
         : undefined,
     });
   } else if (action === "verify-authentication") {
-    const verification = await verifyAuthenticationResponse({
-      response: input.response,
-      expectedChallenge: input.expectedChallenge,
-      expectedOrigin: input.expectedOrigin,
-      expectedRPID: input.expectedRPID,
-      credential: {
-        id: input.credential.id,
-        publicKey: toUint8Array(input.credential.publicKey),
-        counter: input.credential.counter,
-        transports: input.credential.transports || [],
-      },
-      requireUserVerification: true,
-    });
+    const verification = await verifyWithChallengeFallback(
+      async (expectedChallenge) =>
+        verifyAuthenticationResponse({
+          response: input.response,
+          expectedChallenge,
+          expectedOrigin: input.expectedOrigin,
+          expectedRPID: input.expectedRPID,
+          credential: {
+            id: input.credential.id,
+            publicKey: toUint8Array(input.credential.publicKey),
+            counter: input.credential.counter,
+            transports: input.credential.transports || [],
+          },
+          requireUserVerification: true,
+        }),
+      input,
+    );
     output = {
       verified: verification.verified,
       authenticationInfo: verification.authenticationInfo || null,

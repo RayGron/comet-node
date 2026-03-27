@@ -2027,6 +2027,13 @@ function App() {
   const selectedPlaneDeleting = planeRecord?.state === "deleting";
   const currentPlaneDisplayState = planeRecord ? planeDisplayState(planeRecord) : "";
   const currentPlaneDisplayClass = planeRecord ? planeDisplayStateClass(planeRecord) : "is-booting";
+  const runningPlanes = planes.filter((plane) => plane?.state === "running");
+  const runningPlaneCount = runningPlanes.length;
+  const usedModelCount = new Set(
+    runningPlanes
+      .map((plane) => String(plane?.model_id || "").trim())
+      .filter(Boolean),
+  ).size;
   const activeModelCount = Array.isArray(modelLibrary.items) ? modelLibrary.items.length : 0;
   const visibleModelItems = (modelLibrary.items || []).slice(0, visibleModelCount);
   const hasMoreModelItems = activeModelCount > visibleModelCount;
@@ -2040,19 +2047,11 @@ function App() {
     ? "is-critical"
     : activeModelJobs > 0
       ? "is-warning"
-      : activeModelCount > 0
+      : usedModelCount > 0
         ? "is-healthy"
         : "is-booting";
-  const modelsNavLabel = activeModelJobs > 0
-    ? `${activeModelJobs} active`
-    : activeModelCount > 0
-      ? `${activeModelCount} tracked`
-      : "empty";
-  const planesNavLabel = selectedPlane
-    ? currentPlaneDisplayState || "selected"
-    : planes.length > 0
-      ? `${planes.length} total`
-      : "empty";
+  const modelsNavLabel = `${usedModelCount} used`;
+  const planesNavLabel = `${runningPlaneCount} running`;
   const planesNavMeta = selectedPlane || `${planes.length} registered`;
   const modelsNavMeta = activeModelJobs > 0
     ? `${activeModelJobs} download job${activeModelJobs === 1 ? "" : "s"}`
@@ -2892,8 +2891,8 @@ function App() {
                 <span className="side-menu-title">Planes</span>
                 <span className="side-menu-meta">{planesNavMeta}</span>
               </div>
-              <span className={`tag ${selectedPlane ? currentPlaneDisplayClass : "is-booting"}`}>
-                {statusDot(selectedPlane ? currentPlaneDisplayClass : "is-booting")}
+              <span className={`tag ${runningPlaneCount > 0 ? "is-healthy" : "is-booting"}`}>
+                {statusDot(runningPlaneCount > 0 ? "is-healthy" : "is-booting")}
                 <span>{planesNavLabel}</span>
               </span>
             </button>
@@ -2920,8 +2919,7 @@ function App() {
                 <span className="side-menu-title">Access</span>
                 <span className="side-menu-meta">Invites, SSH keys, and logout</span>
               </div>
-              <span className="tag is-healthy">
-                {statusDot("is-healthy")}
+              <span className="tag">
                 <span>{authState.user?.role || "user"}</span>
               </span>
             </button>

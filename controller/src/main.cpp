@@ -3527,6 +3527,15 @@ json BuildPlanesPayload(const std::string& db_path) {
         {"name", plane.name},
         {"state", plane.state},
         {"plane_mode", plane.plane_mode},
+        {"model_id",
+         desired_state.has_value() && desired_state->bootstrap_model.has_value()
+             ? json(desired_state->bootstrap_model->model_id)
+             : json(nullptr)},
+        {"served_model_name",
+         desired_state.has_value() && desired_state->bootstrap_model.has_value() &&
+                 desired_state->bootstrap_model->served_model_name.has_value()
+             ? json(*desired_state->bootstrap_model->served_model_name)
+             : json(nullptr)},
         {"generation", plane.generation},
         {"applied_generation", effective_applied_generation},
         {"staged_update", plane.generation > effective_applied_generation},

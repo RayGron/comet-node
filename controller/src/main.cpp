@@ -326,6 +326,7 @@ void PrintUsage() {
       << "  comet-controller preview-bundle --bundle <dir> [--node <node-name>]\n"
       << "  comet-controller plan-bundle --bundle <dir> [--db <path>]\n"
       << "  comet-controller plan-host-ops --bundle <dir> [--db <path>] [--artifacts-root <path>] [--node <node-name>]\n"
+      << "  comet-controller apply-state-file --state <path> [--db <path>] [--artifacts-root <path>]\n"
       << "  comet-controller apply-bundle --bundle <dir> [--db <path>] [--artifacts-root <path>]\n"
       << "  comet-controller import-bundle --bundle <dir> [--db <path>]\n"
       << "  comet-controller show-host-assignments [--db <path>] [--node <node-name>]\n"
@@ -3603,6 +3604,16 @@ std::optional<std::string> FindCookieValue(
     }
     if (name == key && !value.empty()) {
       return value;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> ParseStateFileArg(int argc, char** argv) {
+  for (int index = 2; index < argc; ++index) {
+    const std::string arg = argv[index];
+    if (arg == "--state" && index + 1 < argc) {
+      return std::string(argv[index + 1]);
     }
   }
   return std::nullopt;
@@ -17097,6 +17108,23 @@ int main(int argc, char** argv) {
               db_path,
               *bundle_dir,
               ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv))));
+    }
+
+    if (command == "apply-state-file") {
+      const auto state_path = ParseStateFileArg(argc, argv);
+      if (!state_path.has_value()) {
+        std::cerr << "error: --state is required\n";
+        return 1;
+      }
+      const auto desired_state = comet::LoadDesiredStateJson(*state_path);
+      if (!desired_state.has_value()) {
+        throw std::runtime_error("failed to load desired state file '" + *state_path + "'");
+      }
+      return ApplyDesiredState(
+          db_path,
+          *desired_state,
+          ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv)),
+          "state-file:" + *state_path);
     }
 
     if (command == "plan-host-ops") {

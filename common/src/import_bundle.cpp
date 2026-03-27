@@ -527,6 +527,9 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
   state.plane_mode =
       ParsePlaneMode(OptionalString(plane_json, "plane_mode", "compute"));
   state.protected_plane = plane_json.value("protected", state.protected_plane);
+  if (const auto post_deploy_script = OptionalStringOpt(plane_json, "post_deploy_script")) {
+    state.post_deploy_script = *post_deploy_script;
+  }
   if (const auto placement_target = OptionalStringOpt(plane_json, "placement_target")) {
     state.placement_target = *placement_target;
   }

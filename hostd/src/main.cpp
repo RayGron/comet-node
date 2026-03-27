@@ -1075,11 +1075,23 @@ void WaitForLocalRuntimeStatus(
     std::chrono::seconds timeout) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
-    if (LoadLocalRuntimeStatus(state_root, node_name, plane_name).has_value()) {
+    if (const auto runtime_status = LoadLocalRuntimeStatus(state_root, node_name, plane_name);
+        runtime_status.has_value() &&
+        runtime_status->ready &&
+        runtime_status->launch_ready &&
+        runtime_status->inference_ready &&
+        (runtime_status->gateway_health_url.empty() || runtime_status->gateway_ready)) {
       return;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
   }
+  throw std::runtime_error(
+      "timed out waiting for plane runtime readiness on node '" + node_name + "'");
+}
+
+bool InstanceProducesRuntimeStatus(const comet::InstanceSpec& instance) {
+  return instance.role == comet::InstanceRole::Infer ||
+         instance.role == comet::InstanceRole::Worker;
 }
 
 std::size_t ExpectedRuntimeStatusCountForNode(
@@ -1087,7 +1099,7 @@ std::size_t ExpectedRuntimeStatusCountForNode(
     const std::string& node_name) {
   std::size_t count = 0;
   for (const auto& instance : desired_node_state.instances) {
-    if (instance.node_name == node_name) {
+    if (instance.node_name == node_name && InstanceProducesRuntimeStatus(instance)) {
       ++count;
     }
   }
@@ -1106,11 +1118,20 @@ void WaitForLocalInstanceRuntimeStatuses(
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
     const auto statuses = LoadLocalInstanceRuntimeStatuses(state_root, node_name, plane_name);
-    if (statuses.size() >= expected_count) {
+    std::size_t ready_count = 0;
+    for (const auto& status : statuses) {
+      if (status.ready &&
+          (status.runtime_phase == "running" || status.runtime_phase == "ready")) {
+        ++ready_count;
+      }
+    }
+    if (ready_count >= expected_count) {
       return;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
   }
+  throw std::runtime_error(
+      "timed out waiting for instance runtime readiness on node '" + node_name + "'");
 }
 
 void PrintLocalStateSummary(
@@ -1347,6 +1368,168 @@ std::optional<std::filesystem::path> DetectCometRepoRoot() {
     return std::nullopt;
   }
   return FindRepoRootFromPath(std::filesystem::path(executable_path).parent_path());
+}
+
+std::optional<std::filesystem::path> ResolvePlaneOwnedPath(
+    const comet::DesiredState& state,
+    const std::string& relative_path) {
+  if (relative_path.empty()) {
+    return std::nullopt;
+  }
+
+  const std::filesystem::path input(relative_path);
+  if (input.is_absolute()) {
+    if (std::filesystem::exists(input)) {
+      return input.lexically_normal();
+    }
+    return std::nullopt;
+  }
+
+  std::vector<std::filesystem::path> candidates;
+  try {
+    candidates.push_back(std::filesystem::current_path() / input);
+  } catch (...) {
+  }
+
+  if (const auto comet_repo_root = DetectCometRepoRoot(); comet_repo_root.has_value()) {
+    candidates.push_back(*comet_repo_root / input);
+    candidates.push_back(comet_repo_root->parent_path() / state.plane_name / input);
+  }
+
+  for (const auto& candidate : candidates) {
+    std::error_code error;
+    if (std::filesystem::exists(candidate, error) && !error) {
+      return candidate.lexically_normal();
+    }
+  }
+  return std::nullopt;
+}
+
+bool NodeHasAppInstance(
+    const comet::DesiredState& desired_node_state,
+    const std::string& node_name) {
+  for (const auto& instance : desired_node_state.instances) {
+    if (instance.node_name == node_name && instance.role == comet::InstanceRole::App) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ShouldRunPostDeployScript(
+    const comet::DesiredState& desired_node_state,
+    const std::string& node_name) {
+  if (!desired_node_state.post_deploy_script.has_value() ||
+      desired_node_state.post_deploy_script->empty()) {
+    return false;
+  }
+  if (!desired_node_state.inference.primary_infer_node.empty()) {
+    return desired_node_state.inference.primary_infer_node == node_name;
+  }
+  if (NodeHasAppInstance(desired_node_state, node_name)) {
+    return true;
+  }
+  return !desired_node_state.nodes.empty() && desired_node_state.nodes.front().name == node_name;
+}
+
+json BuildAssignmentProgressPayload(
+    const std::string& phase,
+    const std::string& title,
+    const std::string& detail,
+    int percent,
+    const std::string& plane_name,
+    const std::string& node_name,
+    const std::optional<std::uintmax_t>& bytes_done,
+    const std::optional<std::uintmax_t>& bytes_total);
+
+void PublishAssignmentProgress(
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id,
+    const json& progress);
+
+std::string TailTextFile(const std::string& path, std::size_t max_bytes = 4096) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    return {};
+  }
+  input.seekg(0, std::ios::end);
+  const auto size = static_cast<std::size_t>(input.tellg());
+  const auto read_size = std::min(size, max_bytes);
+  input.seekg(static_cast<std::streamoff>(size - read_size), std::ios::beg);
+  std::string text(read_size, '\0');
+  input.read(text.data(), static_cast<std::streamsize>(read_size));
+  return text;
+}
+
+void RunPostDeployScriptIfNeeded(
+    const comet::DesiredState& desired_node_state,
+    const std::string& node_name,
+    const std::string& artifacts_root,
+    const std::string& storage_root,
+    const std::optional<std::string>& runtime_root,
+    const std::string& state_root,
+    const std::optional<int>& desired_generation,
+    const std::optional<int>& assignment_id,
+    HostdBackend* backend) {
+  if (!ShouldRunPostDeployScript(desired_node_state, node_name)) {
+    return;
+  }
+
+  const auto script_path =
+      ResolvePlaneOwnedPath(desired_node_state, *desired_node_state.post_deploy_script);
+  if (!script_path.has_value()) {
+    throw std::runtime_error(
+        "post_deploy_script was configured but could not be resolved: " +
+        *desired_node_state.post_deploy_script);
+  }
+
+  const std::filesystem::path plane_root(LocalPlaneRoot(
+      state_root,
+      node_name,
+      desired_node_state.plane_name));
+  std::filesystem::create_directories(plane_root);
+  const std::string log_path = (plane_root / "post-deploy.log").string();
+
+  PublishAssignmentProgress(
+      backend,
+      assignment_id,
+      BuildAssignmentProgressPayload(
+          "running-post-deploy",
+          "Running post-deploy hook",
+          "Executing plane post_deploy_script after runtime readiness.",
+          99,
+          desired_node_state.plane_name,
+          node_name,
+          std::nullopt,
+          std::nullopt));
+
+  std::ostringstream command;
+  command << "cd " << ShellQuote(script_path->parent_path().string()) << " && "
+          << "COMET_PLANE_NAME=" << ShellQuote(desired_node_state.plane_name) << " "
+          << "COMET_NODE_NAME=" << ShellQuote(node_name) << " "
+          << "COMET_ARTIFACTS_ROOT=" << ShellQuote(artifacts_root) << " "
+          << "COMET_STORAGE_ROOT=" << ShellQuote(storage_root) << " "
+          << "COMET_STATE_ROOT=" << ShellQuote(state_root) << " "
+          << "COMET_RUNTIME_ROOT="
+          << ShellQuote(runtime_root.has_value() ? *runtime_root : std::string()) << " "
+          << "COMET_POST_DEPLOY_LOG=" << ShellQuote(log_path) << " "
+          << "COMET_DESIRED_GENERATION="
+          << ShellQuote(desired_generation.has_value()
+                            ? std::to_string(*desired_generation)
+                            : std::string()) << " "
+          << "COMET_ASSIGNMENT_ID="
+          << ShellQuote(
+                 assignment_id.has_value() ? std::to_string(*assignment_id) : std::string())
+          << " "
+          << ShellQuote(script_path->string()) << " >" << ShellQuote(log_path) << " 2>&1";
+  const int rc = std::system(command.str().c_str());
+  if (rc != 0) {
+    const std::string tail = TailTextFile(log_path);
+    throw std::runtime_error(
+        "post_deploy_script failed with exit code " + std::to_string(rc) +
+        (tail.empty() ? std::string()
+                      : std::string(": ") + Trim(tail)));
+  }
 }
 
 bool LocalRuntimeBinaryExists(
@@ -5053,14 +5236,24 @@ void ApplyDesiredNodeState(
             plane_name,
             node_name));
     if (NodeHasInferInstance(desired_node_state)) {
-      WaitForLocalRuntimeStatus(state_root, node_name, plane_name, std::chrono::seconds(20));
+      WaitForLocalRuntimeStatus(state_root, node_name, plane_name, std::chrono::seconds(300));
     }
     WaitForLocalInstanceRuntimeStatuses(
         state_root,
         node_name,
         plane_name,
         ExpectedRuntimeStatusCountForNode(desired_node_state, node_name),
-        std::chrono::seconds(20));
+        std::chrono::seconds(300));
+    RunPostDeployScriptIfNeeded(
+        desired_node_state,
+        node_name,
+        artifacts_root,
+        storage_root,
+        runtime_root,
+        state_root,
+        desired_generation,
+        assignment_id,
+        backend);
   }
   PublishAssignmentProgress(
       backend,

@@ -669,6 +669,9 @@ json DesiredStateToJson(const DesiredState& state) {
       {"disks", json::array()},
       {"instances", json::array()},
   };
+  if (state.post_deploy_script.has_value()) {
+    result["post_deploy_script"] = *state.post_deploy_script;
+  }
   if (state.placement_target.has_value()) {
     result["placement_target"] = *state.placement_target;
   }
@@ -703,6 +706,9 @@ DesiredState DesiredStateFromJson(const json& value) {
       value.value("control_root", "/comet/shared/control/" + state.plane_name);
   state.plane_mode = ParsePlaneMode(value.value("plane_mode", std::string("compute")));
   state.protected_plane = value.value("protected", state.protected_plane);
+  if (value.contains("post_deploy_script") && !value.at("post_deploy_script").is_null()) {
+    state.post_deploy_script = value.at("post_deploy_script").get<std::string>();
+  }
   if (value.contains("placement_target") && !value.at("placement_target").is_null()) {
     state.placement_target = value.at("placement_target").get<std::string>();
   }
@@ -893,6 +899,8 @@ DesiredState SliceDesiredStateForNode(
   result.plane_shared_disk_name = state.plane_shared_disk_name;
   result.control_root = state.control_root;
   result.plane_mode = state.plane_mode;
+  result.protected_plane = state.protected_plane;
+  result.post_deploy_script = state.post_deploy_script;
   result.placement_target = state.placement_target;
   result.bootstrap_model = state.bootstrap_model;
   result.interaction = state.interaction;

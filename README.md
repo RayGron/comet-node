@@ -227,6 +227,15 @@ Import a plane bundle from files:
 ./build/linux/x64/comet-controller import-bundle --bundle config/demo-plane --db var/controller.sqlite
 ```
 
+Apply a plane desired-state file directly:
+
+```bash
+./build/linux/x64/comet-controller apply-state-file \
+  --db var/controller.sqlite \
+  --artifacts-root var/artifacts \
+  --state ../lt-cypher-ai/deploy/comet-node/desired-state.json
+```
+
 Validate a plane bundle without applying it:
 
 ```bash
@@ -683,6 +692,9 @@ Then:
   `--desired-state <path>` or auto-discover a sibling app-owned config at
   `../<plane>/deploy/comet-node/desired-state.json`
 - this lets application repos such as `lt-cypher-ai` own their own canonical plane config
+- a plane desired-state can optionally declare `post_deploy_script`; when present, `hostd`
+  resolves that path from the plane-owning repository and runs it after infer and worker report
+  ready, so app-specific restore/setup steps happen only after the runtime is warm
 - `config/comet-node-config.json` is the machine-level storage config for managed disks and
   heavy cached model files
 

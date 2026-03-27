@@ -459,6 +459,20 @@ function instanceRole(instance) {
   return instance?.kind || instance?.role || "instance";
 }
 
+function hostObservationStatusClass(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "failed" || normalized === "error") {
+    return "is-critical";
+  }
+  if (normalized === "stale" || normalized === "degraded") {
+    return "is-warning";
+  }
+  if (normalized === "ok" || normalized === "healthy" || normalized === "ready") {
+    return "is-healthy";
+  }
+  return "is-booting";
+}
+
 function formatInstanceRoleSummary(instances) {
   const roleCounts = new Map();
   for (const instance of instances || []) {
@@ -1034,6 +1048,7 @@ function App() {
   const [planeDetail, setPlaneDetail] = useState(null);
   const [dashboard, setDashboard] = useState(null);
   const [hostObservations, setHostObservations] = useState(null);
+  const [globalHostObservations, setGlobalHostObservations] = useState(null);
   const [diskState, setDiskState] = useState(null);
   const [rolloutState, setRolloutState] = useState(null);
   const [rebalancePlan, setRebalancePlan] = useState(null);
@@ -1087,6 +1102,7 @@ function App() {
     setPlaneDetail(null);
     setDashboard(null);
     setHostObservations(null);
+    setGlobalHostObservations(null);
     setDiskState(null);
     setRolloutState(null);
     setRebalancePlan(null);
@@ -1198,10 +1214,17 @@ function App() {
     setApiError("");
     try {
       const planeName = await loadPlanes(planeOverride ?? selectedPlane);
+      const globalHostObservationsRequest = fetchJson(
+        queryPath("/api/v1/host-observations", {
+          stale_after: 30,
+        }),
+      );
       if (!planeName) {
+        const globalHostObservationsPayload = await globalHostObservationsRequest;
         setPlaneDetail(null);
         setDashboard(null);
         setHostObservations(null);
+        setGlobalHostObservations(globalHostObservationsPayload);
         setDiskState(null);
         setRolloutState(null);
         setRebalancePlan(null);
@@ -1216,6 +1239,7 @@ function App() {
         planePayload,
         dashboardPayload,
         hostObservationsPayload,
+        globalHostObservationsPayload,
         diskPayload,
         rolloutPayload,
         rebalancePayload,
@@ -1230,6 +1254,7 @@ function App() {
             stale_after: 30,
           }),
         ),
+        globalHostObservationsRequest,
         fetchJson(queryPath("/api/v1/disk-state", { plane: planeName })),
         fetchJson(queryPath("/api/v1/rollout-actions", { plane: planeName })),
         fetchJson(
@@ -1250,6 +1275,7 @@ function App() {
       setPlaneDetail(planePayload);
       setDashboard(dashboardPayload);
       setHostObservations(hostObservationsPayload);
+      setGlobalHostObservations(globalHostObservationsPayload);
       setDiskState(diskPayload);
       setRolloutState(rolloutPayload);
       setRebalancePlan(rebalancePayload);
@@ -1967,6 +1993,7 @@ function App() {
   const interactionReady = interactionStatus?.ready === true;
   const nodeItems = dashboard?.nodes || [];
   const observationItems = hostObservations?.observations || [];
+  const globalObservationItems = globalHostObservations?.observations || [];
   const assignmentItems = dashboard?.assignments?.by_node || [];
   const rolloutItems = rolloutState?.actions || [];
   const rebalanceItems = rebalancePlan?.rebalance_plan || [];
@@ -2012,6 +2039,47 @@ function App() {
       (event) => event.category === "host-assignment" && event.event_type === "failed",
     )?.message ||
     "";
+  const globalObservationSummary = globalObservationItems.reduce(
+    (summary, observation) => {
+      const cpu = observation?.cpu_telemetry?.summary || {};
+      const gpu = observation?.gpu_telemetry?.summary || {};
+      const network = observation?.network_telemetry?.summary || {};
+      const disk = observation?.disk_telemetry?.summary || {};
+      const status = String(observation?.status || "").toLowerCase();
+      if (status !== "stale" && status !== "failed" && status !== "error") {
+        summary.healthyNodes += 1;
+      }
+      if (
+        observation?.runtime_status?.available !== true &&
+        observation?.instance_runtimes?.available !== true
+      ) {
+        summary.missingRuntime += 1;
+      }
+      summary.totalMemoryBytes += Number(cpu.total_memory_bytes || 0);
+      summary.usedMemoryBytes += Number(cpu.used_memory_bytes || 0);
+      summary.totalGpuVramMb += Number(gpu.total_vram_mb || 0);
+      summary.usedGpuVramMb += Number(gpu.used_vram_mb || 0);
+      summary.gpuDeviceCount += Number(gpu.device_count || 0);
+      summary.networkRxBytes += Number(network.rx_bytes || 0);
+      summary.networkTxBytes += Number(network.tx_bytes || 0);
+      summary.diskUsedBytes += Number(disk.used_bytes || 0);
+      summary.diskTotalBytes += Number(disk.total_bytes || 0);
+      return summary;
+    },
+    {
+      healthyNodes: 0,
+      missingRuntime: 0,
+      totalMemoryBytes: 0,
+      usedMemoryBytes: 0,
+      totalGpuVramMb: 0,
+      usedGpuVramMb: 0,
+      gpuDeviceCount: 0,
+      networkRxBytes: 0,
+      networkTxBytes: 0,
+      diskUsedBytes: 0,
+      diskTotalBytes: 0,
+    },
+  );
   const operationProgress = buildOperationProgressModel({
     pendingOperation,
     selectedPlaneName: selectedPlane,
@@ -2998,14 +3066,86 @@ function App() {
 
           {apiError ? <div className="error-banner">{apiError}</div> : null}
 
-          {!selectedPlane || !planeRecord || !dashboard ? (
-            <EmptyState
-              title={loading ? "Loading plane state" : "No plane selected"}
-              detail="Select a plane to inspect nodes, instances, disks, rollout state, and events."
-            />
-          ) : (
-            <>
-              {selectedTab === "status" ? (
+          {selectedTab === "status" ? (
+            <div className="dashboard-stack">
+              <section className="subpanel server-telemetry-panel">
+                <div className="subpanel-header">
+                  <h3>Server telemetry</h3>
+                  <span className="subpanel-meta">
+                    Host-level CPU, GPU, network, disk, and runtime posture across all observed nodes
+                  </span>
+                </div>
+                <div className="summary-grid server-summary-grid">
+                  <SummaryCard
+                    label="Hosts"
+                    value={globalObservationItems.length}
+                    meta={`${globalObservationSummary.healthyNodes} healthy / ${Math.max(0, globalObservationItems.length - globalObservationSummary.healthyNodes)} degraded`}
+                  />
+                  <SummaryCard
+                    label="GPU devices"
+                    value={globalObservationSummary.gpuDeviceCount}
+                    meta={
+                      globalObservationSummary.totalGpuVramMb > 0
+                        ? `${globalObservationSummary.usedGpuVramMb}/${globalObservationSummary.totalGpuVramMb} MB VRAM`
+                        : "no GPU telemetry"
+                    }
+                  />
+                  <SummaryCard
+                    label="Memory"
+                    value={compactBytes(globalObservationSummary.usedMemoryBytes)}
+                    meta={compactBytes(globalObservationSummary.totalMemoryBytes)}
+                  />
+                  <SummaryCard
+                    label="Runtime gaps"
+                    value={globalObservationSummary.missingRuntime}
+                    meta="hosts missing runtime payload"
+                  />
+                </div>
+                <div className="list-column">
+                  {globalObservationItems.length === 0 ? (
+                    <EmptyState
+                      title="No server telemetry yet"
+                      detail="Report observed state from hostd to populate global server telemetry."
+                    />
+                  ) : (
+                    globalObservationItems.map((observation) => {
+                      const cpu = observation.cpu_telemetry?.summary || {};
+                      const gpu = observation.gpu_telemetry?.summary || {};
+                      const network = observation.network_telemetry?.summary || {};
+                      const disk = observation.disk_telemetry?.summary || {};
+                      const statusClass = hostObservationStatusClass(observation.status);
+                      return (
+                        <article className="list-card" key={`global-telemetry-${observation.node_name}`}>
+                          <div className="card-row">
+                            <strong>{observation.node_name}</strong>
+                            <span className={`tag ${statusClass}`}>
+                              {statusDot(statusClass)}
+                              <span>{observation.status || "unknown"}</span>
+                            </span>
+                          </div>
+                          <div className="metric-grid">
+                            <div className="metric-row"><span>CPU</span><strong>{cpu.utilization_pct !== undefined ? `${Math.round(cpu.utilization_pct)}%` : "n/a"}</strong></div>
+                            <div className="metric-row"><span>Load avg</span><strong>{cpu.loadavg_1m !== undefined ? Number(cpu.loadavg_1m).toFixed(2) : "n/a"}</strong></div>
+                            <div className="metric-row"><span>Memory</span><strong>{compactBytes(cpu.used_memory_bytes)} / {compactBytes(cpu.total_memory_bytes)}</strong></div>
+                            <div className="metric-row"><span>GPU VRAM</span><strong>{gpu.used_vram_mb !== undefined ? `${gpu.used_vram_mb}/${gpu.total_vram_mb} MB` : "n/a"}</strong></div>
+                            <div className="metric-row"><span>GPU util</span><strong>{gpu.device_count ? `${gpu.device_count} dev / ${gpu.owned_process_count ?? 0} proc` : "n/a"}</strong></div>
+                            <div className="metric-row"><span>Network</span><strong>{compactBytes(network.rx_bytes)} rx / {compactBytes(network.tx_bytes)} tx</strong></div>
+                            <div className="metric-row"><span>Interfaces</span><strong>{network.up_count ?? 0}/{network.interface_count ?? 0} up</strong></div>
+                            <div className="metric-row"><span>Disk used</span><strong>{compactBytes(disk.used_bytes)} / {compactBytes(disk.total_bytes)}</strong></div>
+                          </div>
+                        </article>
+                      );
+                    })
+                  )}
+                </div>
+              </section>
+
+              {!selectedPlane || !planeRecord || !dashboard ? (
+                <EmptyState
+                  title={loading ? "Loading plane state" : "No plane selected"}
+                  detail="Select a plane to inspect plane-specific nodes, instances, disks, rollout state, and events."
+                />
+              ) : (
                 <>
               <div className="summary-grid">
                 <SummaryCard
@@ -3240,43 +3380,6 @@ function App() {
 
                 <section className="subpanel">
                   <div className="subpanel-header">
-                    <h3>System telemetry</h3>
-                    <span className="subpanel-meta">CPU, GPU, network, and disk summaries per node</span>
-                  </div>
-                  <div className="list-column">
-                    {observationItems.length === 0 ? (
-                      <EmptyState title="No host observations" detail="Report observed state to populate telemetry." />
-                    ) : (
-                      observationItems.map((observation) => {
-                        const cpu = observation.cpu_telemetry?.summary || {};
-                        const gpu = observation.gpu_telemetry?.summary || {};
-                        const network = observation.network_telemetry?.summary || {};
-                        const disk = observation.disk_telemetry?.summary || {};
-                        return (
-                          <article className="list-card" key={`telemetry-${observation.node_name}`}>
-                            <div className="card-row">
-                              <strong>{observation.node_name}</strong>
-                              <span className="tag">{observation.status}</span>
-                            </div>
-                            <div className="metric-grid">
-                              <div className="metric-row"><span>CPU</span><strong>{cpu.utilization_pct !== undefined ? `${Math.round(cpu.utilization_pct)}%` : "n/a"}</strong></div>
-                              <div className="metric-row"><span>Load avg</span><strong>{cpu.loadavg_1m !== undefined ? Number(cpu.loadavg_1m).toFixed(2) : "n/a"}</strong></div>
-                              <div className="metric-row"><span>Memory</span><strong>{compactBytes(cpu.used_memory_bytes)} / {compactBytes(cpu.total_memory_bytes)}</strong></div>
-                              <div className="metric-row"><span>GPU VRAM</span><strong>{gpu.used_vram_mb !== undefined ? `${gpu.used_vram_mb}/${gpu.total_vram_mb} MB` : "n/a"}</strong></div>
-                              <div className="metric-row"><span>GPU util</span><strong>{gpu.device_count ? `${gpu.device_count} dev / ${gpu.owned_process_count ?? 0} proc` : "n/a"}</strong></div>
-                              <div className="metric-row"><span>Network</span><strong>{compactBytes(network.rx_bytes)} rx / {compactBytes(network.tx_bytes)} tx</strong></div>
-                              <div className="metric-row"><span>Interfaces</span><strong>{network.up_count ?? 0}/{network.interface_count ?? 0} up</strong></div>
-                              <div className="metric-row"><span>Disk used</span><strong>{compactBytes(disk.used_bytes)} / {compactBytes(disk.total_bytes)}</strong></div>
-                            </div>
-                          </article>
-                        );
-                      })
-                    )}
-                  </div>
-                </section>
-
-                <section className="subpanel">
-                  <div className="subpanel-header">
                     <h3>Rollout actions</h3>
                     <span className="subpanel-meta">Deferred scheduler workflow</span>
                   </div>
@@ -3397,7 +3500,14 @@ function App() {
                 </section>
               </div>
                 </>
-              ) : (
+              )}
+            </div>
+          ) : !selectedPlane || !planeRecord || !dashboard ? (
+            <EmptyState
+              title={loading ? "Loading plane state" : "No plane selected"}
+              detail="Select a plane to inspect nodes, instances, disks, rollout state, and events."
+            />
+          ) : (
                 <div
                   className="interaction-layout"
                   ref={interactionSplitRef}
@@ -3545,8 +3655,6 @@ function App() {
                   </section>
                 </div>
               )}
-            </>
-          )}
           </section>
         )}
       </main>

@@ -165,7 +165,7 @@ body {
 
 .main-grid {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 328px minmax(0, 1fr);
   gap: 18px;
 }
 
@@ -206,6 +206,11 @@ body {
   text-align: left;
   font: inherit;
   transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.side-menu-item .tag {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .side-menu-item:hover {
@@ -296,6 +301,16 @@ body {
 .event-list {
   display: grid;
   gap: 12px;
+}
+
+.dashboard-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.server-telemetry-panel {
+  display: grid;
+  gap: 16px;
 }
 
 .page-panel {

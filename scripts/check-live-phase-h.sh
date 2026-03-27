@@ -23,6 +23,7 @@ if [[ "${skip_build}" -eq 0 ]]; then
 fi
 
 if [[ "${skip_image_build}" -eq 0 ]]; then
+  (cd "${PWD}/ui/operator-react" && npm run build >/dev/null)
   docker build -f "${PWD}/runtime/web-ui/Dockerfile" -t comet/web-ui:dev "${PWD}" >/dev/null
 fi
 

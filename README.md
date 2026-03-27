@@ -642,10 +642,18 @@ The controller now also has the first sidecar-management seam for that productio
 ```
 
 `ensure-web-ui` materializes controller-local compose/config artifacts for the `comet/web-ui:dev`
-sidecar. That image now builds the React workspace in a Node-based build stage and serves the
-resulting bundle from a minimal nginx runtime stage. `--compose-mode exec` uses Docker Compose to
-start or stop the sidecar; `skip` keeps the same code path but only renders lifecycle artifacts
-for smoke/dev environments.
+sidecar. That image now packages a prebuilt React bundle from
+`ui/operator-react/dist` into a minimal nginx runtime stage, so the standard build flow is:
+
+```bash
+cd ui/operator-react
+npm run build
+cd ../..
+docker build -f runtime/web-ui/Dockerfile -t comet/web-ui:dev .
+```
+
+`--compose-mode exec` uses Docker Compose to start or stop the sidecar; `skip` keeps the same
+code path but only renders lifecycle artifacts for smoke/dev environments.
 
 There is now also a live validation harness for the full browser-facing path:
 

@@ -134,12 +134,22 @@ inline void AssignReplicaTopology(
   const bool data_parallel = DataParallelEnabled(inference);
   const int workers_per_replica = WorkersPerReplica(*worker_group);
   const int replica_count = ExpectedReplicaGroupCount(inference, *worker_group);
-  const std::string data_parallel_head_address =
-      worker_group->rendezvous_host.empty() ? worker_group->infer_instance_name
-                                            : worker_group->rendezvous_host;
   const int data_parallel_rpc_port =
       worker_group->rendezvous_port > 0 ? worker_group->rendezvous_port + 100
                                         : 29600;
+  std::string data_parallel_head_address;
+  for (const auto& member : worker_group->members) {
+    if (!member.enabled) {
+      continue;
+    }
+    data_parallel_head_address = member.name;
+    break;
+  }
+  if (data_parallel_head_address.empty()) {
+    data_parallel_head_address =
+        worker_group->rendezvous_host.empty() ? worker_group->infer_instance_name
+                                              : worker_group->rendezvous_host;
+  }
   std::map<std::string, int> node_replica_counts;
   std::map<std::string, int> node_replica_start_ranks;
   if (HybridDataParallelEnabled(inference)) {

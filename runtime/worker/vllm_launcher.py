@@ -328,13 +328,14 @@ def build_command(model_ref: str, served_model_name: str, port: int) -> list[str
         )
         if env_bool("COMET_VLLM_HEADLESS", False):
             command.append("--headless")
-    if native_data_parallel:
+    data_parallel_size = env_int("COMET_VLLM_DATA_PARALLEL_SIZE", 1)
+    if native_data_parallel and data_parallel_size > 1:
         external_lb = env_bool("COMET_VLLM_DATA_PARALLEL_EXTERNAL_LB", False)
         hybrid_lb = env_bool("COMET_VLLM_DATA_PARALLEL_HYBRID_LB", False)
         command.extend(
             [
                 "--data-parallel-size",
-                str(env_int("COMET_VLLM_DATA_PARALLEL_SIZE", 1)),
+                str(data_parallel_size),
                 "--data-parallel-rank",
                 str(env_int("COMET_VLLM_DATA_PARALLEL_RANK", 0)),
                 "--data-parallel-size-local",

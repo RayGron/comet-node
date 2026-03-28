@@ -1,57 +1,35 @@
 #pragma once
 
-#include <functional>
 #include <optional>
 #include <string>
 
 #include <nlohmann/json.hpp>
 
+#include "infra/controller_request_support.h"
 #include "infra/controller_action.h"
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
 #include "read_model/read_model_service.h"
+#include "scheduler/assignment_orchestration_service.h"
 #include "scheduler/scheduler_service.h"
 
 #include "comet/state/models.h"
 
+class ISchedulerServiceFactory {
+ public:
+  virtual ~ISchedulerServiceFactory() = default;
+  virtual comet::controller::SchedulerService CreateSchedulerService(
+      const std::string& db_path,
+      const std::string& artifacts_root) const = 0;
+};
+
 class SchedulerHttpService {
  public:
-  using BuildJsonResponseFn = std::function<HttpResponse(
-      int,
-      const nlohmann::json&,
-      const std::map<std::string, std::string>&)>;
-  using FindQueryStringFn = std::function<std::optional<std::string>(
-      const HttpRequest&,
-      const std::string&)>;
-  using FindQueryIntFn =
-      std::function<std::optional<int>(const HttpRequest&, const std::string&)>;
-  using ResolveArtifactsRootFn = std::function<std::string(
-      const std::optional<std::string>&,
-      const std::string&)>;
-  using BuildControllerActionPayloadFn =
-      std::function<nlohmann::json(const comet::controller::ControllerActionResult&)>;
-  using SetNodeAvailabilityActionFn = std::function<comet::controller::ControllerActionResult(
-      const std::string&,
-      const std::string&,
-      comet::NodeAvailability,
-      const std::optional<std::string>&)>;
-  using MakeSchedulerServiceFn =
-      std::function<comet::controller::SchedulerService(
-          const std::string&,
-          const std::string&)>;
-
-  struct Deps {
-    BuildJsonResponseFn build_json_response;
-    FindQueryStringFn find_query_string;
-    FindQueryIntFn find_query_int;
-    ResolveArtifactsRootFn resolve_artifacts_root;
-    BuildControllerActionPayloadFn build_controller_action_payload;
-    const comet::controller::ReadModelService* read_model_service = nullptr;
-    SetNodeAvailabilityActionFn set_node_availability_action;
-    MakeSchedulerServiceFn make_scheduler_service;
-  };
-
-  explicit SchedulerHttpService(Deps deps);
+  SchedulerHttpService(
+      const comet::controller::ControllerRequestSupport& controller_request_support,
+      const comet::controller::ReadModelService& read_model_service,
+      const comet::controller::AssignmentOrchestrationService& assignment_orchestration_service,
+      const ISchedulerServiceFactory& scheduler_service_factory);
 
   std::optional<HttpResponse> HandleRequest(
       const std::string& db_path,
@@ -59,5 +37,21 @@ class SchedulerHttpService {
       const HttpRequest& request) const;
 
  private:
-  Deps deps_;
+  HttpResponse BuildJsonResponse(
+      int status_code,
+      const nlohmann::json& payload,
+      const std::map<std::string, std::string>& headers = {}) const;
+
+  std::optional<std::string> FindQueryString(
+      const HttpRequest& request,
+      const std::string& key) const;
+
+  std::optional<int> FindQueryInt(
+      const HttpRequest& request,
+      const std::string& key) const;
+
+  const comet::controller::ControllerRequestSupport& controller_request_support_;
+  const comet::controller::ReadModelService& read_model_service_;
+  const comet::controller::AssignmentOrchestrationService& assignment_orchestration_service_;
+  const ISchedulerServiceFactory& scheduler_service_factory_;
 };

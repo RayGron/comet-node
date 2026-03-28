@@ -11,26 +11,12 @@
 using nlohmann::json;
 
 namespace comet::controller {
-namespace {
 
-std::vector<comet::HostObservation> FilterHostObservationsForPlane(
-    const std::vector<comet::HostObservation>& observations,
-    const std::string& plane_name,
-    const ReadModelService::ObservationMatchesPlaneFn&
-        observation_matches_plane) {
-  std::vector<comet::HostObservation> result;
-  for (const auto& observation : observations) {
-    if (observation_matches_plane &&
-        observation_matches_plane(observation, plane_name)) {
-      result.push_back(observation);
-    }
-  }
-  return result;
-}
+ReadModelService::ReadModelService() = default;
 
-}  // namespace
-
-ReadModelService::ReadModelService(Deps deps) : deps_(std::move(deps)) {}
+ReadModelService::ReadModelService(
+    ControllerRuntimeSupportService runtime_support_service)
+    : runtime_support_service_(std::move(runtime_support_service)) {}
 
 json ReadModelService::BuildEventPayloadItem(
     const comet::EventRecord& event) const {
@@ -63,6 +49,59 @@ json ReadModelService::BuildEventPayloadItem(
       {"payload", payload},
       {"created_at", event.created_at},
   };
+}
+
+bool ReadModelService::ObservationMatchesPlane(
+    const comet::HostObservation& observation,
+    const std::string& plane_name) const {
+  if (observation.plane_name == plane_name) {
+    return true;
+  }
+  if (observation.observed_state_json.empty()) {
+    return false;
+  }
+
+  const auto observed_state =
+      comet::DeserializeDesiredStateJson(observation.observed_state_json);
+  if (observed_state.plane_name == plane_name) {
+    return true;
+  }
+  for (const auto& disk : observed_state.disks) {
+    if (disk.plane_name == plane_name) {
+      return true;
+    }
+  }
+  for (const auto& instance : observed_state.instances) {
+    if (instance.plane_name == plane_name) {
+      return true;
+    }
+  }
+  try {
+    const auto instance_statuses =
+        runtime_support_service_.ParseInstanceRuntimeStatuses(observation);
+    for (const auto& status : instance_statuses) {
+      const std::string worker_prefix = "worker-" + plane_name + "-";
+      if (status.instance_name == "infer-" + plane_name ||
+          status.instance_name == "worker-" + plane_name ||
+          status.instance_name.rfind(worker_prefix, 0) == 0) {
+        return true;
+      }
+    }
+  } catch (const std::exception&) {
+  }
+  return false;
+}
+
+std::vector<comet::HostObservation> ReadModelService::FilterHostObservationsForPlane(
+    const std::vector<comet::HostObservation>& observations,
+    const std::string& plane_name) const {
+  std::vector<comet::HostObservation> result;
+  for (const auto& observation : observations) {
+    if (ObservationMatchesPlane(observation, plane_name)) {
+      result.push_back(observation);
+    }
+  }
+  return result;
 }
 
 json ReadModelService::BuildHostAssignmentsPayload(
@@ -107,32 +146,27 @@ json ReadModelService::BuildHostObservationsPayload(
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name,
     int stale_after_seconds) const {
-  if (!deps_.heartbeat_age_seconds || !deps_.health_from_age ||
-      !deps_.parse_runtime_status || !deps_.parse_instance_runtime_statuses ||
-      !deps_.parse_gpu_telemetry || !deps_.parse_disk_telemetry ||
-      !deps_.parse_network_telemetry || !deps_.parse_cpu_telemetry) {
-    throw std::runtime_error(
-        "read model service observation dependencies are not configured");
-  }
-
   comet::ControllerStore store(db_path);
   store.Initialize();
-  const auto observations = plane_name.has_value()
-                                ? FilterHostObservationsForPlane(
-                                      store.LoadHostObservations(node_name),
-                                      *plane_name,
-                                      deps_.observation_matches_plane)
-                                : store.LoadHostObservations(node_name);
+  const auto observations =
+      plane_name.has_value()
+          ? FilterHostObservationsForPlane(
+                store.LoadHostObservations(node_name), *plane_name)
+          : store.LoadHostObservations(node_name);
 
   json items = json::array();
   for (const auto& observation : observations) {
-    const auto runtime_status = deps_.parse_runtime_status(observation);
-    const auto telemetry = deps_.parse_gpu_telemetry(observation);
-    const auto cpu_telemetry = deps_.parse_cpu_telemetry(observation);
+    const auto runtime_status =
+        runtime_support_service_.ParseRuntimeStatus(observation);
+    const auto telemetry = runtime_support_service_.ParseGpuTelemetry(observation);
+    const auto cpu_telemetry =
+        runtime_support_service_.ParseCpuTelemetry(observation);
     const auto instance_statuses =
-        deps_.parse_instance_runtime_statuses(observation);
-    const auto disk_telemetry = deps_.parse_disk_telemetry(observation);
-    const auto network_telemetry = deps_.parse_network_telemetry(observation);
+        runtime_support_service_.ParseInstanceRuntimeStatuses(observation);
+    const auto disk_telemetry =
+        runtime_support_service_.ParseDiskTelemetry(observation);
+    const auto network_telemetry =
+        runtime_support_service_.ParseNetworkTelemetry(observation);
 
     const auto build_runtime_status_payload =
         [&](const std::optional<comet::RuntimeStatus>& status) -> json {
@@ -475,10 +509,11 @@ json ReadModelService::BuildHostObservationsPayload(
             ? json(*observation.last_assignment_id)
             : json(nullptr);
     const auto age_seconds =
-        deps_.heartbeat_age_seconds(observation.heartbeat_at);
+        runtime_support_service_.HeartbeatAgeSeconds(observation.heartbeat_at);
     entry["age_seconds"] =
         age_seconds.has_value() ? json(*age_seconds) : json(nullptr);
-    entry["health"] = deps_.health_from_age(age_seconds, stale_after_seconds);
+    entry["health"] =
+        runtime_support_service_.HealthFromAge(age_seconds, stale_after_seconds);
 
     if (!observation.observed_state_json.empty()) {
       entry["observed_state"] = json::parse(observation.observed_state_json);
@@ -511,19 +546,12 @@ json ReadModelService::BuildHostHealthPayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     int stale_after_seconds) const {
-  if (!deps_.heartbeat_age_seconds || !deps_.health_from_age ||
-      !deps_.parse_runtime_status || !deps_.parse_gpu_telemetry ||
-      !deps_.build_availability_override_map || !deps_.resolve_node_availability) {
-    throw std::runtime_error(
-        "read model service health dependencies are not configured");
-  }
-
   comet::ControllerStore store(db_path);
   store.Initialize();
   const auto desired_state = store.LoadDesiredState();
   const auto observations = store.LoadHostObservations(node_name);
   const auto availability_override_map =
-      deps_.build_availability_override_map(
+      runtime_support_service_.BuildAvailabilityOverrideMap(
           store.LoadNodeAvailabilityOverrides(node_name));
 
   std::map<std::string, comet::HostObservation> observation_by_node;
@@ -559,7 +587,7 @@ json ReadModelService::BuildHostHealthPayload(
         {"node_name", current_node_name},
         {"availability",
          comet::ToString(
-             deps_.resolve_node_availability(
+             runtime_support_service_.ResolveNodeAvailability(
                  availability_override_map,
                  current_node_name))},
     };
@@ -573,9 +601,10 @@ json ReadModelService::BuildHostHealthPayload(
     }
 
     const auto age_seconds =
-        deps_.heartbeat_age_seconds(observation_it->second.heartbeat_at);
+        runtime_support_service_.HeartbeatAgeSeconds(
+            observation_it->second.heartbeat_at);
     const std::string health =
-        deps_.health_from_age(age_seconds, stale_after_seconds);
+        runtime_support_service_.HealthFromAge(age_seconds, stale_after_seconds);
     item["health"] = health;
     item["status"] = comet::ToString(observation_it->second.status);
     item["age_seconds"] =
@@ -586,14 +615,14 @@ json ReadModelService::BuildHostHealthPayload(
             ? json(*observation_it->second.applied_generation)
             : json(nullptr);
     if (const auto runtime_status =
-            deps_.parse_runtime_status(observation_it->second);
+            runtime_support_service_.ParseRuntimeStatus(observation_it->second);
         runtime_status.has_value()) {
       item["runtime_phase"] = runtime_status->runtime_phase;
       item["runtime_launch_ready"] = runtime_status->launch_ready;
       item["runtime_backend"] = runtime_status->runtime_backend;
     }
     if (const auto telemetry =
-            deps_.parse_gpu_telemetry(observation_it->second);
+            runtime_support_service_.ParseGpuTelemetry(observation_it->second);
         telemetry.has_value()) {
       item["telemetry_degraded"] = telemetry->degraded;
       item["telemetry_source"] = telemetry->source;
@@ -628,11 +657,6 @@ json ReadModelService::BuildDiskStatePayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  if (!deps_.parse_disk_telemetry || !deps_.observation_matches_plane) {
-    throw std::runtime_error(
-        "read model service disk-state dependencies are not configured");
-  }
-
   comet::ControllerStore store(db_path);
   store.Initialize();
   const auto desired_state = plane_name.has_value()
@@ -661,9 +685,7 @@ json ReadModelService::BuildDiskStatePayload(
   const auto observations =
       plane_name.has_value()
           ? FilterHostObservationsForPlane(
-                store.LoadHostObservations(node_name),
-                *plane_name,
-                deps_.observation_matches_plane)
+                store.LoadHostObservations(node_name), *plane_name)
           : store.LoadHostObservations(node_name);
 
   payload["plane_name"] = desired_state->plane_name;
@@ -678,7 +700,8 @@ json ReadModelService::BuildDiskStatePayload(
   }
   std::map<std::string, comet::DiskTelemetryRecord> telemetry_by_key;
   for (const auto& observation : observations) {
-    const auto disk_telemetry = deps_.parse_disk_telemetry(observation);
+    const auto disk_telemetry =
+        runtime_support_service_.ParseDiskTelemetry(observation);
     if (!disk_telemetry.has_value()) {
       continue;
     }

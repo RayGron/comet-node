@@ -1,6 +1,5 @@
 #pragma once
 
-#include <functional>
 #include <optional>
 #include <string>
 
@@ -8,6 +7,10 @@
 
 #include "infra/controller_action.h"
 #include "app/controller_service_interfaces.h"
+#include "infra/controller_print_service.h"
+#include "infra/controller_runtime_support_service.h"
+#include "plane/desired_state_policy_service.h"
+#include "plane/plane_realization_service.h"
 
 #include "comet/planning/execution_plan.h"
 #include "comet/state/models.h"
@@ -18,76 +21,13 @@ namespace comet::controller {
 
 class BundleCliService : public IBundleCliService {
  public:
-  using DefaultArtifactsRootProvider = std::function<std::string()>;
-  using DefaultStaleAfterSecondsFn = std::function<int()>;
-  using BuildAvailabilityOverrideMapFn =
-      std::function<std::map<std::string, comet::NodeAvailabilityOverride>(
-          const std::vector<comet::NodeAvailabilityOverride>&)>;
-  using PrintStateSummaryFn = std::function<void(const comet::DesiredState&)>;
-  using PrintSchedulerDecisionSummaryFn =
-      std::function<void(const comet::DesiredState&)>;
-  using PrintRolloutGateSummaryFn =
-      std::function<void(const comet::SchedulingPolicyReport&)>;
-  using PrintAssignmentDispatchSummaryFn = std::function<void(
-      const comet::DesiredState&,
-      const std::map<std::string, comet::NodeAvailabilityOverride>&,
-      const std::vector<comet::HostObservation>&,
-      int)>;
-  using MaterializeComposeArtifactsFn =
-      std::function<void(
-          const comet::DesiredState&,
-          const std::vector<comet::NodeExecutionPlan>&)>;
-  using MaterializeInferRuntimeArtifactFn =
-      std::function<void(const comet::DesiredState&, const std::string&)>;
-  using BuildHostAssignmentsFn =
-      std::function<std::vector<comet::HostAssignment>(
-          const comet::DesiredState&,
-          const std::string&,
-          int,
-          const std::vector<comet::NodeAvailabilityOverride>&,
-          const std::vector<comet::HostObservation>&,
-          const std::optional<comet::SchedulingPolicyReport>&)>;
-  using ApplyRegisteredHostExecutionModesFn =
-      std::function<void(comet::ControllerStore&, comet::DesiredState*)>;
-  using ResolveDesiredStateDynamicPlacementsFn =
-      std::function<void(comet::ControllerStore&, comet::DesiredState*)>;
-  using ValidateDesiredStateForControllerAdmissionFn =
-      std::function<void(const comet::DesiredState&)>;
-  using ValidateDesiredStateExecutionModesFn =
-      std::function<void(const comet::DesiredState&)>;
-  using EventAppender = std::function<void(
-      comet::ControllerStore&,
-      const std::string&,
-      const std::string&,
-      const std::string&,
-      const nlohmann::json&,
-      const std::string&,
-      const std::string&,
-      const std::string&,
-      const std::optional<int>&,
-      const std::optional<int>&,
-      const std::string&)>;
-
-  struct Deps {
-    DefaultArtifactsRootProvider default_artifacts_root;
-    DefaultStaleAfterSecondsFn default_stale_after_seconds;
-    BuildAvailabilityOverrideMapFn build_availability_override_map;
-    PrintStateSummaryFn print_state_summary;
-    PrintSchedulerDecisionSummaryFn print_scheduler_decision_summary;
-    PrintRolloutGateSummaryFn print_rollout_gate_summary;
-    PrintAssignmentDispatchSummaryFn print_assignment_dispatch_summary;
-    MaterializeComposeArtifactsFn materialize_compose_artifacts;
-    MaterializeInferRuntimeArtifactFn materialize_infer_runtime_artifact;
-    BuildHostAssignmentsFn build_host_assignments;
-    ApplyRegisteredHostExecutionModesFn apply_registered_host_execution_modes;
-    ResolveDesiredStateDynamicPlacementsFn resolve_desired_state_dynamic_placements;
-    ValidateDesiredStateForControllerAdmissionFn
-        validate_desired_state_for_controller_admission;
-    ValidateDesiredStateExecutionModesFn validate_desired_state_execution_modes;
-    EventAppender event_appender;
-  };
-
-  explicit BundleCliService(Deps deps);
+  BundleCliService(
+      const ControllerPrintService& controller_print_service,
+      const DesiredStatePolicyService& desired_state_policy_service,
+      const PlaneRealizationService& plane_realization_service,
+      ControllerRuntimeSupportService runtime_support_service = {},
+      std::string default_artifacts_root = "var/artifacts",
+      int default_stale_after_seconds = 300);
 
   void ShowDemoPlan() const override;
   int RenderDemoCompose(const std::optional<std::string>& node_name) const override;
@@ -126,20 +66,39 @@ class BundleCliService : public IBundleCliService {
       const std::optional<std::string>& node_name) const override;
   int RenderInferRuntime(const std::string& db_path) const override;
 
-  ControllerActionResult ExecuteValidateBundleAction(const std::string& bundle_dir) const;
+  ControllerActionResult ExecuteValidateBundleAction(
+      const std::string& bundle_dir) const override;
   ControllerActionResult ExecutePreviewBundleAction(
       const std::string& bundle_dir,
-      const std::optional<std::string>& node_name) const;
+      const std::optional<std::string>& node_name) const override;
   ControllerActionResult ExecuteImportBundleAction(
       const std::string& db_path,
-      const std::string& bundle_dir) const;
-  ControllerActionResult ExecuteApplyBundleAction(
+      const std::string& bundle_dir) const override;
+ ControllerActionResult ExecuteApplyBundleAction(
       const std::string& db_path,
       const std::string& bundle_dir,
-      const std::string& artifacts_root) const;
+      const std::string& artifacts_root) const override;
 
  private:
-  Deps deps_;
+  void AppendEvent(
+      comet::ControllerStore& store,
+      const std::string& category,
+      const std::string& event_type,
+      const std::string& message,
+      const nlohmann::json& payload,
+      const std::string& plane_name,
+      const std::string& node_name = "",
+      const std::string& worker_name = "",
+      const std::optional<int>& assignment_id = std::nullopt,
+      const std::optional<int>& rollout_action_id = std::nullopt,
+      const std::string& severity = "info") const;
+
+  const ControllerPrintService& controller_print_service_;
+  const DesiredStatePolicyService& desired_state_policy_service_;
+  const PlaneRealizationService& plane_realization_service_;
+  ControllerRuntimeSupportService runtime_support_service_;
+  std::string default_artifacts_root_;
+  int default_stale_after_seconds_ = 300;
 };
 
 }  // namespace comet::controller

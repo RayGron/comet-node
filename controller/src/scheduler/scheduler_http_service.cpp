@@ -5,7 +5,47 @@
 
 using nlohmann::json;
 
-SchedulerHttpService::SchedulerHttpService(Deps deps) : deps_(std::move(deps)) {}
+SchedulerHttpService::SchedulerHttpService(
+    const comet::controller::ControllerRequestSupport& controller_request_support,
+    const comet::controller::ReadModelService& read_model_service,
+    const comet::controller::AssignmentOrchestrationService& assignment_orchestration_service,
+    const ISchedulerServiceFactory& scheduler_service_factory)
+    : controller_request_support_(controller_request_support),
+      read_model_service_(read_model_service),
+      assignment_orchestration_service_(assignment_orchestration_service),
+      scheduler_service_factory_(scheduler_service_factory) {}
+
+HttpResponse SchedulerHttpService::BuildJsonResponse(
+    int status_code,
+    const json& payload,
+    const std::map<std::string, std::string>& headers) const {
+  return HttpResponse{
+      status_code,
+      "application/json",
+      payload.dump(),
+      headers,
+  };
+}
+
+std::optional<std::string> SchedulerHttpService::FindQueryString(
+    const HttpRequest& request,
+    const std::string& key) const {
+  const auto it = request.query_params.find(key);
+  if (it == request.query_params.end() || it->second.empty()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+std::optional<int> SchedulerHttpService::FindQueryInt(
+    const HttpRequest& request,
+    const std::string& key) const {
+  const auto value = FindQueryString(request, key);
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  return std::stoi(*value);
+}
 
 std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
     const std::string& db_path,
@@ -14,56 +54,53 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
   if (request.path == "/api/v1/node-availability") {
     if (request.method == "GET") {
       try {
-        if (deps_.read_model_service == nullptr) {
-          throw std::runtime_error("read model service is not configured");
-        }
-        return deps_.build_json_response(
+        return BuildJsonResponse(
             200,
-            deps_.read_model_service->BuildNodeAvailabilityPayload(
+            read_model_service_.BuildNodeAvailabilityPayload(
                 db_path,
-                deps_.find_query_string(request, "node")),
+                FindQueryString(request, "node")),
             {});
       } catch (const std::exception& error) {
-        return deps_.build_json_response(
-            500,
-            json{{"status", "internal_error"},
-                 {"message", error.what()},
+        return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"},
+               {"message", error.what()},
                  {"path", request.path}},
             {});
       }
     }
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
-    const auto node_name = deps_.find_query_string(request, "node");
-    const auto availability = deps_.find_query_string(request, "availability");
+    const auto node_name = FindQueryString(request, "node");
+    const auto availability = FindQueryString(request, "availability");
     if (!node_name.has_value()) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required query parameter 'node'"}},
           {});
     }
     if (!availability.has_value()) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required query parameter 'availability'"}},
           {});
     }
     try {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
-              deps_.set_node_availability_action(
+          comet::controller::BuildControllerActionPayload(
+              assignment_orchestration_service_.ExecuteSetNodeAvailabilityAction(
                   db_path,
                   *node_name,
                   comet::ParseNodeAvailability(*availability),
-                  deps_.find_query_string(request, "message"))),
+                  FindQueryString(request, "message"))),
           {});
-    } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -74,22 +111,22 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
 
   if (request.path == "/api/v1/scheduler-tick") {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     try {
-      auto scheduler_service = deps_.make_scheduler_service(
+      auto scheduler_service = scheduler_service_factory_.CreateSchedulerService(
           db_path,
-          deps_.resolve_artifacts_root(
-              deps_.find_query_string(request, "artifacts_root"),
+          controller_request_support_.ResolveArtifactsRoot(
+              FindQueryString(request, "artifacts_root"),
               default_artifacts_root));
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
+          comet::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteSchedulerTick()),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -100,22 +137,22 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
 
   if (request.path == "/api/v1/reconcile-rebalance-proposals") {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     try {
-      auto scheduler_service = deps_.make_scheduler_service(
+      auto scheduler_service = scheduler_service_factory_.CreateSchedulerService(
           db_path,
-          deps_.resolve_artifacts_root(
-              deps_.find_query_string(request, "artifacts_root"),
+          controller_request_support_.ResolveArtifactsRoot(
+              FindQueryString(request, "artifacts_root"),
               default_artifacts_root));
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
+          comet::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteReconcileRebalanceProposals()),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -126,22 +163,22 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
 
   if (request.path == "/api/v1/reconcile-rollout-actions") {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     try {
-      auto scheduler_service = deps_.make_scheduler_service(
+      auto scheduler_service = scheduler_service_factory_.CreateSchedulerService(
           db_path,
-          deps_.resolve_artifacts_root(
-              deps_.find_query_string(request, "artifacts_root"),
+          controller_request_support_.ResolveArtifactsRoot(
+              FindQueryString(request, "artifacts_root"),
               default_artifacts_root));
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
+          comet::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteReconcileRolloutActions()),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -152,30 +189,30 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
 
   if (request.path == "/api/v1/apply-rebalance-proposal") {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
-    const auto worker_name = deps_.find_query_string(request, "worker");
+    const auto worker_name = FindQueryString(request, "worker");
     if (!worker_name.has_value()) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required query parameter 'worker'"}},
           {});
     }
     try {
-      auto scheduler_service = deps_.make_scheduler_service(
+      auto scheduler_service = scheduler_service_factory_.CreateSchedulerService(
           db_path,
-          deps_.resolve_artifacts_root(
-              deps_.find_query_string(request, "artifacts_root"),
+          controller_request_support_.ResolveArtifactsRoot(
+              FindQueryString(request, "artifacts_root"),
               default_artifacts_root));
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
+          comet::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteApplyRebalanceProposal(*worker_name)),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -186,41 +223,41 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
 
   if (request.path == "/api/v1/set-rollout-action-status") {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
-    const auto action_id = deps_.find_query_int(request, "id");
-    const auto status = deps_.find_query_string(request, "status");
+    const auto action_id = FindQueryInt(request, "id");
+    const auto status = FindQueryString(request, "status");
     if (!action_id.has_value()) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required query parameter 'id'"}},
           {});
     }
     if (!status.has_value()) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required query parameter 'status'"}},
           {});
     }
     try {
-      auto scheduler_service = deps_.make_scheduler_service(
+      auto scheduler_service = scheduler_service_factory_.CreateSchedulerService(
           db_path,
-          deps_.resolve_artifacts_root(
-              deps_.find_query_string(request, "artifacts_root"),
+          controller_request_support_.ResolveArtifactsRoot(
+              FindQueryString(request, "artifacts_root"),
               default_artifacts_root));
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
+          comet::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteSetRolloutActionStatus(
                   *action_id,
                   *status,
-                  deps_.find_query_string(request, "message"))),
+                  FindQueryString(request, "message"))),
           {});
-    } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -231,30 +268,30 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
 
   if (request.path == "/api/v1/enqueue-rollout-eviction") {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
-    const auto action_id = deps_.find_query_int(request, "id");
+    const auto action_id = FindQueryInt(request, "id");
     if (!action_id.has_value()) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required query parameter 'id'"}},
           {});
     }
     try {
-      auto scheduler_service = deps_.make_scheduler_service(
+      auto scheduler_service = scheduler_service_factory_.CreateSchedulerService(
           db_path,
-          deps_.resolve_artifacts_root(
-              deps_.find_query_string(request, "artifacts_root"),
+          controller_request_support_.ResolveArtifactsRoot(
+              FindQueryString(request, "artifacts_root"),
               default_artifacts_root));
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
+          comet::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteEnqueueRolloutEviction(*action_id)),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -265,30 +302,30 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
 
   if (request.path == "/api/v1/apply-ready-rollout-action") {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
-    const auto action_id = deps_.find_query_int(request, "id");
+    const auto action_id = FindQueryInt(request, "id");
     if (!action_id.has_value()) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required query parameter 'id'"}},
           {});
     }
     try {
-      auto scheduler_service = deps_.make_scheduler_service(
+      auto scheduler_service = scheduler_service_factory_.CreateSchedulerService(
           db_path,
-          deps_.resolve_artifacts_root(
-              deps_.find_query_string(request, "artifacts_root"),
+          controller_request_support_.ResolveArtifactsRoot(
+              FindQueryString(request, "artifacts_root"),
               default_artifacts_root));
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
+          comet::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteApplyReadyRolloutAction(*action_id)),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},

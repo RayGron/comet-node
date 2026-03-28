@@ -1,5 +1,6 @@
 #include "infer_app.h"
 
 int main(int argc, char** argv) {
-  return comet::infer::RunInferApp(argc, argv);
+  comet::infer::InferApp app(argc, argv);
+  return app.Run();
 }

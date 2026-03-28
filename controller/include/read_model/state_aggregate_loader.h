@@ -1,10 +1,10 @@
 #pragma once
 
-#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "infra/controller_runtime_support_service.h"
 #include "plane/dashboard_service.h"
 #include "scheduler/scheduler_domain_service.h"
 #include "scheduler/scheduler_view_service.h"
@@ -16,28 +16,11 @@ namespace comet::controller {
 
 class StateAggregateLoader {
  public:
-  using FilterHostObservationsForPlaneFn =
-      std::function<std::vector<comet::HostObservation>(
-          const std::vector<comet::HostObservation>&,
-          const std::string&)>;
-  using LoadSchedulerRuntimeViewFn =
-      std::function<SchedulerRuntimeView(
-          comet::ControllerStore&,
-          const std::optional<comet::DesiredState>&)>;
-  using EvaluateSchedulingPolicyFn =
-      std::function<comet::SchedulingPolicyReport(const comet::DesiredState&)>;
-  using MaximumRebalanceIterationsFn = std::function<int()>;
-
-  struct Deps {
-    FilterHostObservationsForPlaneFn filter_host_observations_for_plane;
-    LoadSchedulerRuntimeViewFn load_scheduler_runtime_view;
-    EvaluateSchedulingPolicyFn evaluate_scheduling_policy;
-    MaximumRebalanceIterationsFn maximum_rebalance_iterations;
-    const SchedulerDomainService* scheduler_domain_service = nullptr;
-    const SchedulerViewService* scheduler_view_service = nullptr;
-  };
-
-  explicit StateAggregateLoader(Deps deps);
+  StateAggregateLoader(
+      const SchedulerDomainService& scheduler_domain_service,
+      const SchedulerViewService& scheduler_view_service,
+      ControllerRuntimeSupportService runtime_support_service,
+      int maximum_rebalance_iterations);
 
   RolloutActionsViewData LoadRolloutActionsViewData(
       const std::string& db_path,
@@ -56,7 +39,22 @@ class StateAggregateLoader {
       const std::optional<std::string>& plane_name = std::nullopt) const;
 
  private:
-  Deps deps_;
+  bool ObservationMatchesPlane(
+      const comet::HostObservation& observation,
+      const std::string& plane_name) const;
+
+  std::vector<comet::HostObservation> FilterHostObservationsForPlane(
+      const std::vector<comet::HostObservation>& observations,
+      const std::string& plane_name) const;
+
+  SchedulerRuntimeView LoadSchedulerRuntimeView(
+      comet::ControllerStore& store,
+      const std::optional<comet::DesiredState>& desired_state) const;
+
+  const SchedulerDomainService& scheduler_domain_service_;
+  const SchedulerViewService& scheduler_view_service_;
+  ControllerRuntimeSupportService runtime_support_service_;
+  int maximum_rebalance_iterations_ = 1;
 };
 
 }  // namespace comet::controller

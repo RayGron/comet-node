@@ -1,5 +1,6 @@
 #include "app/hostd_app.h"
 
 int main(int argc, char** argv) {
-  return comet::hostd::RunHostdApp(argc, argv);
+  comet::hostd::HostdApp app(argc, argv);
+  return app.Run();
 }

@@ -1,5 +1,6 @@
 #include "app/controller_app.h"
 
 int main(int argc, char** argv) {
-  return comet::controller::RunControllerApp(argc, argv);
+  comet::controller::ControllerApp app(argc, argv);
+  return app.Run();
 }

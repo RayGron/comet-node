@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "comet/state/state_json.h"
+
 namespace comet::controller {
 
 namespace {
@@ -53,7 +55,57 @@ struct EventsViewData {
 
 }  // namespace
 
-ReadModelCliService::ReadModelCliService(Deps deps) : deps_(std::move(deps)) {}
+ReadModelCliService::ReadModelCliService(
+    const ControllerPrintService& controller_print_service,
+    const StateAggregateLoader& state_aggregate_loader,
+    const SchedulerViewService& scheduler_view_service,
+    int default_stale_after_seconds,
+    int verification_stable_samples_required)
+    : controller_print_service_(controller_print_service),
+      state_aggregate_loader_(state_aggregate_loader),
+      scheduler_view_service_(scheduler_view_service),
+      default_stale_after_seconds_(default_stale_after_seconds),
+      verification_stable_samples_required_(verification_stable_samples_required) {}
+
+bool ReadModelCliService::ObservationMatchesPlane(
+    const comet::HostObservation& observation,
+    const std::string& plane_name) const {
+  if (observation.plane_name == plane_name) {
+    return true;
+  }
+  if (observation.observed_state_json.empty()) {
+    return false;
+  }
+
+  const auto observed_state =
+      comet::DeserializeDesiredStateJson(observation.observed_state_json);
+  if (observed_state.plane_name == plane_name) {
+    return true;
+  }
+  for (const auto& disk : observed_state.disks) {
+    if (disk.plane_name == plane_name) {
+      return true;
+    }
+  }
+  for (const auto& instance : observed_state.instances) {
+    if (instance.plane_name == plane_name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<comet::HostObservation> ReadModelCliService::FilterHostObservationsForPlane(
+    const std::vector<comet::HostObservation>& observations,
+    const std::string& plane_name) const {
+  std::vector<comet::HostObservation> result;
+  for (const auto& observation : observations) {
+    if (ObservationMatchesPlane(observation, plane_name)) {
+      result.push_back(observation);
+    }
+  }
+  return result;
+}
 
 int ReadModelCliService::ShowHostAssignments(
     const std::string& db_path,
@@ -66,7 +118,7 @@ int ReadModelCliService::ShowHostAssignments(
       store.LoadHostAssignments(node_name),
   };
   std::cout << "db: " << view.db_path << "\n";
-  deps_.print_host_assignments(view.assignments);
+  controller_print_service_.PrintHostAssignments(view.assignments);
   return 0;
 }
 
@@ -75,13 +127,10 @@ int ReadModelCliService::ShowHostObservations(
     const std::optional<std::string>& plane_name,
     const std::optional<std::string>& node_name,
     int stale_after_seconds) const {
-  if (!deps_.filter_host_observations_for_plane) {
-    throw std::runtime_error("read model cli filter dependency is not configured");
-  }
   comet::ControllerStore store(db_path);
   store.Initialize();
   const auto observations = plane_name.has_value()
-                                ? deps_.filter_host_observations_for_plane(
+                                ? FilterHostObservationsForPlane(
                                       store.LoadHostObservations(node_name),
                                       *plane_name)
                                 : store.LoadHostObservations(node_name);
@@ -97,7 +146,8 @@ int ReadModelCliService::ShowHostObservations(
     std::cout << "plane: " << *view.plane_name << "\n";
   }
   std::cout << "stale_after_seconds: " << view.stale_after_seconds << "\n";
-  deps_.print_host_observations(view.observations, view.stale_after_seconds);
+  controller_print_service_.PrintHostObservations(
+      view.observations, view.stale_after_seconds);
   return 0;
 }
 
@@ -108,7 +158,8 @@ int ReadModelCliService::ShowNodeAvailability(
   store.Initialize();
 
   std::cout << "db: " << db_path << "\n";
-  deps_.print_node_availability_overrides(store.LoadNodeAvailabilityOverrides(node_name));
+  controller_print_service_.PrintNodeAvailabilityOverrides(
+      store.LoadNodeAvailabilityOverrides(node_name));
   return 0;
 }
 
@@ -128,7 +179,7 @@ int ReadModelCliService::ShowHostHealth(
   };
   std::cout << "db: " << view.db_path << "\n";
   std::cout << "stale_after_seconds: " << view.stale_after_seconds << "\n";
-  deps_.print_host_health(
+  controller_print_service_.PrintHostHealth(
       view.desired_state,
       view.observations,
       view.availability_overrides,
@@ -174,17 +225,13 @@ int ReadModelCliService::ShowEvents(
   if (view.category.has_value()) {
     std::cout << "category: " << *view.category << "\n";
   }
-  deps_.print_events(view.events);
+  controller_print_service_.PrintEvents(view.events);
   return 0;
 }
 
 int ReadModelCliService::ShowState(const std::string& db_path) const {
-  if (deps_.state_aggregate_loader == nullptr || deps_.scheduler_view_service == nullptr ||
-      !deps_.default_stale_after_seconds || !deps_.verification_stable_samples_required) {
-    throw std::runtime_error("read model cli state dependencies are not configured");
-  }
-  const auto view = deps_.state_aggregate_loader->LoadStateAggregateViewData(
-      db_path, deps_.default_stale_after_seconds());
+  const auto view = state_aggregate_loader_.LoadStateAggregateViewData(
+      db_path, default_stale_after_seconds_);
   if (!view.desired_state.has_value()) {
     std::cout << "state: empty\n";
     return 0;
@@ -194,46 +241,47 @@ int ReadModelCliService::ShowState(const std::string& db_path) const {
   if (view.desired_generation.has_value()) {
     std::cout << "desired generation: " << *view.desired_generation << "\n";
   }
-  deps_.print_state_summary(*view.desired_state);
-  deps_.print_disk_runtime_states(view.disk_runtime_states);
-  deps_.print_detailed_disk_state(
+  controller_print_service_.PrintStateSummary(*view.desired_state);
+  controller_print_service_.PrintDiskRuntimeStates(view.disk_runtime_states);
+  controller_print_service_.PrintDetailedDiskState(
       *view.desired_state,
       view.disk_runtime_states,
       view.observations,
       std::nullopt);
   std::cout << comet::RenderSchedulingPolicyReport(view.scheduling_report);
-  deps_.print_scheduler_decision_summary(*view.desired_state);
-  deps_.print_rollout_gate_summary(view.scheduling_report);
-  deps_.scheduler_view_service->PrintRebalanceControllerGateSummary(
+  controller_print_service_.PrintSchedulerDecisionSummary(*view.desired_state);
+  controller_print_service_.PrintRolloutGateSummary(view.scheduling_report);
+  scheduler_view_service_.PrintRebalanceControllerGateSummary(
       std::cout,
       view.controller_gate_summary);
-  deps_.scheduler_view_service->PrintRebalanceIterationBudgetSummary(
+  scheduler_view_service_.PrintRebalanceIterationBudgetSummary(
       std::cout,
       view.iteration_budget_summary);
-  deps_.scheduler_view_service->PrintRebalanceLoopStatusSummary(
+  scheduler_view_service_.PrintRebalanceLoopStatusSummary(
       std::cout,
       view.loop_status);
-  deps_.scheduler_view_service->PrintRebalancePlanEntries(
+  scheduler_view_service_.PrintRebalancePlanEntries(
       std::cout,
       view.rebalance_entries);
-  deps_.scheduler_view_service->PrintRebalancePolicySummary(
+  scheduler_view_service_.PrintRebalancePolicySummary(
       std::cout,
       view.rebalance_policy_summary);
-  deps_.scheduler_view_service->PrintSchedulerRuntimeView(
+  scheduler_view_service_.PrintSchedulerRuntimeView(
       std::cout,
       view.scheduler_runtime,
-      deps_.verification_stable_samples_required());
+      verification_stable_samples_required_);
   if (view.desired_generation.has_value()) {
-    deps_.scheduler_view_service->PrintRolloutLifecycleEntries(
+    scheduler_view_service_.PrintRolloutLifecycleEntries(
         std::cout,
         view.rollout_lifecycle);
   }
   std::cout << "\n";
-  deps_.print_node_availability_overrides(view.availability_overrides);
+  controller_print_service_.PrintNodeAvailabilityOverrides(view.availability_overrides);
   std::cout << "\n";
-  deps_.print_host_observations(view.observations, view.stale_after_seconds);
+  controller_print_service_.PrintHostObservations(
+      view.observations, view.stale_after_seconds);
   std::cout << "\n";
-  deps_.print_host_health(
+  controller_print_service_.PrintHostHealth(
       view.desired_state,
       view.observations,
       view.availability_overrides,
@@ -246,9 +294,6 @@ int ReadModelCliService::ShowDiskState(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  if (!deps_.filter_host_observations_for_plane) {
-    throw std::runtime_error("read model cli filter dependency is not configured");
-  }
   comet::ControllerStore store(db_path);
   store.Initialize();
   const auto desired_state =
@@ -265,7 +310,7 @@ int ReadModelCliService::ShowDiskState(
           ? store.LoadDiskRuntimeStates(desired_state->plane_name, node_name)
           : std::vector<comet::DiskRuntimeState>{},
       plane_name.has_value()
-          ? deps_.filter_host_observations_for_plane(
+          ? FilterHostObservationsForPlane(
                 store.LoadHostObservations(node_name),
                 *plane_name)
           : store.LoadHostObservations(node_name),
@@ -283,7 +328,7 @@ int ReadModelCliService::ShowDiskState(
   if (view.node_name.has_value()) {
     std::cout << "node_filter: " << *view.node_name << "\n";
   }
-  deps_.print_detailed_disk_state(
+  controller_print_service_.PrintDetailedDiskState(
       *view.desired_state,
       view.runtime_states,
       view.observations,

@@ -475,6 +475,1597 @@ class Statement {
   sqlite3_stmt* statement_ = nullptr;
 };
 
+class AuthRepository {
+ public:
+  explicit AuthRepository(sqlite3* db) : db_(db) {}
+
+  int LoadUserCount() const {
+    Statement statement(db_, "SELECT COUNT(*) FROM users;");
+    if (!statement.StepRow()) {
+      return 0;
+    }
+    return sqlite3_column_int(statement.raw(), 0);
+  }
+
+  std::optional<UserRecord> LoadUserById(int user_id) const {
+    Statement statement(
+        db_,
+        "SELECT id, username, role, password_hash, created_at, updated_at, last_login_at "
+        "FROM users WHERE id = ?1;");
+    statement.BindInt(1, user_id);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadUser(statement.raw());
+  }
+
+  std::optional<UserRecord> LoadUserByUsername(const std::string& username) const {
+    Statement statement(
+        db_,
+        "SELECT id, username, role, password_hash, created_at, updated_at, last_login_at "
+        "FROM users WHERE username = ?1;");
+    statement.BindText(1, username);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadUser(statement.raw());
+  }
+
+  std::vector<UserRecord> LoadUsers() const {
+    Statement statement(
+        db_,
+        "SELECT id, username, role, password_hash, created_at, updated_at, last_login_at "
+        "FROM users ORDER BY id ASC;");
+    std::vector<UserRecord> users;
+    while (statement.StepRow()) {
+      users.push_back(ReadUser(statement.raw()));
+    }
+    return users;
+  }
+
+  UserRecord CreateBootstrapAdmin(
+      const std::string& username,
+      const std::string& password_hash) {
+    Exec(db_, "BEGIN IMMEDIATE;");
+    try {
+      Statement count_statement(db_, "SELECT COUNT(*) FROM users;");
+      if (!count_statement.StepRow()) {
+        throw std::runtime_error("failed to count users");
+      }
+      if (sqlite3_column_int(count_statement.raw(), 0) != 0) {
+        throw std::runtime_error(
+            "bootstrap admin can be created only when user base is empty");
+      }
+      Statement insert_statement(
+          db_,
+          "INSERT INTO users(username, role, password_hash, updated_at) "
+          "VALUES (?1, 'admin', ?2, CURRENT_TIMESTAMP);");
+      insert_statement.BindText(1, username);
+      insert_statement.BindText(2, password_hash);
+      insert_statement.StepDone();
+      const int user_id = static_cast<int>(sqlite3_last_insert_rowid(db_));
+      Exec(db_, "COMMIT;");
+      return *LoadUserById(user_id);
+    } catch (...) {
+      Exec(db_, "ROLLBACK;");
+      throw;
+    }
+  }
+
+  UserRecord CreateInvitedUser(
+      const std::string& invite_token,
+      const std::string& username,
+      const std::string& password_hash) {
+    Exec(db_, "BEGIN IMMEDIATE;");
+    try {
+      Statement invite_statement(
+          db_,
+          "SELECT id FROM registration_invites "
+          "WHERE token = ?1 AND revoked_at = '' AND used_at = '' "
+          "AND expires_at >= CURRENT_TIMESTAMP;");
+      invite_statement.BindText(1, invite_token);
+      if (!invite_statement.StepRow()) {
+        throw std::runtime_error("invite token is missing, expired, or already used");
+      }
+      const int invite_id = sqlite3_column_int(invite_statement.raw(), 0);
+      Statement insert_statement(
+          db_,
+          "INSERT INTO users(username, role, password_hash, updated_at) "
+          "VALUES (?1, 'user', ?2, CURRENT_TIMESTAMP);");
+      insert_statement.BindText(1, username);
+      insert_statement.BindText(2, password_hash);
+      insert_statement.StepDone();
+      const int user_id = static_cast<int>(sqlite3_last_insert_rowid(db_));
+      Statement update_invite_statement(
+          db_,
+          "UPDATE registration_invites "
+          "SET used_by_user_id = ?2, used_at = CURRENT_TIMESTAMP "
+          "WHERE id = ?1;");
+      update_invite_statement.BindInt(1, invite_id);
+      update_invite_statement.BindInt(2, user_id);
+      update_invite_statement.StepDone();
+      Exec(db_, "COMMIT;");
+      return *LoadUserById(user_id);
+    } catch (...) {
+      Exec(db_, "ROLLBACK;");
+      throw;
+    }
+  }
+
+  void UpdateUserLastLoginAt(int user_id, const std::string& last_login_at) {
+    Statement statement(
+        db_,
+        "UPDATE users SET last_login_at = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?1;");
+    statement.BindInt(1, user_id);
+    statement.BindText(2, last_login_at);
+    statement.StepDone();
+  }
+
+  void InsertWebAuthnCredential(const WebAuthnCredentialRecord& credential) {
+    Statement statement(
+        db_,
+        "INSERT INTO webauthn_credentials("
+        " user_id, credential_id, public_key, counter, transports_json, updated_at"
+        ") VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP);");
+    statement.BindInt(1, credential.user_id);
+    statement.BindText(2, credential.credential_id);
+    statement.BindText(3, credential.public_key);
+    statement.BindInt(4, static_cast<int>(credential.counter));
+    statement.BindText(5, credential.transports_json);
+    statement.StepDone();
+  }
+
+  void UpdateWebAuthnCredentialCounter(
+      const std::string& credential_id,
+      std::uint32_t counter,
+      const std::string& last_used_at) {
+    Statement statement(
+        db_,
+        "UPDATE webauthn_credentials "
+        "SET counter = ?2, last_used_at = ?3, updated_at = CURRENT_TIMESTAMP "
+        "WHERE credential_id = ?1;");
+    statement.BindText(1, credential_id);
+    statement.BindInt(2, static_cast<int>(counter));
+    statement.BindText(3, last_used_at);
+    statement.StepDone();
+  }
+
+  std::vector<WebAuthnCredentialRecord> LoadWebAuthnCredentialsForUser(int user_id) const {
+    Statement statement(
+        db_,
+        "SELECT id, user_id, credential_id, public_key, counter, transports_json, "
+        "created_at, updated_at, last_used_at "
+        "FROM webauthn_credentials WHERE user_id = ?1 ORDER BY id ASC;");
+    statement.BindInt(1, user_id);
+    std::vector<WebAuthnCredentialRecord> credentials;
+    while (statement.StepRow()) {
+      credentials.push_back(ReadWebAuthnCredential(statement.raw()));
+    }
+    return credentials;
+  }
+
+  std::optional<WebAuthnCredentialRecord> LoadWebAuthnCredentialById(
+      const std::string& credential_id) const {
+    Statement statement(
+        db_,
+        "SELECT id, user_id, credential_id, public_key, counter, transports_json, "
+        "created_at, updated_at, last_used_at "
+        "FROM webauthn_credentials WHERE credential_id = ?1;");
+    statement.BindText(1, credential_id);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadWebAuthnCredential(statement.raw());
+  }
+
+  RegistrationInviteRecord CreateRegistrationInvite(
+      int created_by_user_id,
+      const std::string& token,
+      const std::string& expires_at) {
+    Statement statement(
+        db_,
+        "INSERT INTO registration_invites(token, created_by_user_id, expires_at) "
+        "VALUES (?1, ?2, ?3);");
+    statement.BindText(1, token);
+    statement.BindInt(2, created_by_user_id);
+    statement.BindText(3, expires_at);
+    statement.StepDone();
+    return *LoadRegistrationInviteByToken(token);
+  }
+
+  std::optional<RegistrationInviteRecord> LoadRegistrationInviteByToken(
+      const std::string& token) const {
+    Statement statement(
+        db_,
+        "SELECT id, token, created_by_user_id, expires_at, created_at, "
+        "used_by_user_id, used_at, revoked_at "
+        "FROM registration_invites WHERE token = ?1;");
+    statement.BindText(1, token);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadRegistrationInvite(statement.raw());
+  }
+
+  std::vector<RegistrationInviteRecord> LoadActiveRegistrationInvites() const {
+    Statement statement(
+        db_,
+        "SELECT id, token, created_by_user_id, expires_at, created_at, "
+        "used_by_user_id, used_at, revoked_at "
+        "FROM registration_invites "
+        "WHERE revoked_at = '' AND used_at = '' AND expires_at >= CURRENT_TIMESTAMP "
+        "ORDER BY created_at DESC, id DESC;");
+    std::vector<RegistrationInviteRecord> invites;
+    while (statement.StepRow()) {
+      invites.push_back(ReadRegistrationInvite(statement.raw()));
+    }
+    return invites;
+  }
+
+  bool MarkRegistrationInviteUsed(
+      const std::string& token,
+      int used_by_user_id,
+      const std::string& used_at) {
+    Statement statement(
+        db_,
+        "UPDATE registration_invites "
+        "SET used_by_user_id = ?2, used_at = ?3 "
+        "WHERE token = ?1 AND revoked_at = '' AND used_at = '' "
+        "AND expires_at >= CURRENT_TIMESTAMP;");
+    statement.BindText(1, token);
+    statement.BindInt(2, used_by_user_id);
+    statement.BindText(3, used_at);
+    statement.StepDone();
+    return sqlite3_changes(db_) > 0;
+  }
+
+  bool RevokeRegistrationInvite(
+      int invite_id,
+      const std::string& revoked_at) {
+    Statement statement(
+        db_,
+        "UPDATE registration_invites "
+        "SET revoked_at = ?2 "
+        "WHERE id = ?1 AND revoked_at = '' AND used_at = '';");
+    statement.BindInt(1, invite_id);
+    statement.BindText(2, revoked_at);
+    statement.StepDone();
+    return sqlite3_changes(db_) > 0;
+  }
+
+  void InsertUserSshKey(const UserSshKeyRecord& ssh_key) {
+    Statement statement(
+        db_,
+        "INSERT INTO user_ssh_keys(user_id, label, public_key, fingerprint) "
+        "VALUES (?1, ?2, ?3, ?4);");
+    statement.BindInt(1, ssh_key.user_id);
+    statement.BindText(2, ssh_key.label);
+    statement.BindText(3, ssh_key.public_key);
+    statement.BindText(4, ssh_key.fingerprint);
+    statement.StepDone();
+  }
+
+  std::vector<UserSshKeyRecord> LoadActiveUserSshKeys(int user_id) const {
+    Statement statement(
+        db_,
+        "SELECT id, user_id, label, public_key, fingerprint, created_at, "
+        "revoked_at, last_used_at "
+        "FROM user_ssh_keys WHERE user_id = ?1 AND revoked_at = '' ORDER BY id ASC;");
+    statement.BindInt(1, user_id);
+    std::vector<UserSshKeyRecord> ssh_keys;
+    while (statement.StepRow()) {
+      ssh_keys.push_back(ReadUserSshKey(statement.raw()));
+    }
+    return ssh_keys;
+  }
+
+  std::optional<UserSshKeyRecord> LoadActiveUserSshKeyByFingerprint(
+      int user_id,
+      const std::string& fingerprint) const {
+    Statement statement(
+        db_,
+        "SELECT id, user_id, label, public_key, fingerprint, created_at, "
+        "revoked_at, last_used_at "
+        "FROM user_ssh_keys WHERE user_id = ?1 AND fingerprint = ?2 AND revoked_at = '';");
+    statement.BindInt(1, user_id);
+    statement.BindText(2, fingerprint);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadUserSshKey(statement.raw());
+  }
+
+  std::optional<UserSshKeyRecord> LoadActiveUserSshKeyById(int ssh_key_id) const {
+    Statement statement(
+        db_,
+        "SELECT id, user_id, label, public_key, fingerprint, created_at, "
+        "revoked_at, last_used_at "
+        "FROM user_ssh_keys WHERE id = ?1 AND revoked_at = '';");
+    statement.BindInt(1, ssh_key_id);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadUserSshKey(statement.raw());
+  }
+
+  bool RevokeUserSshKey(int ssh_key_id, const std::string& revoked_at) {
+    Statement statement(
+        db_,
+        "UPDATE user_ssh_keys SET revoked_at = ?2 WHERE id = ?1 AND revoked_at = '';");
+    statement.BindInt(1, ssh_key_id);
+    statement.BindText(2, revoked_at);
+    statement.StepDone();
+    return sqlite3_changes(db_) > 0;
+  }
+
+  void TouchUserSshKey(int ssh_key_id, const std::string& last_used_at) {
+    Statement statement(
+        db_,
+        "UPDATE user_ssh_keys SET last_used_at = ?2 WHERE id = ?1;");
+    statement.BindInt(1, ssh_key_id);
+    statement.BindText(2, last_used_at);
+    statement.StepDone();
+  }
+
+  void InsertAuthSession(const AuthSessionRecord& session) {
+    Statement statement(
+        db_,
+        "INSERT INTO auth_sessions(token, user_id, session_kind, plane_name, "
+        "expires_at, last_used_at) "
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6);");
+    statement.BindText(1, session.token);
+    statement.BindInt(2, session.user_id);
+    statement.BindText(3, session.session_kind);
+    statement.BindText(4, session.plane_name);
+    statement.BindText(5, session.expires_at);
+    statement.BindText(6, session.last_used_at);
+    statement.StepDone();
+  }
+
+  std::optional<AuthSessionRecord> LoadActiveAuthSession(
+      const std::string& token,
+      const std::optional<std::string>& session_kind,
+      const std::optional<std::string>& plane_name) const {
+    std::string sql =
+        "SELECT token, user_id, session_kind, plane_name, expires_at, created_at, "
+        "revoked_at, last_used_at "
+        "FROM auth_sessions WHERE token = ?1 AND revoked_at = '' "
+        "AND expires_at >= CURRENT_TIMESTAMP";
+    if (session_kind.has_value()) {
+      sql += " AND session_kind = ?2";
+    }
+    if (plane_name.has_value()) {
+      sql += session_kind.has_value() ? " AND plane_name = ?3" : " AND plane_name = ?2";
+    }
+    sql += ";";
+    Statement statement(db_, sql);
+    statement.BindText(1, token);
+    int next_index = 2;
+    if (session_kind.has_value()) {
+      statement.BindText(next_index++, *session_kind);
+    }
+    if (plane_name.has_value()) {
+      statement.BindText(next_index++, *plane_name);
+    }
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadAuthSession(statement.raw());
+  }
+
+  bool RevokeAuthSession(const std::string& token, const std::string& revoked_at) {
+    Statement statement(
+        db_,
+        "UPDATE auth_sessions SET revoked_at = ?2 WHERE token = ?1 AND revoked_at = '';");
+    statement.BindText(1, token);
+    statement.BindText(2, revoked_at);
+    statement.StepDone();
+    return sqlite3_changes(db_) > 0;
+  }
+
+  bool TouchAuthSession(const std::string& token, const std::string& last_used_at) {
+    Statement statement(
+        db_,
+        "UPDATE auth_sessions SET last_used_at = ?2 WHERE token = ?1;");
+    statement.BindText(1, token);
+    statement.BindText(2, last_used_at);
+    statement.StepDone();
+    return sqlite3_changes(db_) > 0;
+  }
+
+ private:
+  static UserRecord ReadUser(sqlite3_stmt* statement) {
+    return UserRecord{
+        sqlite3_column_int(statement, 0),
+        ToColumnText(statement, 1),
+        ToColumnText(statement, 2),
+        ToColumnText(statement, 3),
+        ToColumnText(statement, 4),
+        ToColumnText(statement, 5),
+        ToColumnText(statement, 6),
+    };
+  }
+
+  static WebAuthnCredentialRecord ReadWebAuthnCredential(sqlite3_stmt* statement) {
+    return WebAuthnCredentialRecord{
+        sqlite3_column_int(statement, 0),
+        sqlite3_column_int(statement, 1),
+        ToColumnText(statement, 2),
+        ToColumnText(statement, 3),
+        static_cast<std::uint32_t>(sqlite3_column_int(statement, 4)),
+        ToColumnText(statement, 5),
+        ToColumnText(statement, 6),
+        ToColumnText(statement, 7),
+        ToColumnText(statement, 8),
+    };
+  }
+
+  static RegistrationInviteRecord ReadRegistrationInvite(sqlite3_stmt* statement) {
+    return RegistrationInviteRecord{
+        sqlite3_column_int(statement, 0),
+        ToColumnText(statement, 1),
+        sqlite3_column_int(statement, 2),
+        ToColumnText(statement, 3),
+        ToColumnText(statement, 4),
+        ToOptionalColumnInt(statement, 5),
+        ToColumnText(statement, 6),
+        ToColumnText(statement, 7),
+    };
+  }
+
+  static UserSshKeyRecord ReadUserSshKey(sqlite3_stmt* statement) {
+    return UserSshKeyRecord{
+        sqlite3_column_int(statement, 0),
+        sqlite3_column_int(statement, 1),
+        ToColumnText(statement, 2),
+        ToColumnText(statement, 3),
+        ToColumnText(statement, 4),
+        ToColumnText(statement, 5),
+        ToColumnText(statement, 6),
+        ToColumnText(statement, 7),
+    };
+  }
+
+  static AuthSessionRecord ReadAuthSession(sqlite3_stmt* statement) {
+    return AuthSessionRecord{
+        ToColumnText(statement, 0),
+        sqlite3_column_int(statement, 1),
+        ToColumnText(statement, 2),
+        ToColumnText(statement, 3),
+        ToColumnText(statement, 4),
+        ToColumnText(statement, 5),
+        ToColumnText(statement, 6),
+        ToColumnText(statement, 7),
+    };
+  }
+
+  sqlite3* db_;
+};
+
+class EventRepository {
+ public:
+  explicit EventRepository(sqlite3* db) : db_(db) {}
+
+  void AppendEvent(const EventRecord& event) {
+    Statement statement(
+        db_,
+        "INSERT INTO event_log("
+        "plane_name, node_name, worker_name, assignment_id, rollout_action_id, "
+        "category, event_type, severity, message, payload_json"
+        ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);");
+    statement.BindText(1, event.plane_name);
+    statement.BindText(2, event.node_name);
+    statement.BindText(3, event.worker_name);
+    statement.BindOptionalInt(4, event.assignment_id);
+    statement.BindOptionalInt(5, event.rollout_action_id);
+    statement.BindText(6, event.category);
+    statement.BindText(7, event.event_type);
+    statement.BindText(8, event.severity);
+    statement.BindText(9, event.message);
+    statement.BindText(10, event.payload_json);
+    statement.StepDone();
+  }
+
+  std::vector<EventRecord> LoadEvents(
+      const std::optional<std::string>& plane_name,
+      const std::optional<std::string>& node_name,
+      const std::optional<std::string>& worker_name,
+      const std::optional<std::string>& category,
+      int limit,
+      const std::optional<int>& since_id,
+      bool ascending) const {
+    std::vector<std::string> clauses;
+    if (plane_name.has_value()) {
+      clauses.push_back("plane_name = ?" + std::to_string(clauses.size() + 1));
+    }
+    if (node_name.has_value()) {
+      clauses.push_back("node_name = ?" + std::to_string(clauses.size() + 1));
+    }
+    if (worker_name.has_value()) {
+      clauses.push_back("worker_name = ?" + std::to_string(clauses.size() + 1));
+    }
+    if (category.has_value()) {
+      clauses.push_back("category = ?" + std::to_string(clauses.size() + 1));
+    }
+    if (since_id.has_value()) {
+      clauses.push_back("id > ?" + std::to_string(clauses.size() + 1));
+    }
+
+    std::string sql =
+        "SELECT id, plane_name, node_name, worker_name, assignment_id, rollout_action_id, "
+        "category, event_type, severity, message, payload_json, created_at "
+        "FROM event_log";
+    if (!clauses.empty()) {
+      sql += " WHERE ";
+      for (std::size_t index = 0; index < clauses.size(); ++index) {
+        if (index > 0) {
+          sql += " AND ";
+        }
+        sql += clauses[index];
+      }
+    }
+    sql += std::string(" ORDER BY id ") + (ascending ? "ASC" : "DESC") +
+           " LIMIT ?" + std::to_string(clauses.size() + 1) + ";";
+
+    Statement statement(db_, sql);
+    int bind_index = 1;
+    if (plane_name.has_value()) {
+      statement.BindText(bind_index++, *plane_name);
+    }
+    if (node_name.has_value()) {
+      statement.BindText(bind_index++, *node_name);
+    }
+    if (worker_name.has_value()) {
+      statement.BindText(bind_index++, *worker_name);
+    }
+    if (category.has_value()) {
+      statement.BindText(bind_index++, *category);
+    }
+    if (since_id.has_value()) {
+      statement.BindInt(bind_index++, *since_id);
+    }
+    statement.BindInt(bind_index, limit > 0 ? limit : 100);
+
+    std::vector<EventRecord> events;
+    while (statement.StepRow()) {
+      events.push_back(ReadEvent(statement.raw()));
+    }
+    return events;
+  }
+
+ private:
+  static EventRecord ReadEvent(sqlite3_stmt* statement) {
+    return EventRecord{
+        sqlite3_column_int(statement, 0),
+        ToColumnText(statement, 1),
+        ToColumnText(statement, 2),
+        ToColumnText(statement, 3),
+        ToOptionalColumnInt(statement, 4),
+        ToOptionalColumnInt(statement, 5),
+        ToColumnText(statement, 6),
+        ToColumnText(statement, 7),
+        ToColumnText(statement, 8),
+        ToColumnText(statement, 9),
+        ToColumnText(statement, 10),
+        ToColumnText(statement, 11),
+    };
+  }
+
+  sqlite3* db_;
+};
+
+class ObservationRepository {
+ public:
+  explicit ObservationRepository(sqlite3* db) : db_(db) {}
+
+  void UpsertHostObservation(const HostObservation& observation) {
+    Statement statement(
+        db_,
+        "INSERT INTO host_observations("
+        "node_name, plane_name, applied_generation, last_assignment_id, status, "
+        "status_message, observed_state_json, runtime_status_json, "
+        "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, "
+        "network_telemetry_json, cpu_telemetry_json, heartbeat_at, updated_at"
+        ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(node_name) DO UPDATE SET "
+        "plane_name = excluded.plane_name, "
+        "applied_generation = excluded.applied_generation, "
+        "last_assignment_id = excluded.last_assignment_id, "
+        "status = excluded.status, "
+        "status_message = excluded.status_message, "
+        "observed_state_json = excluded.observed_state_json, "
+        "runtime_status_json = excluded.runtime_status_json, "
+        "instance_runtime_json = excluded.instance_runtime_json, "
+        "gpu_telemetry_json = excluded.gpu_telemetry_json, "
+        "disk_telemetry_json = excluded.disk_telemetry_json, "
+        "network_telemetry_json = excluded.network_telemetry_json, "
+        "cpu_telemetry_json = excluded.cpu_telemetry_json, "
+        "heartbeat_at = CURRENT_TIMESTAMP, "
+        "updated_at = CURRENT_TIMESTAMP;");
+    statement.BindText(1, observation.node_name);
+    statement.BindText(2, observation.plane_name);
+    statement.BindOptionalInt(3, observation.applied_generation);
+    statement.BindOptionalInt(4, observation.last_assignment_id);
+    statement.BindText(5, ToString(observation.status));
+    statement.BindText(6, observation.status_message);
+    statement.BindText(7, observation.observed_state_json);
+    statement.BindText(8, observation.runtime_status_json);
+    statement.BindText(9, observation.instance_runtime_json);
+    statement.BindText(10, observation.gpu_telemetry_json);
+    statement.BindText(11, observation.disk_telemetry_json);
+    statement.BindText(12, observation.network_telemetry_json);
+    statement.BindText(13, observation.cpu_telemetry_json);
+    statement.StepDone();
+  }
+
+  std::optional<HostObservation> LoadHostObservation(const std::string& node_name) const {
+    Statement statement(
+        db_,
+        "SELECT node_name, plane_name, applied_generation, last_assignment_id, status, "
+        "status_message, observed_state_json, runtime_status_json, "
+        "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, network_telemetry_json, cpu_telemetry_json, heartbeat_at "
+        "FROM host_observations WHERE node_name = ?1;");
+    statement.BindText(1, node_name);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadHostObservation(statement.raw());
+  }
+
+  std::vector<HostObservation> LoadHostObservations(
+      const std::optional<std::string>& node_name,
+      const std::optional<std::string>& plane_name) const {
+    std::vector<HostObservation> observations;
+
+    std::string sql =
+        "SELECT node_name, plane_name, applied_generation, last_assignment_id, status, "
+        "status_message, observed_state_json, runtime_status_json, "
+        "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, network_telemetry_json, cpu_telemetry_json, heartbeat_at "
+        "FROM host_observations";
+    int bind_index = 1;
+    bool has_where = false;
+    if (node_name.has_value()) {
+      sql += " WHERE node_name = ?" + std::to_string(bind_index++);
+      has_where = true;
+    }
+    if (plane_name.has_value()) {
+      sql += has_where ? " AND " : " WHERE ";
+      sql += "plane_name = ?" + std::to_string(bind_index++);
+    }
+    sql += " ORDER BY node_name ASC;";
+
+    Statement statement(db_, sql);
+    bind_index = 1;
+    if (node_name.has_value()) {
+      statement.BindText(bind_index++, *node_name);
+    }
+    if (plane_name.has_value()) {
+      statement.BindText(bind_index++, *plane_name);
+    }
+
+    while (statement.StepRow()) {
+      observations.push_back(ReadHostObservation(statement.raw()));
+    }
+    return observations;
+  }
+
+ private:
+  static HostObservation ReadHostObservation(sqlite3_stmt* statement) {
+    HostObservation observation;
+    observation.node_name = ToColumnText(statement, 0);
+    observation.plane_name = ToColumnText(statement, 1);
+    observation.applied_generation = ToOptionalColumnInt(statement, 2);
+    observation.last_assignment_id = ToOptionalColumnInt(statement, 3);
+    observation.status = ParseHostObservationStatus(ToColumnText(statement, 4));
+    observation.status_message = ToColumnText(statement, 5);
+    observation.observed_state_json = ToColumnText(statement, 6);
+    observation.runtime_status_json = ToColumnText(statement, 7);
+    observation.instance_runtime_json = ToColumnText(statement, 8);
+    observation.gpu_telemetry_json = ToColumnText(statement, 9);
+    observation.disk_telemetry_json = ToColumnText(statement, 10);
+    observation.network_telemetry_json = ToColumnText(statement, 11);
+    observation.cpu_telemetry_json = ToColumnText(statement, 12);
+    observation.heartbeat_at = ToColumnText(statement, 13);
+    return observation;
+  }
+
+  sqlite3* db_;
+};
+
+class AssignmentRepository {
+ public:
+  explicit AssignmentRepository(sqlite3* db) : db_(db) {}
+
+  void ReplaceHostAssignments(const std::vector<HostAssignment>& assignments) {
+    Exec(db_, "BEGIN IMMEDIATE TRANSACTION;");
+
+    try {
+      if (!assignments.empty()) {
+        Statement supersede_statement(
+            db_,
+            "UPDATE host_assignments "
+            "SET status = 'superseded', "
+            "status_message = ?2, "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE plane_name = ?1 AND status IN ('pending', 'claimed');");
+        supersede_statement.BindText(1, assignments.front().plane_name);
+        supersede_statement.BindText(
+            2,
+            "superseded by desired generation " +
+                std::to_string(assignments.front().desired_generation));
+        supersede_statement.StepDone();
+      }
+
+      for (const auto& assignment : assignments) {
+        InsertAssignment(assignment);
+      }
+
+      Exec(db_, "COMMIT;");
+    } catch (...) {
+      Exec(db_, "ROLLBACK;");
+      throw;
+    }
+  }
+
+  void EnqueueHostAssignments(
+      const std::vector<HostAssignment>& assignments,
+      const std::string& supersede_reason) {
+    if (assignments.empty()) {
+      return;
+    }
+
+    Exec(db_, "BEGIN IMMEDIATE TRANSACTION;");
+
+    try {
+      for (const auto& assignment : assignments) {
+        Statement supersede_statement(
+            db_,
+            "UPDATE host_assignments "
+            "SET status = 'superseded', "
+            "status_message = ?3, "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE plane_name = ?1 AND node_name = ?2 AND status IN ('pending', 'claimed');");
+        supersede_statement.BindText(1, assignment.plane_name);
+        supersede_statement.BindText(2, assignment.node_name);
+        supersede_statement.BindText(
+            3,
+            supersede_reason.empty()
+                ? "superseded by manual resync for desired generation " +
+                      std::to_string(assignment.desired_generation)
+                : supersede_reason);
+        supersede_statement.StepDone();
+
+        InsertAssignment(assignment);
+      }
+
+      Exec(db_, "COMMIT;");
+    } catch (...) {
+      Exec(db_, "ROLLBACK;");
+      throw;
+    }
+  }
+
+  std::optional<HostAssignment> LoadHostAssignment(int assignment_id) const {
+    Statement statement(
+        db_,
+        "SELECT id, node_name, plane_name, desired_generation, attempt_count, max_attempts, "
+        "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json "
+        "FROM host_assignments WHERE id = ?1;");
+    statement.BindInt(1, assignment_id);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadHostAssignment(statement.raw());
+  }
+
+  std::vector<HostAssignment> LoadHostAssignments(
+      const std::optional<std::string>& node_name,
+      const std::optional<HostAssignmentStatus>& status,
+      const std::optional<std::string>& plane_name) const {
+    std::vector<HostAssignment> assignments;
+
+    const bool has_node = node_name.has_value();
+    const bool has_status = status.has_value();
+    const bool has_plane = plane_name.has_value();
+
+    std::string sql =
+        "SELECT id, node_name, plane_name, desired_generation, attempt_count, max_attempts, "
+        "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json "
+        "FROM host_assignments";
+    int bind_index = 1;
+    if (has_node || has_status || has_plane) {
+      sql += " WHERE ";
+      if (has_node) {
+        sql += "node_name = ?" + std::to_string(bind_index++);
+      }
+      if (has_node && (has_status || has_plane)) {
+        sql += " AND ";
+      }
+      if (has_status) {
+        sql += "status = ?" + std::to_string(bind_index++);
+      }
+      if (has_plane) {
+        if (has_node || has_status) {
+          sql += " AND ";
+        }
+        sql += "plane_name = ?" + std::to_string(bind_index++);
+      }
+    }
+    sql += " ORDER BY id ASC;";
+
+    Statement statement(db_, sql);
+    bind_index = 1;
+    if (has_node) {
+      statement.BindText(bind_index++, *node_name);
+    }
+    if (has_status) {
+      statement.BindText(bind_index++, ToString(*status));
+    }
+    if (has_plane) {
+      statement.BindText(bind_index++, *plane_name);
+    }
+
+    while (statement.StepRow()) {
+      assignments.push_back(ReadHostAssignment(statement.raw()));
+    }
+    return assignments;
+  }
+
+  std::optional<HostAssignment> ClaimNextHostAssignment(const std::string& node_name) {
+    Exec(db_, "BEGIN IMMEDIATE TRANSACTION;");
+
+    try {
+      std::optional<HostAssignment> assignment;
+      {
+        Statement statement(
+            db_,
+            "SELECT id, node_name, plane_name, desired_generation, attempt_count, max_attempts, "
+            "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json "
+            "FROM host_assignments "
+            "WHERE node_name = ?1 AND status = 'pending' AND attempt_count < max_attempts "
+            "ORDER BY id ASC LIMIT 1;");
+        statement.BindText(1, node_name);
+        if (statement.StepRow()) {
+          assignment = ReadHostAssignment(statement.raw());
+        }
+      }
+
+      if (!assignment.has_value()) {
+        Exec(db_, "COMMIT;");
+        return std::nullopt;
+      }
+
+      {
+        Statement statement(
+            db_,
+            "UPDATE host_assignments "
+            "SET status = 'claimed', "
+            "status_message = '', "
+            "progress_json = '{\"phase\":\"queued\",\"title\":\"Assignment claimed\",\"detail\":\"Hostd accepted the assignment and is starting work.\",\"percent\":5}', "
+            "attempt_count = attempt_count + 1, "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?1 AND status = 'pending';");
+        statement.BindInt(1, assignment->id);
+        statement.StepDone();
+      }
+
+      Exec(db_, "COMMIT;");
+      assignment->status = HostAssignmentStatus::Claimed;
+      assignment->attempt_count += 1;
+      assignment->progress_json =
+          "{\"phase\":\"queued\",\"title\":\"Assignment claimed\",\"detail\":"
+          "\"Hostd accepted the assignment and is starting work.\",\"percent\":5}";
+      return assignment;
+    } catch (...) {
+      Exec(db_, "ROLLBACK;");
+      throw;
+    }
+  }
+
+  bool UpdateHostAssignmentProgress(int assignment_id, const std::string& progress_json) {
+    Statement statement(
+        db_,
+        "UPDATE host_assignments "
+        "SET progress_json = ?2, updated_at = CURRENT_TIMESTAMP "
+        "WHERE id = ?1 AND status = 'claimed';");
+    statement.BindInt(1, assignment_id);
+    statement.BindText(2, progress_json.empty() ? "{}" : progress_json);
+    statement.StepDone();
+    return sqlite3_changes(db_) > 0;
+  }
+
+  bool TransitionClaimedHostAssignment(
+      int assignment_id,
+      HostAssignmentStatus status,
+      const std::string& status_message) {
+    Statement statement(
+        db_,
+        "UPDATE host_assignments "
+        "SET status = ?2, status_message = ?3, updated_at = CURRENT_TIMESTAMP "
+        "WHERE id = ?1 AND status = 'claimed';");
+    statement.BindInt(1, assignment_id);
+    statement.BindText(2, ToString(status));
+    statement.BindText(3, status_message);
+    statement.StepDone();
+    return sqlite3_changes(db_) > 0;
+  }
+
+  bool RetryFailedHostAssignment(int assignment_id, const std::string& status_message) {
+    Statement statement(
+        db_,
+        "UPDATE host_assignments "
+        "SET status = 'pending', "
+        "status_message = ?2, "
+        "max_attempts = CASE "
+        "  WHEN max_attempts < attempt_count + 1 THEN attempt_count + 1 "
+        "  ELSE max_attempts "
+        "END, "
+        "updated_at = CURRENT_TIMESTAMP "
+        "WHERE id = ?1 AND status = 'failed';");
+    statement.BindInt(1, assignment_id);
+    statement.BindText(2, status_message);
+    statement.StepDone();
+    return sqlite3_changes(db_) > 0;
+  }
+
+  void UpdateHostAssignmentStatus(
+      int assignment_id,
+      HostAssignmentStatus status,
+      const std::string& status_message) {
+    Statement statement(
+        db_,
+        "UPDATE host_assignments "
+        "SET status = ?2, status_message = ?3, updated_at = CURRENT_TIMESTAMP "
+        "WHERE id = ?1;");
+    statement.BindInt(1, assignment_id);
+    statement.BindText(2, ToString(status));
+    statement.BindText(3, status_message);
+    statement.StepDone();
+  }
+
+ private:
+  void InsertAssignment(const HostAssignment& assignment) {
+    Statement statement(
+        db_,
+        "INSERT INTO host_assignments("
+        "node_name, plane_name, desired_generation, attempt_count, max_attempts, "
+        "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json, "
+        "updated_at"
+        ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP);");
+    statement.BindText(1, assignment.node_name);
+    statement.BindText(2, assignment.plane_name);
+    statement.BindInt(3, assignment.desired_generation);
+    statement.BindInt(4, assignment.attempt_count);
+    statement.BindInt(5, assignment.max_attempts);
+    statement.BindText(6, assignment.assignment_type);
+    statement.BindText(7, assignment.desired_state_json);
+    statement.BindText(8, assignment.artifacts_root);
+    statement.BindText(9, ToString(assignment.status));
+    statement.BindText(10, assignment.status_message);
+    statement.BindText(11, assignment.progress_json.empty() ? "{}" : assignment.progress_json);
+    statement.StepDone();
+  }
+
+  static HostAssignment ReadHostAssignment(sqlite3_stmt* statement) {
+    HostAssignment assignment;
+    assignment.id = sqlite3_column_int(statement, 0);
+    assignment.node_name = ToColumnText(statement, 1);
+    assignment.plane_name = ToColumnText(statement, 2);
+    assignment.desired_generation = sqlite3_column_int(statement, 3);
+    assignment.attempt_count = sqlite3_column_int(statement, 4);
+    assignment.max_attempts = sqlite3_column_int(statement, 5);
+    assignment.assignment_type = ToColumnText(statement, 6);
+    assignment.desired_state_json = ToColumnText(statement, 7);
+    assignment.artifacts_root = ToColumnText(statement, 8);
+    assignment.status = ParseHostAssignmentStatus(ToColumnText(statement, 9));
+    assignment.status_message = ToColumnText(statement, 10);
+    assignment.progress_json = ToColumnText(statement, 11);
+    return assignment;
+  }
+
+  sqlite3* db_;
+};
+
+std::vector<std::string> DeserializeStringArray(const std::string& json_text);
+std::string SerializeStringArray(const std::vector<std::string>& values);
+
+class SchedulerRepository {
+ public:
+  explicit SchedulerRepository(sqlite3* db) : db_(db) {}
+
+  void ReplaceRolloutActions(
+      const std::string& plane_name,
+      int desired_generation,
+      const std::vector<SchedulerRolloutAction>& actions) {
+    Exec(db_, "BEGIN IMMEDIATE TRANSACTION;");
+    try {
+      {
+        Statement delete_statement(
+            db_,
+            "DELETE FROM rollout_actions WHERE plane_name = ?1;");
+        delete_statement.BindText(1, plane_name);
+        delete_statement.StepDone();
+      }
+
+      for (const auto& action : actions) {
+        Statement insert_statement(
+            db_,
+            "INSERT INTO rollout_actions("
+            "plane_name, desired_generation, step, worker_name, action, target_node_name, "
+            "target_gpu_device, victim_worker_names_json, reason, status, status_message, "
+            "created_at, updated_at"
+            ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);");
+        insert_statement.BindText(1, plane_name);
+        insert_statement.BindInt(2, desired_generation);
+        insert_statement.BindInt(3, action.step);
+        insert_statement.BindText(4, action.worker_name);
+        insert_statement.BindText(5, action.action);
+        insert_statement.BindText(6, action.target_node_name);
+        insert_statement.BindText(7, action.target_gpu_device);
+        insert_statement.BindText(8, SerializeStringArray(action.victim_worker_names));
+        insert_statement.BindText(9, action.reason);
+        insert_statement.BindText(10, ToString(RolloutActionStatus::Pending));
+        insert_statement.BindText(11, "");
+        insert_statement.StepDone();
+      }
+
+      Exec(db_, "COMMIT;");
+    } catch (...) {
+      Exec(db_, "ROLLBACK;");
+      throw;
+    }
+  }
+
+  std::vector<RolloutActionRecord> LoadRolloutActions(
+      const std::optional<std::string>& plane_name,
+      const std::optional<std::string>& target_node_name,
+      const std::optional<RolloutActionStatus>& status) const {
+    std::string sql =
+        "SELECT id, plane_name, desired_generation, step, worker_name, action, target_node_name, "
+        "target_gpu_device, victim_worker_names_json, reason, status, status_message "
+        "FROM rollout_actions";
+    int bind_index = 1;
+    bool has_where = false;
+    if (plane_name.has_value()) {
+      sql += " WHERE plane_name = ?" + std::to_string(bind_index++);
+      has_where = true;
+    }
+    if (target_node_name.has_value()) {
+      sql += has_where ? " AND " : " WHERE ";
+      sql += "target_node_name = ?" + std::to_string(bind_index++);
+      has_where = true;
+    }
+    if (status.has_value()) {
+      sql += has_where ? " AND " : " WHERE ";
+      sql += "status = ?" + std::to_string(bind_index++);
+    }
+    sql += " ORDER BY plane_name ASC, desired_generation ASC, step ASC, id ASC;";
+
+    Statement statement(db_, sql);
+    bind_index = 1;
+    if (plane_name.has_value()) {
+      statement.BindText(bind_index++, *plane_name);
+    }
+    if (target_node_name.has_value()) {
+      statement.BindText(bind_index++, *target_node_name);
+    }
+    if (status.has_value()) {
+      statement.BindText(bind_index++, ToString(*status));
+    }
+
+    std::vector<RolloutActionRecord> actions;
+    while (statement.StepRow()) {
+      actions.push_back(ReadRolloutAction(statement.raw()));
+    }
+    return actions;
+  }
+
+  bool UpdateRolloutActionStatus(
+      int action_id,
+      RolloutActionStatus status,
+      const std::string& status_message) {
+    Statement statement(
+        db_,
+        "UPDATE rollout_actions "
+        "SET status = ?2, status_message = ?3, updated_at = CURRENT_TIMESTAMP "
+        "WHERE id = ?1;");
+    statement.BindInt(1, action_id);
+    statement.BindText(2, ToString(status));
+    statement.BindText(3, status_message);
+    statement.StepDone();
+    return sqlite3_changes(db_) == 1;
+  }
+
+  void UpsertSchedulerPlaneRuntime(const SchedulerPlaneRuntime& runtime) {
+    Statement statement(
+        db_,
+        "INSERT INTO scheduler_plane_runtime("
+        "plane_name, active_action, active_worker_name, phase, action_generation, "
+        "stable_samples, rollback_attempt_count, source_node_name, source_gpu_device, "
+        "target_node_name, target_gpu_device, previous_state_json, status_message, "
+        "started_at, updated_at"
+        ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, "
+        "COALESCE(NULLIF(?14, ''), CURRENT_TIMESTAMP), CURRENT_TIMESTAMP) "
+        "ON CONFLICT(plane_name) DO UPDATE SET "
+        "active_action = excluded.active_action, "
+        "active_worker_name = excluded.active_worker_name, "
+        "phase = excluded.phase, "
+        "action_generation = excluded.action_generation, "
+        "stable_samples = excluded.stable_samples, "
+        "rollback_attempt_count = excluded.rollback_attempt_count, "
+        "source_node_name = excluded.source_node_name, "
+        "source_gpu_device = excluded.source_gpu_device, "
+        "target_node_name = excluded.target_node_name, "
+        "target_gpu_device = excluded.target_gpu_device, "
+        "previous_state_json = excluded.previous_state_json, "
+        "status_message = excluded.status_message, "
+        "started_at = COALESCE(NULLIF(excluded.started_at, ''), scheduler_plane_runtime.started_at, CURRENT_TIMESTAMP), "
+        "updated_at = CURRENT_TIMESTAMP;");
+    statement.BindText(1, runtime.plane_name);
+    statement.BindText(2, runtime.active_action);
+    statement.BindText(3, runtime.active_worker_name);
+    statement.BindText(4, runtime.phase);
+    statement.BindInt(5, runtime.action_generation);
+    statement.BindInt(6, runtime.stable_samples);
+    statement.BindInt(7, runtime.rollback_attempt_count);
+    statement.BindText(8, runtime.source_node_name);
+    statement.BindText(9, runtime.source_gpu_device);
+    statement.BindText(10, runtime.target_node_name);
+    statement.BindText(11, runtime.target_gpu_device);
+    statement.BindText(12, runtime.previous_state_json);
+    statement.BindText(13, runtime.status_message);
+    statement.BindText(14, runtime.started_at);
+    statement.StepDone();
+  }
+
+  std::optional<SchedulerPlaneRuntime> LoadSchedulerPlaneRuntime(
+      const std::string& plane_name) const {
+    Statement statement(
+        db_,
+        "SELECT plane_name, active_action, active_worker_name, phase, action_generation, "
+        "stable_samples, rollback_attempt_count, source_node_name, source_gpu_device, "
+        "target_node_name, target_gpu_device, previous_state_json, status_message, "
+        "started_at, updated_at "
+        "FROM scheduler_plane_runtime WHERE plane_name = ?1;");
+    statement.BindText(1, plane_name);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadSchedulerPlaneRuntime(statement.raw());
+  }
+
+  void ClearSchedulerPlaneRuntime(const std::string& plane_name) {
+    Statement statement(
+        db_,
+        "DELETE FROM scheduler_plane_runtime WHERE plane_name = ?1;");
+    statement.BindText(1, plane_name);
+    statement.StepDone();
+  }
+
+  void UpsertSchedulerWorkerRuntime(const SchedulerWorkerRuntime& runtime) {
+    Statement statement(
+        db_,
+        "INSERT INTO scheduler_worker_runtime("
+        "worker_name, plane_name, last_move_at, last_eviction_at, "
+        "last_verified_generation, last_scheduler_phase, last_status_message, "
+        "manual_intervention_required, updated_at"
+        ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(worker_name) DO UPDATE SET "
+        "plane_name = excluded.plane_name, "
+        "last_move_at = excluded.last_move_at, "
+        "last_eviction_at = excluded.last_eviction_at, "
+        "last_verified_generation = excluded.last_verified_generation, "
+        "last_scheduler_phase = excluded.last_scheduler_phase, "
+        "last_status_message = excluded.last_status_message, "
+        "manual_intervention_required = excluded.manual_intervention_required, "
+        "updated_at = CURRENT_TIMESTAMP;");
+    statement.BindText(1, runtime.worker_name);
+    statement.BindText(2, runtime.plane_name);
+    statement.BindText(3, runtime.last_move_at);
+    statement.BindText(4, runtime.last_eviction_at);
+    statement.BindOptionalInt(5, runtime.last_verified_generation);
+    statement.BindText(6, runtime.last_scheduler_phase);
+    statement.BindText(7, runtime.last_status_message);
+    statement.BindInt(8, runtime.manual_intervention_required ? 1 : 0);
+    statement.StepDone();
+  }
+
+  std::optional<SchedulerWorkerRuntime> LoadSchedulerWorkerRuntime(
+      const std::string& worker_name) const {
+    Statement statement(
+        db_,
+        "SELECT worker_name, plane_name, last_move_at, last_eviction_at, "
+        "last_verified_generation, last_scheduler_phase, last_status_message, "
+        "manual_intervention_required, updated_at "
+        "FROM scheduler_worker_runtime WHERE worker_name = ?1;");
+    statement.BindText(1, worker_name);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadSchedulerWorkerRuntime(statement.raw());
+  }
+
+  std::vector<SchedulerWorkerRuntime> LoadSchedulerWorkerRuntimes(
+      const std::optional<std::string>& plane_name) const {
+    std::string sql =
+        "SELECT worker_name, plane_name, last_move_at, last_eviction_at, "
+        "last_verified_generation, last_scheduler_phase, last_status_message, "
+        "manual_intervention_required, updated_at "
+        "FROM scheduler_worker_runtime";
+    if (plane_name.has_value()) {
+      sql += " WHERE plane_name = ?1";
+    }
+    sql += " ORDER BY worker_name ASC;";
+    Statement statement(db_, sql);
+    if (plane_name.has_value()) {
+      statement.BindText(1, *plane_name);
+    }
+    std::vector<SchedulerWorkerRuntime> runtimes;
+    while (statement.StepRow()) {
+      runtimes.push_back(ReadSchedulerWorkerRuntime(statement.raw()));
+    }
+    return runtimes;
+  }
+
+  void UpsertSchedulerNodeRuntime(const SchedulerNodeRuntime& runtime) {
+    Statement statement(
+        db_,
+        "INSERT INTO scheduler_node_runtime("
+        "node_name, plane_name, last_move_at, last_verified_generation, updated_at"
+        ") VALUES(?1, ?2, ?3, ?4, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(node_name) DO UPDATE SET "
+        "plane_name = excluded.plane_name, "
+        "last_move_at = excluded.last_move_at, "
+        "last_verified_generation = excluded.last_verified_generation, "
+        "updated_at = CURRENT_TIMESTAMP;");
+    statement.BindText(1, runtime.node_name);
+    statement.BindText(2, runtime.plane_name);
+    statement.BindText(3, runtime.last_move_at);
+    statement.BindOptionalInt(4, runtime.last_verified_generation);
+    statement.StepDone();
+  }
+
+  std::optional<SchedulerNodeRuntime> LoadSchedulerNodeRuntime(
+      const std::string& node_name) const {
+    Statement statement(
+        db_,
+        "SELECT node_name, plane_name, last_move_at, last_verified_generation, updated_at "
+        "FROM scheduler_node_runtime WHERE node_name = ?1;");
+    statement.BindText(1, node_name);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadSchedulerNodeRuntime(statement.raw());
+  }
+
+  std::vector<SchedulerNodeRuntime> LoadSchedulerNodeRuntimes(
+      const std::optional<std::string>& plane_name) const {
+    std::string sql =
+        "SELECT node_name, plane_name, last_move_at, last_verified_generation, updated_at "
+        "FROM scheduler_node_runtime";
+    if (plane_name.has_value()) {
+      sql += " WHERE plane_name = ?1";
+    }
+    sql += " ORDER BY node_name ASC;";
+    Statement statement(db_, sql);
+    if (plane_name.has_value()) {
+      statement.BindText(1, *plane_name);
+    }
+    std::vector<SchedulerNodeRuntime> runtimes;
+    while (statement.StepRow()) {
+      runtimes.push_back(ReadSchedulerNodeRuntime(statement.raw()));
+    }
+    return runtimes;
+  }
+
+ private:
+  static RolloutActionRecord ReadRolloutAction(sqlite3_stmt* statement) {
+    RolloutActionRecord action;
+    action.id = sqlite3_column_int(statement, 0);
+    action.plane_name = ToColumnText(statement, 1);
+    action.desired_generation = sqlite3_column_int(statement, 2);
+    action.step = sqlite3_column_int(statement, 3);
+    action.worker_name = ToColumnText(statement, 4);
+    action.action = ToColumnText(statement, 5);
+    action.target_node_name = ToColumnText(statement, 6);
+    action.target_gpu_device = ToColumnText(statement, 7);
+    action.victim_worker_names = DeserializeStringArray(ToColumnText(statement, 8));
+    action.reason = ToColumnText(statement, 9);
+    action.status = ParseRolloutActionStatus(ToColumnText(statement, 10));
+    action.status_message = ToColumnText(statement, 11);
+    return action;
+  }
+
+  static SchedulerPlaneRuntime ReadSchedulerPlaneRuntime(sqlite3_stmt* statement) {
+    SchedulerPlaneRuntime runtime;
+    runtime.plane_name = ToColumnText(statement, 0);
+    runtime.active_action = ToColumnText(statement, 1);
+    runtime.active_worker_name = ToColumnText(statement, 2);
+    runtime.phase = ToColumnText(statement, 3);
+    runtime.action_generation = sqlite3_column_int(statement, 4);
+    runtime.stable_samples = sqlite3_column_int(statement, 5);
+    runtime.rollback_attempt_count = sqlite3_column_int(statement, 6);
+    runtime.source_node_name = ToColumnText(statement, 7);
+    runtime.source_gpu_device = ToColumnText(statement, 8);
+    runtime.target_node_name = ToColumnText(statement, 9);
+    runtime.target_gpu_device = ToColumnText(statement, 10);
+    runtime.previous_state_json = ToColumnText(statement, 11);
+    runtime.status_message = ToColumnText(statement, 12);
+    runtime.started_at = ToColumnText(statement, 13);
+    runtime.updated_at = ToColumnText(statement, 14);
+    return runtime;
+  }
+
+  static SchedulerWorkerRuntime ReadSchedulerWorkerRuntime(sqlite3_stmt* statement) {
+    SchedulerWorkerRuntime runtime;
+    runtime.worker_name = ToColumnText(statement, 0);
+    runtime.plane_name = ToColumnText(statement, 1);
+    runtime.last_move_at = ToColumnText(statement, 2);
+    runtime.last_eviction_at = ToColumnText(statement, 3);
+    runtime.last_verified_generation = ToOptionalColumnInt(statement, 4);
+    runtime.last_scheduler_phase = ToColumnText(statement, 5);
+    runtime.last_status_message = ToColumnText(statement, 6);
+    runtime.manual_intervention_required = sqlite3_column_int(statement, 7) != 0;
+    runtime.updated_at = ToColumnText(statement, 8);
+    return runtime;
+  }
+
+  static SchedulerNodeRuntime ReadSchedulerNodeRuntime(sqlite3_stmt* statement) {
+    SchedulerNodeRuntime runtime;
+    runtime.node_name = ToColumnText(statement, 0);
+    runtime.plane_name = ToColumnText(statement, 1);
+    runtime.last_move_at = ToColumnText(statement, 2);
+    runtime.last_verified_generation = ToOptionalColumnInt(statement, 3);
+    runtime.updated_at = ToColumnText(statement, 4);
+    return runtime;
+  }
+
+  sqlite3* db_;
+};
+
+class DiskRuntimeRepository {
+ public:
+  explicit DiskRuntimeRepository(sqlite3* db) : db_(db) {}
+
+  void UpsertDiskRuntimeState(const DiskRuntimeState& runtime_state) {
+    Statement statement(
+        db_,
+        "INSERT INTO disk_runtime_state("
+        "disk_name, plane_name, node_name, image_path, filesystem_type, loop_device, "
+        "mount_point, runtime_state, attached_at, mounted_at, last_verified_at, "
+        "status_message, updated_at"
+        ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, "
+        "COALESCE(NULLIF(?11, ''), CURRENT_TIMESTAMP), ?12, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(disk_name, node_name) DO UPDATE SET "
+        "plane_name = excluded.plane_name, "
+        "image_path = excluded.image_path, "
+        "filesystem_type = excluded.filesystem_type, "
+        "loop_device = excluded.loop_device, "
+        "mount_point = excluded.mount_point, "
+        "runtime_state = excluded.runtime_state, "
+        "attached_at = excluded.attached_at, "
+        "mounted_at = excluded.mounted_at, "
+        "last_verified_at = COALESCE(NULLIF(excluded.last_verified_at, ''), disk_runtime_state.last_verified_at, CURRENT_TIMESTAMP), "
+        "status_message = excluded.status_message, "
+        "updated_at = CURRENT_TIMESTAMP;");
+    statement.BindText(1, runtime_state.disk_name);
+    statement.BindText(2, runtime_state.plane_name);
+    statement.BindText(3, runtime_state.node_name);
+    statement.BindText(4, runtime_state.image_path);
+    statement.BindText(5, runtime_state.filesystem_type);
+    statement.BindText(6, runtime_state.loop_device);
+    statement.BindText(7, runtime_state.mount_point);
+    statement.BindText(8, runtime_state.runtime_state);
+    statement.BindText(9, runtime_state.attached_at);
+    statement.BindText(10, runtime_state.mounted_at);
+    statement.BindText(11, runtime_state.last_verified_at);
+    statement.BindText(12, runtime_state.status_message);
+    statement.StepDone();
+  }
+
+  std::optional<DiskRuntimeState> LoadDiskRuntimeState(
+      const std::string& disk_name,
+      const std::string& node_name) const {
+    Statement statement(
+        db_,
+        "SELECT disk_name, plane_name, node_name, image_path, filesystem_type, loop_device, "
+        "mount_point, runtime_state, attached_at, mounted_at, last_verified_at, "
+        "status_message, updated_at "
+        "FROM disk_runtime_state WHERE disk_name = ?1 AND node_name = ?2;");
+    statement.BindText(1, disk_name);
+    statement.BindText(2, node_name);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadDiskRuntimeState(statement.raw());
+  }
+
+  std::vector<DiskRuntimeState> LoadDiskRuntimeStates(
+      const std::optional<std::string>& plane_name,
+      const std::optional<std::string>& node_name) const {
+    std::vector<DiskRuntimeState> runtime_states;
+    std::string sql =
+        "SELECT disk_name, plane_name, node_name, image_path, filesystem_type, loop_device, "
+        "mount_point, runtime_state, attached_at, mounted_at, last_verified_at, "
+        "status_message, updated_at "
+        "FROM disk_runtime_state";
+
+    int bind_index = 1;
+    if (plane_name.has_value() || node_name.has_value()) {
+      sql += " WHERE ";
+      bool wrote_condition = false;
+      if (plane_name.has_value()) {
+        sql += "plane_name = ?" + std::to_string(bind_index++);
+        wrote_condition = true;
+      }
+      if (node_name.has_value()) {
+        if (wrote_condition) {
+          sql += " AND ";
+        }
+        sql += "node_name = ?" + std::to_string(bind_index++);
+      }
+    }
+    sql += " ORDER BY plane_name ASC, node_name ASC, disk_name ASC;";
+
+    Statement statement(db_, sql);
+    bind_index = 1;
+    if (plane_name.has_value()) {
+      statement.BindText(bind_index++, *plane_name);
+    }
+    if (node_name.has_value()) {
+      statement.BindText(bind_index++, *node_name);
+    }
+    while (statement.StepRow()) {
+      runtime_states.push_back(ReadDiskRuntimeState(statement.raw()));
+    }
+    return runtime_states;
+  }
+
+ private:
+  static DiskRuntimeState ReadDiskRuntimeState(sqlite3_stmt* statement) {
+    DiskRuntimeState runtime_state;
+    runtime_state.disk_name = ToColumnText(statement, 0);
+    runtime_state.plane_name = ToColumnText(statement, 1);
+    runtime_state.node_name = ToColumnText(statement, 2);
+    runtime_state.image_path = ToColumnText(statement, 3);
+    runtime_state.filesystem_type = ToColumnText(statement, 4);
+    runtime_state.loop_device = ToColumnText(statement, 5);
+    runtime_state.mount_point = ToColumnText(statement, 6);
+    runtime_state.runtime_state = ToColumnText(statement, 7);
+    runtime_state.attached_at = ToColumnText(statement, 8);
+    runtime_state.mounted_at = ToColumnText(statement, 9);
+    runtime_state.last_verified_at = ToColumnText(statement, 10);
+    runtime_state.status_message = ToColumnText(statement, 11);
+    runtime_state.updated_at = ToColumnText(statement, 12);
+    return runtime_state;
+  }
+
+  sqlite3* db_;
+};
+
+class PlaneRepository {
+ public:
+  explicit PlaneRepository(sqlite3* db) : db_(db) {}
+
+  std::optional<int> LoadPlaneRebalanceIteration(const std::string& plane_name) const {
+    Statement statement(
+        db_,
+        "SELECT rebalance_iteration FROM planes WHERE name = ?1;");
+    statement.BindText(1, plane_name);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return sqlite3_column_int(statement.raw(), 0);
+  }
+
+  std::vector<PlaneRecord> LoadPlanes() const {
+    std::vector<PlaneRecord> planes;
+    Statement statement(
+        db_,
+        "SELECT name, shared_disk_name, control_root, artifacts_root, plane_mode, generation, applied_generation, "
+        "rebalance_iteration, state, created_at FROM planes ORDER BY name ASC;");
+    while (statement.StepRow()) {
+      planes.push_back(ReadPlane(statement.raw()));
+    }
+    return planes;
+  }
+
+  std::optional<PlaneRecord> LoadPlane(const std::string& plane_name) const {
+    Statement statement(
+        db_,
+        "SELECT name, shared_disk_name, control_root, artifacts_root, plane_mode, generation, applied_generation, "
+        "rebalance_iteration, state, created_at FROM planes WHERE name = ?1;");
+    statement.BindText(1, plane_name);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    return ReadPlane(statement.raw());
+  }
+
+  bool UpdatePlaneState(const std::string& plane_name, const std::string& state) {
+    Statement statement(
+        db_,
+        "UPDATE planes SET state = ?2 WHERE name = ?1;");
+    statement.BindText(1, plane_name);
+    statement.BindText(2, state);
+    statement.StepDone();
+    return sqlite3_changes(db_) > 0;
+  }
+
+  bool UpdatePlaneAppliedGeneration(
+      const std::string& plane_name,
+      int applied_generation) {
+    Statement statement(
+        db_,
+        "UPDATE planes SET applied_generation = ?2 WHERE name = ?1;");
+    statement.BindText(1, plane_name);
+    statement.BindInt(2, applied_generation);
+    statement.StepDone();
+    return sqlite3_changes(db_) > 0;
+  }
+
+  bool UpdatePlaneArtifactsRoot(
+      const std::string& plane_name,
+      const std::string& artifacts_root) {
+    Statement statement(
+        db_,
+        "UPDATE planes SET artifacts_root = ?2 WHERE name = ?1;");
+    statement.BindText(1, plane_name);
+    statement.BindText(2, artifacts_root);
+    statement.StepDone();
+    return sqlite3_changes(db_) > 0;
+  }
+
+  void DeletePlane(const std::string& plane_name) {
+    Exec(db_, "BEGIN IMMEDIATE TRANSACTION;");
+    try {
+      const std::array<std::string, 9> delete_sql = {
+          "DELETE FROM host_assignments WHERE plane_name = ?1;",
+          "DELETE FROM rollout_actions WHERE plane_name = ?1;",
+          "DELETE FROM disk_runtime_state WHERE plane_name = ?1;",
+          "DELETE FROM event_log WHERE plane_name = ?1;",
+          "DELETE FROM scheduler_plane_runtime WHERE plane_name = ?1;",
+          "DELETE FROM scheduler_worker_runtime WHERE plane_name = ?1;",
+          "DELETE FROM scheduler_node_runtime WHERE plane_name = ?1;",
+          "UPDATE host_observations "
+          "SET plane_name = CASE WHEN plane_name = ?1 THEN '' ELSE plane_name END, "
+          "    applied_generation = CASE WHEN plane_name = ?1 THEN NULL ELSE applied_generation END, "
+          "    last_assignment_id = CASE WHEN plane_name = ?1 THEN NULL ELSE last_assignment_id END, "
+          "    updated_at = CURRENT_TIMESTAMP "
+          "WHERE plane_name = ?1;",
+          "DELETE FROM planes WHERE name = ?1;",
+      };
+      for (const auto& sql : delete_sql) {
+        Statement statement(db_, sql);
+        statement.BindText(1, plane_name);
+        statement.StepDone();
+      }
+      Exec(db_, "COMMIT;");
+    } catch (...) {
+      Exec(db_, "ROLLBACK;");
+      throw;
+    }
+  }
+
+ private:
+  static PlaneRecord ReadPlane(sqlite3_stmt* statement) {
+    PlaneRecord plane;
+    plane.name = ToColumnText(statement, 0);
+    plane.shared_disk_name = ToColumnText(statement, 1);
+    plane.control_root = ToColumnText(statement, 2);
+    plane.artifacts_root = ToColumnText(statement, 3);
+    plane.plane_mode = ToColumnText(statement, 4);
+    plane.generation = sqlite3_column_int(statement, 5);
+    plane.applied_generation = sqlite3_column_int(statement, 6);
+    plane.rebalance_iteration = sqlite3_column_int(statement, 7);
+    plane.state = ToColumnText(statement, 8);
+    plane.created_at = ToColumnText(statement, 9);
+    return plane;
+  }
+
+  sqlite3* db_;
+};
+
 bool TableHasColumn(sqlite3* db, const std::string& table_name, const std::string& column_name) {
   Statement statement(db, "PRAGMA table_info(" + table_name + ");");
   while (statement.StepRow()) {
@@ -895,23 +2486,6 @@ sqlite3* AsSqlite(void* db) {
   return static_cast<sqlite3*>(db);
 }
 
-HostAssignment AssignmentFromStatement(sqlite3_stmt* statement) {
-  HostAssignment assignment;
-  assignment.id = sqlite3_column_int(statement, 0);
-  assignment.node_name = ToColumnText(statement, 1);
-  assignment.plane_name = ToColumnText(statement, 2);
-  assignment.desired_generation = sqlite3_column_int(statement, 3);
-  assignment.attempt_count = sqlite3_column_int(statement, 4);
-  assignment.max_attempts = sqlite3_column_int(statement, 5);
-  assignment.assignment_type = ToColumnText(statement, 6);
-  assignment.desired_state_json = ToColumnText(statement, 7);
-  assignment.artifacts_root = ToColumnText(statement, 8);
-  assignment.status = ParseHostAssignmentStatus(ToColumnText(statement, 9));
-  assignment.status_message = ToColumnText(statement, 10);
-  assignment.progress_json = ToColumnText(statement, 11);
-  return assignment;
-}
-
 std::vector<std::string> DeserializeStringArray(const std::string& json_text) {
   std::vector<std::string> values;
   if (json_text.empty()) {
@@ -933,42 +2507,6 @@ std::string SerializeStringArray(const std::vector<std::string>& values) {
   return json(values).dump();
 }
 
-RolloutActionRecord RolloutActionFromStatement(sqlite3_stmt* statement) {
-  RolloutActionRecord action;
-  action.id = sqlite3_column_int(statement, 0);
-  action.plane_name = ToColumnText(statement, 1);
-  action.desired_generation = sqlite3_column_int(statement, 2);
-  action.step = sqlite3_column_int(statement, 3);
-  action.worker_name = ToColumnText(statement, 4);
-  action.action = ToColumnText(statement, 5);
-  action.target_node_name = ToColumnText(statement, 6);
-  action.target_gpu_device = ToColumnText(statement, 7);
-  action.victim_worker_names = DeserializeStringArray(ToColumnText(statement, 8));
-  action.reason = ToColumnText(statement, 9);
-  action.status = ParseRolloutActionStatus(ToColumnText(statement, 10));
-  action.status_message = ToColumnText(statement, 11);
-  return action;
-}
-
-HostObservation ObservationFromStatement(sqlite3_stmt* statement) {
-  HostObservation observation;
-  observation.node_name = ToColumnText(statement, 0);
-  observation.plane_name = ToColumnText(statement, 1);
-  observation.applied_generation = ToOptionalColumnInt(statement, 2);
-  observation.last_assignment_id = ToOptionalColumnInt(statement, 3);
-  observation.status = ParseHostObservationStatus(ToColumnText(statement, 4));
-  observation.status_message = ToColumnText(statement, 5);
-  observation.observed_state_json = ToColumnText(statement, 6);
-  observation.runtime_status_json = ToColumnText(statement, 7);
-  observation.instance_runtime_json = ToColumnText(statement, 8);
-  observation.gpu_telemetry_json = ToColumnText(statement, 9);
-  observation.disk_telemetry_json = ToColumnText(statement, 10);
-  observation.network_telemetry_json = ToColumnText(statement, 11);
-  observation.cpu_telemetry_json = ToColumnText(statement, 12);
-  observation.heartbeat_at = ToColumnText(statement, 13);
-  return observation;
-}
-
 NodeAvailabilityOverride AvailabilityOverrideFromStatement(sqlite3_stmt* statement) {
   NodeAvailabilityOverride availability_override;
   availability_override.node_name = ToColumnText(statement, 0);
@@ -976,100 +2514,6 @@ NodeAvailabilityOverride AvailabilityOverrideFromStatement(sqlite3_stmt* stateme
   availability_override.status_message = ToColumnText(statement, 2);
   availability_override.updated_at = ToColumnText(statement, 3);
   return availability_override;
-}
-
-SchedulerPlaneRuntime SchedulerPlaneRuntimeFromStatement(sqlite3_stmt* statement) {
-  SchedulerPlaneRuntime runtime;
-  runtime.plane_name = ToColumnText(statement, 0);
-  runtime.active_action = ToColumnText(statement, 1);
-  runtime.active_worker_name = ToColumnText(statement, 2);
-  runtime.phase = ToColumnText(statement, 3);
-  runtime.action_generation = sqlite3_column_int(statement, 4);
-  runtime.stable_samples = sqlite3_column_int(statement, 5);
-  runtime.rollback_attempt_count = sqlite3_column_int(statement, 6);
-  runtime.source_node_name = ToColumnText(statement, 7);
-  runtime.source_gpu_device = ToColumnText(statement, 8);
-  runtime.target_node_name = ToColumnText(statement, 9);
-  runtime.target_gpu_device = ToColumnText(statement, 10);
-  runtime.previous_state_json = ToColumnText(statement, 11);
-  runtime.status_message = ToColumnText(statement, 12);
-  runtime.started_at = ToColumnText(statement, 13);
-  runtime.updated_at = ToColumnText(statement, 14);
-  return runtime;
-}
-
-SchedulerWorkerRuntime SchedulerWorkerRuntimeFromStatement(sqlite3_stmt* statement) {
-  SchedulerWorkerRuntime runtime;
-  runtime.worker_name = ToColumnText(statement, 0);
-  runtime.plane_name = ToColumnText(statement, 1);
-  runtime.last_move_at = ToColumnText(statement, 2);
-  runtime.last_eviction_at = ToColumnText(statement, 3);
-  runtime.last_verified_generation = ToOptionalColumnInt(statement, 4);
-  runtime.last_scheduler_phase = ToColumnText(statement, 5);
-  runtime.last_status_message = ToColumnText(statement, 6);
-  runtime.manual_intervention_required = sqlite3_column_int(statement, 7) != 0;
-  runtime.updated_at = ToColumnText(statement, 8);
-  return runtime;
-}
-
-SchedulerNodeRuntime SchedulerNodeRuntimeFromStatement(sqlite3_stmt* statement) {
-  SchedulerNodeRuntime runtime;
-  runtime.node_name = ToColumnText(statement, 0);
-  runtime.plane_name = ToColumnText(statement, 1);
-  runtime.last_move_at = ToColumnText(statement, 2);
-  runtime.last_verified_generation = ToOptionalColumnInt(statement, 3);
-  runtime.updated_at = ToColumnText(statement, 4);
-  return runtime;
-}
-
-EventRecord EventFromStatement(sqlite3_stmt* statement) {
-  EventRecord event;
-  event.id = sqlite3_column_int(statement, 0);
-  event.plane_name = ToColumnText(statement, 1);
-  event.node_name = ToColumnText(statement, 2);
-  event.worker_name = ToColumnText(statement, 3);
-  event.assignment_id = ToOptionalColumnInt(statement, 4);
-  event.rollout_action_id = ToOptionalColumnInt(statement, 5);
-  event.category = ToColumnText(statement, 6);
-  event.event_type = ToColumnText(statement, 7);
-  event.severity = ToColumnText(statement, 8);
-  event.message = ToColumnText(statement, 9);
-  event.payload_json = ToColumnText(statement, 10);
-  event.created_at = ToColumnText(statement, 11);
-  return event;
-}
-
-PlaneRecord PlaneFromStatement(sqlite3_stmt* statement) {
-  PlaneRecord plane;
-  plane.name = ToColumnText(statement, 0);
-  plane.shared_disk_name = ToColumnText(statement, 1);
-  plane.control_root = ToColumnText(statement, 2);
-  plane.artifacts_root = ToColumnText(statement, 3);
-  plane.plane_mode = ToColumnText(statement, 4);
-  plane.generation = sqlite3_column_int(statement, 5);
-  plane.applied_generation = sqlite3_column_int(statement, 6);
-  plane.rebalance_iteration = sqlite3_column_int(statement, 7);
-  plane.state = ToColumnText(statement, 8);
-  plane.created_at = ToColumnText(statement, 9);
-  return plane;
-}
-
-DiskRuntimeState DiskRuntimeStateFromStatement(sqlite3_stmt* statement) {
-  DiskRuntimeState runtime_state;
-  runtime_state.disk_name = ToColumnText(statement, 0);
-  runtime_state.plane_name = ToColumnText(statement, 1);
-  runtime_state.node_name = ToColumnText(statement, 2);
-  runtime_state.image_path = ToColumnText(statement, 3);
-  runtime_state.filesystem_type = ToColumnText(statement, 4);
-  runtime_state.loop_device = ToColumnText(statement, 5);
-  runtime_state.mount_point = ToColumnText(statement, 6);
-  runtime_state.runtime_state = ToColumnText(statement, 7);
-  runtime_state.attached_at = ToColumnText(statement, 8);
-  runtime_state.mounted_at = ToColumnText(statement, 9);
-  runtime_state.last_verified_at = ToColumnText(statement, 10);
-  runtime_state.status_message = ToColumnText(statement, 11);
-  runtime_state.updated_at = ToColumnText(statement, 12);
-  return runtime_state;
 }
 
 }  // namespace
@@ -1901,41 +3345,15 @@ std::optional<int> ControllerStore::LoadRebalanceIteration() const {
 
 std::optional<int> ControllerStore::LoadRebalanceIteration(
     const std::string& plane_name) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT rebalance_iteration FROM planes WHERE name = ?1;");
-  statement.BindText(1, plane_name);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return sqlite3_column_int(statement.raw(), 0);
+  return PlaneRepository(AsSqlite(db_)).LoadPlaneRebalanceIteration(plane_name);
 }
 
 std::vector<PlaneRecord> ControllerStore::LoadPlanes() const {
-  sqlite3* db = AsSqlite(db_);
-  std::vector<PlaneRecord> planes;
-  Statement statement(
-      db,
-      "SELECT name, shared_disk_name, control_root, artifacts_root, plane_mode, generation, applied_generation, "
-      "rebalance_iteration, state, created_at FROM planes ORDER BY name ASC;");
-  while (statement.StepRow()) {
-    planes.push_back(PlaneFromStatement(statement.raw()));
-  }
-  return planes;
+  return PlaneRepository(AsSqlite(db_)).LoadPlanes();
 }
 
 std::optional<PlaneRecord> ControllerStore::LoadPlane(const std::string& plane_name) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT name, shared_disk_name, control_root, artifacts_root, plane_mode, generation, applied_generation, "
-      "rebalance_iteration, state, created_at FROM planes WHERE name = ?1;");
-  statement.BindText(1, plane_name);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return PlaneFromStatement(statement.raw());
+  return PlaneRepository(AsSqlite(db_)).LoadPlane(plane_name);
 }
 
 void ControllerStore::UpsertRegisteredHost(const RegisteredHostRecord& host) {
@@ -2109,587 +3527,167 @@ std::vector<RegisteredHostRecord> ControllerStore::LoadRegisteredHosts(
 }
 
 int ControllerStore::LoadUserCount() const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(db, "SELECT COUNT(*) FROM users;");
-  if (!statement.StepRow()) {
-    return 0;
-  }
-  return sqlite3_column_int(statement.raw(), 0);
+  return AuthRepository(AsSqlite(db_)).LoadUserCount();
 }
 
 std::optional<UserRecord> ControllerStore::LoadUserById(int user_id) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT id, username, role, password_hash, created_at, updated_at, last_login_at "
-      "FROM users WHERE id = ?1;");
-  statement.BindInt(1, user_id);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return UserRecord{
-      sqlite3_column_int(statement.raw(), 0),
-      ToColumnText(statement.raw(), 1),
-      ToColumnText(statement.raw(), 2),
-      ToColumnText(statement.raw(), 3),
-      ToColumnText(statement.raw(), 4),
-      ToColumnText(statement.raw(), 5),
-      ToColumnText(statement.raw(), 6),
-  };
+  return AuthRepository(AsSqlite(db_)).LoadUserById(user_id);
 }
 
 std::optional<UserRecord> ControllerStore::LoadUserByUsername(const std::string& username) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT id, username, role, password_hash, created_at, updated_at, last_login_at "
-      "FROM users WHERE username = ?1;");
-  statement.BindText(1, username);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return UserRecord{
-      sqlite3_column_int(statement.raw(), 0),
-      ToColumnText(statement.raw(), 1),
-      ToColumnText(statement.raw(), 2),
-      ToColumnText(statement.raw(), 3),
-      ToColumnText(statement.raw(), 4),
-      ToColumnText(statement.raw(), 5),
-      ToColumnText(statement.raw(), 6),
-  };
+  return AuthRepository(AsSqlite(db_)).LoadUserByUsername(username);
 }
 
 std::vector<UserRecord> ControllerStore::LoadUsers() const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT id, username, role, password_hash, created_at, updated_at, last_login_at "
-      "FROM users ORDER BY id ASC;");
-  std::vector<UserRecord> users;
-  while (statement.StepRow()) {
-    users.push_back(UserRecord{
-        sqlite3_column_int(statement.raw(), 0),
-        ToColumnText(statement.raw(), 1),
-        ToColumnText(statement.raw(), 2),
-        ToColumnText(statement.raw(), 3),
-        ToColumnText(statement.raw(), 4),
-        ToColumnText(statement.raw(), 5),
-        ToColumnText(statement.raw(), 6),
-    });
-  }
-  return users;
+  return AuthRepository(AsSqlite(db_)).LoadUsers();
 }
 
 UserRecord ControllerStore::CreateBootstrapAdmin(
     const std::string& username,
     const std::string& password_hash) {
-  sqlite3* db = AsSqlite(db_);
-  Exec(db, "BEGIN IMMEDIATE;");
-  try {
-    Statement count_statement(db, "SELECT COUNT(*) FROM users;");
-    if (!count_statement.StepRow()) {
-      throw std::runtime_error("failed to count users");
-    }
-    if (sqlite3_column_int(count_statement.raw(), 0) != 0) {
-      throw std::runtime_error("bootstrap admin can be created only when user base is empty");
-    }
-    Statement insert_statement(
-        db,
-        "INSERT INTO users(username, role, password_hash, updated_at) "
-        "VALUES (?1, 'admin', ?2, CURRENT_TIMESTAMP);");
-    insert_statement.BindText(1, username);
-    insert_statement.BindText(2, password_hash);
-    insert_statement.StepDone();
-    const int user_id = static_cast<int>(sqlite3_last_insert_rowid(db));
-    Exec(db, "COMMIT;");
-    return *LoadUserById(user_id);
-  } catch (...) {
-    Exec(db, "ROLLBACK;");
-    throw;
-  }
+  return AuthRepository(AsSqlite(db_)).CreateBootstrapAdmin(username, password_hash);
 }
 
 UserRecord ControllerStore::CreateInvitedUser(
     const std::string& invite_token,
     const std::string& username,
     const std::string& password_hash) {
-  sqlite3* db = AsSqlite(db_);
-  Exec(db, "BEGIN IMMEDIATE;");
-  try {
-    Statement invite_statement(
-        db,
-        "SELECT id FROM registration_invites "
-        "WHERE token = ?1 AND revoked_at = '' AND used_at = '' AND expires_at >= CURRENT_TIMESTAMP;");
-    invite_statement.BindText(1, invite_token);
-    if (!invite_statement.StepRow()) {
-      throw std::runtime_error("invite token is missing, expired, or already used");
-    }
-    const int invite_id = sqlite3_column_int(invite_statement.raw(), 0);
-    Statement insert_statement(
-        db,
-        "INSERT INTO users(username, role, password_hash, updated_at) "
-        "VALUES (?1, 'user', ?2, CURRENT_TIMESTAMP);");
-    insert_statement.BindText(1, username);
-    insert_statement.BindText(2, password_hash);
-    insert_statement.StepDone();
-    const int user_id = static_cast<int>(sqlite3_last_insert_rowid(db));
-    Statement update_invite_statement(
-        db,
-        "UPDATE registration_invites "
-        "SET used_by_user_id = ?2, used_at = CURRENT_TIMESTAMP "
-        "WHERE id = ?1;");
-    update_invite_statement.BindInt(1, invite_id);
-    update_invite_statement.BindInt(2, user_id);
-    update_invite_statement.StepDone();
-    Exec(db, "COMMIT;");
-    return *LoadUserById(user_id);
-  } catch (...) {
-    Exec(db, "ROLLBACK;");
-    throw;
-  }
+  return AuthRepository(AsSqlite(db_)).CreateInvitedUser(
+      invite_token, username, password_hash);
 }
 
 void ControllerStore::UpdateUserLastLoginAt(int user_id, const std::string& last_login_at) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE users SET last_login_at = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?1;");
-  statement.BindInt(1, user_id);
-  statement.BindText(2, last_login_at);
-  statement.StepDone();
+  AuthRepository(AsSqlite(db_)).UpdateUserLastLoginAt(user_id, last_login_at);
 }
 
 void ControllerStore::InsertWebAuthnCredential(const WebAuthnCredentialRecord& credential) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "INSERT INTO webauthn_credentials("
-      " user_id, credential_id, public_key, counter, transports_json, updated_at"
-      ") VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP);");
-  statement.BindInt(1, credential.user_id);
-  statement.BindText(2, credential.credential_id);
-  statement.BindText(3, credential.public_key);
-  statement.BindInt(4, static_cast<int>(credential.counter));
-  statement.BindText(5, credential.transports_json);
-  statement.StepDone();
+  AuthRepository(AsSqlite(db_)).InsertWebAuthnCredential(credential);
 }
 
 void ControllerStore::UpdateWebAuthnCredentialCounter(
     const std::string& credential_id,
     std::uint32_t counter,
     const std::string& last_used_at) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE webauthn_credentials "
-      "SET counter = ?2, last_used_at = ?3, updated_at = CURRENT_TIMESTAMP "
-      "WHERE credential_id = ?1;");
-  statement.BindText(1, credential_id);
-  statement.BindInt(2, static_cast<int>(counter));
-  statement.BindText(3, last_used_at);
-  statement.StepDone();
+  AuthRepository(AsSqlite(db_))
+      .UpdateWebAuthnCredentialCounter(credential_id, counter, last_used_at);
 }
 
 std::vector<WebAuthnCredentialRecord> ControllerStore::LoadWebAuthnCredentialsForUser(int user_id) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT id, user_id, credential_id, public_key, counter, transports_json, created_at, updated_at, last_used_at "
-      "FROM webauthn_credentials WHERE user_id = ?1 ORDER BY id ASC;");
-  statement.BindInt(1, user_id);
-  std::vector<WebAuthnCredentialRecord> credentials;
-  while (statement.StepRow()) {
-    credentials.push_back(WebAuthnCredentialRecord{
-        sqlite3_column_int(statement.raw(), 0),
-        sqlite3_column_int(statement.raw(), 1),
-        ToColumnText(statement.raw(), 2),
-        ToColumnText(statement.raw(), 3),
-        static_cast<std::uint32_t>(sqlite3_column_int(statement.raw(), 4)),
-        ToColumnText(statement.raw(), 5),
-        ToColumnText(statement.raw(), 6),
-        ToColumnText(statement.raw(), 7),
-        ToColumnText(statement.raw(), 8),
-    });
-  }
-  return credentials;
+  return AuthRepository(AsSqlite(db_)).LoadWebAuthnCredentialsForUser(user_id);
 }
 
 std::optional<WebAuthnCredentialRecord> ControllerStore::LoadWebAuthnCredentialById(
     const std::string& credential_id) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT id, user_id, credential_id, public_key, counter, transports_json, created_at, updated_at, last_used_at "
-      "FROM webauthn_credentials WHERE credential_id = ?1;");
-  statement.BindText(1, credential_id);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return WebAuthnCredentialRecord{
-      sqlite3_column_int(statement.raw(), 0),
-      sqlite3_column_int(statement.raw(), 1),
-      ToColumnText(statement.raw(), 2),
-      ToColumnText(statement.raw(), 3),
-      static_cast<std::uint32_t>(sqlite3_column_int(statement.raw(), 4)),
-      ToColumnText(statement.raw(), 5),
-      ToColumnText(statement.raw(), 6),
-      ToColumnText(statement.raw(), 7),
-      ToColumnText(statement.raw(), 8),
-  };
+  return AuthRepository(AsSqlite(db_)).LoadWebAuthnCredentialById(credential_id);
 }
 
 RegistrationInviteRecord ControllerStore::CreateRegistrationInvite(
     int created_by_user_id,
     const std::string& token,
     const std::string& expires_at) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "INSERT INTO registration_invites(token, created_by_user_id, expires_at) "
-      "VALUES (?1, ?2, ?3);");
-  statement.BindText(1, token);
-  statement.BindInt(2, created_by_user_id);
-  statement.BindText(3, expires_at);
-  statement.StepDone();
-  return *LoadRegistrationInviteByToken(token);
+  return AuthRepository(AsSqlite(db_))
+      .CreateRegistrationInvite(created_by_user_id, token, expires_at);
 }
 
 std::optional<RegistrationInviteRecord> ControllerStore::LoadRegistrationInviteByToken(
     const std::string& token) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT id, token, created_by_user_id, expires_at, created_at, used_by_user_id, used_at, revoked_at "
-      "FROM registration_invites WHERE token = ?1;");
-  statement.BindText(1, token);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return RegistrationInviteRecord{
-      sqlite3_column_int(statement.raw(), 0),
-      ToColumnText(statement.raw(), 1),
-      sqlite3_column_int(statement.raw(), 2),
-      ToColumnText(statement.raw(), 3),
-      ToColumnText(statement.raw(), 4),
-      ToOptionalColumnInt(statement.raw(), 5),
-      ToColumnText(statement.raw(), 6),
-      ToColumnText(statement.raw(), 7),
-  };
+  return AuthRepository(AsSqlite(db_)).LoadRegistrationInviteByToken(token);
 }
 
 std::vector<RegistrationInviteRecord> ControllerStore::LoadActiveRegistrationInvites() const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT id, token, created_by_user_id, expires_at, created_at, used_by_user_id, used_at, revoked_at "
-      "FROM registration_invites "
-      "WHERE revoked_at = '' AND used_at = '' AND expires_at >= CURRENT_TIMESTAMP "
-      "ORDER BY created_at DESC, id DESC;");
-  std::vector<RegistrationInviteRecord> invites;
-  while (statement.StepRow()) {
-    invites.push_back(RegistrationInviteRecord{
-        sqlite3_column_int(statement.raw(), 0),
-        ToColumnText(statement.raw(), 1),
-        sqlite3_column_int(statement.raw(), 2),
-        ToColumnText(statement.raw(), 3),
-        ToColumnText(statement.raw(), 4),
-        ToOptionalColumnInt(statement.raw(), 5),
-        ToColumnText(statement.raw(), 6),
-        ToColumnText(statement.raw(), 7),
-    });
-  }
-  return invites;
+  return AuthRepository(AsSqlite(db_)).LoadActiveRegistrationInvites();
 }
 
 bool ControllerStore::MarkRegistrationInviteUsed(
     const std::string& token,
     int used_by_user_id,
     const std::string& used_at) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE registration_invites "
-      "SET used_by_user_id = ?2, used_at = ?3 "
-      "WHERE token = ?1 AND revoked_at = '' AND used_at = '' AND expires_at >= CURRENT_TIMESTAMP;");
-  statement.BindText(1, token);
-  statement.BindInt(2, used_by_user_id);
-  statement.BindText(3, used_at);
-  statement.StepDone();
-  return sqlite3_changes(db) > 0;
+  return AuthRepository(AsSqlite(db_))
+      .MarkRegistrationInviteUsed(token, used_by_user_id, used_at);
 }
 
 bool ControllerStore::RevokeRegistrationInvite(
     int invite_id,
     const std::string& revoked_at) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE registration_invites "
-      "SET revoked_at = ?2 "
-      "WHERE id = ?1 AND revoked_at = '' AND used_at = '';");
-  statement.BindInt(1, invite_id);
-  statement.BindText(2, revoked_at);
-  statement.StepDone();
-  return sqlite3_changes(db) > 0;
+  return AuthRepository(AsSqlite(db_)).RevokeRegistrationInvite(invite_id, revoked_at);
 }
 
 void ControllerStore::InsertUserSshKey(const UserSshKeyRecord& ssh_key) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "INSERT INTO user_ssh_keys(user_id, label, public_key, fingerprint) "
-      "VALUES (?1, ?2, ?3, ?4);");
-  statement.BindInt(1, ssh_key.user_id);
-  statement.BindText(2, ssh_key.label);
-  statement.BindText(3, ssh_key.public_key);
-  statement.BindText(4, ssh_key.fingerprint);
-  statement.StepDone();
+  AuthRepository(AsSqlite(db_)).InsertUserSshKey(ssh_key);
 }
 
 std::vector<UserSshKeyRecord> ControllerStore::LoadActiveUserSshKeys(int user_id) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT id, user_id, label, public_key, fingerprint, created_at, revoked_at, last_used_at "
-      "FROM user_ssh_keys WHERE user_id = ?1 AND revoked_at = '' ORDER BY id ASC;");
-  statement.BindInt(1, user_id);
-  std::vector<UserSshKeyRecord> ssh_keys;
-  while (statement.StepRow()) {
-    ssh_keys.push_back(UserSshKeyRecord{
-        sqlite3_column_int(statement.raw(), 0),
-        sqlite3_column_int(statement.raw(), 1),
-        ToColumnText(statement.raw(), 2),
-        ToColumnText(statement.raw(), 3),
-        ToColumnText(statement.raw(), 4),
-        ToColumnText(statement.raw(), 5),
-        ToColumnText(statement.raw(), 6),
-        ToColumnText(statement.raw(), 7),
-    });
-  }
-  return ssh_keys;
+  return AuthRepository(AsSqlite(db_)).LoadActiveUserSshKeys(user_id);
 }
 
 std::optional<UserSshKeyRecord> ControllerStore::LoadActiveUserSshKeyByFingerprint(
     int user_id,
     const std::string& fingerprint) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT id, user_id, label, public_key, fingerprint, created_at, revoked_at, last_used_at "
-      "FROM user_ssh_keys WHERE user_id = ?1 AND fingerprint = ?2 AND revoked_at = '';");
-  statement.BindInt(1, user_id);
-  statement.BindText(2, fingerprint);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return UserSshKeyRecord{
-      sqlite3_column_int(statement.raw(), 0),
-      sqlite3_column_int(statement.raw(), 1),
-      ToColumnText(statement.raw(), 2),
-      ToColumnText(statement.raw(), 3),
-      ToColumnText(statement.raw(), 4),
-      ToColumnText(statement.raw(), 5),
-      ToColumnText(statement.raw(), 6),
-      ToColumnText(statement.raw(), 7),
-  };
+  return AuthRepository(AsSqlite(db_))
+      .LoadActiveUserSshKeyByFingerprint(user_id, fingerprint);
 }
 
 std::optional<UserSshKeyRecord> ControllerStore::LoadActiveUserSshKeyById(int ssh_key_id) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT id, user_id, label, public_key, fingerprint, created_at, revoked_at, last_used_at "
-      "FROM user_ssh_keys WHERE id = ?1 AND revoked_at = '';");
-  statement.BindInt(1, ssh_key_id);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return UserSshKeyRecord{
-      sqlite3_column_int(statement.raw(), 0),
-      sqlite3_column_int(statement.raw(), 1),
-      ToColumnText(statement.raw(), 2),
-      ToColumnText(statement.raw(), 3),
-      ToColumnText(statement.raw(), 4),
-      ToColumnText(statement.raw(), 5),
-      ToColumnText(statement.raw(), 6),
-      ToColumnText(statement.raw(), 7),
-  };
+  return AuthRepository(AsSqlite(db_)).LoadActiveUserSshKeyById(ssh_key_id);
 }
 
 bool ControllerStore::RevokeUserSshKey(
     int ssh_key_id,
     const std::string& revoked_at) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE user_ssh_keys SET revoked_at = ?2 WHERE id = ?1 AND revoked_at = '';");
-  statement.BindInt(1, ssh_key_id);
-  statement.BindText(2, revoked_at);
-  statement.StepDone();
-  return sqlite3_changes(db) > 0;
+  return AuthRepository(AsSqlite(db_)).RevokeUserSshKey(ssh_key_id, revoked_at);
 }
 
 void ControllerStore::TouchUserSshKey(
     int ssh_key_id,
     const std::string& last_used_at) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE user_ssh_keys SET last_used_at = ?2 WHERE id = ?1;");
-  statement.BindInt(1, ssh_key_id);
-  statement.BindText(2, last_used_at);
-  statement.StepDone();
+  AuthRepository(AsSqlite(db_)).TouchUserSshKey(ssh_key_id, last_used_at);
 }
 
 void ControllerStore::InsertAuthSession(const AuthSessionRecord& session) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "INSERT INTO auth_sessions(token, user_id, session_kind, plane_name, expires_at, last_used_at) "
-      "VALUES (?1, ?2, ?3, ?4, ?5, ?6);");
-  statement.BindText(1, session.token);
-  statement.BindInt(2, session.user_id);
-  statement.BindText(3, session.session_kind);
-  statement.BindText(4, session.plane_name);
-  statement.BindText(5, session.expires_at);
-  statement.BindText(6, session.last_used_at);
-  statement.StepDone();
+  AuthRepository(AsSqlite(db_)).InsertAuthSession(session);
 }
 
 std::optional<AuthSessionRecord> ControllerStore::LoadActiveAuthSession(
     const std::string& token,
     const std::optional<std::string>& session_kind,
     const std::optional<std::string>& plane_name) const {
-  sqlite3* db = AsSqlite(db_);
-  std::string sql =
-      "SELECT token, user_id, session_kind, plane_name, expires_at, created_at, revoked_at, last_used_at "
-      "FROM auth_sessions WHERE token = ?1 AND revoked_at = '' AND expires_at >= CURRENT_TIMESTAMP";
-  if (session_kind.has_value()) {
-    sql += " AND session_kind = ?2";
-  }
-  if (plane_name.has_value()) {
-    sql += session_kind.has_value() ? " AND plane_name = ?3" : " AND plane_name = ?2";
-  }
-  sql += ";";
-  Statement statement(db, sql);
-  statement.BindText(1, token);
-  int next_index = 2;
-  if (session_kind.has_value()) {
-    statement.BindText(next_index++, *session_kind);
-  }
-  if (plane_name.has_value()) {
-    statement.BindText(next_index++, *plane_name);
-  }
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return AuthSessionRecord{
-      ToColumnText(statement.raw(), 0),
-      sqlite3_column_int(statement.raw(), 1),
-      ToColumnText(statement.raw(), 2),
-      ToColumnText(statement.raw(), 3),
-      ToColumnText(statement.raw(), 4),
-      ToColumnText(statement.raw(), 5),
-      ToColumnText(statement.raw(), 6),
-      ToColumnText(statement.raw(), 7),
-  };
+  return AuthRepository(AsSqlite(db_))
+      .LoadActiveAuthSession(token, session_kind, plane_name);
 }
 
 bool ControllerStore::RevokeAuthSession(
     const std::string& token,
     const std::string& revoked_at) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE auth_sessions SET revoked_at = ?2 WHERE token = ?1 AND revoked_at = '';");
-  statement.BindText(1, token);
-  statement.BindText(2, revoked_at);
-  statement.StepDone();
-  return sqlite3_changes(db) > 0;
+  return AuthRepository(AsSqlite(db_)).RevokeAuthSession(token, revoked_at);
 }
 
 bool ControllerStore::TouchAuthSession(
     const std::string& token,
     const std::string& last_used_at) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE auth_sessions SET last_used_at = ?2 WHERE token = ?1;");
-  statement.BindText(1, token);
-  statement.BindText(2, last_used_at);
-  statement.StepDone();
-  return sqlite3_changes(db) > 0;
+  return AuthRepository(AsSqlite(db_)).TouchAuthSession(token, last_used_at);
 }
 
 bool ControllerStore::UpdatePlaneState(
     const std::string& plane_name,
     const std::string& state) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE planes SET state = ?2 WHERE name = ?1;");
-  statement.BindText(1, plane_name);
-  statement.BindText(2, state);
-  statement.StepDone();
-  return sqlite3_changes(db) > 0;
+  return PlaneRepository(AsSqlite(db_)).UpdatePlaneState(plane_name, state);
 }
 
 bool ControllerStore::UpdatePlaneAppliedGeneration(
     const std::string& plane_name,
     int applied_generation) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE planes SET applied_generation = ?2 WHERE name = ?1;");
-  statement.BindText(1, plane_name);
-  statement.BindInt(2, applied_generation);
-  statement.StepDone();
-  return sqlite3_changes(db) > 0;
+  return PlaneRepository(AsSqlite(db_))
+      .UpdatePlaneAppliedGeneration(plane_name, applied_generation);
 }
 
 bool ControllerStore::UpdatePlaneArtifactsRoot(
     const std::string& plane_name,
     const std::string& artifacts_root) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE planes SET artifacts_root = ?2 WHERE name = ?1;");
-  statement.BindText(1, plane_name);
-  statement.BindText(2, artifacts_root);
-  statement.StepDone();
-  return sqlite3_changes(db) > 0;
+  return PlaneRepository(AsSqlite(db_)).UpdatePlaneArtifactsRoot(plane_name, artifacts_root);
 }
 
 void ControllerStore::DeletePlane(const std::string& plane_name) {
-  sqlite3* db = AsSqlite(db_);
-  Exec(db, "BEGIN IMMEDIATE TRANSACTION;");
-  try {
-    const std::array<std::string, 9> delete_sql = {
-        "DELETE FROM host_assignments WHERE plane_name = ?1;",
-        "DELETE FROM rollout_actions WHERE plane_name = ?1;",
-        "DELETE FROM disk_runtime_state WHERE plane_name = ?1;",
-        "DELETE FROM event_log WHERE plane_name = ?1;",
-        "DELETE FROM scheduler_plane_runtime WHERE plane_name = ?1;",
-        "DELETE FROM scheduler_worker_runtime WHERE plane_name = ?1;",
-        "DELETE FROM scheduler_node_runtime WHERE plane_name = ?1;",
-        "UPDATE host_observations "
-        "SET plane_name = CASE WHEN plane_name = ?1 THEN '' ELSE plane_name END, "
-        "    applied_generation = CASE WHEN plane_name = ?1 THEN NULL ELSE applied_generation END, "
-        "    last_assignment_id = CASE WHEN plane_name = ?1 THEN NULL ELSE last_assignment_id END, "
-        "    updated_at = CURRENT_TIMESTAMP "
-        "WHERE plane_name = ?1;",
-        "DELETE FROM planes WHERE name = ?1;",
-    };
-    for (const auto& sql : delete_sql) {
-      Statement statement(db, sql);
-      statement.BindText(1, plane_name);
-      statement.StepDone();
-    }
-    Exec(db, "COMMIT;");
-  } catch (...) {
-    Exec(db, "ROLLBACK;");
-    throw;
-  }
+  PlaneRepository(AsSqlite(db_)).DeletePlane(plane_name);
 }
 
 int ControllerStore::SupersedeHostAssignmentsForPlane(
@@ -2763,323 +3761,61 @@ std::vector<NodeAvailabilityOverride> ControllerStore::LoadNodeAvailabilityOverr
 }
 
 void ControllerStore::UpsertDiskRuntimeState(const DiskRuntimeState& runtime_state) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "INSERT INTO disk_runtime_state("
-      "disk_name, plane_name, node_name, image_path, filesystem_type, loop_device, "
-      "mount_point, runtime_state, attached_at, mounted_at, last_verified_at, "
-      "status_message, updated_at"
-      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, "
-      "COALESCE(NULLIF(?11, ''), CURRENT_TIMESTAMP), ?12, CURRENT_TIMESTAMP) "
-      "ON CONFLICT(disk_name, node_name) DO UPDATE SET "
-      "plane_name = excluded.plane_name, "
-      "image_path = excluded.image_path, "
-      "filesystem_type = excluded.filesystem_type, "
-      "loop_device = excluded.loop_device, "
-      "mount_point = excluded.mount_point, "
-      "runtime_state = excluded.runtime_state, "
-      "attached_at = excluded.attached_at, "
-      "mounted_at = excluded.mounted_at, "
-      "last_verified_at = COALESCE(NULLIF(excluded.last_verified_at, ''), disk_runtime_state.last_verified_at, CURRENT_TIMESTAMP), "
-      "status_message = excluded.status_message, "
-      "updated_at = CURRENT_TIMESTAMP;");
-  statement.BindText(1, runtime_state.disk_name);
-  statement.BindText(2, runtime_state.plane_name);
-  statement.BindText(3, runtime_state.node_name);
-  statement.BindText(4, runtime_state.image_path);
-  statement.BindText(5, runtime_state.filesystem_type);
-  statement.BindText(6, runtime_state.loop_device);
-  statement.BindText(7, runtime_state.mount_point);
-  statement.BindText(8, runtime_state.runtime_state);
-  statement.BindText(9, runtime_state.attached_at);
-  statement.BindText(10, runtime_state.mounted_at);
-  statement.BindText(11, runtime_state.last_verified_at);
-  statement.BindText(12, runtime_state.status_message);
-  statement.StepDone();
+  DiskRuntimeRepository(AsSqlite(db_)).UpsertDiskRuntimeState(runtime_state);
 }
 
 std::optional<DiskRuntimeState> ControllerStore::LoadDiskRuntimeState(
     const std::string& disk_name,
     const std::string& node_name) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT disk_name, plane_name, node_name, image_path, filesystem_type, loop_device, "
-      "mount_point, runtime_state, attached_at, mounted_at, last_verified_at, "
-      "status_message, updated_at "
-      "FROM disk_runtime_state WHERE disk_name = ?1 AND node_name = ?2;");
-  statement.BindText(1, disk_name);
-  statement.BindText(2, node_name);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return DiskRuntimeStateFromStatement(statement.raw());
+  return DiskRuntimeRepository(AsSqlite(db_)).LoadDiskRuntimeState(disk_name, node_name);
 }
 
 std::vector<DiskRuntimeState> ControllerStore::LoadDiskRuntimeStates(
     const std::optional<std::string>& plane_name,
     const std::optional<std::string>& node_name) const {
-  sqlite3* db = AsSqlite(db_);
-  std::vector<DiskRuntimeState> runtime_states;
-  std::string sql =
-      "SELECT disk_name, plane_name, node_name, image_path, filesystem_type, loop_device, "
-      "mount_point, runtime_state, attached_at, mounted_at, last_verified_at, "
-      "status_message, updated_at "
-      "FROM disk_runtime_state";
-
-  int bind_index = 1;
-  if (plane_name.has_value() || node_name.has_value()) {
-    sql += " WHERE ";
-    bool wrote_condition = false;
-    if (plane_name.has_value()) {
-      sql += "plane_name = ?" + std::to_string(bind_index++);
-      wrote_condition = true;
-    }
-    if (node_name.has_value()) {
-      if (wrote_condition) {
-        sql += " AND ";
-      }
-      sql += "node_name = ?" + std::to_string(bind_index++);
-    }
-  }
-  sql += " ORDER BY plane_name ASC, node_name ASC, disk_name ASC;";
-
-  Statement statement(db, sql);
-  bind_index = 1;
-  if (plane_name.has_value()) {
-    statement.BindText(bind_index++, *plane_name);
-  }
-  if (node_name.has_value()) {
-    statement.BindText(bind_index++, *node_name);
-  }
-  while (statement.StepRow()) {
-    runtime_states.push_back(DiskRuntimeStateFromStatement(statement.raw()));
-  }
-  return runtime_states;
+  return DiskRuntimeRepository(AsSqlite(db_)).LoadDiskRuntimeStates(plane_name, node_name);
 }
 
 void ControllerStore::ReplaceRolloutActions(
     const std::string& plane_name,
     int desired_generation,
     const std::vector<SchedulerRolloutAction>& actions) {
-  sqlite3* db = AsSqlite(db_);
-  Exec(db, "BEGIN IMMEDIATE TRANSACTION;");
-  try {
-    {
-      Statement delete_statement(
-          db,
-          "DELETE FROM rollout_actions WHERE plane_name = ?1;");
-      delete_statement.BindText(1, plane_name);
-      delete_statement.StepDone();
-    }
-
-    for (const auto& action : actions) {
-      Statement insert_statement(
-          db,
-          "INSERT INTO rollout_actions("
-          "plane_name, desired_generation, step, worker_name, action, target_node_name, "
-          "target_gpu_device, victim_worker_names_json, reason, status, status_message, "
-          "created_at, updated_at"
-          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);");
-      insert_statement.BindText(1, plane_name);
-      insert_statement.BindInt(2, desired_generation);
-      insert_statement.BindInt(3, action.step);
-      insert_statement.BindText(4, action.worker_name);
-      insert_statement.BindText(5, action.action);
-      insert_statement.BindText(6, action.target_node_name);
-      insert_statement.BindText(7, action.target_gpu_device);
-      insert_statement.BindText(8, SerializeStringArray(action.victim_worker_names));
-      insert_statement.BindText(9, action.reason);
-      insert_statement.BindText(10, ToString(RolloutActionStatus::Pending));
-      insert_statement.BindText(11, "");
-      insert_statement.StepDone();
-    }
-
-    Exec(db, "COMMIT;");
-  } catch (...) {
-    Exec(db, "ROLLBACK;");
-    throw;
-  }
+  SchedulerRepository(AsSqlite(db_)).ReplaceRolloutActions(plane_name, desired_generation, actions);
 }
 
 std::vector<RolloutActionRecord> ControllerStore::LoadRolloutActions(
     const std::optional<std::string>& plane_name,
     const std::optional<std::string>& target_node_name,
     const std::optional<RolloutActionStatus>& status) const {
-  sqlite3* db = AsSqlite(db_);
-  std::string sql =
-      "SELECT id, plane_name, desired_generation, step, worker_name, action, target_node_name, "
-      "target_gpu_device, victim_worker_names_json, reason, status, status_message "
-      "FROM rollout_actions";
-  int bind_index = 1;
-  bool has_where = false;
-  if (plane_name.has_value()) {
-    sql += " WHERE plane_name = ?" + std::to_string(bind_index++);
-    has_where = true;
-  }
-  if (target_node_name.has_value()) {
-    sql += has_where ? " AND " : " WHERE ";
-    sql += "target_node_name = ?" + std::to_string(bind_index++);
-    has_where = true;
-  }
-  if (status.has_value()) {
-    sql += has_where ? " AND " : " WHERE ";
-    sql += "status = ?" + std::to_string(bind_index++);
-  }
-  sql += " ORDER BY plane_name ASC, desired_generation ASC, step ASC, id ASC;";
-
-  Statement statement(db, sql);
-  bind_index = 1;
-  if (plane_name.has_value()) {
-    statement.BindText(bind_index++, *plane_name);
-  }
-  if (target_node_name.has_value()) {
-    statement.BindText(bind_index++, *target_node_name);
-  }
-  if (status.has_value()) {
-    statement.BindText(bind_index++, ToString(*status));
-  }
-
-  std::vector<RolloutActionRecord> actions;
-  while (statement.StepRow()) {
-    actions.push_back(RolloutActionFromStatement(statement.raw()));
-  }
-  return actions;
+  return SchedulerRepository(AsSqlite(db_)).LoadRolloutActions(
+      plane_name, target_node_name, status);
 }
 
 bool ControllerStore::UpdateRolloutActionStatus(
     int action_id,
     RolloutActionStatus status,
     const std::string& status_message) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE rollout_actions "
-      "SET status = ?2, status_message = ?3, updated_at = CURRENT_TIMESTAMP "
-      "WHERE id = ?1;");
-  statement.BindInt(1, action_id);
-  statement.BindText(2, ToString(status));
-  statement.BindText(3, status_message);
-  statement.StepDone();
-  return sqlite3_changes(db) == 1;
+  return SchedulerRepository(AsSqlite(db_))
+      .UpdateRolloutActionStatus(action_id, status, status_message);
 }
 
 void ControllerStore::UpsertHostObservation(const HostObservation& observation) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "INSERT INTO host_observations("
-      "node_name, plane_name, applied_generation, last_assignment_id, status, "
-      "status_message, observed_state_json, runtime_status_json, "
-      "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, "
-      "network_telemetry_json, cpu_telemetry_json, heartbeat_at, updated_at"
-      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
-      "ON CONFLICT(node_name) DO UPDATE SET "
-      "plane_name = excluded.plane_name, "
-      "applied_generation = excluded.applied_generation, "
-      "last_assignment_id = excluded.last_assignment_id, "
-      "status = excluded.status, "
-      "status_message = excluded.status_message, "
-      "observed_state_json = excluded.observed_state_json, "
-      "runtime_status_json = excluded.runtime_status_json, "
-      "instance_runtime_json = excluded.instance_runtime_json, "
-      "gpu_telemetry_json = excluded.gpu_telemetry_json, "
-      "disk_telemetry_json = excluded.disk_telemetry_json, "
-      "network_telemetry_json = excluded.network_telemetry_json, "
-      "cpu_telemetry_json = excluded.cpu_telemetry_json, "
-      "heartbeat_at = CURRENT_TIMESTAMP, "
-      "updated_at = CURRENT_TIMESTAMP;");
-  statement.BindText(1, observation.node_name);
-  statement.BindText(2, observation.plane_name);
-  statement.BindOptionalInt(3, observation.applied_generation);
-  statement.BindOptionalInt(4, observation.last_assignment_id);
-  statement.BindText(5, ToString(observation.status));
-  statement.BindText(6, observation.status_message);
-  statement.BindText(7, observation.observed_state_json);
-  statement.BindText(8, observation.runtime_status_json);
-  statement.BindText(9, observation.instance_runtime_json);
-  statement.BindText(10, observation.gpu_telemetry_json);
-  statement.BindText(11, observation.disk_telemetry_json);
-  statement.BindText(12, observation.network_telemetry_json);
-  statement.BindText(13, observation.cpu_telemetry_json);
-  statement.StepDone();
+  ObservationRepository(AsSqlite(db_)).UpsertHostObservation(observation);
 }
 
 std::optional<HostObservation> ControllerStore::LoadHostObservation(
     const std::string& node_name) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT node_name, plane_name, applied_generation, last_assignment_id, status, "
-      "status_message, observed_state_json, runtime_status_json, "
-      "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, network_telemetry_json, cpu_telemetry_json, heartbeat_at "
-      "FROM host_observations WHERE node_name = ?1;");
-  statement.BindText(1, node_name);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return ObservationFromStatement(statement.raw());
+  return ObservationRepository(AsSqlite(db_)).LoadHostObservation(node_name);
 }
 
 std::vector<HostObservation> ControllerStore::LoadHostObservations(
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  sqlite3* db = AsSqlite(db_);
-  std::vector<HostObservation> observations;
-
-  std::string sql =
-      "SELECT node_name, plane_name, applied_generation, last_assignment_id, status, "
-      "status_message, observed_state_json, runtime_status_json, "
-      "instance_runtime_json, gpu_telemetry_json, disk_telemetry_json, network_telemetry_json, cpu_telemetry_json, heartbeat_at "
-      "FROM host_observations";
-  int bind_index = 1;
-  bool has_where = false;
-  if (node_name.has_value()) {
-    sql += " WHERE node_name = ?" + std::to_string(bind_index++);
-    has_where = true;
-  }
-  if (plane_name.has_value()) {
-    sql += has_where ? " AND " : " WHERE ";
-    sql += "plane_name = ?" + std::to_string(bind_index++);
-  }
-  sql += " ORDER BY node_name ASC;";
-
-  Statement statement(db, sql);
-  bind_index = 1;
-  if (node_name.has_value()) {
-    statement.BindText(bind_index++, *node_name);
-  }
-  if (plane_name.has_value()) {
-    statement.BindText(bind_index++, *plane_name);
-  }
-
-  while (statement.StepRow()) {
-    observations.push_back(ObservationFromStatement(statement.raw()));
-  }
-
-  return observations;
+  return ObservationRepository(AsSqlite(db_)).LoadHostObservations(node_name, plane_name);
 }
 
 void ControllerStore::AppendEvent(const EventRecord& event) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "INSERT INTO event_log("
-      "plane_name, node_name, worker_name, assignment_id, rollout_action_id, "
-      "category, event_type, severity, message, payload_json"
-      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);");
-  statement.BindText(1, event.plane_name);
-  statement.BindText(2, event.node_name);
-  statement.BindText(3, event.worker_name);
-  statement.BindOptionalInt(4, event.assignment_id);
-  statement.BindOptionalInt(5, event.rollout_action_id);
-  statement.BindText(6, event.category);
-  statement.BindText(7, event.event_type);
-  statement.BindText(8, event.severity);
-  statement.BindText(9, event.message);
-  statement.BindText(10, event.payload_json);
-  statement.StepDone();
+  EventRepository(AsSqlite(db_)).AppendEvent(event);
 }
 
 std::vector<EventRecord> ControllerStore::LoadEvents(
@@ -3090,555 +3826,111 @@ std::vector<EventRecord> ControllerStore::LoadEvents(
     int limit,
     const std::optional<int>& since_id,
     bool ascending) const {
-  sqlite3* db = AsSqlite(db_);
-  std::vector<std::string> clauses;
-  if (plane_name.has_value()) {
-    clauses.push_back("plane_name = ?" + std::to_string(clauses.size() + 1));
-  }
-  if (node_name.has_value()) {
-    clauses.push_back("node_name = ?" + std::to_string(clauses.size() + 1));
-  }
-  if (worker_name.has_value()) {
-    clauses.push_back("worker_name = ?" + std::to_string(clauses.size() + 1));
-  }
-  if (category.has_value()) {
-    clauses.push_back("category = ?" + std::to_string(clauses.size() + 1));
-  }
-  if (since_id.has_value()) {
-    clauses.push_back("id > ?" + std::to_string(clauses.size() + 1));
-  }
-
-  std::string sql =
-      "SELECT id, plane_name, node_name, worker_name, assignment_id, rollout_action_id, "
-      "category, event_type, severity, message, payload_json, created_at "
-      "FROM event_log";
-  if (!clauses.empty()) {
-    sql += " WHERE ";
-    for (std::size_t index = 0; index < clauses.size(); ++index) {
-      if (index > 0) {
-        sql += " AND ";
-      }
-      sql += clauses[index];
-    }
-  }
-  sql += std::string(" ORDER BY id ") + (ascending ? "ASC" : "DESC") +
-         " LIMIT ?" + std::to_string(clauses.size() + 1) + ";";
-
-  Statement statement(db, sql);
-  int bind_index = 1;
-  if (plane_name.has_value()) {
-    statement.BindText(bind_index++, *plane_name);
-  }
-  if (node_name.has_value()) {
-    statement.BindText(bind_index++, *node_name);
-  }
-  if (worker_name.has_value()) {
-    statement.BindText(bind_index++, *worker_name);
-  }
-  if (category.has_value()) {
-    statement.BindText(bind_index++, *category);
-  }
-  if (since_id.has_value()) {
-    statement.BindInt(bind_index++, *since_id);
-  }
-  statement.BindInt(bind_index, limit > 0 ? limit : 100);
-
-  std::vector<EventRecord> events;
-  while (statement.StepRow()) {
-    events.push_back(EventFromStatement(statement.raw()));
-  }
-  return events;
+  return EventRepository(AsSqlite(db_)).LoadEvents(
+      plane_name,
+      node_name,
+      worker_name,
+      category,
+      limit,
+      since_id,
+      ascending);
 }
 
 void ControllerStore::UpsertSchedulerPlaneRuntime(const SchedulerPlaneRuntime& runtime) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "INSERT INTO scheduler_plane_runtime("
-      "plane_name, active_action, active_worker_name, phase, action_generation, "
-      "stable_samples, rollback_attempt_count, source_node_name, source_gpu_device, "
-      "target_node_name, target_gpu_device, previous_state_json, status_message, "
-      "started_at, updated_at"
-      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, "
-      "COALESCE(NULLIF(?14, ''), CURRENT_TIMESTAMP), CURRENT_TIMESTAMP) "
-      "ON CONFLICT(plane_name) DO UPDATE SET "
-      "active_action = excluded.active_action, "
-      "active_worker_name = excluded.active_worker_name, "
-      "phase = excluded.phase, "
-      "action_generation = excluded.action_generation, "
-      "stable_samples = excluded.stable_samples, "
-      "rollback_attempt_count = excluded.rollback_attempt_count, "
-      "source_node_name = excluded.source_node_name, "
-      "source_gpu_device = excluded.source_gpu_device, "
-      "target_node_name = excluded.target_node_name, "
-      "target_gpu_device = excluded.target_gpu_device, "
-      "previous_state_json = excluded.previous_state_json, "
-      "status_message = excluded.status_message, "
-      "started_at = COALESCE(NULLIF(excluded.started_at, ''), scheduler_plane_runtime.started_at, CURRENT_TIMESTAMP), "
-      "updated_at = CURRENT_TIMESTAMP;");
-  statement.BindText(1, runtime.plane_name);
-  statement.BindText(2, runtime.active_action);
-  statement.BindText(3, runtime.active_worker_name);
-  statement.BindText(4, runtime.phase);
-  statement.BindInt(5, runtime.action_generation);
-  statement.BindInt(6, runtime.stable_samples);
-  statement.BindInt(7, runtime.rollback_attempt_count);
-  statement.BindText(8, runtime.source_node_name);
-  statement.BindText(9, runtime.source_gpu_device);
-  statement.BindText(10, runtime.target_node_name);
-  statement.BindText(11, runtime.target_gpu_device);
-  statement.BindText(12, runtime.previous_state_json);
-  statement.BindText(13, runtime.status_message);
-  statement.BindText(14, runtime.started_at);
-  statement.StepDone();
+  SchedulerRepository(AsSqlite(db_)).UpsertSchedulerPlaneRuntime(runtime);
 }
 
 std::optional<SchedulerPlaneRuntime> ControllerStore::LoadSchedulerPlaneRuntime(
     const std::string& plane_name) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT plane_name, active_action, active_worker_name, phase, action_generation, "
-      "stable_samples, rollback_attempt_count, source_node_name, source_gpu_device, "
-      "target_node_name, target_gpu_device, previous_state_json, status_message, "
-      "started_at, updated_at "
-      "FROM scheduler_plane_runtime WHERE plane_name = ?1;");
-  statement.BindText(1, plane_name);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return SchedulerPlaneRuntimeFromStatement(statement.raw());
+  return SchedulerRepository(AsSqlite(db_)).LoadSchedulerPlaneRuntime(plane_name);
 }
 
 void ControllerStore::ClearSchedulerPlaneRuntime(const std::string& plane_name) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "DELETE FROM scheduler_plane_runtime WHERE plane_name = ?1;");
-  statement.BindText(1, plane_name);
-  statement.StepDone();
+  SchedulerRepository(AsSqlite(db_)).ClearSchedulerPlaneRuntime(plane_name);
 }
 
 void ControllerStore::UpsertSchedulerWorkerRuntime(const SchedulerWorkerRuntime& runtime) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "INSERT INTO scheduler_worker_runtime("
-      "worker_name, plane_name, last_move_at, last_eviction_at, "
-      "last_verified_generation, last_scheduler_phase, last_status_message, "
-      "manual_intervention_required, updated_at"
-      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP) "
-      "ON CONFLICT(worker_name) DO UPDATE SET "
-      "plane_name = excluded.plane_name, "
-      "last_move_at = excluded.last_move_at, "
-      "last_eviction_at = excluded.last_eviction_at, "
-      "last_verified_generation = excluded.last_verified_generation, "
-      "last_scheduler_phase = excluded.last_scheduler_phase, "
-      "last_status_message = excluded.last_status_message, "
-      "manual_intervention_required = excluded.manual_intervention_required, "
-      "updated_at = CURRENT_TIMESTAMP;");
-  statement.BindText(1, runtime.worker_name);
-  statement.BindText(2, runtime.plane_name);
-  statement.BindText(3, runtime.last_move_at);
-  statement.BindText(4, runtime.last_eviction_at);
-  statement.BindOptionalInt(5, runtime.last_verified_generation);
-  statement.BindText(6, runtime.last_scheduler_phase);
-  statement.BindText(7, runtime.last_status_message);
-  statement.BindInt(8, runtime.manual_intervention_required ? 1 : 0);
-  statement.StepDone();
+  SchedulerRepository(AsSqlite(db_)).UpsertSchedulerWorkerRuntime(runtime);
 }
 
 std::optional<SchedulerWorkerRuntime> ControllerStore::LoadSchedulerWorkerRuntime(
     const std::string& worker_name) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT worker_name, plane_name, last_move_at, last_eviction_at, "
-      "last_verified_generation, last_scheduler_phase, last_status_message, "
-      "manual_intervention_required, updated_at "
-      "FROM scheduler_worker_runtime WHERE worker_name = ?1;");
-  statement.BindText(1, worker_name);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return SchedulerWorkerRuntimeFromStatement(statement.raw());
+  return SchedulerRepository(AsSqlite(db_)).LoadSchedulerWorkerRuntime(worker_name);
 }
 
 std::vector<SchedulerWorkerRuntime> ControllerStore::LoadSchedulerWorkerRuntimes(
     const std::optional<std::string>& plane_name) const {
-  sqlite3* db = AsSqlite(db_);
-  std::string sql =
-      "SELECT worker_name, plane_name, last_move_at, last_eviction_at, "
-      "last_verified_generation, last_scheduler_phase, last_status_message, "
-      "manual_intervention_required, updated_at "
-      "FROM scheduler_worker_runtime";
-  if (plane_name.has_value()) {
-    sql += " WHERE plane_name = ?1";
-  }
-  sql += " ORDER BY worker_name ASC;";
-  Statement statement(db, sql);
-  if (plane_name.has_value()) {
-    statement.BindText(1, *plane_name);
-  }
-  std::vector<SchedulerWorkerRuntime> runtimes;
-  while (statement.StepRow()) {
-    runtimes.push_back(SchedulerWorkerRuntimeFromStatement(statement.raw()));
-  }
-  return runtimes;
+  return SchedulerRepository(AsSqlite(db_)).LoadSchedulerWorkerRuntimes(plane_name);
 }
 
 void ControllerStore::UpsertSchedulerNodeRuntime(const SchedulerNodeRuntime& runtime) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "INSERT INTO scheduler_node_runtime("
-      "node_name, plane_name, last_move_at, last_verified_generation, updated_at"
-      ") VALUES(?1, ?2, ?3, ?4, CURRENT_TIMESTAMP) "
-      "ON CONFLICT(node_name) DO UPDATE SET "
-      "plane_name = excluded.plane_name, "
-      "last_move_at = excluded.last_move_at, "
-      "last_verified_generation = excluded.last_verified_generation, "
-      "updated_at = CURRENT_TIMESTAMP;");
-  statement.BindText(1, runtime.node_name);
-  statement.BindText(2, runtime.plane_name);
-  statement.BindText(3, runtime.last_move_at);
-  statement.BindOptionalInt(4, runtime.last_verified_generation);
-  statement.StepDone();
+  SchedulerRepository(AsSqlite(db_)).UpsertSchedulerNodeRuntime(runtime);
 }
 
 std::optional<SchedulerNodeRuntime> ControllerStore::LoadSchedulerNodeRuntime(
     const std::string& node_name) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT node_name, plane_name, last_move_at, last_verified_generation, updated_at "
-      "FROM scheduler_node_runtime WHERE node_name = ?1;");
-  statement.BindText(1, node_name);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return SchedulerNodeRuntimeFromStatement(statement.raw());
+  return SchedulerRepository(AsSqlite(db_)).LoadSchedulerNodeRuntime(node_name);
 }
 
 std::vector<SchedulerNodeRuntime> ControllerStore::LoadSchedulerNodeRuntimes(
     const std::optional<std::string>& plane_name) const {
-  sqlite3* db = AsSqlite(db_);
-  std::string sql =
-      "SELECT node_name, plane_name, last_move_at, last_verified_generation, updated_at "
-      "FROM scheduler_node_runtime";
-  if (plane_name.has_value()) {
-    sql += " WHERE plane_name = ?1";
-  }
-  sql += " ORDER BY node_name ASC;";
-  Statement statement(db, sql);
-  if (plane_name.has_value()) {
-    statement.BindText(1, *plane_name);
-  }
-  std::vector<SchedulerNodeRuntime> runtimes;
-  while (statement.StepRow()) {
-    runtimes.push_back(SchedulerNodeRuntimeFromStatement(statement.raw()));
-  }
-  return runtimes;
+  return SchedulerRepository(AsSqlite(db_)).LoadSchedulerNodeRuntimes(plane_name);
 }
 
 void ControllerStore::ReplaceHostAssignments(const std::vector<HostAssignment>& assignments) {
-  sqlite3* db = AsSqlite(db_);
-  Exec(db, "BEGIN IMMEDIATE TRANSACTION;");
-
-  try {
-    if (!assignments.empty()) {
-      Statement supersede_statement(
-          db,
-          "UPDATE host_assignments "
-          "SET status = 'superseded', "
-          "status_message = ?2, "
-          "updated_at = CURRENT_TIMESTAMP "
-          "WHERE plane_name = ?1 AND status IN ('pending', 'claimed');");
-      supersede_statement.BindText(1, assignments.front().plane_name);
-      supersede_statement.BindText(
-          2,
-          "superseded by desired generation " +
-              std::to_string(assignments.front().desired_generation));
-      supersede_statement.StepDone();
-    }
-
-    for (const auto& assignment : assignments) {
-      Statement statement(
-          db,
-          "INSERT INTO host_assignments("
-          "node_name, plane_name, desired_generation, attempt_count, max_attempts, "
-          "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json, "
-          "updated_at"
-          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP);");
-      statement.BindText(1, assignment.node_name);
-      statement.BindText(2, assignment.plane_name);
-      statement.BindInt(3, assignment.desired_generation);
-      statement.BindInt(4, assignment.attempt_count);
-      statement.BindInt(5, assignment.max_attempts);
-      statement.BindText(6, assignment.assignment_type);
-      statement.BindText(7, assignment.desired_state_json);
-      statement.BindText(8, assignment.artifacts_root);
-      statement.BindText(9, ToString(assignment.status));
-      statement.BindText(10, assignment.status_message);
-      statement.BindText(11, assignment.progress_json.empty() ? "{}" : assignment.progress_json);
-      statement.StepDone();
-    }
-
-    Exec(db, "COMMIT;");
-  } catch (...) {
-    Exec(db, "ROLLBACK;");
-    throw;
-  }
+  AssignmentRepository(AsSqlite(db_)).ReplaceHostAssignments(assignments);
 }
 
 void ControllerStore::EnqueueHostAssignments(
     const std::vector<HostAssignment>& assignments,
     const std::string& supersede_reason) {
-  if (assignments.empty()) {
-    return;
-  }
-
-  sqlite3* db = AsSqlite(db_);
-  Exec(db, "BEGIN IMMEDIATE TRANSACTION;");
-
-  try {
-    for (const auto& assignment : assignments) {
-      Statement supersede_statement(
-          db,
-          "UPDATE host_assignments "
-          "SET status = 'superseded', "
-          "status_message = ?3, "
-          "updated_at = CURRENT_TIMESTAMP "
-          "WHERE plane_name = ?1 AND node_name = ?2 AND status IN ('pending', 'claimed');");
-      supersede_statement.BindText(1, assignment.plane_name);
-      supersede_statement.BindText(2, assignment.node_name);
-      supersede_statement.BindText(
-          3,
-          supersede_reason.empty()
-              ? "superseded by manual resync for desired generation " +
-                    std::to_string(assignment.desired_generation)
-              : supersede_reason);
-      supersede_statement.StepDone();
-
-      Statement insert_statement(
-          db,
-          "INSERT INTO host_assignments("
-          "node_name, plane_name, desired_generation, attempt_count, max_attempts, "
-          "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json, "
-          "updated_at"
-          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP);");
-      insert_statement.BindText(1, assignment.node_name);
-      insert_statement.BindText(2, assignment.plane_name);
-      insert_statement.BindInt(3, assignment.desired_generation);
-      insert_statement.BindInt(4, assignment.attempt_count);
-      insert_statement.BindInt(5, assignment.max_attempts);
-      insert_statement.BindText(6, assignment.assignment_type);
-      insert_statement.BindText(7, assignment.desired_state_json);
-      insert_statement.BindText(8, assignment.artifacts_root);
-      insert_statement.BindText(9, ToString(assignment.status));
-      insert_statement.BindText(10, assignment.status_message);
-      insert_statement.BindText(
-          11,
-          assignment.progress_json.empty() ? "{}" : assignment.progress_json);
-      insert_statement.StepDone();
-    }
-
-    Exec(db, "COMMIT;");
-  } catch (...) {
-    Exec(db, "ROLLBACK;");
-    throw;
-  }
+  AssignmentRepository(AsSqlite(db_)).EnqueueHostAssignments(assignments, supersede_reason);
 }
 
 std::optional<HostAssignment> ControllerStore::LoadHostAssignment(int assignment_id) const {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "SELECT id, node_name, plane_name, desired_generation, attempt_count, max_attempts, "
-      "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json "
-      "FROM host_assignments WHERE id = ?1;");
-  statement.BindInt(1, assignment_id);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return AssignmentFromStatement(statement.raw());
+  return AssignmentRepository(AsSqlite(db_)).LoadHostAssignment(assignment_id);
 }
 
 std::vector<HostAssignment> ControllerStore::LoadHostAssignments(
     const std::optional<std::string>& node_name,
     const std::optional<HostAssignmentStatus>& status,
     const std::optional<std::string>& plane_name) const {
-  sqlite3* db = AsSqlite(db_);
-  std::vector<HostAssignment> assignments;
-
-  const bool has_node = node_name.has_value();
-  const bool has_status = status.has_value();
-  const bool has_plane = plane_name.has_value();
-
-  std::string sql =
-      "SELECT id, node_name, plane_name, desired_generation, attempt_count, max_attempts, "
-      "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json "
-      "FROM host_assignments";
-  int bind_index = 1;
-  if (has_node || has_status || has_plane) {
-    sql += " WHERE ";
-    if (has_node) {
-      sql += "node_name = ?" + std::to_string(bind_index++);
-    }
-    if (has_node && (has_status || has_plane)) {
-      sql += " AND ";
-    }
-    if (has_status) {
-      sql += "status = ?" + std::to_string(bind_index++);
-    }
-    if (has_plane) {
-      if (has_node || has_status) {
-        sql += " AND ";
-      }
-      sql += "plane_name = ?" + std::to_string(bind_index++);
-    }
-  }
-  sql += " ORDER BY id ASC;";
-
-  Statement statement(db, sql);
-  bind_index = 1;
-  if (has_node) {
-    statement.BindText(bind_index++, *node_name);
-  }
-  if (has_status) {
-    statement.BindText(bind_index++, ToString(*status));
-  }
-  if (has_plane) {
-    statement.BindText(bind_index++, *plane_name);
-  }
-
-  while (statement.StepRow()) {
-    assignments.push_back(AssignmentFromStatement(statement.raw()));
-  }
-
-  return assignments;
+  return AssignmentRepository(AsSqlite(db_)).LoadHostAssignments(node_name, status, plane_name);
 }
 
 std::optional<HostAssignment> ControllerStore::ClaimNextHostAssignment(
     const std::string& node_name) {
-  sqlite3* db = AsSqlite(db_);
-  Exec(db, "BEGIN IMMEDIATE TRANSACTION;");
-
-  try {
-    std::optional<HostAssignment> assignment;
-    {
-      Statement statement(
-          db,
-          "SELECT id, node_name, plane_name, desired_generation, attempt_count, max_attempts, "
-          "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json "
-          "FROM host_assignments "
-          "WHERE node_name = ?1 AND status = 'pending' AND attempt_count < max_attempts "
-          "ORDER BY id ASC LIMIT 1;");
-      statement.BindText(1, node_name);
-      if (statement.StepRow()) {
-        assignment = AssignmentFromStatement(statement.raw());
-      }
-    }
-
-    if (!assignment.has_value()) {
-      Exec(db, "COMMIT;");
-      return std::nullopt;
-    }
-
-    {
-      Statement statement(
-          db,
-          "UPDATE host_assignments "
-          "SET status = 'claimed', "
-          "status_message = '', "
-          "progress_json = '{\"phase\":\"queued\",\"title\":\"Assignment claimed\",\"detail\":\"Hostd accepted the assignment and is starting work.\",\"percent\":5}', "
-          "attempt_count = attempt_count + 1, "
-          "updated_at = CURRENT_TIMESTAMP "
-          "WHERE id = ?1 AND status = 'pending';");
-      statement.BindInt(1, assignment->id);
-      statement.StepDone();
-    }
-
-    Exec(db, "COMMIT;");
-    assignment->status = HostAssignmentStatus::Claimed;
-    assignment->attempt_count += 1;
-    assignment->progress_json =
-        "{\"phase\":\"queued\",\"title\":\"Assignment claimed\",\"detail\":"
-        "\"Hostd accepted the assignment and is starting work.\",\"percent\":5}";
-    return assignment;
-  } catch (...) {
-    Exec(db, "ROLLBACK;");
-    throw;
-  }
+  return AssignmentRepository(AsSqlite(db_)).ClaimNextHostAssignment(node_name);
 }
 
 bool ControllerStore::UpdateHostAssignmentProgress(
     int assignment_id,
     const std::string& progress_json) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE host_assignments "
-      "SET progress_json = ?2, updated_at = CURRENT_TIMESTAMP "
-      "WHERE id = ?1 AND status = 'claimed';");
-  statement.BindInt(1, assignment_id);
-  statement.BindText(2, progress_json.empty() ? "{}" : progress_json);
-  statement.StepDone();
-  return sqlite3_changes(db) > 0;
+  return AssignmentRepository(AsSqlite(db_)).UpdateHostAssignmentProgress(
+      assignment_id, progress_json);
 }
 
 bool ControllerStore::TransitionClaimedHostAssignment(
     int assignment_id,
     HostAssignmentStatus status,
     const std::string& status_message) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE host_assignments "
-      "SET status = ?2, status_message = ?3, updated_at = CURRENT_TIMESTAMP "
-      "WHERE id = ?1 AND status = 'claimed';");
-  statement.BindInt(1, assignment_id);
-  statement.BindText(2, ToString(status));
-  statement.BindText(3, status_message);
-  statement.StepDone();
-  return sqlite3_changes(db) > 0;
+  return AssignmentRepository(AsSqlite(db_)).TransitionClaimedHostAssignment(
+      assignment_id, status, status_message);
 }
 
 bool ControllerStore::RetryFailedHostAssignment(
     int assignment_id,
     const std::string& status_message) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE host_assignments "
-      "SET status = 'pending', "
-      "status_message = ?2, "
-      "max_attempts = CASE "
-      "  WHEN max_attempts < attempt_count + 1 THEN attempt_count + 1 "
-      "  ELSE max_attempts "
-      "END, "
-      "updated_at = CURRENT_TIMESTAMP "
-      "WHERE id = ?1 AND status = 'failed';");
-  statement.BindInt(1, assignment_id);
-  statement.BindText(2, status_message);
-  statement.StepDone();
-  return sqlite3_changes(db) > 0;
+  return AssignmentRepository(AsSqlite(db_)).RetryFailedHostAssignment(
+      assignment_id, status_message);
 }
 
 void ControllerStore::UpdateHostAssignmentStatus(
     int assignment_id,
     HostAssignmentStatus status,
     const std::string& status_message) {
-  sqlite3* db = AsSqlite(db_);
-  Statement statement(
-      db,
-      "UPDATE host_assignments "
-      "SET status = ?2, status_message = ?3, updated_at = CURRENT_TIMESTAMP "
-      "WHERE id = ?1;");
-  statement.BindInt(1, assignment_id);
-  statement.BindText(2, ToString(status));
-  statement.BindText(3, status_message);
-  statement.StepDone();
+  AssignmentRepository(AsSqlite(db_))
+      .UpdateHostAssignmentStatus(assignment_id, status, status_message);
 }
 
 const std::string& ControllerStore::db_path() const {

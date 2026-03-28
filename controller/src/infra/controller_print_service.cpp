@@ -1,6 +1,8 @@
 #include "infra/controller_print_service.h"
 
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -9,7 +11,38 @@
 
 namespace comet::controller {
 
-ControllerPrintService::ControllerPrintService(Deps deps) : deps_(std::move(deps)) {}
+ControllerPrintService::ControllerPrintService() = default;
+
+ControllerPrintService::ControllerPrintService(
+    ControllerRuntimeSupportService runtime_support_service)
+    : runtime_support_service_(std::move(runtime_support_service)) {}
+
+std::optional<std::tm> ControllerPrintService::ParseDisplayTimestamp(
+    const std::string& value) const {
+  if (value.empty()) {
+    return std::nullopt;
+  }
+  for (const char* format : {"%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"}) {
+    std::tm tm{};
+    std::istringstream input(value);
+    input >> std::get_time(&tm, format);
+    if (!input.fail()) {
+      return tm;
+    }
+  }
+  return std::nullopt;
+}
+
+std::string ControllerPrintService::FormatDisplayTimestamp(
+    const std::string& value) const {
+  const auto parsed = ParseDisplayTimestamp(value);
+  if (!parsed.has_value()) {
+    return value.empty() ? "(empty)" : value;
+  }
+  std::ostringstream output;
+  output << std::put_time(&*parsed, "%d/%m/%Y %H:%M:%S");
+  return output.str();
+}
 
 void ControllerPrintService::PrintStateSummary(const comet::DesiredState& state) const {
   std::cout << "plane: " << state.plane_name << "\n";
@@ -145,7 +178,7 @@ void ControllerPrintService::PrintDetailedDiskState(
   }
   std::map<std::string, comet::DiskTelemetryRecord> telemetry_by_key;
   for (const auto& observation : observations) {
-    const auto disk_telemetry = deps_.parse_disk_telemetry(observation);
+    const auto disk_telemetry = runtime_support_service_.ParseDiskTelemetry(observation);
     if (!disk_telemetry.has_value()) {
       continue;
     }
@@ -380,7 +413,7 @@ void ControllerPrintService::PrintNodeAvailabilityOverrides(
     std::cout << "  - node=" << availability_override.node_name
               << " availability=" << comet::ToString(availability_override.availability)
               << " updated_at="
-              << deps_.format_display_timestamp(availability_override.updated_at)
+              << FormatDisplayTimestamp(availability_override.updated_at)
               << "\n";
     if (!availability_override.status_message.empty()) {
       std::cout << "    message=" << availability_override.status_message << "\n";
@@ -396,7 +429,8 @@ void ControllerPrintService::PrintAssignmentDispatchSummary(
   std::size_t schedulable_nodes = 0;
   std::vector<std::string> skipped_nodes;
   for (const auto& node : desired_state.nodes) {
-    const auto availability = deps_.resolve_node_availability(availability_overrides, node.name);
+    const auto availability =
+        runtime_support_service_.ResolveNodeAvailability(availability_overrides, node.name);
     if (!IsNodeSchedulable(availability)) {
       skipped_nodes.push_back(node.name + "(" + comet::ToString(availability) + ")");
       continue;
@@ -466,13 +500,14 @@ void ControllerPrintService::PrintHostObservations(
       disk_count = observed_state.disks.size();
       instance_count = observed_state.instances.size();
     }
-    const auto runtime_status = deps_.parse_runtime_status(observation);
-    const auto instance_statuses = deps_.parse_instance_runtime_statuses(observation);
-    const auto gpu_telemetry = deps_.parse_gpu_telemetry(observation);
-    const auto disk_telemetry = deps_.parse_disk_telemetry(observation);
-    const auto network_telemetry = deps_.parse_network_telemetry(observation);
-    const auto cpu_telemetry = deps_.parse_cpu_telemetry(observation);
-    const auto age_seconds = deps_.heartbeat_age_seconds(observation.heartbeat_at);
+    const auto runtime_status = runtime_support_service_.ParseRuntimeStatus(observation);
+    const auto instance_statuses =
+        runtime_support_service_.ParseInstanceRuntimeStatuses(observation);
+    const auto gpu_telemetry = runtime_support_service_.ParseGpuTelemetry(observation);
+    const auto disk_telemetry = runtime_support_service_.ParseDiskTelemetry(observation);
+    const auto network_telemetry = runtime_support_service_.ParseNetworkTelemetry(observation);
+    const auto cpu_telemetry = runtime_support_service_.ParseCpuTelemetry(observation);
+    const auto age_seconds = runtime_support_service_.HeartbeatAgeSeconds(observation.heartbeat_at);
 
     std::cout << "  - node=" << observation.node_name
               << " plane=" << (observation.plane_name.empty() ? "(none)" : observation.plane_name)
@@ -486,10 +521,11 @@ void ControllerPrintService::PrintHostObservations(
     std::cout << " disks=" << disk_count
               << " instances=" << instance_count
               << " heartbeat_at="
-              << deps_.format_display_timestamp(observation.heartbeat_at);
+              << FormatDisplayTimestamp(observation.heartbeat_at);
     if (age_seconds.has_value()) {
       std::cout << " age_seconds=" << *age_seconds
-                << " health=" << deps_.health_from_age(age_seconds, stale_after_seconds);
+                << " health="
+                << runtime_support_service_.HealthFromAge(age_seconds, stale_after_seconds);
     }
     if (runtime_status.has_value()) {
       std::cout << " runtime_backend="
@@ -689,7 +725,7 @@ void ControllerPrintService::PrintHostHealth(
     observation_by_node.emplace(observation.node_name, observation);
   }
   const auto availability_override_map =
-      deps_.build_availability_override_map(availability_overrides);
+      runtime_support_service_.BuildAvailabilityOverrideMap(availability_overrides);
 
   std::vector<std::string> nodes;
   std::set<std::string> seen_nodes;
@@ -725,18 +761,21 @@ void ControllerPrintService::PrintHostHealth(
       std::cout << "  - node=" << current_node_name
                 << " availability="
                 << comet::ToString(
-                       deps_.resolve_node_availability(
-                           availability_override_map,
-                           current_node_name))
+                       runtime_support_service_.ResolveNodeAvailability(
+                           availability_override_map, current_node_name))
                 << " health=unknown status=(none)\n";
       ++unknown_count;
       continue;
     }
 
-    const auto age_seconds = deps_.heartbeat_age_seconds(observation_it->second.heartbeat_at);
-    const std::string health = deps_.health_from_age(age_seconds, stale_after_seconds);
-    const auto runtime_status = deps_.parse_runtime_status(observation_it->second);
-    const auto gpu_telemetry = deps_.parse_gpu_telemetry(observation_it->second);
+    const auto age_seconds =
+        runtime_support_service_.HeartbeatAgeSeconds(observation_it->second.heartbeat_at);
+    const std::string health =
+        runtime_support_service_.HealthFromAge(age_seconds, stale_after_seconds);
+    const auto runtime_status =
+        runtime_support_service_.ParseRuntimeStatus(observation_it->second);
+    const auto gpu_telemetry =
+        runtime_support_service_.ParseGpuTelemetry(observation_it->second);
     if (health == "online") {
       ++online_count;
     } else if (health == "stale") {
@@ -748,9 +787,8 @@ void ControllerPrintService::PrintHostHealth(
     std::cout << "  - node=" << current_node_name
               << " availability="
               << comet::ToString(
-                     deps_.resolve_node_availability(
-                         availability_override_map,
-                         current_node_name))
+                     runtime_support_service_.ResolveNodeAvailability(
+                         availability_override_map, current_node_name))
               << " health=" << health
               << " status=" << comet::ToString(observation_it->second.status);
     if (observation_it->second.applied_generation.has_value()) {
@@ -821,7 +859,7 @@ void ControllerPrintService::PrintEvents(
     if (event.rollout_action_id.has_value()) {
       std::cout << " rollout_action_id=" << *event.rollout_action_id;
     }
-    std::cout << " at=" << deps_.format_display_timestamp(event.created_at)
+    std::cout << " at=" << FormatDisplayTimestamp(event.created_at)
               << " message="
               << (event.message.empty() ? "(empty)" : event.message)
               << "\n";
@@ -836,22 +874,24 @@ std::optional<std::string> ControllerPrintService::ObservedSchedulingGateReason(
     const std::vector<comet::HostObservation>& observations,
     const std::string& node_name,
     int stale_after_seconds) const {
-  const auto observation = deps_.find_host_observation_for_node(observations, node_name);
+  const auto observation =
+      runtime_support_service_.FindHostObservationForNode(observations, node_name);
   if (!observation.has_value()) {
     return std::nullopt;
   }
   if (observation->status == comet::HostObservationStatus::Failed) {
     return std::string("failed");
   }
-  const auto age_seconds = deps_.heartbeat_age_seconds(observation->heartbeat_at);
-  if (deps_.health_from_age(age_seconds, stale_after_seconds) == "stale") {
+  const auto age_seconds =
+      runtime_support_service_.HeartbeatAgeSeconds(observation->heartbeat_at);
+  if (runtime_support_service_.HealthFromAge(age_seconds, stale_after_seconds) == "stale") {
     return std::string("stale");
   }
-  const auto runtime_status = deps_.parse_runtime_status(*observation);
+  const auto runtime_status = runtime_support_service_.ParseRuntimeStatus(*observation);
   if (runtime_status.has_value() && runtime_status->runtime_phase == "failed") {
     return std::string("runtime-failed");
   }
-  const auto gpu_telemetry = deps_.parse_gpu_telemetry(*observation);
+  const auto gpu_telemetry = runtime_support_service_.ParseGpuTelemetry(*observation);
   if (gpu_telemetry.has_value() && gpu_telemetry->degraded) {
     return std::string("telemetry-degraded");
   }

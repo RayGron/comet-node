@@ -1,9 +1,9 @@
 #pragma once
 
-#include <functional>
 #include <optional>
 #include <string>
 
+#include "infra/controller_print_service.h"
 #include "scheduler/scheduler_view_service.h"
 #include "read_model/state_aggregate_loader.h"
 
@@ -11,19 +11,12 @@ namespace comet::controller {
 
 class SchedulerCliService {
  public:
-  using PrintPersistedRolloutActionsFn =
-      std::function<void(const std::vector<comet::RolloutActionRecord>&)>;
-  using VerificationStableSamplesRequiredFn = std::function<int()>;
-
-  struct Deps {
-    const StateAggregateLoader* state_aggregate_loader = nullptr;
-    const SchedulerViewService* scheduler_view_service = nullptr;
-    PrintPersistedRolloutActionsFn print_persisted_rollout_actions;
-    VerificationStableSamplesRequiredFn verification_stable_samples_required;
-    int default_stale_after_seconds = 300;
-  };
-
-  explicit SchedulerCliService(Deps deps);
+  SchedulerCliService(
+      const StateAggregateLoader& state_aggregate_loader,
+      const SchedulerViewService& scheduler_view_service,
+      const ControllerPrintService& controller_print_service,
+      int default_stale_after_seconds = 300,
+      int verification_stable_samples_required = 3);
 
   int ShowRolloutActions(
       const std::string& db_path,
@@ -36,7 +29,11 @@ class SchedulerCliService {
       const std::optional<std::string>& plane_name) const;
 
  private:
-  Deps deps_;
+  const StateAggregateLoader& state_aggregate_loader_;
+  const SchedulerViewService& scheduler_view_service_;
+  const ControllerPrintService& controller_print_service_;
+  int default_stale_after_seconds_ = 300;
+  int verification_stable_samples_required_ = 3;
 };
 
 }  // namespace comet::controller

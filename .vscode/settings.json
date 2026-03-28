@@ -5,7 +5,8 @@
   "C_Cpp.default.cppStandard": "c++20",
   "C_Cpp.intelliSenseEngine": "default",
   "cSpell.words": [
-    "Hostd"
+    "Hostd",
+    "workerd"
   ],
   "files.associations": {
     "*.h": "cpp",

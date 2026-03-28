@@ -1,5 +1,6 @@
 #include "app/launcher_app.h"
 
 int main(int argc, char** argv) {
-  return comet::launcher::RunLauncherApp(argc, argv);
+  comet::launcher::LauncherApp app(argc, argv);
+  return app.Run();
 }

@@ -1074,4 +1074,39 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
   return ResolvePlacementTargetAliases(std::move(state));
 }
 
+nlohmann::json BundleReader::ReadJsonFile(const std::filesystem::path& path) const {
+  std::ifstream input(path);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to open json file '" + path.string() + "'");
+  }
+
+  json value;
+  input >> value;
+  return value;
+}
+
+std::vector<std::filesystem::path> BundleReader::ListWorkerFiles(
+    const std::filesystem::path& workers_dir) const {
+  if (!std::filesystem::exists(workers_dir) || !std::filesystem::is_directory(workers_dir)) {
+    throw std::runtime_error("bundle is missing workers directory at '" + workers_dir.string() + "'");
+  }
+  std::vector<std::filesystem::path> worker_files;
+  for (const auto& entry : std::filesystem::directory_iterator(workers_dir)) {
+    if (entry.is_regular_file() && entry.path().extension() == ".json") {
+      worker_files.push_back(entry.path());
+    }
+  }
+  std::sort(worker_files.begin(), worker_files.end());
+  return worker_files;
+}
+
+DesiredState AutoPlacementResolver::Resolve(DesiredState state) const {
+  ApplyMovableSchedulerDecisions(&state);
+  return ResolvePlacementTargetAliases(std::move(state));
+}
+
+DesiredState DesiredStateImporter::Import(const std::string& bundle_dir) const {
+  return ImportPlaneBundle(bundle_dir);
+}
+
 }  // namespace comet

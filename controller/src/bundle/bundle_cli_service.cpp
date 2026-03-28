@@ -79,10 +79,50 @@ std::vector<comet::NodeExecutionPlan> FilterNodeExecutionPlans(
 
 }  // namespace
 
-BundleCliService::BundleCliService(Deps deps) : deps_(std::move(deps)) {}
+BundleCliService::BundleCliService(
+    const ControllerPrintService& controller_print_service,
+    const DesiredStatePolicyService& desired_state_policy_service,
+    const PlaneRealizationService& plane_realization_service,
+    ControllerRuntimeSupportService runtime_support_service,
+    std::string default_artifacts_root,
+    int default_stale_after_seconds)
+    : controller_print_service_(controller_print_service),
+      desired_state_policy_service_(desired_state_policy_service),
+      plane_realization_service_(plane_realization_service),
+      runtime_support_service_(std::move(runtime_support_service)),
+      default_artifacts_root_(std::move(default_artifacts_root)),
+      default_stale_after_seconds_(default_stale_after_seconds) {}
+
+void BundleCliService::AppendEvent(
+    comet::ControllerStore& store,
+    const std::string& category,
+    const std::string& event_type,
+    const std::string& message,
+    const nlohmann::json& payload,
+    const std::string& plane_name,
+    const std::string& node_name,
+    const std::string& worker_name,
+    const std::optional<int>& assignment_id,
+    const std::optional<int>& rollout_action_id,
+    const std::string& severity) const {
+  store.AppendEvent(comet::EventRecord{
+      0,
+      plane_name,
+      node_name,
+      worker_name,
+      assignment_id,
+      rollout_action_id,
+      category,
+      event_type,
+      severity,
+      message,
+      payload.dump(),
+      "",
+  });
+}
 
 void BundleCliService::ShowDemoPlan() const {
-  deps_.print_state_summary(comet::BuildDemoState());
+  controller_print_service_.PrintStateSummary(comet::BuildDemoState());
 }
 
 int BundleCliService::RenderDemoCompose(
@@ -105,8 +145,8 @@ int BundleCliService::ValidateBundle(const std::string& bundle_dir) const {
   std::cout << "bundle validation: OK\n";
   PrintPreviewSummary(state);
   std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
-  deps_.print_scheduler_decision_summary(state);
-  deps_.print_rollout_gate_summary(scheduling_report);
+  controller_print_service_.PrintSchedulerDecisionSummary(state);
+  controller_print_service_.PrintRolloutGateSummary(scheduling_report);
   return 0;
 }
 
@@ -118,8 +158,8 @@ int BundleCliService::PreviewBundle(
       comet::EvaluateSchedulingPolicy(state);
   PrintPreviewSummary(state);
   std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
-  deps_.print_scheduler_decision_summary(state);
-  deps_.print_rollout_gate_summary(scheduling_report);
+  controller_print_service_.PrintSchedulerDecisionSummary(state);
+  controller_print_service_.PrintRolloutGateSummary(scheduling_report);
   std::cout << "\ncompose-preview:\n";
   return RenderComposeForState(state, node_name);
 }
@@ -143,13 +183,13 @@ int BundleCliService::PlanBundle(
   std::cout << "  bundle=" << bundle_dir << "\n";
   std::cout << comet::RenderReconcilePlan(plan);
   std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
-  deps_.print_scheduler_decision_summary(desired_state);
-  deps_.print_rollout_gate_summary(scheduling_report);
-  deps_.print_assignment_dispatch_summary(
+  controller_print_service_.PrintSchedulerDecisionSummary(desired_state);
+  controller_print_service_.PrintRolloutGateSummary(scheduling_report);
+  controller_print_service_.PrintAssignmentDispatchSummary(
       desired_state,
-      deps_.build_availability_override_map(availability_overrides),
+      runtime_support_service_.BuildAvailabilityOverrideMap(availability_overrides),
       observations,
-      deps_.default_stale_after_seconds());
+      default_stale_after_seconds_);
   return 0;
 }
 
@@ -191,22 +231,22 @@ int BundleCliService::SeedDemo(const std::string& db_path) const {
   store.ReplaceRolloutActions(
       desired_state.plane_name, desired_generation, scheduling_report.rollout_actions);
   store.ReplaceHostAssignments(
-      deps_.build_host_assignments(
+      plane_realization_service_.BuildHostAssignments(
           desired_state,
-          deps_.default_artifacts_root(),
+          default_artifacts_root_,
           desired_generation,
           availability_overrides,
           observations,
           scheduling_report));
   std::cout << "seeded demo state into: " << db_path << "\n";
   std::cout << "desired generation: " << desired_generation << "\n";
-  deps_.print_scheduler_decision_summary(desired_state);
-  deps_.print_rollout_gate_summary(scheduling_report);
-  deps_.print_assignment_dispatch_summary(
+  controller_print_service_.PrintSchedulerDecisionSummary(desired_state);
+  controller_print_service_.PrintRolloutGateSummary(scheduling_report);
+  controller_print_service_.PrintAssignmentDispatchSummary(
       desired_state,
-      deps_.build_availability_override_map(availability_overrides),
+      runtime_support_service_.BuildAvailabilityOverrideMap(availability_overrides),
       observations,
-      deps_.default_stale_after_seconds());
+      default_stale_after_seconds_);
   return 0;
 }
 
@@ -220,10 +260,10 @@ int BundleCliService::ImportBundle(
   const int desired_generation =
       store.LoadDesiredGeneration(desired_state.plane_name).value_or(0) + 1;
   store.ReplaceDesiredState(desired_state, desired_generation, 0);
-  store.UpdatePlaneArtifactsRoot(desired_state.plane_name, deps_.default_artifacts_root());
+  store.UpdatePlaneArtifactsRoot(desired_state.plane_name, default_artifacts_root_);
   store.ClearSchedulerPlaneRuntime(desired_state.plane_name);
   store.ReplaceRolloutActions(desired_state.plane_name, desired_generation, {});
-  deps_.event_appender(
+  AppendEvent(
       store,
       "bundle",
       "imported",
@@ -267,17 +307,17 @@ int BundleCliService::ApplyBundle(
   std::cout << "apply-plan:\n";
   std::cout << comet::RenderReconcilePlan(plan);
   std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
-  deps_.print_scheduler_decision_summary(desired_state);
-  deps_.print_rollout_gate_summary(scheduling_report);
+  controller_print_service_.PrintSchedulerDecisionSummary(desired_state);
+  controller_print_service_.PrintRolloutGateSummary(scheduling_report);
   std::cout << comet::RenderNodeExecutionPlans(host_plans);
 
-  deps_.materialize_compose_artifacts(desired_state, host_plans);
-  deps_.materialize_infer_runtime_artifact(desired_state, artifacts_root);
+  plane_realization_service_.MaterializeComposeArtifacts(desired_state, host_plans);
+  plane_realization_service_.MaterializeInferRuntimeArtifact(desired_state, artifacts_root);
   store.ReplaceDesiredState(desired_state, desired_generation, 0);
   store.UpdatePlaneArtifactsRoot(desired_state.plane_name, artifacts_root);
   store.ClearSchedulerPlaneRuntime(desired_state.plane_name);
   store.ReplaceRolloutActions(desired_state.plane_name, desired_generation, {});
-  deps_.event_appender(
+  AppendEvent(
       store,
       "bundle",
       "applied",
@@ -310,10 +350,14 @@ int BundleCliService::ApplyDesiredState(
   comet::ControllerStore store(db_path);
   store.Initialize();
   comet::DesiredState effective_desired_state = desired_state;
-  deps_.apply_registered_host_execution_modes(store, &effective_desired_state);
-  deps_.resolve_desired_state_dynamic_placements(store, &effective_desired_state);
-  deps_.validate_desired_state_for_controller_admission(effective_desired_state);
-  deps_.validate_desired_state_execution_modes(effective_desired_state);
+  desired_state_policy_service_.ApplyRegisteredHostExecutionModes(
+      store, &effective_desired_state);
+  desired_state_policy_service_.ResolveDesiredStateDynamicPlacements(
+      store, &effective_desired_state);
+  desired_state_policy_service_.ValidateDesiredStateForControllerAdmission(
+      effective_desired_state);
+  desired_state_policy_service_.ValidateDesiredStateExecutionModes(
+      effective_desired_state);
   const auto current_state = store.LoadDesiredState(effective_desired_state.plane_name);
   comet::RequireSchedulingPolicy(effective_desired_state);
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
@@ -330,19 +374,21 @@ int BundleCliService::ApplyDesiredState(
   std::cout << "apply-plan:\n";
   std::cout << comet::RenderReconcilePlan(plan);
   std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
-  deps_.print_scheduler_decision_summary(effective_desired_state);
-  deps_.print_rollout_gate_summary(scheduling_report);
+  controller_print_service_.PrintSchedulerDecisionSummary(effective_desired_state);
+  controller_print_service_.PrintRolloutGateSummary(scheduling_report);
   std::cout << comet::RenderNodeExecutionPlans(host_plans);
 
-  deps_.materialize_compose_artifacts(effective_desired_state, host_plans);
-  deps_.materialize_infer_runtime_artifact(effective_desired_state, artifacts_root);
+  plane_realization_service_.MaterializeComposeArtifacts(
+      effective_desired_state, host_plans);
+  plane_realization_service_.MaterializeInferRuntimeArtifact(
+      effective_desired_state, artifacts_root);
   store.ReplaceDesiredState(effective_desired_state, desired_generation, 0);
   store.UpdatePlaneArtifactsRoot(effective_desired_state.plane_name, artifacts_root);
   store.ClearSchedulerPlaneRuntime(effective_desired_state.plane_name);
   store.ReplaceRolloutActions(effective_desired_state.plane_name, desired_generation, {});
 
   const bool existed = current_state.has_value();
-  deps_.event_appender(
+  AppendEvent(
       store,
       "plane",
       existed ? "staged-update" : "created",

@@ -43,6 +43,7 @@
 #include "infra/controller_action.h"
 #include "app/controller_cli.h"
 #include "app/controller_command_line.h"
+#include "infra/controller_event_service.h"
 #include "infra/controller_health_service.h"
 #include "infra/controller_print_service.h"
 #include "infra/controller_request_support.h"

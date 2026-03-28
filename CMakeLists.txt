@@ -171,6 +171,8 @@ add_executable(
   controller/src/app/controller_cli.cpp
   controller/src/infra/controller_action.cpp
   controller/src/app/controller_command_line.cpp
+  controller/src/app/controller_request_context.cpp
+  controller/src/infra/controller_event_service.cpp
   controller/src/infra/controller_health_service.cpp
   controller/src/infra/controller_print_service.cpp
   controller/src/infra/controller_request_support.cpp
@@ -211,6 +213,7 @@ add_executable(
   controller/src/read_model/state_aggregate_loader.cpp
   controller/src/web/web_ui_service.cpp
   controller/src/app/controller_app.cpp
+  controller/src/app/controller_composition_root.cpp
   controller/src/main.cpp
 )
 target_include_directories(comet-controller PRIVATE controller/include)
@@ -245,10 +248,14 @@ comet_enable_strict_warnings(comet-hostd)
 
 add_executable(
   comet-node
+  launcher/src/app/hostd_registration_service.cpp
+  launcher/src/app/launcher_composition_root.cpp
+  launcher/src/app/launcher_doctor_service.cpp
   launcher/src/cli/launcher_command_line.cpp
   launcher/src/config/generated_config_loader.cpp
   launcher/src/config/install_layout.cpp
   launcher/src/install/launcher_install_service.cpp
+  launcher/src/platform/launcher_path_resolver.cpp
   launcher/src/platform/process_runner.cpp
   launcher/src/platform/signal_manager.cpp
   launcher/src/run/launcher_run_service.cpp
@@ -283,22 +290,27 @@ if(NOT WIN32)
 
   add_executable(
     comet-workerd
-    runtime/worker/src/worker_app.cpp
+    runtime/worker/src/worker_config_loader.cpp
+    runtime/worker/src/worker_engine_host.cpp
+    runtime/worker/src/worker_model_resolver.cpp
+    runtime/worker/src/worker_signal_service.cpp
+    runtime/worker/src/worker_status_service.cpp
+    # runtime/worker/src/llama_library_engine.cpp
     runtime/worker/src/main.cpp
     common/src/runtime/runtime_status.cpp
   )
-  target_include_directories(comet-workerd PRIVATE common/include)
-  target_include_directories(
-    comet-workerd
-    BEFORE PRIVATE
-      "${llama_cpp_SOURCE_DIR}/include"
-      "${llama_cpp_SOURCE_DIR}/ggml/include"
-  )
+  target_include_directories(comet-workerd PRIVATE common/include runtime/worker/include)
+  # target_include_directories(
+  #   comet-workerd
+  #   BEFORE PRIVATE
+  #     "${llama_cpp_SOURCE_DIR}/include"
+  #     "${llama_cpp_SOURCE_DIR}/ggml/include"
+  # )
   target_link_libraries(
     comet-workerd
     PRIVATE
       nlohmann_json::nlohmann_json
-      llama
+      # llama
   )
   comet_enable_strict_warnings(comet-workerd)
 endif()

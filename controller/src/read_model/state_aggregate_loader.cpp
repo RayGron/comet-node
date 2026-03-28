@@ -1,20 +1,96 @@
 #include "read_model/state_aggregate_loader.h"
 
 #include <set>
-#include <stdexcept>
+#include <utility>
+
+#include "comet/state/state_json.h"
 
 namespace comet::controller {
 
-StateAggregateLoader::StateAggregateLoader(Deps deps) : deps_(std::move(deps)) {}
+StateAggregateLoader::StateAggregateLoader(
+    const SchedulerDomainService& scheduler_domain_service,
+    const SchedulerViewService& scheduler_view_service,
+    ControllerRuntimeSupportService runtime_support_service,
+    int maximum_rebalance_iterations)
+    : scheduler_domain_service_(scheduler_domain_service),
+      scheduler_view_service_(scheduler_view_service),
+      runtime_support_service_(std::move(runtime_support_service)),
+      maximum_rebalance_iterations_(maximum_rebalance_iterations) {}
+
+bool StateAggregateLoader::ObservationMatchesPlane(
+    const comet::HostObservation& observation,
+    const std::string& plane_name) const {
+  if (observation.plane_name == plane_name) {
+    return true;
+  }
+  if (observation.observed_state_json.empty()) {
+    return false;
+  }
+
+  const auto observed_state =
+      comet::DeserializeDesiredStateJson(observation.observed_state_json);
+  if (observed_state.plane_name == plane_name) {
+    return true;
+  }
+  for (const auto& disk : observed_state.disks) {
+    if (disk.plane_name == plane_name) {
+      return true;
+    }
+  }
+  for (const auto& instance : observed_state.instances) {
+    if (instance.plane_name == plane_name) {
+      return true;
+    }
+  }
+  try {
+    const auto instance_statuses =
+        runtime_support_service_.ParseInstanceRuntimeStatuses(observation);
+    for (const auto& status : instance_statuses) {
+      const std::string worker_prefix = "worker-" + plane_name + "-";
+      if (status.instance_name == "infer-" + plane_name ||
+          status.instance_name == "worker-" + plane_name ||
+          status.instance_name.rfind(worker_prefix, 0) == 0) {
+        return true;
+      }
+    }
+  } catch (const std::exception&) {
+  }
+  return false;
+}
+
+std::vector<comet::HostObservation> StateAggregateLoader::FilterHostObservationsForPlane(
+    const std::vector<comet::HostObservation>& observations,
+    const std::string& plane_name) const {
+  std::vector<comet::HostObservation> result;
+  for (const auto& observation : observations) {
+    if (ObservationMatchesPlane(observation, plane_name)) {
+      result.push_back(observation);
+    }
+  }
+  return result;
+}
+
+SchedulerRuntimeView StateAggregateLoader::LoadSchedulerRuntimeView(
+    comet::ControllerStore& store,
+    const std::optional<comet::DesiredState>& desired_state) const {
+  SchedulerRuntimeView view;
+  if (!desired_state.has_value()) {
+    return view;
+  }
+  view.plane_runtime = store.LoadSchedulerPlaneRuntime(desired_state->plane_name);
+  for (const auto& runtime : store.LoadSchedulerWorkerRuntimes(desired_state->plane_name)) {
+    view.worker_runtime_by_name.emplace(runtime.worker_name, runtime);
+  }
+  for (const auto& runtime : store.LoadSchedulerNodeRuntimes(desired_state->plane_name)) {
+    view.node_runtime_by_name.emplace(runtime.node_name, runtime);
+  }
+  return view;
+}
 
 RolloutActionsViewData StateAggregateLoader::LoadRolloutActionsViewData(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  if (deps_.scheduler_domain_service == nullptr) {
-    throw std::runtime_error("scheduler domain service is not configured");
-  }
-
   comet::ControllerStore store(db_path);
   store.Initialize();
 
@@ -43,16 +119,14 @@ RolloutActionsViewData StateAggregateLoader::LoadRolloutActionsViewData(
   view.gated_node_count = node_names.size();
 
   if (view.desired_state.has_value()) {
-    view.scheduler_runtime =
-        deps_.load_scheduler_runtime_view(store, view.desired_state);
+    view.scheduler_runtime = LoadSchedulerRuntimeView(store, view.desired_state);
     if (view.desired_generation.has_value()) {
       const auto plane_assignments =
           store.LoadHostAssignments(std::nullopt, std::nullopt, view.desired_state->plane_name);
-      const auto plane_observations =
-          deps_.filter_host_observations_for_plane(
-              store.LoadHostObservations(),
-              view.desired_state->plane_name);
-      view.lifecycle = deps_.scheduler_domain_service->BuildRolloutLifecycleEntries(
+      const auto plane_observations = FilterHostObservationsForPlane(
+          store.LoadHostObservations(),
+          view.desired_state->plane_name);
+      view.lifecycle = scheduler_domain_service_.BuildRolloutLifecycleEntries(
           *view.desired_state,
           *view.desired_generation,
           view.actions,
@@ -68,11 +142,6 @@ RebalancePlanViewData StateAggregateLoader::LoadRebalancePlanViewData(
     const std::optional<std::string>& node_name,
     int stale_after_seconds,
     const std::optional<std::string>& plane_name) const {
-  if (deps_.scheduler_domain_service == nullptr ||
-      deps_.scheduler_view_service == nullptr) {
-    throw std::runtime_error("scheduler services are not configured");
-  }
-
   comet::ControllerStore store(db_path);
   store.Initialize();
 
@@ -92,27 +161,24 @@ RebalancePlanViewData StateAggregateLoader::LoadRebalancePlanViewData(
       (plane_name.has_value() ? store.LoadDesiredGeneration(*plane_name)
                               : store.LoadDesiredGeneration())
           .value_or(0);
-  const auto observations =
-      deps_.filter_host_observations_for_plane(
-          store.LoadHostObservations(),
-          view.desired_state->plane_name);
+  const auto observations = FilterHostObservationsForPlane(
+      store.LoadHostObservations(),
+      view.desired_state->plane_name);
   const auto assignments =
       store.LoadHostAssignments(std::nullopt, std::nullopt, view.desired_state->plane_name);
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
-  const auto scheduling_report =
-      deps_.evaluate_scheduling_policy(*view.desired_state);
-  view.scheduler_runtime =
-      deps_.load_scheduler_runtime_view(store, view.desired_state);
+  const auto scheduling_report = comet::EvaluateSchedulingPolicy(*view.desired_state);
+  view.scheduler_runtime = LoadSchedulerRuntimeView(store, view.desired_state);
   const auto rollout_actions = store.LoadRolloutActions(view.desired_state->plane_name);
   const auto rollout_lifecycle =
-      deps_.scheduler_domain_service->BuildRolloutLifecycleEntries(
+      scheduler_domain_service_.BuildRolloutLifecycleEntries(
           *view.desired_state,
           view.desired_generation,
           rollout_actions,
           assignments,
           observations);
   view.rebalance_entries =
-      deps_.scheduler_domain_service->BuildRebalancePlanEntries(
+      scheduler_domain_service_.BuildRebalancePlanEntries(
           *view.desired_state,
           scheduling_report,
           availability_overrides,
@@ -123,7 +189,7 @@ RebalancePlanViewData StateAggregateLoader::LoadRebalancePlanViewData(
           stale_after_seconds,
           node_name);
   view.controller_gate_summary =
-      deps_.scheduler_domain_service->BuildRebalanceControllerGateSummary(
+      scheduler_domain_service_.BuildRebalanceControllerGateSummary(
           *view.desired_state,
           view.desired_generation,
           availability_overrides,
@@ -133,13 +199,13 @@ RebalancePlanViewData StateAggregateLoader::LoadRebalancePlanViewData(
           observations,
           stale_after_seconds);
   view.iteration_budget_summary =
-      deps_.scheduler_view_service->BuildRebalanceIterationBudgetSummary(
+      scheduler_view_service_.BuildRebalanceIterationBudgetSummary(
           store.LoadRebalanceIteration().value_or(0),
-          deps_.maximum_rebalance_iterations());
+          maximum_rebalance_iterations_);
   view.policy_summary =
-      deps_.scheduler_view_service->BuildRebalancePolicySummary(view.rebalance_entries);
+      scheduler_view_service_.BuildRebalancePolicySummary(view.rebalance_entries);
   view.loop_status =
-      deps_.scheduler_view_service->BuildRebalanceLoopStatusSummary(
+      scheduler_view_service_.BuildRebalanceLoopStatusSummary(
           view.controller_gate_summary,
           view.iteration_budget_summary,
           view.policy_summary);
@@ -150,11 +216,6 @@ StateAggregateViewData StateAggregateLoader::LoadStateAggregateViewData(
     const std::string& db_path,
     int stale_after_seconds,
     const std::optional<std::string>& plane_name) const {
-  if (deps_.scheduler_domain_service == nullptr ||
-      deps_.scheduler_view_service == nullptr) {
-    throw std::runtime_error("scheduler services are not configured");
-  }
-
   comet::ControllerStore store(db_path);
   store.Initialize();
 
@@ -174,10 +235,10 @@ StateAggregateViewData StateAggregateLoader::LoadStateAggregateViewData(
   }
 
   view.disk_runtime_states = store.LoadDiskRuntimeStates(view.desired_state->plane_name);
-  view.scheduling_report = deps_.evaluate_scheduling_policy(*view.desired_state);
+  view.scheduling_report = comet::EvaluateSchedulingPolicy(*view.desired_state);
   view.observations =
       plane_name.has_value()
-          ? deps_.filter_host_observations_for_plane(
+          ? FilterHostObservationsForPlane(
                 store.LoadHostObservations(),
                 *plane_name)
           : store.LoadHostObservations();
@@ -186,12 +247,11 @@ StateAggregateViewData StateAggregateLoader::LoadStateAggregateViewData(
           ? store.LoadHostAssignments(std::nullopt, std::nullopt, *plane_name)
           : store.LoadHostAssignments();
   view.availability_overrides = store.LoadNodeAvailabilityOverrides();
-  view.scheduler_runtime =
-      deps_.load_scheduler_runtime_view(store, view.desired_state);
+  view.scheduler_runtime = LoadSchedulerRuntimeView(store, view.desired_state);
   const auto plane_rollout_actions = store.LoadRolloutActions(view.desired_state->plane_name);
   view.rollout_lifecycle =
       view.desired_generation.has_value()
-          ? deps_.scheduler_domain_service->BuildRolloutLifecycleEntries(
+          ? scheduler_domain_service_.BuildRolloutLifecycleEntries(
                 *view.desired_state,
                 *view.desired_generation,
                 plane_rollout_actions,
@@ -199,7 +259,7 @@ StateAggregateViewData StateAggregateLoader::LoadStateAggregateViewData(
                 view.observations)
           : std::vector<RolloutLifecycleEntry>{};
   view.rebalance_entries =
-      deps_.scheduler_domain_service->BuildRebalancePlanEntries(
+      scheduler_domain_service_.BuildRebalancePlanEntries(
           *view.desired_state,
           view.scheduling_report,
           view.availability_overrides,
@@ -209,7 +269,7 @@ StateAggregateViewData StateAggregateLoader::LoadStateAggregateViewData(
           view.observations,
           stale_after_seconds);
   view.controller_gate_summary =
-      deps_.scheduler_domain_service->BuildRebalanceControllerGateSummary(
+      scheduler_domain_service_.BuildRebalanceControllerGateSummary(
           *view.desired_state,
           view.desired_generation.value_or(0),
           view.availability_overrides,
@@ -219,13 +279,13 @@ StateAggregateViewData StateAggregateLoader::LoadStateAggregateViewData(
           view.observations,
           stale_after_seconds);
   view.iteration_budget_summary =
-      deps_.scheduler_view_service->BuildRebalanceIterationBudgetSummary(
+      scheduler_view_service_.BuildRebalanceIterationBudgetSummary(
           store.LoadRebalanceIteration().value_or(0),
-          deps_.maximum_rebalance_iterations());
+          maximum_rebalance_iterations_);
   view.rebalance_policy_summary =
-      deps_.scheduler_view_service->BuildRebalancePolicySummary(view.rebalance_entries);
+      scheduler_view_service_.BuildRebalancePolicySummary(view.rebalance_entries);
   view.loop_status =
-      deps_.scheduler_view_service->BuildRebalanceLoopStatusSummary(
+      scheduler_view_service_.BuildRebalanceLoopStatusSummary(
           view.controller_gate_summary,
           view.iteration_budget_summary,
           view.rebalance_policy_summary);

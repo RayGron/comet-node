@@ -150,6 +150,44 @@ struct RuntimeStatus {
   bool launch_ready = false;
 };
 
+class RuntimeStatusJsonCodec {
+ public:
+  std::string Serialize(const RuntimeStatus& status) const;
+  RuntimeStatus Deserialize(const std::string& json_text) const;
+  std::string SerializeList(const std::vector<RuntimeProcessStatus>& statuses) const;
+  std::vector<RuntimeProcessStatus> DeserializeList(const std::string& json_text) const;
+};
+
+class GpuTelemetryJsonCodec {
+ public:
+  std::string Serialize(const GpuTelemetrySnapshot& snapshot) const;
+  GpuTelemetrySnapshot Deserialize(const std::string& json_text) const;
+};
+
+class DiskTelemetryJsonCodec {
+ public:
+  std::string Serialize(const DiskTelemetrySnapshot& snapshot) const;
+  DiskTelemetrySnapshot Deserialize(const std::string& json_text) const;
+};
+
+class NetworkTelemetryJsonCodec {
+ public:
+  std::string Serialize(const NetworkTelemetrySnapshot& snapshot) const;
+  NetworkTelemetrySnapshot Deserialize(const std::string& json_text) const;
+};
+
+class CpuTelemetryJsonCodec {
+ public:
+  std::string Serialize(const CpuTelemetrySnapshot& snapshot) const;
+  CpuTelemetrySnapshot Deserialize(const std::string& json_text) const;
+};
+
+class RuntimeStatusFileStore {
+ public:
+  std::optional<RuntimeStatus> Load(const std::string& path) const;
+  void Save(const RuntimeStatus& status, const std::string& path) const;
+};
+
 std::string SerializeRuntimeStatusJson(const RuntimeStatus& status);
 RuntimeStatus DeserializeRuntimeStatusJson(const std::string& json_text);
 std::string SerializeRuntimeStatusListJson(const std::vector<RuntimeProcessStatus>& statuses);

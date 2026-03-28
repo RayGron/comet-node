@@ -1,10 +1,10 @@
 #pragma once
 
-#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "infra/controller_runtime_support_service.h"
 #include "comet/state/models.h"
 #include "comet/runtime/runtime_status.h"
 #include "comet/state/sqlite_store.h"
@@ -13,57 +13,8 @@ namespace comet::controller {
 
 class ControllerPrintService {
  public:
-  using BuildAvailabilityOverrideMapFn =
-      std::function<std::map<std::string, comet::NodeAvailabilityOverride>(
-          const std::vector<comet::NodeAvailabilityOverride>&)>;
-  using ResolveNodeAvailabilityFn = std::function<comet::NodeAvailability(
-      const std::map<std::string, comet::NodeAvailabilityOverride>&,
-      const std::string&)>;
-  using FindHostObservationForNodeFn =
-      std::function<std::optional<comet::HostObservation>(
-          const std::vector<comet::HostObservation>&,
-          const std::string&)>;
-  using HeartbeatAgeSecondsFn =
-      std::function<std::optional<long long>(const std::string&)>;
-  using HealthFromAgeFn = std::function<std::string(
-      const std::optional<long long>&,
-      int)>;
-  using ParseRuntimeStatusFn =
-      std::function<std::optional<comet::RuntimeStatus>(
-          const comet::HostObservation&)>;
-  using ParseInstanceRuntimeStatusesFn =
-      std::function<std::vector<comet::RuntimeProcessStatus>(
-          const comet::HostObservation&)>;
-  using ParseGpuTelemetryFn =
-      std::function<std::optional<comet::GpuTelemetrySnapshot>(
-          const comet::HostObservation&)>;
-  using ParseDiskTelemetryFn =
-      std::function<std::optional<comet::DiskTelemetrySnapshot>(
-          const comet::HostObservation&)>;
-  using ParseNetworkTelemetryFn =
-      std::function<std::optional<comet::NetworkTelemetrySnapshot>(
-          const comet::HostObservation&)>;
-  using ParseCpuTelemetryFn =
-      std::function<std::optional<comet::CpuTelemetrySnapshot>(
-          const comet::HostObservation&)>;
-  using FormatDisplayTimestampFn = std::function<std::string(const std::string&)>;
-
-  struct Deps {
-    BuildAvailabilityOverrideMapFn build_availability_override_map;
-    ResolveNodeAvailabilityFn resolve_node_availability;
-    FindHostObservationForNodeFn find_host_observation_for_node;
-    HeartbeatAgeSecondsFn heartbeat_age_seconds;
-    HealthFromAgeFn health_from_age;
-    ParseRuntimeStatusFn parse_runtime_status;
-    ParseInstanceRuntimeStatusesFn parse_instance_runtime_statuses;
-    ParseGpuTelemetryFn parse_gpu_telemetry;
-    ParseDiskTelemetryFn parse_disk_telemetry;
-    ParseNetworkTelemetryFn parse_network_telemetry;
-    ParseCpuTelemetryFn parse_cpu_telemetry;
-    FormatDisplayTimestampFn format_display_timestamp;
-  };
-
-  explicit ControllerPrintService(Deps deps);
+  ControllerPrintService();
+  explicit ControllerPrintService(ControllerRuntimeSupportService runtime_support_service);
 
   void PrintStateSummary(const comet::DesiredState& state) const;
   void PrintDiskRuntimeStates(const std::vector<comet::DiskRuntimeState>& runtime_states) const;
@@ -102,8 +53,10 @@ class ControllerPrintService {
       const std::vector<comet::HostObservation>& observations,
       const std::string& node_name,
       int stale_after_seconds) const;
+  std::optional<std::tm> ParseDisplayTimestamp(const std::string& value) const;
+  std::string FormatDisplayTimestamp(const std::string& value) const;
 
-  Deps deps_;
+  ControllerRuntimeSupportService runtime_support_service_;
 };
 
 }  // namespace comet::controller

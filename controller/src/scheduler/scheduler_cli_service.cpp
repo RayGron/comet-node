@@ -6,20 +6,24 @@
 
 namespace comet::controller {
 
-SchedulerCliService::SchedulerCliService(Deps deps) : deps_(std::move(deps)) {}
+SchedulerCliService::SchedulerCliService(
+    const StateAggregateLoader& state_aggregate_loader,
+    const SchedulerViewService& scheduler_view_service,
+    const ControllerPrintService& controller_print_service,
+    int default_stale_after_seconds,
+    int verification_stable_samples_required)
+    : state_aggregate_loader_(state_aggregate_loader),
+      scheduler_view_service_(scheduler_view_service),
+      controller_print_service_(controller_print_service),
+      default_stale_after_seconds_(default_stale_after_seconds),
+      verification_stable_samples_required_(verification_stable_samples_required) {}
 
 int SchedulerCliService::ShowRolloutActions(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  if (deps_.state_aggregate_loader == nullptr || deps_.scheduler_view_service == nullptr ||
-      !deps_.print_persisted_rollout_actions ||
-      !deps_.verification_stable_samples_required) {
-    throw std::runtime_error("scheduler cli dependencies are not configured");
-  }
-
   const auto view =
-      deps_.state_aggregate_loader->LoadRolloutActionsViewData(db_path, node_name, plane_name);
+      state_aggregate_loader_.LoadRolloutActionsViewData(db_path, node_name, plane_name);
 
   std::cout << "db: " << view.db_path << "\n";
   if (view.desired_generation.has_value()) {
@@ -31,15 +35,15 @@ int SchedulerCliService::ShowRolloutActions(
               << " gated_nodes=" << view.gated_node_count
               << " deferred_actions=" << view.actions.size() << "\n";
   }
-  deps_.print_persisted_rollout_actions(view.actions);
+  controller_print_service_.PrintPersistedRolloutActions(view.actions);
   if (view.scheduler_runtime.has_value()) {
-    deps_.scheduler_view_service->PrintSchedulerRuntimeView(
+    scheduler_view_service_.PrintSchedulerRuntimeView(
         std::cout,
         *view.scheduler_runtime,
-        deps_.verification_stable_samples_required());
+        verification_stable_samples_required_);
   }
   if (!view.lifecycle.empty()) {
-    deps_.scheduler_view_service->PrintRolloutLifecycleEntries(
+    scheduler_view_service_.PrintRolloutLifecycleEntries(
         std::cout,
         view.lifecycle);
   }
@@ -50,14 +54,10 @@ int SchedulerCliService::ShowRebalancePlan(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  if (deps_.state_aggregate_loader == nullptr || deps_.scheduler_view_service == nullptr) {
-    throw std::runtime_error("scheduler cli dependencies are not configured");
-  }
-
-  const auto view = deps_.state_aggregate_loader->LoadRebalancePlanViewData(
+  const auto view = state_aggregate_loader_.LoadRebalancePlanViewData(
       db_path,
       node_name,
-      deps_.default_stale_after_seconds,
+      default_stale_after_seconds_,
       plane_name);
   if (!view.desired_state.has_value()) {
     std::cout << "rebalance-plan:\n  (empty)\n";
@@ -66,27 +66,25 @@ int SchedulerCliService::ShowRebalancePlan(
 
   std::cout << "db: " << view.db_path << "\n";
   std::cout << "desired generation: " << view.desired_generation << "\n";
-  deps_.scheduler_view_service->PrintRebalanceControllerGateSummary(
+  scheduler_view_service_.PrintRebalanceControllerGateSummary(
       std::cout,
       view.controller_gate_summary);
-  deps_.scheduler_view_service->PrintRebalanceIterationBudgetSummary(
+  scheduler_view_service_.PrintRebalanceIterationBudgetSummary(
       std::cout,
       view.iteration_budget_summary);
-  deps_.scheduler_view_service->PrintRebalanceLoopStatusSummary(
+  scheduler_view_service_.PrintRebalanceLoopStatusSummary(
       std::cout,
       view.loop_status);
-  deps_.scheduler_view_service->PrintRebalancePlanEntries(
+  scheduler_view_service_.PrintRebalancePlanEntries(
       std::cout,
       view.rebalance_entries);
-  deps_.scheduler_view_service->PrintRebalancePolicySummary(
+  scheduler_view_service_.PrintRebalancePolicySummary(
       std::cout,
       view.policy_summary);
-  deps_.scheduler_view_service->PrintSchedulerRuntimeView(
+  scheduler_view_service_.PrintSchedulerRuntimeView(
       std::cout,
       view.scheduler_runtime,
-      deps_.verification_stable_samples_required
-          ? deps_.verification_stable_samples_required()
-          : 0);
+      verification_stable_samples_required_);
   return 0;
 }
 

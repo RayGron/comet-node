@@ -94,8 +94,13 @@ std::optional<comet::NodeInventory> FindNodeInventory(
 
 }  // namespace
 
-AssignmentOrchestrationService::AssignmentOrchestrationService(Deps deps)
-    : deps_(std::move(deps)) {}
+AssignmentOrchestrationService::AssignmentOrchestrationService(
+    const ControllerEventService& controller_event_service,
+    const ControllerPrintService& controller_print_service,
+    std::string default_artifacts_root)
+    : controller_event_service_(controller_event_service),
+      controller_print_service_(controller_print_service),
+      default_artifacts_root_(std::move(default_artifacts_root)) {}
 
 std::optional<comet::HostAssignment>
 AssignmentOrchestrationService::BuildResyncAssignmentForNode(
@@ -156,7 +161,7 @@ AssignmentOrchestrationService::BuildResyncAssignmentForNode(
                                   ? latest_assignment->artifacts_root
                                   : (plane_assignment.has_value()
                                          ? plane_assignment->artifacts_root
-                                         : deps_.default_artifacts_root_provider());
+                                         : default_artifacts_root_);
   assignment.status = comet::HostAssignmentStatus::Pending;
   assignment.status_message = "resync after node returned to active";
   return assignment;
@@ -199,7 +204,7 @@ AssignmentOrchestrationService::BuildDrainAssignmentForNode(
                                   ? latest_assignment->artifacts_root
                                   : (plane_assignment.has_value()
                                          ? plane_assignment->artifacts_root
-                                         : deps_.default_artifacts_root_provider());
+                                         : default_artifacts_root_);
   assignment.status = comet::HostAssignmentStatus::Pending;
   assignment.status_message = "drain after node availability changed";
   return assignment;
@@ -222,7 +227,7 @@ int AssignmentOrchestrationService::SetNodeAvailability(
   availability_override.availability = availability;
   availability_override.status_message = status_message.value_or("");
   store.UpsertNodeAvailabilityOverride(availability_override);
-  deps_.event_appender(
+  controller_event_service_.AppendEvent(
       store,
       "node-availability",
       "updated",
@@ -238,7 +243,7 @@ int AssignmentOrchestrationService::SetNodeAvailability(
       std::nullopt);
 
   std::cout << "updated node availability for " << node_name << "\n";
-  deps_.print_node_availability_overrides(
+  controller_print_service_.PrintNodeAvailabilityOverrides(
       store.LoadNodeAvailabilityOverrides(node_name));
 
   const auto desired_states = store.LoadDesiredStates();
@@ -272,7 +277,7 @@ int AssignmentOrchestrationService::SetNodeAvailability(
             "superseded by node drain for availability transition");
         std::cout << "queued drain assignment for " << node_name
                   << " planes=" << drain_assignments.size() << "\n";
-        deps_.print_host_assignments(store.LoadHostAssignments(node_name));
+        controller_print_service_.PrintHostAssignments(store.LoadHostAssignments(node_name));
       }
     }
 
@@ -304,7 +309,7 @@ int AssignmentOrchestrationService::SetNodeAvailability(
             "superseded by node reactivation for availability transition");
         std::cout << "queued resync assignment for " << node_name
                   << " planes=" << resync_assignments.size() << "\n";
-        deps_.print_host_assignments(store.LoadHostAssignments(node_name));
+        controller_print_service_.PrintHostAssignments(store.LoadHostAssignments(node_name));
       } else {
         std::cout << "no resync assignment needed for " << node_name << "\n";
       }
@@ -347,7 +352,7 @@ int AssignmentOrchestrationService::RetryHostAssignment(
     throw std::runtime_error(
         "failed to requeue host assignment id=" + std::to_string(assignment_id));
   }
-  deps_.event_appender(
+  controller_event_service_.AppendEvent(
       store,
       "host-assignment",
       "retried",
@@ -365,7 +370,7 @@ int AssignmentOrchestrationService::RetryHostAssignment(
   const auto updated_assignment = store.LoadHostAssignment(assignment_id);
   std::cout << "requeued host assignment id=" << assignment_id << "\n";
   if (updated_assignment.has_value()) {
-    deps_.print_host_assignments({*updated_assignment});
+    controller_print_service_.PrintHostAssignments({*updated_assignment});
   }
   return 0;
 }

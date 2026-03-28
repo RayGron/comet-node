@@ -7,26 +7,63 @@
 #include <stdexcept>
 #include <utility>
 
+#include "infra/controller_event_service.h"
+#include "infra/controller_print_service.h"
+#include "infra/controller_runtime_support_service.h"
+#include "plane/plane_realization_service.h"
+#include "read_model/read_model_cli_service.h"
+#include "read_model/state_aggregate_loader.h"
+#include "scheduler/scheduler_execution_support.h"
+
+#include "comet/planning/execution_plan.h"
+#include "comet/planning/scheduling_policy.h"
+#include "comet/state/state_json.h"
+
 namespace comet::controller {
 
+std::optional<comet::RolloutActionRecord> SchedulerService::FindRolloutActionById(
+    const std::vector<comet::RolloutActionRecord>& actions,
+    int action_id) const {
+  for (const auto& action : actions) {
+    if (action.id == action_id) {
+      return action;
+    }
+  }
+  return std::nullopt;
+}
+
 SchedulerService::SchedulerService(
-    EventsQueryAction show_events_action,
-    Deps deps)
-    : show_events_action_(std::move(show_events_action)),
-      deps_(std::move(deps)) {}
+    std::string db_path,
+    std::string artifacts_root,
+    int default_stale_after_seconds,
+    int verification_stable_samples_required,
+    const StateAggregateLoader& state_aggregate_loader,
+    const SchedulerViewService& scheduler_view_service,
+    const ReadModelCliService& read_model_cli_service,
+    const ControllerPrintService& controller_print_service,
+    const ControllerRuntimeSupportService& runtime_support_service,
+    const SchedulerExecutionSupport& scheduler_execution_support,
+    const PlaneRealizationService& plane_realization_service,
+    const ControllerEventService& controller_event_service)
+    : db_path_(std::move(db_path)),
+      artifacts_root_(std::move(artifacts_root)),
+      default_stale_after_seconds_(default_stale_after_seconds),
+      verification_stable_samples_required_(verification_stable_samples_required),
+      state_aggregate_loader_(state_aggregate_loader),
+      scheduler_view_service_(scheduler_view_service),
+      read_model_cli_service_(read_model_cli_service),
+      controller_print_service_(controller_print_service),
+      runtime_support_service_(runtime_support_service),
+      scheduler_execution_support_(scheduler_execution_support),
+      plane_realization_service_(plane_realization_service),
+      controller_event_service_(controller_event_service) {}
 
 int SchedulerService::ShowRolloutActions(
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  if (deps_.state_aggregate_loader == nullptr || deps_.scheduler_view_service == nullptr ||
-      !deps_.print_persisted_rollout_actions ||
-      !deps_.verification_stable_samples_required) {
-    throw std::runtime_error("scheduler aggregate services are not configured");
-  }
-
   const auto view =
-      deps_.state_aggregate_loader->LoadRolloutActionsViewData(
-          deps_.db_path,
+      state_aggregate_loader_.LoadRolloutActionsViewData(
+          db_path_,
           node_name,
           plane_name);
 
@@ -40,15 +77,15 @@ int SchedulerService::ShowRolloutActions(
               << " gated_nodes=" << view.gated_node_count
               << " deferred_actions=" << view.actions.size() << "\n";
   }
-  deps_.print_persisted_rollout_actions(view.actions);
+  controller_print_service_.PrintPersistedRolloutActions(view.actions);
   if (view.scheduler_runtime.has_value()) {
-    deps_.scheduler_view_service->PrintSchedulerRuntimeView(
+    scheduler_view_service_.PrintSchedulerRuntimeView(
         std::cout,
         *view.scheduler_runtime,
-        deps_.verification_stable_samples_required());
+        verification_stable_samples_required_);
   }
   if (!view.lifecycle.empty()) {
-    deps_.scheduler_view_service->PrintRolloutLifecycleEntries(
+    scheduler_view_service_.PrintRolloutLifecycleEntries(
         std::cout,
         view.lifecycle);
   }
@@ -58,15 +95,10 @@ int SchedulerService::ShowRolloutActions(
 int SchedulerService::ShowRebalancePlan(
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  if (deps_.state_aggregate_loader == nullptr || deps_.scheduler_view_service == nullptr ||
-      !deps_.verification_stable_samples_required) {
-    throw std::runtime_error("scheduler aggregate services are not configured");
-  }
-
-  const auto view = deps_.state_aggregate_loader->LoadRebalancePlanViewData(
-      deps_.db_path,
+  const auto view = state_aggregate_loader_.LoadRebalancePlanViewData(
+      db_path_,
       node_name,
-      deps_.default_stale_after_seconds,
+      default_stale_after_seconds_,
       plane_name);
   if (!view.desired_state.has_value()) {
     std::cout << "rebalance-plan:\n  (empty)\n";
@@ -75,25 +107,25 @@ int SchedulerService::ShowRebalancePlan(
 
   std::cout << "db: " << view.db_path << "\n";
   std::cout << "desired generation: " << view.desired_generation << "\n";
-  deps_.scheduler_view_service->PrintRebalanceControllerGateSummary(
+  scheduler_view_service_.PrintRebalanceControllerGateSummary(
       std::cout,
       view.controller_gate_summary);
-  deps_.scheduler_view_service->PrintRebalanceIterationBudgetSummary(
+  scheduler_view_service_.PrintRebalanceIterationBudgetSummary(
       std::cout,
       view.iteration_budget_summary);
-  deps_.scheduler_view_service->PrintRebalanceLoopStatusSummary(
+  scheduler_view_service_.PrintRebalanceLoopStatusSummary(
       std::cout,
       view.loop_status);
-  deps_.scheduler_view_service->PrintRebalancePlanEntries(
+  scheduler_view_service_.PrintRebalancePlanEntries(
       std::cout,
       view.rebalance_entries);
-  deps_.scheduler_view_service->PrintRebalancePolicySummary(
+  scheduler_view_service_.PrintRebalancePolicySummary(
       std::cout,
       view.policy_summary);
-  deps_.scheduler_view_service->PrintSchedulerRuntimeView(
+  scheduler_view_service_.PrintSchedulerRuntimeView(
       std::cout,
       view.scheduler_runtime,
-      deps_.verification_stable_samples_required());
+      verification_stable_samples_required_);
   return 0;
 }
 
@@ -103,7 +135,13 @@ int SchedulerService::ShowEvents(
     const std::optional<std::string>& worker_name,
     const std::optional<std::string>& category,
     int limit) const {
-  return show_events_action_(plane_name, node_name, worker_name, category, limit);
+  return read_model_cli_service_.ShowEvents(
+      db_path_,
+      plane_name,
+      node_name,
+      worker_name,
+      category,
+      limit);
 }
 
 ControllerActionResult SchedulerService::ExecuteApplyRebalanceProposal(
@@ -158,11 +196,7 @@ ControllerActionResult SchedulerService::ExecuteApplyReadyRolloutAction(int acti
 }
 
 int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) const {
-  if (deps_.state_aggregate_loader == nullptr || deps_.scheduler_view_service == nullptr) {
-    throw std::runtime_error("scheduler aggregate services are not configured");
-  }
-
-  comet::ControllerStore store(deps_.db_path);
+  comet::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -173,10 +207,10 @@ int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) con
   }
 
   const auto observations = store.LoadHostObservations();
-  const auto rebalance_view = deps_.state_aggregate_loader->LoadRebalancePlanViewData(
-      deps_.db_path,
+  const auto rebalance_view = state_aggregate_loader_.LoadRebalancePlanViewData(
+      db_path_,
       std::nullopt,
-      deps_.default_stale_after_seconds,
+      default_stale_after_seconds_,
       desired_state->plane_name);
   const auto rebalance_entries = rebalance_view.rebalance_entries;
 
@@ -203,17 +237,17 @@ int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) con
   }
 
   comet::DesiredState updated_state = *desired_state;
-  deps_.materialize_rebalance_plan_entry(&updated_state, *rebalance_it);
+  scheduler_execution_support_.MaterializeRebalancePlanEntry(&updated_state, *rebalance_it);
   comet::RequireSchedulingPolicy(updated_state);
   const comet::SchedulingPolicyReport updated_scheduling_report =
-      deps_.evaluate_scheduling_policy(updated_state);
+      comet::EvaluateSchedulingPolicy(updated_state);
   const int next_generation = *desired_generation + 1;
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
   const auto host_plans =
-      comet::BuildNodeExecutionPlans(desired_state, updated_state, deps_.artifacts_root);
+      comet::BuildNodeExecutionPlans(desired_state, updated_state, artifacts_root_);
 
-  deps_.materialize_compose_artifacts(updated_state, host_plans);
-  deps_.materialize_infer_runtime_artifact(updated_state, deps_.artifacts_root);
+  plane_realization_service_.MaterializeComposeArtifacts(updated_state, host_plans);
+  plane_realization_service_.MaterializeInferRuntimeArtifact(updated_state, artifacts_root_);
   store.ReplaceDesiredState(
       updated_state,
       next_generation,
@@ -223,9 +257,9 @@ int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) con
       next_generation,
       updated_scheduling_report.rollout_actions);
   store.ReplaceHostAssignments(
-      deps_.build_host_assignments(
+      plane_realization_service_.BuildHostAssignments(
           updated_state,
-          deps_.artifacts_root,
+          artifacts_root_,
           next_generation,
           availability_overrides,
           observations,
@@ -245,7 +279,7 @@ int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) con
   plane_runtime.previous_state_json = comet::SerializeDesiredStateJson(*desired_state);
   plane_runtime.status_message = "awaiting post-move verification";
   store.UpsertSchedulerPlaneRuntime(plane_runtime);
-  deps_.event_appender(
+  controller_event_service_.AppendEvent(
       store,
       "scheduler",
       "rebalance-materialized",
@@ -270,24 +304,20 @@ int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) con
   std::cout << "desired generation: " << next_generation << "\n";
   std::cout << "target=" << rebalance_it->target_node_name << ":"
             << rebalance_it->target_gpu_device << "\n";
-  deps_.print_state_summary(updated_state);
+  controller_print_service_.PrintStateSummary(updated_state);
   std::cout << comet::RenderSchedulingPolicyReport(updated_scheduling_report);
-  deps_.print_scheduler_decision_summary(updated_state);
-  deps_.print_rollout_gate_summary(updated_scheduling_report);
-  deps_.print_assignment_dispatch_summary(
+  controller_print_service_.PrintSchedulerDecisionSummary(updated_state);
+  controller_print_service_.PrintRolloutGateSummary(updated_scheduling_report);
+  controller_print_service_.PrintAssignmentDispatchSummary(
       updated_state,
-      deps_.build_availability_override_map(availability_overrides),
+      runtime_support_service_.BuildAvailabilityOverrideMap(availability_overrides),
       observations,
-      deps_.default_stale_after_seconds);
+      default_stale_after_seconds_);
   return 0;
 }
 
 int SchedulerService::ReconcileRebalanceProposals() const {
-  if (deps_.state_aggregate_loader == nullptr || deps_.scheduler_view_service == nullptr) {
-    throw std::runtime_error("scheduler aggregate services are not configured");
-  }
-
-  comet::ControllerStore store(deps_.db_path);
+  comet::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -296,24 +326,24 @@ int SchedulerService::ReconcileRebalanceProposals() const {
     throw std::runtime_error("no desired state found in controller db");
   }
 
-  auto rebalance_view = deps_.state_aggregate_loader->LoadRebalancePlanViewData(
-      deps_.db_path,
+  auto rebalance_view = state_aggregate_loader_.LoadRebalancePlanViewData(
+      db_path_,
       std::nullopt,
-      deps_.default_stale_after_seconds,
+      default_stale_after_seconds_,
       desired_state->plane_name);
   auto rebalance_entries = rebalance_view.rebalance_entries;
   const auto& controller_gate_summary = rebalance_view.controller_gate_summary;
   const auto& iteration_budget_summary = rebalance_view.iteration_budget_summary;
   const auto& rebalance_policy_summary = rebalance_view.policy_summary;
-  deps_.scheduler_view_service->PrintRebalanceControllerGateSummary(
+  scheduler_view_service_.PrintRebalanceControllerGateSummary(
       std::cout,
       controller_gate_summary);
-  deps_.scheduler_view_service->PrintRebalanceIterationBudgetSummary(
+  scheduler_view_service_.PrintRebalanceIterationBudgetSummary(
       std::cout,
       iteration_budget_summary);
-  deps_.scheduler_view_service->PrintRebalanceLoopStatusSummary(
+  scheduler_view_service_.PrintRebalanceLoopStatusSummary(
       std::cout,
-      deps_.scheduler_view_service->BuildRebalanceLoopStatusSummary(
+      scheduler_view_service_.BuildRebalanceLoopStatusSummary(
           controller_gate_summary,
           iteration_budget_summary,
           rebalance_policy_summary));
@@ -359,7 +389,7 @@ int SchedulerService::ReconcileRebalanceProposals() const {
 }
 
 int SchedulerService::SchedulerTick() const {
-  comet::ControllerStore store(deps_.db_path);
+  comet::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -401,16 +431,15 @@ int SchedulerService::SetRolloutActionStatus(
     int action_id,
     comet::RolloutActionStatus status,
     const std::optional<std::string>& status_message) const {
-  comet::ControllerStore store(deps_.db_path);
+  comet::ControllerStore store(db_path_);
   store.Initialize();
   if (!store.UpdateRolloutActionStatus(action_id, status, status_message.value_or(""))) {
     throw std::runtime_error(
         "rollout action id=" + std::to_string(action_id) + " not found");
   }
-  const auto updated_action =
-      deps_.find_rollout_action_by_id(store.LoadRolloutActions(), action_id);
+  const auto updated_action = FindRolloutActionById(store.LoadRolloutActions(), action_id);
   if (updated_action.has_value()) {
-    deps_.event_appender(
+    controller_event_service_.AppendEvent(
         store,
         "rollout-action",
         "status-updated",
@@ -431,16 +460,16 @@ int SchedulerService::SetRolloutActionStatus(
   std::cout << "updated rollout action id=" << action_id
             << " status=" << comet::ToString(status) << "\n";
   if (updated_action.has_value()) {
-    deps_.print_persisted_rollout_actions(
+    controller_print_service_.PrintPersistedRolloutActions(
         store.LoadRolloutActions(updated_action->plane_name));
   } else {
-    deps_.print_persisted_rollout_actions(store.LoadRolloutActions());
+    controller_print_service_.PrintPersistedRolloutActions(store.LoadRolloutActions());
   }
   return 0;
 }
 
 int SchedulerService::EnqueueRolloutEviction(int action_id) const {
-  comet::ControllerStore store(deps_.db_path);
+  comet::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -450,7 +479,7 @@ int SchedulerService::EnqueueRolloutEviction(int action_id) const {
   }
 
   const auto rollout_actions = store.LoadRolloutActions(desired_state->plane_name);
-  const auto action = deps_.find_rollout_action_by_id(rollout_actions, action_id);
+  const auto action = FindRolloutActionById(rollout_actions, action_id);
   if (!action.has_value()) {
     throw std::runtime_error(
         "rollout action id=" + std::to_string(action_id) + " not found");
@@ -475,7 +504,7 @@ int SchedulerService::EnqueueRolloutEviction(int action_id) const {
   }
 
   const auto existing_assignments = store.LoadHostAssignments();
-  const auto eviction_assignments = deps_.build_eviction_assignments_for_action(
+  const auto eviction_assignments = scheduler_execution_support_.BuildEvictionAssignmentsForAction(
       *desired_state,
       *desired_generation,
       *action,
@@ -502,7 +531,7 @@ int SchedulerService::EnqueueRolloutEviction(int action_id) const {
       action_id,
       comet::RolloutActionStatus::Acknowledged,
       message.str());
-  deps_.event_appender(
+  controller_event_service_.AppendEvent(
       store,
       "rollout-action",
       "eviction-enqueued",
@@ -520,19 +549,16 @@ int SchedulerService::EnqueueRolloutEviction(int action_id) const {
       "info");
 
   std::cout << "enqueued rollout eviction action id=" << action_id << "\n";
-  deps_.print_persisted_rollout_actions(store.LoadRolloutActions(desired_state->plane_name));
+  controller_print_service_.PrintPersistedRolloutActions(
+      store.LoadRolloutActions(desired_state->plane_name));
   for (const auto& node_name : node_names) {
-    deps_.print_host_assignments(store.LoadHostAssignments(node_name));
+    controller_print_service_.PrintHostAssignments(store.LoadHostAssignments(node_name));
   }
   return 0;
 }
 
 int SchedulerService::ReconcileRolloutActions() const {
-  if (deps_.state_aggregate_loader == nullptr || deps_.scheduler_view_service == nullptr) {
-    throw std::runtime_error("scheduler aggregate services are not configured");
-  }
-
-  comet::ControllerStore store(deps_.db_path);
+  comet::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -549,7 +575,7 @@ int SchedulerService::ReconcileRolloutActions() const {
     }
   }
 
-  std::cout << "db: " << deps_.db_path << "\n";
+  std::cout << "db: " << db_path_ << "\n";
   std::cout << "desired generation: " << *desired_generation << "\n";
   if (rollout_actions.empty()) {
     std::cout << "rollout reconcile: no rollout actions for current generation\n";
@@ -561,7 +587,8 @@ int SchedulerService::ReconcileRolloutActions() const {
     if (action.action == "evict-best-effort") {
       if (action.status == comet::RolloutActionStatus::Pending) {
         const auto existing_assignments = store.LoadHostAssignments();
-        const auto eviction_assignments = deps_.build_eviction_assignments_for_action(
+        const auto eviction_assignments =
+            scheduler_execution_support_.BuildEvictionAssignmentsForAction(
             *desired_state,
             *desired_generation,
             action,
@@ -579,14 +606,14 @@ int SchedulerService::ReconcileRolloutActions() const {
       }
 
       if (action.status == comet::RolloutActionStatus::Acknowledged &&
-          deps_.are_rollout_eviction_assignments_applied(
+          scheduler_execution_support_.AreRolloutEvictionAssignmentsApplied(
               store.LoadHostAssignments(),
               action.id)) {
         store.UpdateRolloutActionStatus(
             action.id,
             comet::RolloutActionStatus::ReadyToRetry,
             "eviction assignments applied");
-        deps_.mark_workers_evicted(
+        scheduler_execution_support_.MarkWorkersEvicted(
             &store,
             desired_state->plane_name,
             action.victim_worker_names);
@@ -601,14 +628,14 @@ int SchedulerService::ReconcileRolloutActions() const {
       continue;
     }
 
-    auto current_action = deps_.find_rollout_action_by_id(
+    auto current_action = FindRolloutActionById(
         store.LoadRolloutActions(desired_state->plane_name),
         action.id);
     if (!current_action.has_value()) {
       continue;
     }
 
-    const auto prior_evict_action = deps_.find_prior_rollout_action_for_worker(
+    const auto prior_evict_action = scheduler_execution_support_.FindPriorRolloutActionForWorker(
         store.LoadRolloutActions(desired_state->plane_name),
         *current_action,
         "evict-best-effort");
@@ -622,7 +649,7 @@ int SchedulerService::ReconcileRolloutActions() const {
       std::cout << "rollout reconcile: retry action id=" << current_action->id
                 << " is ready-to-retry\n";
       changed = true;
-      current_action = deps_.find_rollout_action_by_id(
+      current_action = FindRolloutActionById(
           store.LoadRolloutActions(desired_state->plane_name),
           action.id);
     }
@@ -638,14 +665,15 @@ int SchedulerService::ReconcileRolloutActions() const {
   if (!changed) {
     std::cout << "rollout reconcile: no state changes\n";
   }
-  deps_.print_persisted_rollout_actions(store.LoadRolloutActions(desired_state->plane_name));
+  controller_print_service_.PrintPersistedRolloutActions(
+      store.LoadRolloutActions(desired_state->plane_name));
   if (const auto state = store.LoadDesiredState(); state.has_value()) {
     if (store.LoadDesiredGeneration().has_value()) {
-      const auto rollout_view = deps_.state_aggregate_loader->LoadRolloutActionsViewData(
-          deps_.db_path,
+      const auto rollout_view = state_aggregate_loader_.LoadRolloutActionsViewData(
+          db_path_,
           std::nullopt,
           state->plane_name);
-      deps_.scheduler_view_service->PrintRolloutLifecycleEntries(
+      scheduler_view_service_.PrintRolloutLifecycleEntries(
           std::cout,
           rollout_view.lifecycle);
     }
@@ -654,7 +682,7 @@ int SchedulerService::ReconcileRolloutActions() const {
 }
 
 int SchedulerService::ApplyReadyRolloutAction(int action_id) const {
-  comet::ControllerStore store(deps_.db_path);
+  comet::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -664,7 +692,7 @@ int SchedulerService::ApplyReadyRolloutAction(int action_id) const {
   }
 
   const auto rollout_actions = store.LoadRolloutActions(desired_state->plane_name);
-  const auto action = deps_.find_rollout_action_by_id(rollout_actions, action_id);
+  const auto action = FindRolloutActionById(rollout_actions, action_id);
   if (!action.has_value()) {
     throw std::runtime_error(
         "rollout action id=" + std::to_string(action_id) + " not found");
@@ -699,10 +727,11 @@ int SchedulerService::ApplyReadyRolloutAction(int action_id) const {
   }
 
   comet::DesiredState updated_state = *desired_state;
-  deps_.materialize_retry_placement_action(&updated_state, *action, victim_worker_names);
+  scheduler_execution_support_.MaterializeRetryPlacementAction(
+      &updated_state, *action, victim_worker_names);
   comet::RequireSchedulingPolicy(updated_state);
   const comet::SchedulingPolicyReport scheduling_report =
-      deps_.evaluate_scheduling_policy(updated_state);
+      comet::EvaluateSchedulingPolicy(updated_state);
   const int next_generation = *desired_generation + 1;
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
   const auto observations = store.LoadHostObservations();
@@ -712,14 +741,14 @@ int SchedulerService::ApplyReadyRolloutAction(int action_id) const {
   store.ReplaceRolloutActions(
       updated_state.plane_name, next_generation, scheduling_report.rollout_actions);
   store.ReplaceHostAssignments(
-      deps_.build_host_assignments(
+      plane_realization_service_.BuildHostAssignments(
           updated_state,
-          deps_.artifacts_root,
+          artifacts_root_,
           next_generation,
           availability_overrides,
           observations,
           scheduling_report));
-  deps_.event_appender(
+  controller_event_service_.AppendEvent(
       store,
       "rollout-action",
       "retry-placement-applied",
@@ -739,15 +768,15 @@ int SchedulerService::ApplyReadyRolloutAction(int action_id) const {
 
   std::cout << "applied ready rollout action id=" << action_id << "\n";
   std::cout << "desired generation: " << next_generation << "\n";
-  deps_.print_state_summary(updated_state);
+  controller_print_service_.PrintStateSummary(updated_state);
   std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
-  deps_.print_scheduler_decision_summary(updated_state);
-  deps_.print_rollout_gate_summary(scheduling_report);
+  controller_print_service_.PrintSchedulerDecisionSummary(updated_state);
+  controller_print_service_.PrintRolloutGateSummary(scheduling_report);
   return 0;
 }
 
 int SchedulerService::AdvanceActiveSchedulerAction() const {
-  comet::ControllerStore store(deps_.db_path);
+  comet::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -773,7 +802,7 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
     comet::RequireSchedulingPolicy(rollback_state);
     const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
     const auto observations = store.LoadHostObservations();
-    const auto rollback_report = deps_.evaluate_scheduling_policy(rollback_state);
+    const auto rollback_report = comet::EvaluateSchedulingPolicy(rollback_state);
     const int rollback_generation = *desired_generation + 1;
     store.ReplaceDesiredState(rollback_state, rollback_generation, 0);
     store.ReplaceRolloutActions(
@@ -781,9 +810,9 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
         rollback_generation,
         rollback_report.rollout_actions);
     store.ReplaceHostAssignments(
-        deps_.build_host_assignments(
+        plane_realization_service_.BuildHostAssignments(
             rollback_state,
-            deps_.artifacts_root,
+            artifacts_root_,
             rollback_generation,
             availability_overrides,
             observations,
@@ -793,10 +822,10 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
     updated_runtime.action_generation = rollback_generation;
     updated_runtime.stable_samples = 0;
     updated_runtime.rollback_attempt_count = 1;
-    updated_runtime.started_at = deps_.utc_now_sql_timestamp();
+    updated_runtime.started_at = runtime_support_service_.UtcNowSqlTimestamp();
     updated_runtime.status_message = "rollback materialized after verification timeout";
     store.UpsertSchedulerPlaneRuntime(updated_runtime);
-    deps_.event_appender(
+    controller_event_service_.AppendEvent(
         store,
         "scheduler",
         "rollback-applied",
@@ -820,14 +849,15 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
 
   const auto observations = store.LoadHostObservations();
   const auto verification =
-      deps_.evaluate_scheduler_action_verification(*plane_runtime, observations);
+      scheduler_execution_support_.EvaluateSchedulerActionVerification(
+          *plane_runtime, observations);
   comet::SchedulerPlaneRuntime updated_runtime = *plane_runtime;
   updated_runtime.stable_samples = verification.next_stable_samples;
   updated_runtime.status_message = verification.detail;
 
   if (verification.stable) {
-    deps_.mark_worker_move_verified(&store, updated_runtime);
-    deps_.event_appender(
+    scheduler_execution_support_.MarkWorkerMoveVerified(&store, updated_runtime);
+    controller_event_service_.AppendEvent(
         store,
         "scheduler",
         "move-verified",
@@ -857,7 +887,7 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
               << updated_runtime.active_worker_name
               << " phase=" << updated_runtime.phase
               << " stable_samples=" << updated_runtime.stable_samples << "/"
-              << deps_.verification_stable_samples_required()
+              << verification_stable_samples_required_
               << " detail=" << verification.detail << "\n";
     return 0;
   }
@@ -877,10 +907,10 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
     store.UpsertSchedulerWorkerRuntime(worker_runtime);
     updated_runtime.phase = "rollback-planned";
     updated_runtime.stable_samples = 0;
-    updated_runtime.started_at = deps_.utc_now_sql_timestamp();
+    updated_runtime.started_at = runtime_support_service_.UtcNowSqlTimestamp();
     updated_runtime.status_message = "verification timed out; rollback planned";
     store.UpsertSchedulerPlaneRuntime(updated_runtime);
-    deps_.event_appender(
+    controller_event_service_.AppendEvent(
         store,
         "scheduler",
         "rollback-planned",
@@ -913,7 +943,7 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
   worker_runtime.last_status_message = verification.detail;
   worker_runtime.manual_intervention_required = true;
   store.UpsertSchedulerWorkerRuntime(worker_runtime);
-  deps_.event_appender(
+  controller_event_service_.AppendEvent(
       store,
       "scheduler",
       "manual-intervention-required",

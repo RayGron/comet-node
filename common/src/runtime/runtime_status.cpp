@@ -381,14 +381,64 @@ RuntimeStatus RuntimeStatusFromJson(const json& value) {
 }  // namespace
 
 std::string SerializeRuntimeStatusJson(const RuntimeStatus& status) {
-  return ToJson(status).dump(2);
+  return RuntimeStatusJsonCodec().Serialize(status);
 }
 
 RuntimeStatus DeserializeRuntimeStatusJson(const std::string& json_text) {
-  return RuntimeStatusFromJson(json::parse(json_text));
+  return RuntimeStatusJsonCodec().Deserialize(json_text);
 }
 
 std::string SerializeRuntimeStatusListJson(const std::vector<RuntimeProcessStatus>& statuses) {
+  return RuntimeStatusJsonCodec().SerializeList(statuses);
+}
+
+std::vector<RuntimeProcessStatus> DeserializeRuntimeStatusListJson(const std::string& json_text) {
+  return RuntimeStatusJsonCodec().DeserializeList(json_text);
+}
+
+std::string GpuTelemetryJsonCodec::Serialize(const GpuTelemetrySnapshot& snapshot) const {
+  return ToJson(snapshot).dump(2);
+}
+
+GpuTelemetrySnapshot GpuTelemetryJsonCodec::Deserialize(const std::string& json_text) const {
+  return GpuTelemetrySnapshotFromJson(json::parse(json_text));
+}
+
+std::string DiskTelemetryJsonCodec::Serialize(const DiskTelemetrySnapshot& snapshot) const {
+  return ToJson(snapshot).dump(2);
+}
+
+DiskTelemetrySnapshot DiskTelemetryJsonCodec::Deserialize(const std::string& json_text) const {
+  return DiskTelemetrySnapshotFromJson(json::parse(json_text));
+}
+
+std::string NetworkTelemetryJsonCodec::Serialize(const NetworkTelemetrySnapshot& snapshot) const {
+  return ToJson(snapshot).dump(2);
+}
+
+NetworkTelemetrySnapshot NetworkTelemetryJsonCodec::Deserialize(
+    const std::string& json_text) const {
+  return NetworkTelemetrySnapshotFromJson(json::parse(json_text));
+}
+
+std::string CpuTelemetryJsonCodec::Serialize(const CpuTelemetrySnapshot& snapshot) const {
+  return ToJson(snapshot).dump(2);
+}
+
+CpuTelemetrySnapshot CpuTelemetryJsonCodec::Deserialize(const std::string& json_text) const {
+  return CpuTelemetrySnapshotFromJson(json::parse(json_text));
+}
+
+std::string RuntimeStatusJsonCodec::Serialize(const RuntimeStatus& status) const {
+  return ToJson(status).dump(2);
+}
+
+RuntimeStatus RuntimeStatusJsonCodec::Deserialize(const std::string& json_text) const {
+  return RuntimeStatusFromJson(json::parse(json_text));
+}
+
+std::string RuntimeStatusJsonCodec::SerializeList(
+    const std::vector<RuntimeProcessStatus>& statuses) const {
   json payload = json::array();
   for (const auto& status : statuses) {
     payload.push_back(ToJson(status));
@@ -396,7 +446,8 @@ std::string SerializeRuntimeStatusListJson(const std::vector<RuntimeProcessStatu
   return payload.dump(2);
 }
 
-std::vector<RuntimeProcessStatus> DeserializeRuntimeStatusListJson(const std::string& json_text) {
+std::vector<RuntimeProcessStatus> RuntimeStatusJsonCodec::DeserializeList(
+    const std::string& json_text) const {
   const json value = json::parse(json_text);
   std::vector<RuntimeProcessStatus> statuses;
   for (const auto& entry : value) {
@@ -408,38 +459,38 @@ std::vector<RuntimeProcessStatus> DeserializeRuntimeStatusListJson(const std::st
 }
 
 std::string SerializeGpuTelemetryJson(const GpuTelemetrySnapshot& snapshot) {
-  return ToJson(snapshot).dump(2);
+  return GpuTelemetryJsonCodec().Serialize(snapshot);
 }
 
 GpuTelemetrySnapshot DeserializeGpuTelemetryJson(const std::string& json_text) {
-  return GpuTelemetrySnapshotFromJson(json::parse(json_text));
+  return GpuTelemetryJsonCodec().Deserialize(json_text);
 }
 
 std::string SerializeDiskTelemetryJson(const DiskTelemetrySnapshot& snapshot) {
-  return ToJson(snapshot).dump(2);
+  return DiskTelemetryJsonCodec().Serialize(snapshot);
 }
 
 DiskTelemetrySnapshot DeserializeDiskTelemetryJson(const std::string& json_text) {
-  return DiskTelemetrySnapshotFromJson(json::parse(json_text));
+  return DiskTelemetryJsonCodec().Deserialize(json_text);
 }
 
 std::string SerializeNetworkTelemetryJson(const NetworkTelemetrySnapshot& snapshot) {
-  return ToJson(snapshot).dump(2);
+  return NetworkTelemetryJsonCodec().Serialize(snapshot);
 }
 
 NetworkTelemetrySnapshot DeserializeNetworkTelemetryJson(const std::string& json_text) {
-  return NetworkTelemetrySnapshotFromJson(json::parse(json_text));
+  return NetworkTelemetryJsonCodec().Deserialize(json_text);
 }
 
 std::string SerializeCpuTelemetryJson(const CpuTelemetrySnapshot& snapshot) {
-  return ToJson(snapshot).dump(2);
+  return CpuTelemetryJsonCodec().Serialize(snapshot);
 }
 
 CpuTelemetrySnapshot DeserializeCpuTelemetryJson(const std::string& json_text) {
-  return CpuTelemetrySnapshotFromJson(json::parse(json_text));
+  return CpuTelemetryJsonCodec().Deserialize(json_text);
 }
 
-std::optional<RuntimeStatus> LoadRuntimeStatusJson(const std::string& path) {
+std::optional<RuntimeStatus> RuntimeStatusFileStore::Load(const std::string& path) const {
   if (!std::filesystem::exists(path)) {
     return std::nullopt;
   }
@@ -454,7 +505,7 @@ std::optional<RuntimeStatus> LoadRuntimeStatusJson(const std::string& path) {
   return RuntimeStatusFromJson(value);
 }
 
-void SaveRuntimeStatusJson(const RuntimeStatus& status, const std::string& path) {
+void RuntimeStatusFileStore::Save(const RuntimeStatus& status, const std::string& path) const {
   const std::filesystem::path file_path(path);
   if (file_path.has_parent_path()) {
     std::filesystem::create_directories(file_path.parent_path());
@@ -469,6 +520,14 @@ void SaveRuntimeStatusJson(const RuntimeStatus& status, const std::string& path)
   if (!output.good()) {
     throw std::runtime_error("failed to write runtime status file: " + path);
   }
+}
+
+std::optional<RuntimeStatus> LoadRuntimeStatusJson(const std::string& path) {
+  return RuntimeStatusFileStore().Load(path);
+}
+
+void SaveRuntimeStatusJson(const RuntimeStatus& status, const std::string& path) {
+  RuntimeStatusFileStore().Save(status, path);
 }
 
 }  // namespace comet

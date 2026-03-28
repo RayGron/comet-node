@@ -56,6 +56,18 @@ class IBundleCliService {
       const std::string& db_path,
       const std::optional<std::string>& node_name) const = 0;
   virtual int RenderInferRuntime(const std::string& db_path) const = 0;
+  virtual ControllerActionResult ExecuteValidateBundleAction(
+      const std::string& bundle_dir) const = 0;
+  virtual ControllerActionResult ExecutePreviewBundleAction(
+      const std::string& bundle_dir,
+      const std::optional<std::string>& node_name) const = 0;
+  virtual ControllerActionResult ExecuteImportBundleAction(
+      const std::string& db_path,
+      const std::string& bundle_dir) const = 0;
+  virtual ControllerActionResult ExecuteApplyBundleAction(
+      const std::string& db_path,
+      const std::string& bundle_dir,
+      const std::string& artifacts_root) const = 0;
 };
 
 class IReadModelCliService {

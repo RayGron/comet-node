@@ -140,7 +140,30 @@ std::string Lowercase(std::string value);
 
 void SendResponse(int client_fd, const SimpleResponse& response);
 
-std::atomic<bool> g_stop_requested{false};
+class InferSignalService {
+ public:
+  void RegisterHandlers() {
+    instance_ = this;
+    std::signal(SIGINT, &InferSignalService::HandleSignal);
+    std::signal(SIGTERM, &InferSignalService::HandleSignal);
+  }
+
+  bool StopRequested() const {
+    return stop_requested_.load();
+  }
+
+ private:
+  static void HandleSignal(int) {
+    if (instance_ != nullptr) {
+      instance_->stop_requested_.store(true);
+    }
+  }
+
+  static InferSignalService* instance_;
+  std::atomic<bool> stop_requested_{false};
+};
+
+InferSignalService* InferSignalService::instance_ = nullptr;
 
 [[noreturn]] void Throw(const std::string& message) {
   throw std::runtime_error(message);
@@ -1824,6 +1847,7 @@ class LocalHttpServer {
       std::string service_name,
       const RuntimeConfig& config,
       LlamaLibraryEngine* engine,
+      const InferSignalService& signal_service,
       bool dynamic_upstream = false,
       std::optional<UpstreamTarget> upstream = std::nullopt)
       : host_(std::move(host)),
@@ -1831,6 +1855,7 @@ class LocalHttpServer {
         service_name_(std::move(service_name)),
         config_(config),
         engine_(engine),
+        signal_service_(signal_service),
         dynamic_upstream_(dynamic_upstream),
         upstream_(std::move(upstream)) {}
 
@@ -1854,7 +1879,7 @@ class LocalHttpServer {
  private:
   void AcceptLoop() {
     running_ = true;
-    while (running_ && !g_stop_requested.load()) {
+    while (running_ && !signal_service_.StopRequested()) {
       const int client_fd = accept(listen_fd_, nullptr, nullptr);
       if (client_fd < 0) {
         if (!running_) {
@@ -1932,16 +1957,13 @@ class LocalHttpServer {
   std::string service_name_;
   RuntimeConfig config_;
   LlamaLibraryEngine* engine_ = nullptr;
+  const InferSignalService& signal_service_;
   bool dynamic_upstream_ = false;
   std::optional<UpstreamTarget> upstream_;
   std::thread worker_;
   std::atomic<bool> running_{false};
   int listen_fd_ = -1;
 };
-
-void SignalHandler(int) {
-  g_stop_requested.store(true);
-}
 
 bool ProbeUrl(const std::string& url) {
   constexpr std::string_view kHttpPrefix = "http://";
@@ -2550,12 +2572,14 @@ class LocalRuntime {
       std::string backend,
       std::string started_at,
       std::unique_ptr<LlamaLibraryEngine> engine,
+      InferSignalService& signal_service,
       bool dynamic_upstream = false,
       std::optional<UpstreamTarget> upstream = std::nullopt)
       : config_(config),
         backend_(std::move(backend)),
         started_at_(std::move(started_at)),
         engine_(std::move(engine)),
+        signal_service_(signal_service),
         dynamic_upstream_(dynamic_upstream),
         upstream_(std::move(upstream)),
         inference_server_(
@@ -2564,6 +2588,7 @@ class LocalRuntime {
             "comet-inference-local",
             config,
             engine_.get(),
+            signal_service_,
             dynamic_upstream_,
             upstream_),
         gateway_server_(
@@ -2572,18 +2597,18 @@ class LocalRuntime {
             "comet-gateway-local",
             config,
             engine_.get(),
+            signal_service_,
             dynamic_upstream_,
             upstream_) {}
 
   int Run() {
-    std::signal(SIGINT, SignalHandler);
-    std::signal(SIGTERM, SignalHandler);
+    signal_service_.RegisterHandlers();
     TouchReadyFile();
     WriteCurrentRuntimeStatus("starting");
     inference_server_.Start();
     gateway_server_.Start();
     WriteCurrentRuntimeStatus("running");
-    while (!g_stop_requested.load()) {
+    while (!signal_service_.StopRequested()) {
       std::this_thread::sleep_for(std::chrono::seconds(2));
       WriteCurrentRuntimeStatus("running");
     }
@@ -2652,6 +2677,7 @@ class LocalRuntime {
   std::string backend_;
   std::string started_at_;
   std::unique_ptr<LlamaLibraryEngine> engine_;
+  InferSignalService& signal_service_;
   bool dynamic_upstream_ = false;
   std::optional<UpstreamTarget> upstream_;
   LocalHttpServer inference_server_;
@@ -2663,57 +2689,64 @@ bool HasResolvableGgufModel(const RuntimeConfig& config) {
   return active_model.is_object() && ResolveGgufPath(active_model).has_value();
 }
 
-int LaunchEmbeddedRuntime(const RuntimeConfig& config, const std::string& backend) {
-  LocalRuntime runtime(config, backend, UtcNowIso(), nullptr);
+int LaunchEmbeddedRuntime(
+    const RuntimeConfig& config,
+    const std::string& backend,
+    InferSignalService& signal_service) {
+  LocalRuntime runtime(config, backend, UtcNowIso(), nullptr, signal_service);
   return runtime.Run();
 }
 
-int LaunchLlamaRuntime(const RuntimeConfig& config) {
+int LaunchLlamaRuntime(const RuntimeConfig& config, InferSignalService& signal_service) {
   const json active_model = LoadActiveModel(config);
   if (active_model.empty()) {
     Throw("llama backend requires an active model");
   }
   auto engine = std::make_unique<LlamaLibraryEngine>(config, active_model);
-  LocalRuntime runtime(config, "llama", UtcNowIso(), std::move(engine));
+  LocalRuntime runtime(config, "llama", UtcNowIso(), std::move(engine), signal_service);
   return runtime.Run();
 }
 
-int LaunchWorkerVllmRuntime(const RuntimeConfig& config) {
+int LaunchWorkerVllmRuntime(const RuntimeConfig& config, InferSignalService& signal_service) {
   LocalRuntime runtime(
       config,
       "worker-vllm",
       UtcNowIso(),
       nullptr,
+      signal_service,
       true);
   return runtime.Run();
 }
 
-int LaunchRuntime(const RuntimeConfig& config, const std::string& requested_backend) {
+int LaunchRuntime(
+    const RuntimeConfig& config,
+    const std::string& requested_backend,
+    InferSignalService& signal_service) {
   if (requested_backend == "embedded") {
-    return LaunchEmbeddedRuntime(config, "embedded");
+    return LaunchEmbeddedRuntime(config, "embedded", signal_service);
   }
   if (requested_backend == "llama") {
-    return LaunchLlamaRuntime(config);
+    return LaunchLlamaRuntime(config, signal_service);
   }
   if (requested_backend == "worker-vllm" || requested_backend == "vllm") {
-    return LaunchWorkerVllmRuntime(config);
+    return LaunchWorkerVllmRuntime(config, signal_service);
   }
   if (requested_backend != "auto") {
     Throw("unsupported backend: " + requested_backend);
   }
   if (config.runtime_engine == "vllm") {
-    return LaunchWorkerVllmRuntime(config);
+    return LaunchWorkerVllmRuntime(config, signal_service);
   }
   const json active_model = LoadActiveModel(config);
   if (active_model.empty()) {
     std::cout << "[comet-inferctl] auto backend fallback to embedded: no active model\n";
-    return LaunchEmbeddedRuntime(config, "embedded");
+    return LaunchEmbeddedRuntime(config, "embedded", signal_service);
   }
   if (!HasResolvableGgufModel(config)) {
     std::cout << "[comet-inferctl] auto backend fallback to embedded: active model has no local GGUF\n";
-    return LaunchEmbeddedRuntime(config, "embedded");
+    return LaunchEmbeddedRuntime(config, "embedded", signal_service);
   }
-  return LaunchLlamaRuntime(config);
+  return LaunchLlamaRuntime(config, signal_service);
 }
 
 void PrintJsonOrEmpty(const json& value) {
@@ -2728,9 +2761,12 @@ void PrintJsonOrEmpty(const json& value) {
 
 namespace comet::infer {
 
-int RunInferApp(int argc, char** argv) {
+InferApp::InferApp(int argc, char** argv) : argc_(argc), argv_(argv) {}
+
+int InferApp::Run() {
   try {
-    const Args args = ParseArgs(argc, argv);
+    InferSignalService signal_service;
+    const Args args = ParseArgs(argc_, argv_);
     if (args.command == "probe-url") {
       return ProbeUrl(args.probe_url) ? 0 : 1;
     }
@@ -2808,10 +2844,10 @@ int RunInferApp(int argc, char** argv) {
       return doctor_rc;
     }
     if (args.command == "launch-embedded-runtime") {
-      return LaunchEmbeddedRuntime(config, "embedded");
+      return LaunchEmbeddedRuntime(config, "embedded", signal_service);
     }
     if (args.command == "launch-runtime") {
-      return LaunchRuntime(config, args.backend);
+      return LaunchRuntime(config, args.backend, signal_service);
     }
 
     Throw("unsupported command: " + args.command);

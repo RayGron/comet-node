@@ -1,0 +1,47 @@
+#pragma once
+
+#include <optional>
+#include <string>
+
+#include "comet/runtime/runtime_status.h"
+
+#include "worker_config.h"
+
+namespace comet::worker {
+
+class WorkerStatusService final {
+ public:
+  WorkerStatusService() = default;
+
+  std::string CurrentTimestamp() const;
+
+  void MarkWaitingForModel(
+      const WorkerConfig& config,
+      const std::string& started_at,
+      const std::optional<std::string>& model_path) const;
+  void MarkRunning(
+      const WorkerConfig& config,
+      const std::string& started_at,
+      const std::string& model_path) const;
+  void MarkFailed(
+      const WorkerConfig& config,
+      const std::string& started_at,
+      const std::optional<std::string>& model_path) const;
+  void MarkStopped(
+      const WorkerConfig& config,
+      const std::string& started_at,
+      const std::optional<std::string>& model_path) const;
+
+ private:
+  static void TouchReadyFile(bool ready);
+  static comet::RuntimeStatus BuildStatus(
+      const WorkerConfig& config,
+      const std::string& phase,
+      bool ready,
+      const std::string& started_at,
+      const std::string& last_activity_at,
+      const std::string& model_path);
+  static void WriteStatus(const comet::RuntimeStatus& status, const std::string& path);
+};
+
+}  // namespace comet::worker

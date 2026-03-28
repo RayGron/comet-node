@@ -74,10 +74,6 @@ void CloseSocketHandle(const SocketHandle fd) {
 
 constexpr const char* kDefaultManagedStorageRoot = "/var/lib/comet";
 
-std::string DefaultDbPath() {
-  return (std::filesystem::path("var") / "controller.sqlite").string();
-}
-
 std::string DefaultArtifactsRoot() {
   return (std::filesystem::path("var") / "artifacts").string();
 }
@@ -924,18 +920,6 @@ std::string RequireSingleNodeName(const comet::DesiredState& state) {
     throw std::runtime_error("desired node state is empty");
   }
   return state.nodes.front().name;
-}
-
-void PrintAssignmentSummary(const comet::HostAssignment& assignment) {
-  std::cout << "assignment_id=" << assignment.id << "\n";
-  std::cout << "assignment_node=" << assignment.node_name << "\n";
-  std::cout << "assignment_plane=" << assignment.plane_name << "\n";
-  std::cout << "assignment_generation=" << assignment.desired_generation << "\n";
-  std::cout << "assignment_attempt=" << assignment.attempt_count
-            << "/" << assignment.max_attempts << "\n";
-  std::cout << "assignment_type=" << assignment.assignment_type << "\n";
-  std::cout << "assignment_status=" << comet::ToString(assignment.status) << "\n";
-  std::cout << "assignment_artifacts_root=" << assignment.artifacts_root << "\n";
 }
 
 std::string Trim(const std::string& value) {
@@ -2861,12 +2845,6 @@ class DefaultHttpHostdBackendSupport final : public comet::hostd::IHttpHostdBack
   }
 };
 
-const comet::hostd::IHostdBackendFactory& DefaultBackendFactory() {
-  static const DefaultHttpHostdBackendSupport support;
-  static const comet::hostd::HostdBackendFactory factory(support);
-  return factory;
-}
-
 void PublishAssignmentProgress(
     HostdBackend* backend,
     const std::optional<int>& assignment_id,
@@ -3877,50 +3855,6 @@ comet::HostObservation BuildObservedStateSnapshot(
   return observation;
 }
 
-void ReportObservedState(
-    HostdBackend& backend,
-    const comet::HostObservation& observation,
-    const std::string& source_label) {
-  backend.UpsertHostObservation(observation);
-  AppendHostdEvent(
-      backend,
-      "host-observation",
-      "reported",
-      source_label,
-      json{
-          {"status", comet::ToString(observation.status)},
-          {"applied_generation",
-           observation.applied_generation.has_value()
-               ? json(*observation.applied_generation)
-               : json(nullptr)},
-          {"last_assignment_id",
-           observation.last_assignment_id.has_value()
-               ? json(*observation.last_assignment_id)
-               : json(nullptr)},
-      },
-      observation.plane_name,
-      observation.node_name,
-      "",
-      observation.last_assignment_id);
-
-  std::cout << source_label << "\n";
-  std::cout << "backend=hostd-control\n";
-  std::cout << "node=" << observation.node_name << "\n";
-  std::cout << "status=" << comet::ToString(observation.status) << "\n";
-  if (!observation.plane_name.empty()) {
-    std::cout << "plane=" << observation.plane_name << "\n";
-  }
-  if (observation.applied_generation.has_value()) {
-    std::cout << "applied_generation=" << *observation.applied_generation << "\n";
-  }
-  if (observation.last_assignment_id.has_value()) {
-    std::cout << "last_assignment_id=" << *observation.last_assignment_id << "\n";
-  }
-  if (!observation.status_message.empty()) {
-    std::cout << "message=" << observation.status_message << "\n";
-  }
-}
-
 bool IsDesiredNodeStateEmpty(const comet::DesiredState& state) {
   return state.disks.empty() && state.instances.empty();
 }
@@ -4315,28 +4249,6 @@ void ShowRuntimeStatus(
   std::cout << "launch_ready=" << (runtime_status->launch_ready ? "yes" : "no") << "\n";
 }
 
-[[maybe_unused]] void ReportLocalObservedState(
-    const std::optional<std::string>& db_path,
-    const std::optional<std::string>& controller_url,
-    const std::optional<std::string>& host_private_key_path,
-    const std::optional<std::string>& controller_fingerprint,
-    const std::string& node_name,
-    const std::string& state_root) {
-  auto backend = DefaultBackendFactory().CreateBackend(
-      db_path,
-      controller_url,
-      host_private_key_path,
-      controller_fingerprint);
-  ReportObservedState(
-      *backend,
-      BuildObservedStateSnapshot(
-          node_name,
-          state_root,
-          comet::HostObservationStatus::Idle,
-          "manual heartbeat"),
-      "hostd report-observed-state");
-}
-
 std::optional<comet::DiskSpec> FindDiskInStateByKey(
     const std::optional<comet::DesiredState>& state,
     const std::string& disk_key) {
@@ -4684,626 +4596,372 @@ void ApplyDesiredNodeState(
           node_name));
 }
 
-[[maybe_unused]] void ApplyStateOps(
-    const std::string& db_path,
-    const std::string& node_name,
-    const std::string& artifacts_root,
-    const std::string& storage_root,
-    const std::optional<std::string>& runtime_root,
-    const std::string& state_root,
-    ComposeMode compose_mode) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  comet::hostd::LocalDbHostdBackend backend(db_path);
-  const auto state = store.LoadDesiredState();
-  if (!state.has_value()) {
-    throw std::runtime_error("no desired state found in db '" + db_path + "'");
+class HostdBackendHttpSupport final : public comet::hostd::IHttpHostdBackendSupport {
+ public:
+  nlohmann::json SendControllerJsonRequest(
+      const std::string& controller_url,
+      const std::string& method,
+      const std::string& path,
+      const nlohmann::json& payload,
+      const std::map<std::string, std::string>& headers = {}) const override {
+    return ::SendControllerJsonRequest(
+        ParseControllerTarget(controller_url),
+        method,
+        path,
+        payload,
+        headers);
   }
-  const auto desired_generation = store.LoadDesiredGeneration();
 
-  const comet::DesiredState rebased_full_state =
-      RebaseStateForRuntimeRoot(*state, storage_root, runtime_root);
-  const comet::DesiredState desired_node_state =
-      comet::SliceDesiredStateForNode(rebased_full_state, node_name);
+  comet::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) const override {
+    return ::ParseAssignmentPayload(payload);
+  }
 
-  std::cout << "db=" << db_path << "\n";
-  try {
-    ApplyDesiredNodeState(
+  nlohmann::json BuildHostObservationPayload(
+      const comet::HostObservation& observation) const override {
+    return ::BuildHostObservationPayload(observation);
+  }
+
+  nlohmann::json BuildDiskRuntimeStatePayload(
+      const comet::DiskRuntimeState& state) const override {
+    return ::BuildDiskRuntimeStatePayload(state);
+  }
+
+  comet::DiskRuntimeState ParseDiskRuntimeStatePayload(
+      const nlohmann::json& payload) const override {
+    return ::ParseDiskRuntimeStatePayload(payload);
+  }
+
+  std::string Trim(const std::string& value) const override {
+    return ::Trim(value);
+  }
+};
+
+class HostdObservationSupport final : public comet::hostd::IHostdObservationSupport {
+ public:
+  void ShowLocalState(const std::string& node_name, const std::string& state_root) const override {
+    ::ShowLocalState(node_name, state_root);
+  }
+
+  void ShowRuntimeStatus(const std::string& node_name, const std::string& state_root) const override {
+    ::ShowRuntimeStatus(node_name, state_root);
+  }
+
+  comet::HostObservation BuildObservedStateSnapshot(
+      const std::string& node_name,
+      const std::string& state_root,
+      const comet::HostObservationStatus status,
+      const std::string& status_message,
+      const std::optional<int>& assignment_id = std::nullopt) const override {
+    return ::BuildObservedStateSnapshot(node_name, state_root, status, status_message, assignment_id);
+  }
+
+  void AppendHostdEvent(
+      HostdBackend& backend,
+      const std::string& category,
+      const std::string& event_type,
+      const std::string& message,
+      const nlohmann::json& payload,
+      const std::string& plane_name,
+      const std::string& node_name,
+      const std::string& worker_name,
+      const std::optional<int>& assignment_id,
+      const std::optional<int>& rollout_action_id,
+      const std::string& severity) const override {
+    ::AppendHostdEvent(
+        backend,
+        category,
+        event_type,
+        message,
+        payload,
+        plane_name,
+        node_name,
+        worker_name,
+        assignment_id,
+        rollout_action_id,
+        severity);
+  }
+};
+
+class HostdAssignmentSupport final : public comet::hostd::IHostdAssignmentSupport {
+ public:
+  comet::DesiredState RebaseStateForRuntimeRoot(
+      comet::DesiredState state,
+      const std::string& storage_root,
+      const std::optional<std::string>& runtime_root) const override {
+    return ::RebaseStateForRuntimeRoot(std::move(state), storage_root, runtime_root);
+  }
+
+  nlohmann::json BuildAssignmentProgressPayload(
+      const std::string& phase,
+      const std::string& phase_label,
+      const std::string& message,
+      const int progress_percent,
+      const std::string& plane_name,
+      const std::string& node_name) const override {
+    return ::BuildAssignmentProgressPayload(
+        phase,
+        phase_label,
+        message,
+        progress_percent,
+        plane_name,
+        node_name);
+  }
+
+  void PublishAssignmentProgress(
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id,
+      const nlohmann::json& progress) const override {
+    ::PublishAssignmentProgress(backend, assignment_id, progress);
+  }
+
+  std::vector<std::string> ParseTaggedCsv(
+      const std::string& tagged_message,
+      const std::string& tag) const override {
+    return ::ParseTaggedCsv(tagged_message, tag);
+  }
+
+  comet::HostObservation BuildObservedStateSnapshot(
+      const std::string& node_name,
+      const std::string& state_root,
+      const comet::HostObservationStatus status,
+      const std::string& status_message,
+      const std::optional<int>& assignment_id = std::nullopt) const override {
+    return ::BuildObservedStateSnapshot(node_name, state_root, status, status_message, assignment_id);
+  }
+
+  std::map<std::string, int> CaptureServiceHostPids(
+      const std::vector<std::string>& service_names) const override {
+    return ::CaptureServiceHostPids(service_names);
+  }
+
+  bool VerifyEvictionAssignment(
+      const comet::DesiredState& desired_state,
+      const std::string& node_name,
+      const std::string& state_root,
+      const std::string& tagged_message,
+      const std::map<std::string, int>& expected_victim_host_pids) const override {
+    return ::VerifyEvictionAssignment(
+        desired_state,
+        node_name,
+        state_root,
+        tagged_message,
+        expected_victim_host_pids);
+  }
+
+  void ApplyDesiredNodeState(
+      const comet::DesiredState& desired_node_state,
+      const std::string& artifacts_root,
+      const std::string& storage_root,
+      const std::optional<std::string>& runtime_root,
+      const std::string& state_root,
+      const ComposeMode compose_mode,
+      const std::string& source_label,
+      const std::optional<int>& desired_generation,
+      const std::optional<int>& assignment_id,
+      HostdBackend* backend) const override {
+    ::ApplyDesiredNodeState(
         desired_node_state,
         artifacts_root,
         storage_root,
         runtime_root,
         state_root,
         compose_mode,
-        "hostd apply-state-ops",
+        source_label,
         desired_generation,
-        std::nullopt,
-        &backend);
-    ReportObservedState(
+        assignment_id,
+        backend);
+  }
+
+  void ShowDemoOps(
+      const std::string& node_name,
+      const std::string& storage_root,
+      const std::optional<std::string>& runtime_root) const override {
+    ::ShowDemoOps(node_name, storage_root, runtime_root);
+  }
+
+  void ShowStateOps(
+      const std::string& db_path,
+      const std::string& node_name,
+      const std::string& artifacts_root,
+      const std::string& storage_root,
+      const std::optional<std::string>& runtime_root,
+      const std::string& state_root) const override {
+    ::ShowStateOps(db_path, node_name, artifacts_root, storage_root, runtime_root, state_root);
+  }
+
+  void AppendHostdEvent(
+      HostdBackend& backend,
+      const std::string& category,
+      const std::string& event_type,
+      const std::string& message,
+      const nlohmann::json& payload,
+      const std::string& plane_name,
+      const std::string& node_name,
+      const std::string& worker_name,
+      const std::optional<int>& assignment_id,
+      const std::optional<int>& rollout_action_id,
+      const std::string& severity) const override {
+    ::AppendHostdEvent(
         backend,
-        BuildObservedStateSnapshot(
-            node_name,
-            state_root,
-            comet::HostObservationStatus::Applied,
-            desired_generation.has_value()
-                ? "applied desired generation " + std::to_string(*desired_generation)
-                : "applied desired state"),
-        "hostd observed-state-update");
-  } catch (const std::exception& error) {
-    ReportObservedState(
-        backend,
-        BuildObservedStateSnapshot(
-            node_name,
-            state_root,
-            comet::HostObservationStatus::Failed,
-            error.what()),
-        "hostd observed-state-update");
-    throw;
+        category,
+        event_type,
+        message,
+        payload,
+        plane_name,
+        node_name,
+        worker_name,
+        assignment_id,
+        rollout_action_id,
+        severity);
   }
-}
+};
 
-[[maybe_unused]] void ApplyNextAssignment(
-    const std::optional<std::string>& db_path,
-    const std::optional<std::string>& controller_url,
-    const std::optional<std::string>& host_private_key_path,
-    const std::optional<std::string>& controller_fingerprint,
-    const std::string& node_name,
-    const std::string& storage_root,
-    const std::optional<std::string>& runtime_root,
-    const std::string& state_root,
-    ComposeMode compose_mode) {
-  auto backend = DefaultBackendFactory().CreateBackend(
-      db_path,
-      controller_url,
-      host_private_key_path,
-      controller_fingerprint);
-  const auto assignment = backend->ClaimNextHostAssignment(node_name);
-  if (!assignment.has_value()) {
-    std::cout << "no pending assignments for node=" << node_name << "\n";
-    return;
+class HostdCliActions final : public comet::hostd::IHostdCliActions {
+ public:
+  HostdCliActions(
+      const comet::hostd::HostdAssignmentService& assignment_service,
+      const comet::hostd::HostdObservationService& observation_service)
+      : assignment_service_(assignment_service),
+        observation_service_(observation_service) {}
+
+  void ShowDemoOps(
+      const std::string& node_name,
+      const std::string& storage_root,
+      const std::optional<std::string>& runtime_root) override {
+    assignment_service_.ShowDemoOps(node_name, storage_root, runtime_root);
   }
 
-  std::cout << "hostd apply-next-assignment\n";
-  if (controller_url.has_value()) {
-    std::cout << "controller=" << *controller_url << "\n";
-  } else {
-    std::cout << "db=" << db_path.value_or(DefaultDbPath()) << "\n";
-  }
-  PrintAssignmentSummary(*assignment);
-  if (runtime_root.has_value()) {
-    std::cout << "runtime_root=" << *runtime_root << "\n";
-  }
-  std::cout << "state_root=" << state_root << "\n";
-  std::cout << "compose_mode="
-            << (compose_mode == ComposeMode::Exec ? "exec" : "skip") << "\n";
-  const std::string assignment_context =
-      assignment->status_message.empty() ? "" : " [" + assignment->status_message + "]";
-
-  try {
-    if (assignment->assignment_type != "apply-node-state" &&
-        assignment->assignment_type != "drain-node-state" &&
-        assignment->assignment_type != "stop-plane-state" &&
-        assignment->assignment_type != "delete-plane-state" &&
-        assignment->assignment_type != "evict-workers") {
-      throw std::runtime_error(
-          "unsupported assignment type '" + assignment->assignment_type + "'");
-    }
-
-    const comet::DesiredState rebased_state = RebaseStateForRuntimeRoot(
-        comet::DeserializeDesiredStateJson(assignment->desired_state_json),
+  void ShowStateOps(
+      const std::string& db_path,
+      const std::string& node_name,
+      const std::string& artifacts_root,
+      const std::string& storage_root,
+      const std::optional<std::string>& runtime_root,
+      const std::string& state_root) override {
+    assignment_service_.ShowStateOps(
+        db_path,
+        node_name,
+        artifacts_root,
         storage_root,
-        runtime_root);
-    const bool is_drain_assignment = assignment->assignment_type == "drain-node-state";
-    const bool is_stop_assignment = assignment->assignment_type == "stop-plane-state";
-    const bool is_delete_assignment = assignment->assignment_type == "delete-plane-state";
-    const bool is_eviction_assignment = assignment->assignment_type == "evict-workers";
-    const auto victim_names =
-        is_eviction_assignment ? ParseTaggedCsv(assignment->status_message, "victims")
-                               : std::vector<std::string>{};
-    const auto victim_host_pids =
-        is_eviction_assignment ? CaptureServiceHostPids(victim_names)
-                               : std::map<std::string, int>{};
-    const std::string applying_status_message =
-        (is_drain_assignment ? "draining node for desired generation "
-                             : (is_stop_assignment
-                                    ? "stopping plane state for desired generation "
-                             : (is_delete_assignment
-                                    ? "deleting plane state for desired generation "
-                             : (is_eviction_assignment
-                                    ? "evicting rollout workers for desired generation "
-                                    : "applying desired generation ")))) +
-        std::to_string(assignment->desired_generation) + assignment_context;
-    const std::string apply_trace_label =
-        is_drain_assignment
-            ? "hostd drain-assignment-ops"
-            : (is_stop_assignment
-                   ? "hostd stop-plane-assignment-ops"
-                   : (is_delete_assignment
-                          ? "hostd delete-plane-assignment-ops"
-                          : (is_eviction_assignment
-                                 ? "hostd eviction-assignment-ops"
-                                 : "hostd apply-assignment-ops")));
-    ReportObservedState(
-        *backend,
-        BuildObservedStateSnapshot(
-            node_name,
-            state_root,
-            comet::HostObservationStatus::Applying,
-            applying_status_message,
-            assignment->id),
-        "hostd observed-state-update");
-    ApplyDesiredNodeState(
-        rebased_state,
-        assignment->artifacts_root,
+        runtime_root,
+        state_root);
+  }
+
+  void ShowLocalState(const std::string& node_name, const std::string& state_root) override {
+    observation_service_.ShowLocalState(node_name, state_root);
+  }
+
+  void ShowRuntimeStatus(
+      const std::string& node_name,
+      const std::string& state_root) override {
+    observation_service_.ShowRuntimeStatus(node_name, state_root);
+  }
+
+  void ReportLocalObservedState(
+      const std::optional<std::string>& db_path,
+      const std::optional<std::string>& controller_url,
+      const std::optional<std::string>& host_private_key_path,
+      const std::optional<std::string>& controller_fingerprint,
+      const std::string& node_name,
+      const std::string& state_root) override {
+    observation_service_.ReportLocalObservedState(
+        db_path,
+        controller_url,
+        host_private_key_path,
+        controller_fingerprint,
+        node_name,
+        state_root);
+  }
+
+  void ApplyStateOps(
+      const std::string& db_path,
+      const std::string& node_name,
+      const std::string& artifacts_root,
+      const std::string& storage_root,
+      const std::optional<std::string>& runtime_root,
+      const std::string& state_root,
+      const ComposeMode compose_mode) override {
+    assignment_service_.ApplyStateOps(
+        db_path,
+        node_name,
+        artifacts_root,
         storage_root,
         runtime_root,
         state_root,
-        compose_mode,
-        apply_trace_label,
-        assignment->desired_generation,
-        assignment->id,
-        backend.get());
-    if (is_eviction_assignment &&
-        compose_mode == ComposeMode::Exec &&
-        !VerifyEvictionAssignment(
-            rebased_state,
-            node_name,
-            state_root,
-            assignment->status_message,
-            victim_host_pids)) {
-      throw std::runtime_error(
-          "eviction verification timed out; gpu resources were not released");
-    }
-    ReportObservedState(
-        *backend,
-        BuildObservedStateSnapshot(
-            node_name,
-            state_root,
-            comet::HostObservationStatus::Applied,
-            (is_drain_assignment ? "drained node for desired generation "
-                                 : (is_stop_assignment
-                                        ? "stopped plane state for desired generation "
-                                 : (is_eviction_assignment
-                                        ? "evicted rollout workers for desired generation "
-                                        : "applied desired generation "))) +
-                std::to_string(assignment->desired_generation) + assignment_context,
-            assignment->id),
-        "hostd observed-state-update");
-    if (!backend->TransitionClaimedHostAssignment(
-        assignment->id,
-        comet::HostAssignmentStatus::Applied,
-        (is_drain_assignment ? "drained node for desired generation "
-                             : (is_stop_assignment
-                                    ? "stopped plane state for desired generation "
-                             : (is_eviction_assignment
-                                    ? "evicted rollout workers for desired generation "
-                                    : "applied desired generation "))) +
-            std::to_string(assignment->desired_generation) +
-            assignment_context +
-            " on attempt " + std::to_string(assignment->attempt_count) + "/" +
-            std::to_string(assignment->max_attempts))) {
-      std::cout << "assignment transition skipped for id=" << assignment->id
-                << " because it is no longer claimed\n";
-    }
-    AppendHostdEvent(
-        *backend,
-        "host-assignment",
-        "applied",
-        "applied assignment on node " + node_name,
-        json{
-            {"assignment_type", assignment->assignment_type},
-            {"desired_generation", assignment->desired_generation},
-            {"attempt_count", assignment->attempt_count},
-            {"max_attempts", assignment->max_attempts},
-        },
-        assignment->plane_name,
-        node_name,
-        "",
-        assignment->id);
-  } catch (const std::exception& error) {
-    const std::string error_message = error.what();
-    PublishAssignmentProgress(
-        backend.get(),
-        assignment->id,
-        BuildAssignmentProgressPayload(
-            "failed",
-            "Assignment failed",
-            error_message,
-            100,
-            assignment->plane_name,
-            node_name));
-    ReportObservedState(
-        *backend,
-        BuildObservedStateSnapshot(
-            node_name,
-            state_root,
-            comet::HostObservationStatus::Failed,
-            error_message,
-            assignment->id),
-        "hostd observed-state-update");
-    if (assignment->attempt_count < assignment->max_attempts) {
-      if (!backend->TransitionClaimedHostAssignment(
-              assignment->id,
-              comet::HostAssignmentStatus::Pending,
-              "attempt " + std::to_string(assignment->attempt_count) + "/" +
-                  std::to_string(assignment->max_attempts) + " failed: " +
-                  error_message + assignment_context)) {
-        std::cout << "assignment retry transition skipped for id=" << assignment->id
-                  << " because it is no longer claimed\n";
-      }
-    } else {
-      if (!backend->TransitionClaimedHostAssignment(
-              assignment->id,
-              comet::HostAssignmentStatus::Failed,
-              "attempt " + std::to_string(assignment->attempt_count) + "/" +
-                  std::to_string(assignment->max_attempts) + " exhausted: " +
-                  error_message + assignment_context)) {
-        std::cout << "assignment failure transition skipped for id=" << assignment->id
-                  << " because it is no longer claimed\n";
-      }
-    }
-    AppendHostdEvent(
-        *backend,
-        "host-assignment",
-        "failed",
-        error_message,
-        json{
-            {"assignment_type", assignment->assignment_type},
-            {"desired_generation", assignment->desired_generation},
-            {"attempt_count", assignment->attempt_count},
-            {"max_attempts", assignment->max_attempts},
-        },
-        assignment->plane_name,
-        node_name,
-        "",
-        assignment->id,
-        std::nullopt,
-        "error");
-    throw;
+        compose_mode);
   }
-}
+
+  void ApplyNextAssignment(
+      const std::optional<std::string>& db_path,
+      const std::optional<std::string>& controller_url,
+      const std::optional<std::string>& host_private_key_path,
+      const std::optional<std::string>& controller_fingerprint,
+      const std::string& node_name,
+      const std::string& storage_root,
+      const std::optional<std::string>& runtime_root,
+      const std::string& state_root,
+      const ComposeMode compose_mode) override {
+    assignment_service_.ApplyNextAssignment(
+        db_path,
+        controller_url,
+        host_private_key_path,
+        controller_fingerprint,
+        node_name,
+        storage_root,
+        runtime_root,
+        state_root,
+        compose_mode);
+  }
+
+ private:
+  const comet::hostd::HostdAssignmentService& assignment_service_;
+  const comet::hostd::HostdObservationService& observation_service_;
+};
+
+class HostdCompositionRoot final {
+ public:
+  HostdCompositionRoot()
+      : backend_support_(std::make_unique<HostdBackendHttpSupport>()),
+        backend_factory_(std::make_unique<comet::hostd::HostdBackendFactory>(*backend_support_)),
+        observation_support_(std::make_unique<HostdObservationSupport>()),
+        observation_service_(std::make_unique<comet::hostd::HostdObservationService>(
+            *backend_factory_,
+            *observation_support_)),
+        assignment_support_(std::make_unique<HostdAssignmentSupport>()),
+        assignment_service_(std::make_unique<comet::hostd::HostdAssignmentService>(
+            *backend_factory_,
+            *assignment_support_,
+            *observation_service_)),
+        actions_(std::make_unique<HostdCliActions>(*assignment_service_, *observation_service_)),
+        cli_(std::make_unique<comet::hostd::HostdCli>(*actions_)),
+        config_loader_(std::make_unique<comet::hostd::NodeConfigLoader>()) {}
+
+  int Run(int argc, char** argv) const {
+    const comet::hostd::HostdCommandLine command_line(argc, argv);
+    return cli_->Run(command_line, *config_loader_, argv[0]);
+  }
+
+ private:
+  std::unique_ptr<HostdBackendHttpSupport> backend_support_;
+  std::unique_ptr<comet::hostd::HostdBackendFactory> backend_factory_;
+  std::unique_ptr<HostdObservationSupport> observation_support_;
+  std::unique_ptr<comet::hostd::HostdObservationService> observation_service_;
+  std::unique_ptr<HostdAssignmentSupport> assignment_support_;
+  std::unique_ptr<comet::hostd::HostdAssignmentService> assignment_service_;
+  std::unique_ptr<HostdCliActions> actions_;
+  std::unique_ptr<comet::hostd::HostdCli> cli_;
+  std::unique_ptr<comet::hostd::NodeConfigLoader> config_loader_;
+};
 
 }  // namespace
 
 namespace comet::hostd {
 
-int RunHostdApp(int argc, char** argv) {
-  class AppHttpHostdBackendSupport final : public IHttpHostdBackendSupport {
-   public:
-    nlohmann::json SendControllerJsonRequest(
-        const std::string& controller_url,
-        const std::string& method,
-        const std::string& path,
-        const nlohmann::json& payload,
-        const std::map<std::string, std::string>& headers = {}) const override {
-      return ::SendControllerJsonRequest(
-          ParseControllerTarget(controller_url),
-          method,
-          path,
-          payload,
-          headers);
-    }
+HostdApp::HostdApp(int argc, char** argv) : argc_(argc), argv_(argv) {}
 
-    comet::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) const override {
-      return ::ParseAssignmentPayload(payload);
-    }
-
-    nlohmann::json BuildHostObservationPayload(
-        const comet::HostObservation& observation) const override {
-      return ::BuildHostObservationPayload(observation);
-    }
-
-    nlohmann::json BuildDiskRuntimeStatePayload(
-        const comet::DiskRuntimeState& state) const override {
-      return ::BuildDiskRuntimeStatePayload(state);
-    }
-
-    comet::DiskRuntimeState ParseDiskRuntimeStatePayload(
-        const nlohmann::json& payload) const override {
-      return ::ParseDiskRuntimeStatePayload(payload);
-    }
-
-    std::string Trim(const std::string& value) const override {
-      return ::Trim(value);
-    }
-  };
-
-  class AppObservationSupport final : public IHostdObservationSupport {
-   public:
-    void ShowLocalState(const std::string& node_name, const std::string& state_root) const override {
-      ::ShowLocalState(node_name, state_root);
-    }
-
-    void ShowRuntimeStatus(const std::string& node_name, const std::string& state_root) const override {
-      ::ShowRuntimeStatus(node_name, state_root);
-    }
-
-    comet::HostObservation BuildObservedStateSnapshot(
-        const std::string& node_name,
-        const std::string& state_root,
-        const comet::HostObservationStatus status,
-        const std::string& status_message,
-        const std::optional<int>& assignment_id = std::nullopt) const override {
-      return ::BuildObservedStateSnapshot(node_name, state_root, status, status_message, assignment_id);
-    }
-
-    void AppendHostdEvent(
-        HostdBackend& backend,
-        const std::string& category,
-        const std::string& event_type,
-        const std::string& message,
-        const nlohmann::json& payload,
-        const std::string& plane_name,
-        const std::string& node_name,
-        const std::string& worker_name,
-        const std::optional<int>& assignment_id,
-        const std::optional<int>& rollout_action_id,
-        const std::string& severity) const override {
-      ::AppendHostdEvent(
-          backend,
-          category,
-          event_type,
-          message,
-          payload,
-          plane_name,
-          node_name,
-          worker_name,
-          assignment_id,
-          rollout_action_id,
-          severity);
-    }
-  };
-
-  class AppAssignmentSupport final : public IHostdAssignmentSupport {
-   public:
-    comet::DesiredState RebaseStateForRuntimeRoot(
-        comet::DesiredState state,
-        const std::string& storage_root,
-        const std::optional<std::string>& runtime_root) const override {
-      return ::RebaseStateForRuntimeRoot(std::move(state), storage_root, runtime_root);
-    }
-
-    nlohmann::json BuildAssignmentProgressPayload(
-        const std::string& phase,
-        const std::string& phase_label,
-        const std::string& message,
-        const int progress_percent,
-        const std::string& plane_name,
-        const std::string& node_name) const override {
-      return ::BuildAssignmentProgressPayload(
-          phase,
-          phase_label,
-          message,
-          progress_percent,
-          plane_name,
-          node_name);
-    }
-
-    void PublishAssignmentProgress(
-        HostdBackend* backend,
-        const std::optional<int>& assignment_id,
-        const nlohmann::json& progress) const override {
-      ::PublishAssignmentProgress(backend, assignment_id, progress);
-    }
-
-    std::vector<std::string> ParseTaggedCsv(
-        const std::string& tagged_message,
-        const std::string& tag) const override {
-      return ::ParseTaggedCsv(tagged_message, tag);
-    }
-
-    comet::HostObservation BuildObservedStateSnapshot(
-        const std::string& node_name,
-        const std::string& state_root,
-        const comet::HostObservationStatus status,
-        const std::string& status_message,
-        const std::optional<int>& assignment_id = std::nullopt) const override {
-      return ::BuildObservedStateSnapshot(node_name, state_root, status, status_message, assignment_id);
-    }
-
-    std::map<std::string, int> CaptureServiceHostPids(
-        const std::vector<std::string>& service_names) const override {
-      return ::CaptureServiceHostPids(service_names);
-    }
-
-    bool VerifyEvictionAssignment(
-        const comet::DesiredState& desired_state,
-        const std::string& node_name,
-        const std::string& state_root,
-        const std::string& tagged_message,
-        const std::map<std::string, int>& expected_victim_host_pids) const override {
-      return ::VerifyEvictionAssignment(
-          desired_state,
-          node_name,
-          state_root,
-          tagged_message,
-          expected_victim_host_pids);
-    }
-
-    void ApplyDesiredNodeState(
-        const comet::DesiredState& desired_node_state,
-        const std::string& artifacts_root,
-        const std::string& storage_root,
-        const std::optional<std::string>& runtime_root,
-        const std::string& state_root,
-        const ComposeMode compose_mode,
-        const std::string& source_label,
-        const std::optional<int>& desired_generation,
-        const std::optional<int>& assignment_id,
-        HostdBackend* backend) const override {
-      ::ApplyDesiredNodeState(
-          desired_node_state,
-          artifacts_root,
-          storage_root,
-          runtime_root,
-          state_root,
-          compose_mode,
-          source_label,
-          desired_generation,
-          assignment_id,
-          backend);
-    }
-
-    void ShowDemoOps(
-        const std::string& node_name,
-        const std::string& storage_root,
-        const std::optional<std::string>& runtime_root) const override {
-      ::ShowDemoOps(node_name, storage_root, runtime_root);
-    }
-
-    void ShowStateOps(
-        const std::string& db_path,
-        const std::string& node_name,
-        const std::string& artifacts_root,
-        const std::string& storage_root,
-        const std::optional<std::string>& runtime_root,
-        const std::string& state_root) const override {
-      ::ShowStateOps(db_path, node_name, artifacts_root, storage_root, runtime_root, state_root);
-    }
-
-    void AppendHostdEvent(
-        HostdBackend& backend,
-        const std::string& category,
-        const std::string& event_type,
-        const std::string& message,
-        const nlohmann::json& payload,
-        const std::string& plane_name,
-        const std::string& node_name,
-        const std::string& worker_name,
-        const std::optional<int>& assignment_id,
-        const std::optional<int>& rollout_action_id,
-        const std::string& severity) const override {
-      ::AppendHostdEvent(
-          backend,
-          category,
-          event_type,
-          message,
-          payload,
-          plane_name,
-          node_name,
-          worker_name,
-          assignment_id,
-          rollout_action_id,
-          severity);
-    }
-  };
-
-  class HostdCliActions final : public IHostdCliActions {
-   public:
-    HostdCliActions(
-        const HostdAssignmentService& assignment_service,
-        const HostdObservationService& observation_service)
-        : assignment_service_(assignment_service),
-          observation_service_(observation_service) {}
-
-    void ShowDemoOps(
-        const std::string& node_name,
-        const std::string& storage_root,
-        const std::optional<std::string>& runtime_root) override {
-      assignment_service_.ShowDemoOps(node_name, storage_root, runtime_root);
-    }
-
-    void ShowStateOps(
-        const std::string& db_path,
-        const std::string& node_name,
-        const std::string& artifacts_root,
-        const std::string& storage_root,
-        const std::optional<std::string>& runtime_root,
-        const std::string& state_root) override {
-      assignment_service_.ShowStateOps(
-          db_path,
-          node_name,
-          artifacts_root,
-          storage_root,
-          runtime_root,
-          state_root);
-    }
-
-    void ShowLocalState(const std::string& node_name, const std::string& state_root) override {
-      observation_service_.ShowLocalState(node_name, state_root);
-    }
-
-    void ShowRuntimeStatus(
-        const std::string& node_name,
-        const std::string& state_root) override {
-      observation_service_.ShowRuntimeStatus(node_name, state_root);
-    }
-
-    void ReportLocalObservedState(
-        const std::optional<std::string>& db_path,
-        const std::optional<std::string>& controller_url,
-        const std::optional<std::string>& host_private_key_path,
-        const std::optional<std::string>& controller_fingerprint,
-        const std::string& node_name,
-        const std::string& state_root) override {
-      observation_service_.ReportLocalObservedState(
-          db_path,
-          controller_url,
-          host_private_key_path,
-          controller_fingerprint,
-          node_name,
-          state_root);
-    }
-
-    void ApplyStateOps(
-        const std::string& db_path,
-        const std::string& node_name,
-        const std::string& artifacts_root,
-        const std::string& storage_root,
-        const std::optional<std::string>& runtime_root,
-        const std::string& state_root,
-        const ComposeMode compose_mode) override {
-      assignment_service_.ApplyStateOps(
-          db_path,
-          node_name,
-          artifacts_root,
-          storage_root,
-          runtime_root,
-          state_root,
-          compose_mode);
-    }
-
-    void ApplyNextAssignment(
-        const std::optional<std::string>& db_path,
-        const std::optional<std::string>& controller_url,
-        const std::optional<std::string>& host_private_key_path,
-        const std::optional<std::string>& controller_fingerprint,
-        const std::string& node_name,
-        const std::string& storage_root,
-        const std::optional<std::string>& runtime_root,
-        const std::string& state_root,
-        const ComposeMode compose_mode) override {
-      assignment_service_.ApplyNextAssignment(
-          db_path,
-          controller_url,
-          host_private_key_path,
-          controller_fingerprint,
-          node_name,
-          storage_root,
-          runtime_root,
-          state_root,
-          compose_mode);
-    }
-
-   private:
-    const HostdAssignmentService& assignment_service_;
-    const HostdObservationService& observation_service_;
-  };
-
-  const HostdCommandLine command_line(argc, argv);
-  const NodeConfigLoader config_loader;
-  AppHttpHostdBackendSupport backend_support;
-  HostdBackendFactory backend_factory(backend_support);
-  AppObservationSupport observation_support;
-  HostdObservationService observation_service(backend_factory, observation_support);
-  AppAssignmentSupport assignment_support;
-  HostdAssignmentService assignment_service(
-      backend_factory,
-      assignment_support,
-      observation_service);
-  HostdCliActions actions(assignment_service, observation_service);
-  HostdCli cli(actions);
-  return cli.Run(command_line, config_loader, argv[0]);
+int HostdApp::Run() {
+  HostdCompositionRoot composition_root;
+  return composition_root.Run(argc_, argv_);
 }
 
 }  // namespace comet::hostd

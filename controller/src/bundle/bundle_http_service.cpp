@@ -1,11 +1,31 @@
 #include "bundle/bundle_http_service.h"
 
-#include <stdexcept>
 #include <utility>
 
 using nlohmann::json;
 
-BundleHttpService::BundleHttpService(Deps deps) : deps_(std::move(deps)) {}
+BundleHttpService::BundleHttpService(
+    const comet::controller::IBundleCliService& bundle_cli_service,
+    comet::controller::ControllerRequestSupport request_support)
+    : bundle_cli_service_(bundle_cli_service),
+      request_support_(std::move(request_support)) {}
+
+HttpResponse BundleHttpService::BuildJsonResponse(
+    int status_code,
+    const json& payload,
+    const std::map<std::string, std::string>& headers) const {
+  return HttpResponse{status_code, "application/json", payload.dump(), headers};
+}
+
+std::optional<std::string> BundleHttpService::FindQueryString(
+    const HttpRequest& request,
+    const std::string& key) const {
+  const auto it = request.query_params.find(key);
+  if (it == request.query_params.end() || it->second.empty()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
 
 std::optional<HttpResponse> BundleHttpService::HandleRequest(
     const std::string& db_path,
@@ -13,25 +33,25 @@ std::optional<HttpResponse> BundleHttpService::HandleRequest(
     const HttpRequest& request) const {
   if (request.path == "/api/v1/bundles/validate") {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
-    const auto bundle_dir = deps_.find_query_string(request, "bundle");
+    const auto bundle_dir = FindQueryString(request, "bundle");
     if (!bundle_dir.has_value()) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required query parameter 'bundle'"}},
           {});
     }
     try {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
-              deps_.validate_bundle_action(*bundle_dir)),
+          comet::controller::BuildControllerActionPayload(
+              bundle_cli_service_.ExecuteValidateBundleAction(*bundle_dir)),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -42,27 +62,27 @@ std::optional<HttpResponse> BundleHttpService::HandleRequest(
 
   if (request.path == "/api/v1/bundles/preview") {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
-    const auto bundle_dir = deps_.find_query_string(request, "bundle");
+    const auto bundle_dir = FindQueryString(request, "bundle");
     if (!bundle_dir.has_value()) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required query parameter 'bundle'"}},
           {});
     }
     try {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
-              deps_.preview_bundle_action(
+          comet::controller::BuildControllerActionPayload(
+              bundle_cli_service_.ExecutePreviewBundleAction(
                   *bundle_dir,
-                  deps_.find_query_string(request, "node"))),
+                  FindQueryString(request, "node"))),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -73,25 +93,25 @@ std::optional<HttpResponse> BundleHttpService::HandleRequest(
 
   if (request.path == "/api/v1/bundles/import") {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
-    const auto bundle_dir = deps_.find_query_string(request, "bundle");
+    const auto bundle_dir = FindQueryString(request, "bundle");
     if (!bundle_dir.has_value()) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required query parameter 'bundle'"}},
           {});
     }
     try {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
-              deps_.import_bundle_action(db_path, *bundle_dir)),
+          comet::controller::BuildControllerActionPayload(
+              bundle_cli_service_.ExecuteImportBundleAction(db_path, *bundle_dir)),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -102,30 +122,30 @@ std::optional<HttpResponse> BundleHttpService::HandleRequest(
 
   if (request.path == "/api/v1/bundles/apply") {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           405, json{{"status", "method_not_allowed"}}, {});
     }
-    const auto bundle_dir = deps_.find_query_string(request, "bundle");
+    const auto bundle_dir = FindQueryString(request, "bundle");
     if (!bundle_dir.has_value()) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required query parameter 'bundle'"}},
           {});
     }
     try {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           200,
-          deps_.build_controller_action_payload(
-              deps_.apply_bundle_action(
+          comet::controller::BuildControllerActionPayload(
+              bundle_cli_service_.ExecuteApplyBundleAction(
                   db_path,
                   *bundle_dir,
-                  deps_.resolve_artifacts_root(
-                      deps_.find_query_string(request, "artifacts_root"),
+                  request_support_.ResolveArtifactsRoot(
+                      FindQueryString(request, "artifacts_root"),
                       default_artifacts_root))),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return BuildJsonResponse(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},

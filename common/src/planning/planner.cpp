@@ -326,6 +326,16 @@ ComposeService BuildComposeService(
         service.environment["COMET_VLLM_SERVED_MODEL_NAME"] =
             *state.bootstrap_model->served_model_name;
       }
+      if (state.bootstrap_model.has_value()) {
+        if (state.bootstrap_model->local_path.has_value() &&
+            !state.bootstrap_model->local_path->empty()) {
+          service.environment["COMET_WORKER_MODEL_PATH"] =
+              *state.bootstrap_model->local_path;
+        } else if (!state.bootstrap_model->model_id.empty()) {
+          service.environment["COMET_WORKER_MODEL_PATH"] =
+              state.bootstrap_model->model_id;
+        }
+      }
       if (data_parallel_api_endpoint || !distributed_runtime) {
         service.published_ports.push_back(
             PublishedPort{"127.0.0.1", published_host_port, state.inference.api_port});

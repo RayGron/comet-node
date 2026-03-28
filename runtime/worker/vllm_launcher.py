@@ -52,11 +52,6 @@ def load_json_or_empty(path: Path) -> dict:
 def active_model_path(control_root: str) -> Path:
     return Path(control_root) / "active-model.json"
 
-
-def worker_upstream_path(control_root: str) -> Path:
-    return Path(control_root) / "worker-upstream.json"
-
-
 def worker_group_dir(control_root: str) -> Path:
     return Path(control_root) / "worker-group"
 
@@ -193,38 +188,6 @@ def build_status(
     }
 
 
-def build_worker_upstream_contract(
-    *,
-    control_root: str,
-    ready: bool,
-    phase: str,
-    node_name: str,
-    instance_name: str,
-    active_model_id: str,
-    served_model_name: str,
-    port: int,
-    last_activity_at: str,
-) -> dict:
-    base_url = resolve_advertised_base_url(port)
-    return {
-        "plane_name": env("COMET_PLANE_NAME"),
-        "control_root": control_root,
-        "node_name": node_name,
-        "instance_name": instance_name,
-        "runtime_backend": "vllm-worker",
-        "ready": ready,
-        "phase": phase,
-        "active_model_id": active_model_id,
-        "served_model_name": served_model_name,
-        "port": port,
-        "base_url": base_url,
-        "health_url": f"{base_url}/health",
-        "models_url": f"{base_url}/v1/models",
-        "last_activity_at": last_activity_at,
-        "distributed_runtime": env_bool("COMET_VLLM_DISTRIBUTED_RUNTIME", False),
-    }
-
-
 def build_worker_group_member_contract(
     *,
     control_root: str,
@@ -242,6 +205,7 @@ def build_worker_group_member_contract(
         "control_root": control_root,
         "group_id": env("COMET_WORKER_GROUP_ID", "default-worker-group"),
         "data_parallel_mode": env("COMET_DATA_PARALLEL_MODE", "off"),
+        "data_parallel_lb_mode": env("COMET_DATA_PARALLEL_LB_MODE", "external"),
         "distributed_backend": env("COMET_DISTRIBUTED_BACKEND", "vllm"),
         "worker_selection_policy": env(
             "COMET_WORKER_SELECTION_POLICY", "prefer-free-then-share"
@@ -256,6 +220,13 @@ def build_worker_group_member_contract(
         "replica_index": env_int("COMET_WORKER_REPLICA_INDEX", 0),
         "replica_size": env_int("COMET_WORKER_REPLICA_SIZE", env_int("COMET_WORKER_GROUP_WORLD_SIZE", 1)),
         "replica_leader": env_bool("COMET_WORKER_REPLICA_LEADER", env_bool("COMET_WORKER_GROUP_LEADER", False)),
+        "data_parallel_rank": env_int("COMET_VLLM_DATA_PARALLEL_RANK", env_int("COMET_WORKER_REPLICA_INDEX", 0)),
+        "data_parallel_size": env_int("COMET_VLLM_DATA_PARALLEL_SIZE", 1),
+        "data_parallel_size_local": env_int("COMET_VLLM_DATA_PARALLEL_SIZE_LOCAL", 1),
+        "data_parallel_start_rank": env_int("COMET_VLLM_DATA_PARALLEL_START_RANK", 0),
+        "data_parallel_api_endpoint": env_bool("COMET_VLLM_DATA_PARALLEL_API_ENDPOINT", not env_bool("COMET_VLLM_HEADLESS", False)),
+        "data_parallel_head_address": env("COMET_VLLM_DATA_PARALLEL_ADDRESS"),
+        "data_parallel_rpc_port": env_int("COMET_VLLM_DATA_PARALLEL_RPC_PORT", env_int("COMET_RENDEZVOUS_PORT", 29500) + 100),
         "gpu_device": env("COMET_GPU_DEVICE", env("COMET_WORKER_GPU_DEVICE")),
         "ready": ready,
         "phase": phase,
@@ -339,6 +310,7 @@ def build_command(model_ref: str, served_model_name: str, port: int) -> list[str
         str(env_float("COMET_VLLM_GPU_MEMORY_UTILIZATION", 0.9)),
     ]
     distributed_runtime = env_bool("COMET_VLLM_DISTRIBUTED_RUNTIME", False)
+    native_data_parallel = env("COMET_DATA_PARALLEL_MODE", "off") == "vllm_native"
     if distributed_runtime:
         command.extend(
             [
@@ -356,6 +328,27 @@ def build_command(model_ref: str, served_model_name: str, port: int) -> list[str
         )
         if env_bool("COMET_VLLM_HEADLESS", False):
             command.append("--headless")
+    if native_data_parallel:
+        command.extend(
+            [
+                "--data-parallel-size",
+                str(env_int("COMET_VLLM_DATA_PARALLEL_SIZE", 1)),
+                "--data-parallel-rank",
+                str(env_int("COMET_VLLM_DATA_PARALLEL_RANK", 0)),
+                "--data-parallel-size-local",
+                str(env_int("COMET_VLLM_DATA_PARALLEL_SIZE_LOCAL", 1)),
+                "--data-parallel-start-rank",
+                str(env_int("COMET_VLLM_DATA_PARALLEL_START_RANK", 0)),
+                "--data-parallel-address",
+                env("COMET_VLLM_DATA_PARALLEL_ADDRESS", env("COMET_RENDEZVOUS_HOST", "host.docker.internal")),
+                "--data-parallel-rpc-port",
+                str(env_int("COMET_VLLM_DATA_PARALLEL_RPC_PORT", env_int("COMET_RENDEZVOUS_PORT", 29500) + 100)),
+            ]
+        )
+        if env_bool("COMET_VLLM_DATA_PARALLEL_EXTERNAL_LB", False):
+            command.append("--data-parallel-external-lb")
+        if env_bool("COMET_VLLM_DATA_PARALLEL_HYBRID_LB", False):
+            command.append("--data-parallel-hybrid-lb")
     download_dir = env("COMET_VLLM_DOWNLOAD_DIR")
     if download_dir:
         command.extend(["--download-dir", download_dir])
@@ -395,7 +388,6 @@ def main() -> int:
     active_model_id = resolve_active_model_id(active_model, served_model_name)
     started_at = utc_now_iso()
     status_file = status_path(private_disk_path)
-    upstream_file = worker_upstream_path(control_root)
     worker_group_member_file = worker_group_member_path(control_root, instance_name)
     health_url = f"http://127.0.0.1:{port}/health"
     models_url = f"http://127.0.0.1:{port}/v1/models"
@@ -454,22 +446,6 @@ def main() -> int:
             last_activity_at="",
         ),
     )
-    if env_bool("COMET_WRITE_LEGACY_WORKER_UPSTREAM", False):
-        write_json(
-            upstream_file,
-            build_worker_upstream_contract(
-                control_root=control_root,
-                ready=False,
-                phase="starting",
-                node_name=node_name,
-                instance_name=instance_name,
-                active_model_id=active_model_id,
-                served_model_name=served_model_name,
-                port=port,
-                last_activity_at="",
-            ),
-        )
-
     while child.poll() is None and not STOP_REQUESTED:
         healthy = probe(health_url) and probe_models(models_url, served_model_name)
         leader_healthy = healthy
@@ -508,21 +484,6 @@ def main() -> int:
                 last_activity_at=now,
             ),
         )
-        if env_bool("COMET_WRITE_LEGACY_WORKER_UPSTREAM", False):
-            write_json(
-                upstream_file,
-                build_worker_upstream_contract(
-                    control_root=control_root,
-                    ready=ready,
-                    phase="running" if ready else "starting",
-                    node_name=node_name,
-                    instance_name=instance_name,
-                    active_model_id=active_model_id,
-                    served_model_name=served_model_name,
-                    port=port,
-                    last_activity_at=now,
-                ),
-            )
         time.sleep(2)
 
     if STOP_REQUESTED and child.poll() is None:
@@ -562,21 +523,6 @@ def main() -> int:
             last_activity_at=utc_now_iso(),
         ),
     )
-    if env_bool("COMET_WRITE_LEGACY_WORKER_UPSTREAM", False):
-        write_json(
-            upstream_file,
-            build_worker_upstream_contract(
-                control_root=control_root,
-                ready=False,
-                phase="stopped" if child.returncode == 0 else "failed",
-                node_name=node_name,
-                instance_name=instance_name,
-                active_model_id=active_model_id,
-                served_model_name=served_model_name,
-                port=port,
-                last_activity_at=utc_now_iso(),
-            ),
-        )
     return 0 if child.returncode is None else child.returncode
 
 

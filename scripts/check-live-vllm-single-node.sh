@@ -131,13 +131,13 @@ assert models, payload
 print("models=" + ",".join(item.get("id", "") for item in models))
 PY
 
-echo "[check-live-vllm] checking worker upstream contract"
+echo "[check-live-vllm] checking worker group contracts"
 "${docker_cmd[@]}" inspect "${infer_container}" >/dev/null
 if "${docker_cmd[@]}" inspect "${infer_container}" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^COMET_INFER_VLLM_UPSTREAM_URL='; then
   echo "error: infer container still has COMET_INFER_VLLM_UPSTREAM_URL pinned" >&2
   exit 1
 fi
-worker_upstream_path="$(
+worker_group_dir="$(
   python3 - <<'PY' "${status_json}"
 import json
 import pathlib
@@ -146,21 +146,38 @@ import sys
 payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
 control_root = (payload.get("runtime_status") or {}).get("control_root", "")
 assert control_root, payload
-print(control_root.rstrip("/") + "/worker-upstream.json")
+print(control_root.rstrip("/") + "/worker-group")
 PY
 )"
-"${docker_cmd[@]}" exec "${infer_container}" test -f "${worker_upstream_path}"
-worker_upstream_json="${tmp_dir}/worker-upstream.json"
-"${docker_cmd[@]}" exec "${infer_container}" cat "${worker_upstream_path}" >"${worker_upstream_json}"
-python3 - <<'PY' "${worker_upstream_json}"
+"${docker_cmd[@]}" exec "${infer_container}" test -d "${worker_group_dir}"
+worker_group_json="${tmp_dir}/worker-group.json"
+"${docker_cmd[@]}" exec "${infer_container}" sh -lc "cat '${worker_group_dir}'/*.json" >"${worker_group_json}"
+python3 - <<'PY' "${worker_group_json}"
 import json
 import pathlib
 import sys
 
-payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
-assert payload.get("ready") is True, payload
-assert payload.get("base_url", "").startswith("http://"), payload
-print("worker_upstream=ok")
+payload_text = pathlib.Path(sys.argv[1]).read_text().strip()
+decoder = json.JSONDecoder()
+items = []
+cursor = 0
+while cursor < len(payload_text):
+    while cursor < len(payload_text) and payload_text[cursor].isspace():
+        cursor += 1
+    if cursor >= len(payload_text):
+        break
+    item, end = decoder.raw_decode(payload_text, cursor)
+    items.append(item)
+    cursor = end
+
+assert items, "no worker-group contracts found"
+ready_endpoints = [
+    item for item in items
+    if item.get("ready") is True and item.get("data_parallel_api_endpoint") is True
+]
+assert ready_endpoints, items
+assert all(item.get("base_url", "").startswith("http://") for item in ready_endpoints), ready_endpoints
+print("worker_group=ok")
 PY
 
 echo "[check-live-vllm] checking basic chat completion"

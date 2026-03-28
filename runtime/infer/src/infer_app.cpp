@@ -463,6 +463,8 @@ RuntimeConfig LoadRuntimeConfig(const std::string& path_str) {
       inference.value("runtime_engine", config.runtime_engine);
   config.data_parallel_mode =
       inference.value("data_parallel_mode", config.data_parallel_mode);
+  config.data_parallel_lb_mode =
+      inference.value("data_parallel_lb_mode", config.data_parallel_lb_mode);
   config.worker_group = root.value("worker_group", json::object());
   config.net_if = Require<std::string>(inference, "net_if", "inference");
   config.models_root =
@@ -560,6 +562,7 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.runtime_backend = backend;
   status.runtime_phase = phase;
   status.data_parallel_mode = topology.data_parallel_mode;
+  status.data_parallel_lb_mode = topology.data_parallel_lb_mode;
   status.replica_groups_expected = topology.replica_groups_expected;
   status.replica_groups_ready = topology.replica_groups_ready;
   status.replica_groups_degraded = topology.replica_groups_degraded;
@@ -588,7 +591,8 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.started_at = started_at;
   status.last_activity_at = started_at;
   const bool replica_topology_ready =
-      topology.replica_groups_expected == 0 || topology.replica_groups_ready > 0;
+      topology.replica_groups_expected == 0 ||
+      topology.replica_groups_ready >= topology.replica_groups_expected;
   status.active_model_ready = !active_model.empty();
   status.gateway_plan_ready = !gateway_plan.empty();
   status.inference_ready = inference_ready;

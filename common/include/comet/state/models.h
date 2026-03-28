@@ -108,6 +108,7 @@ struct InferenceRuntimeSettings {
   std::string primary_infer_node;
   std::string runtime_engine = "llama.cpp";
   std::string data_parallel_mode = "off";
+  std::string data_parallel_lb_mode = "external";
   std::string worker_group_id;
   std::string distributed_backend = "vllm";
   std::string worker_selection_policy = "prefer-free-then-share";
@@ -142,6 +143,13 @@ struct WorkerGroupMemberSpec {
   int replica_index = 0;
   int replica_size = 1;
   bool replica_leader = false;
+  int data_parallel_rank = 0;
+  int data_parallel_size = 1;
+  int data_parallel_size_local = 1;
+  int data_parallel_start_rank = 0;
+  bool data_parallel_api_endpoint = false;
+  std::string data_parallel_head_address;
+  int data_parallel_rpc_port = 0;
   double gpu_fraction = 0.0;
   GpuShareMode share_mode = GpuShareMode::Exclusive;
   int priority = 100;

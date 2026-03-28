@@ -29,6 +29,12 @@ void NormalizeInferenceSettings(InferenceRuntimeSettings* settings) {
   if (settings->data_parallel_mode.empty()) {
     settings->data_parallel_mode = kDataParallelModeOff;
   }
+  if (settings->data_parallel_mode == kDataParallelModeAutoReplicas) {
+    settings->data_parallel_mode = kDataParallelModeVllmNative;
+  }
+  if (settings->data_parallel_lb_mode.empty()) {
+    settings->data_parallel_lb_mode = kDataParallelLbModeExternal;
+  }
   if (settings->worker_selection_policy.empty()) {
     settings->worker_selection_policy = "prefer-free-then-share";
   }
@@ -115,6 +121,13 @@ json ToJson(const WorkerGroupMemberSpec& member) {
       {"replica_index", member.replica_index},
       {"replica_size", member.replica_size},
       {"replica_leader", member.replica_leader},
+      {"data_parallel_rank", member.data_parallel_rank},
+      {"data_parallel_size", member.data_parallel_size},
+      {"data_parallel_size_local", member.data_parallel_size_local},
+      {"data_parallel_start_rank", member.data_parallel_start_rank},
+      {"data_parallel_api_endpoint", member.data_parallel_api_endpoint},
+      {"data_parallel_head_address", member.data_parallel_head_address},
+      {"data_parallel_rpc_port", member.data_parallel_rpc_port},
       {"gpu_fraction", member.gpu_fraction},
       {"share_mode", ToString(member.share_mode)},
       {"priority", member.priority},
@@ -358,6 +371,16 @@ WorkerGroupMemberSpec WorkerGroupMemberSpecFromJson(const json& value) {
   member.replica_index = value.value("replica_index", 0);
   member.replica_size = value.value("replica_size", 1);
   member.replica_leader = value.value("replica_leader", value.value("leader", false));
+  member.data_parallel_rank = value.value("data_parallel_rank", member.replica_index);
+  member.data_parallel_size = value.value("data_parallel_size", 1);
+  member.data_parallel_size_local = value.value("data_parallel_size_local", 1);
+  member.data_parallel_start_rank =
+      value.value("data_parallel_start_rank", member.data_parallel_rank);
+  member.data_parallel_api_endpoint =
+      value.value("data_parallel_api_endpoint", member.replica_leader);
+  member.data_parallel_head_address =
+      value.value("data_parallel_head_address", std::string{});
+  member.data_parallel_rpc_port = value.value("data_parallel_rpc_port", 0);
   member.gpu_fraction = value.value("gpu_fraction", 0.0);
   member.share_mode =
       ParseGpuShareMode(value.value("share_mode", std::string("exclusive")));
@@ -646,6 +669,7 @@ json DesiredStateToJson(const DesiredState& state) {
            {"primary_infer_node", state.inference.primary_infer_node},
            {"runtime_engine", state.inference.runtime_engine},
            {"data_parallel_mode", state.inference.data_parallel_mode},
+           {"data_parallel_lb_mode", state.inference.data_parallel_lb_mode},
            {"worker_group_id", state.inference.worker_group_id},
            {"distributed_backend", state.inference.distributed_backend},
            {"worker_selection_policy", state.inference.worker_selection_policy},
@@ -741,6 +765,8 @@ DesiredState DesiredStateFromJson(const json& value) {
         inference.value("runtime_engine", state.inference.runtime_engine);
     state.inference.data_parallel_mode =
         inference.value("data_parallel_mode", state.inference.data_parallel_mode);
+    state.inference.data_parallel_lb_mode =
+        inference.value("data_parallel_lb_mode", state.inference.data_parallel_lb_mode);
     state.inference.worker_group_id =
         inference.value("worker_group_id", state.inference.worker_group_id);
     state.inference.distributed_backend =

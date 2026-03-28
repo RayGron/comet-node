@@ -125,6 +125,23 @@ const WorkerGroupMemberSpec* FindReplicaLeaderWorkerGroupMember(
   return FindLeaderWorkerGroupMember(state);
 }
 
+const WorkerGroupMemberSpec* FindHybridApiEndpointWorkerGroupMember(
+    const DesiredState& state,
+    const WorkerGroupMemberSpec& member) {
+  const auto it = std::find_if(
+      state.worker_group.members.begin(),
+      state.worker_group.members.end(),
+      [&](const WorkerGroupMemberSpec& candidate) {
+        return candidate.enabled && candidate.data_parallel_api_endpoint &&
+               candidate.node_name == member.node_name &&
+               candidate.data_parallel_start_rank == member.data_parallel_start_rank;
+      });
+  if (it != state.worker_group.members.end()) {
+    return &*it;
+  }
+  return FindReplicaLeaderWorkerGroupMember(state, member);
+}
+
 ComposeService BuildComposeService(
     const InstanceSpec& instance,
     const std::vector<DiskSpec>& disks,
@@ -156,9 +173,12 @@ ComposeService BuildComposeService(
   service.environment["COMET_PLANE_NAME"] = state.plane_name;
   service.environment["COMET_PLANE_PROTECTED"] = state.protected_plane ? "1" : "0";
   if (use_vllm) {
+    const std::string data_parallel_mode = CanonicalDataParallelMode(state.inference);
     if (instance.role == InstanceRole::Infer) {
       service.environment["COMET_INFER_RUNTIME_BACKEND"] = "worker-vllm";
-      service.environment["COMET_DATA_PARALLEL_MODE"] = state.inference.data_parallel_mode;
+      service.environment["COMET_DATA_PARALLEL_MODE"] = data_parallel_mode;
+      service.environment["COMET_DATA_PARALLEL_LB_MODE"] =
+          state.inference.data_parallel_lb_mode;
       service.environment["COMET_WORKER_GROUP_ID"] = state.worker_group.group_id;
       service.environment["COMET_WORKER_GROUP_EXPECTED_SIZE"] =
           std::to_string(std::max(0, state.worker_group.expected_workers));
@@ -178,14 +198,22 @@ ComposeService BuildComposeService(
           worker_group_member != nullptr
               ? FindReplicaLeaderWorkerGroupMember(state, *worker_group_member)
               : FindLeaderWorkerGroupMember(state);
+      const auto* routable_worker_group_member =
+          worker_group_member != nullptr && HybridDataParallelEnabled(state.inference)
+              ? FindHybridApiEndpointWorkerGroupMember(state, *worker_group_member)
+              : leader_worker_group_member;
       const int published_host_port = WorkerPublishedHostPort(state, instance);
       const int internal_runtime_port = WorkerInternalRuntimePort(state, instance);
       const bool worker_group_leader =
           worker_group_member != nullptr && worker_group_member->leader;
-      const bool data_parallel = DataParallelEnabled(state.inference);
+      const bool native_data_parallel = NativeDataParallelEnabled(state.inference);
       const int replica_world_size =
           worker_group_member != nullptr ? std::max(1, worker_group_member->replica_size)
                                          : std::max(1, state.worker_group.expected_workers);
+      const bool data_parallel_api_endpoint =
+          worker_group_member != nullptr
+              ? worker_group_member->data_parallel_api_endpoint
+              : worker_group_leader;
       const bool distributed_runtime =
           replica_world_size > 1;
       service.environment["COMET_WORKER_BOOT_MODE"] = "vllm-openai";
@@ -203,7 +231,9 @@ ComposeService BuildComposeService(
       service.environment["COMET_VLLM_ENFORCE_EAGER"] =
           state.inference.enforce_eager ? "1" : "0";
       service.environment["COMET_VLLM_DOWNLOAD_DIR"] = state.inference.model_cache_dir;
-      service.environment["COMET_DATA_PARALLEL_MODE"] = state.inference.data_parallel_mode;
+      service.environment["COMET_DATA_PARALLEL_MODE"] = data_parallel_mode;
+      service.environment["COMET_DATA_PARALLEL_LB_MODE"] =
+          state.inference.data_parallel_lb_mode;
       service.environment["COMET_WORKER_GROUP_ID"] = state.worker_group.group_id;
       service.environment["COMET_WORKER_GROUP_WORLD_SIZE"] =
           std::to_string(replica_world_size);
@@ -218,7 +248,7 @@ ComposeService BuildComposeService(
       service.environment["COMET_RENDEZVOUS_PORT"] =
           std::to_string(state.worker_group.rendezvous_port);
       service.environment["COMET_WORKER_ADVERTISED_BASE_URL"] =
-          worker_group_leader
+          data_parallel_api_endpoint
               ? "http://" + instance.name + ":" + std::to_string(state.inference.api_port)
               : "";
       service.environment["VLLM_HOST_IP"] = instance.name;
@@ -236,7 +266,7 @@ ComposeService BuildComposeService(
       service.environment["COMET_VLLM_HEADLESS"] = "0";
       service.environment["COMET_WORKER_LEADER_API_BASE_URL"] =
           "http://" +
-          (leader_worker_group_member != nullptr ? leader_worker_group_member->name : instance.name) +
+          (routable_worker_group_member != nullptr ? routable_worker_group_member->name : instance.name) +
           ":" + std::to_string(state.inference.api_port);
       if (worker_group_member != nullptr) {
         service.environment["COMET_WORKER_GROUP_RANK"] =
@@ -251,20 +281,52 @@ ComposeService BuildComposeService(
             std::to_string(std::max(1, worker_group_member->replica_size));
         service.environment["COMET_WORKER_REPLICA_LEADER"] =
             worker_group_member->replica_leader ? "1" : "0";
+        service.environment["COMET_VLLM_DATA_PARALLEL_SIZE"] =
+            std::to_string(std::max(1, worker_group_member->data_parallel_size));
+        service.environment["COMET_VLLM_DATA_PARALLEL_RANK"] =
+            std::to_string(std::max(0, worker_group_member->data_parallel_rank));
+        service.environment["COMET_VLLM_DATA_PARALLEL_SIZE_LOCAL"] =
+            std::to_string(std::max(1, worker_group_member->data_parallel_size_local));
+        service.environment["COMET_VLLM_DATA_PARALLEL_START_RANK"] =
+            std::to_string(std::max(0, worker_group_member->data_parallel_start_rank));
+        service.environment["COMET_VLLM_DATA_PARALLEL_ADDRESS"] =
+            worker_group_member->data_parallel_head_address.empty()
+                ? service.environment["COMET_RENDEZVOUS_HOST"]
+                : worker_group_member->data_parallel_head_address;
+        service.environment["COMET_VLLM_DATA_PARALLEL_RPC_PORT"] =
+            std::to_string(
+                worker_group_member->data_parallel_rpc_port > 0
+                    ? worker_group_member->data_parallel_rpc_port
+                    : state.worker_group.rendezvous_port + 100);
+        service.environment["COMET_VLLM_DATA_PARALLEL_API_ENDPOINT"] =
+            worker_group_member->data_parallel_api_endpoint ? "1" : "0";
+        service.environment["COMET_VLLM_DATA_PARALLEL_EXTERNAL_LB"] =
+            (native_data_parallel &&
+             state.inference.data_parallel_lb_mode == kDataParallelLbModeExternal)
+                ? "1"
+                : "0";
+        service.environment["COMET_VLLM_DATA_PARALLEL_HYBRID_LB"] =
+            (native_data_parallel &&
+             state.inference.data_parallel_lb_mode == kDataParallelLbModeHybrid)
+                ? "1"
+                : "0";
         service.environment["COMET_VLLM_DISTRIBUTED_NODE_RANK"] =
             std::to_string(std::max(0, worker_group_member->rank));
         service.environment["COMET_VLLM_HEADLESS"] =
-            distributed_runtime && !worker_group_member->leader ? "1" : "0";
+            (distributed_runtime &&
+             (!worker_group_member->leader ||
+              (HybridDataParallelEnabled(state.inference) &&
+               !worker_group_member->data_parallel_api_endpoint)))
+                ? "1"
+                : "0";
       }
-      service.environment["COMET_WRITE_LEGACY_WORKER_UPSTREAM"] =
-          (!data_parallel && worker_group_leader) ? "1" : "0";
       if (state.bootstrap_model.has_value() &&
           state.bootstrap_model->served_model_name.has_value() &&
           !state.bootstrap_model->served_model_name->empty()) {
         service.environment["COMET_VLLM_SERVED_MODEL_NAME"] =
             *state.bootstrap_model->served_model_name;
       }
-      if (worker_group_leader || !distributed_runtime) {
+      if (data_parallel_api_endpoint || !distributed_runtime) {
         service.published_ports.push_back(
             PublishedPort{"127.0.0.1", published_host_port, state.inference.api_port});
       }

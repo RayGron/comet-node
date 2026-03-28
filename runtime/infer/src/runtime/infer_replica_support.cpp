@@ -29,21 +29,36 @@ struct ReplicaAccumulator {
 std::string ConfiguredReplicaKey(
     const json& member,
     int workers_per_replica,
-    int fallback_position) {
+    int fallback_position,
+    bool hybrid_mode) {
+  if (hybrid_mode) {
+    const int start_rank = member.value(
+        "data_parallel_start_rank",
+        member.value(
+            "data_parallel_rank",
+            member.value("replica_index", fallback_position / std::max(1, workers_per_replica))));
+    const std::string node_name = member.value("node_name", std::string{});
+    if (!node_name.empty()) {
+      return "hybrid-node-" + node_name + "-start-" + std::to_string(std::max(0, start_rank));
+    }
+    return "hybrid-start-" + std::to_string(std::max(0, start_rank));
+  }
   const std::string configured = member.value("replica_group_id", std::string{});
   if (!configured.empty()) {
     return configured;
   }
-  const int replica_index =
-      member.value("replica_index", fallback_position / std::max(1, workers_per_replica));
+  const int replica_index = member.value(
+      "data_parallel_rank",
+      member.value("replica_index", fallback_position / std::max(1, workers_per_replica)));
   return "replica-" + std::to_string(std::max(0, replica_index));
 }
 
-std::string ObservedReplicaKey(const json& member, int workers_per_replica) {
+std::string ObservedReplicaKey(const json& member, int workers_per_replica, bool hybrid_mode) {
   return ConfiguredReplicaKey(
       member,
       workers_per_replica,
-      member.value("rank", 0));
+      member.value("rank", 0),
+      hybrid_mode);
 }
 
 void AddUniqueReason(std::vector<std::string>* reasons, const std::string& reason) {
@@ -60,6 +75,10 @@ void AddUniqueReason(std::vector<std::string>* reasons, const std::string& reaso
 ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
   ReplicaTopology topology;
   topology.data_parallel_mode = config.data_parallel_mode.empty() ? "off" : config.data_parallel_mode;
+  topology.data_parallel_lb_mode =
+      config.data_parallel_lb_mode.empty() ? "external" : config.data_parallel_lb_mode;
+  const bool hybrid_mode =
+      topology.data_parallel_mode == "vllm_native" && topology.data_parallel_lb_mode == "hybrid";
 
   const json configured_members = config.worker_group.value("members", json::array());
   const json observed_worker_group = LoadWorkerGroupStatus(config);
@@ -75,11 +94,22 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
       continue;
     }
     const std::string key =
-        ConfiguredReplicaKey(member, topology.workers_per_replica, configured_position++);
+        ConfiguredReplicaKey(
+            member, topology.workers_per_replica, configured_position++, hybrid_mode);
     auto& group = expected_groups[key];
-    group.replica_index = member.value("replica_index", group.replica_index);
-    group.expected_size =
-        std::max(group.expected_size, member.value("replica_size", topology.workers_per_replica));
+    group.replica_index = hybrid_mode
+                              ? member.value(
+                                    "data_parallel_start_rank",
+                                    member.value(
+                                        "data_parallel_rank",
+                                        member.value("replica_index", group.replica_index)))
+                              : member.value(
+                                    "data_parallel_rank",
+                                    member.value("replica_index", group.replica_index));
+    group.expected_size = std::max(
+        group.expected_size,
+        hybrid_mode ? member.value("data_parallel_size_local", 1)
+                    : member.value("replica_size", topology.workers_per_replica));
   }
 
   std::map<std::string, ReplicaAccumulator> observed_groups;
@@ -87,11 +117,22 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
     if (!member.is_object()) {
       continue;
     }
-    const std::string key = ObservedReplicaKey(member, topology.workers_per_replica);
+    const std::string key =
+        ObservedReplicaKey(member, topology.workers_per_replica, hybrid_mode);
     auto& group = observed_groups[key];
-    group.replica_index = member.value("replica_index", group.replica_index);
-    group.expected_size =
-        std::max(group.expected_size, member.value("replica_size", topology.workers_per_replica));
+    group.replica_index = hybrid_mode
+                              ? member.value(
+                                    "data_parallel_start_rank",
+                                    member.value(
+                                        "data_parallel_rank",
+                                        member.value("replica_index", group.replica_index)))
+                              : member.value(
+                                    "data_parallel_rank",
+                                    member.value("replica_index", group.replica_index));
+    group.expected_size = std::max(
+        group.expected_size,
+        hybrid_mode ? member.value("data_parallel_size_local", 1)
+                    : member.value("replica_size", topology.workers_per_replica));
     ++group.observed_members;
 
     const bool ready = member.value("ready", false);
@@ -107,9 +148,13 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
       }
     }
 
-    const bool replica_leader =
-        member.value("replica_leader", member.value("leader", false));
-    if (replica_leader) {
+    const bool api_endpoint = config.data_parallel_mode == "vllm_native"
+                                  ? member.value(
+                                        "data_parallel_api_endpoint",
+                                        member.value("replica_leader", member.value("leader", false)))
+                                  : member.value(
+                                        "replica_leader", member.value("leader", false));
+    if (api_endpoint) {
       group.leader_ready = ready;
       if (ready) {
         group.leader_base_url = member.value("base_url", std::string{});

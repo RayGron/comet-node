@@ -123,6 +123,7 @@ struct RuntimeStatus {
   std::string instance_role;
   std::string node_name;
   std::string data_parallel_mode = "off";
+  std::string data_parallel_lb_mode = "external";
   std::string runtime_backend;
   std::string runtime_phase;
   int enabled_gpu_nodes = 0;

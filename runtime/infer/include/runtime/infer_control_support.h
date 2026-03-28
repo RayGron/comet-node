@@ -30,14 +30,12 @@ struct ControlPaths {
   fs::path gateway_plan_path;
   fs::path prewarmed_replicas_path;
   fs::path runtime_status_path;
-  fs::path worker_upstream_path;
   fs::path worker_group_dir;
 };
 
 json LoadProfiles(const std::string& path_str);
 RuntimeProfile ResolveProfile(const json& profiles_json, const std::string& name);
 ControlPaths BuildControlPaths(const RuntimeConfig& config);
-json LoadWorkerUpstreamContract(const RuntimeConfig& config);
 json LoadWorkerGroupStatus(const RuntimeConfig& config);
 std::vector<fs::path> RuntimeDirs(const RuntimeConfig& config);
 json LoadActiveModel(const RuntimeConfig& config);

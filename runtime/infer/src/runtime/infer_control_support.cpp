@@ -77,13 +77,8 @@ ControlPaths BuildControlPaths(const RuntimeConfig& config) {
       root / "gateway-plan.json",
       root / "prewarmed-replicas.json",
       root / "runtime-status.json",
-      root / "worker-upstream.json",
       root / "worker-group",
   };
-}
-
-json LoadWorkerUpstreamContract(const RuntimeConfig& config) {
-  return LoadJsonOrDefault(BuildControlPaths(config).worker_upstream_path, json::object());
 }
 
 json LoadWorkerGroupStatus(const RuntimeConfig& config) {
@@ -91,6 +86,7 @@ json LoadWorkerGroupStatus(const RuntimeConfig& config) {
   json result = {
       {"group_id", config.worker_group.value("group_id", std::string{})},
       {"data_parallel_mode", config.data_parallel_mode},
+      {"data_parallel_lb_mode", config.data_parallel_lb_mode},
       {"expected_workers", config.worker_group.value("expected_workers", 0)},
       {"members", json::array()},
   };

@@ -9,6 +9,7 @@ namespace comet::infer::replica_support {
 
 struct ReplicaTopology {
   std::string data_parallel_mode = "off";
+  std::string data_parallel_lb_mode = "external";
   int workers_per_replica = 0;
   int replica_groups_expected = 0;
   int replica_groups_ready = 0;

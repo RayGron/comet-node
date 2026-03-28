@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <map>
 #include <stdexcept>
 #include <string>
 
@@ -10,9 +11,28 @@ namespace comet {
 
 inline constexpr const char* kDataParallelModeOff = "off";
 inline constexpr const char* kDataParallelModeAutoReplicas = "auto_replicas";
+inline constexpr const char* kDataParallelModeVllmNative = "vllm_native";
+inline constexpr const char* kDataParallelLbModeExternal = "external";
+inline constexpr const char* kDataParallelLbModeHybrid = "hybrid";
+
+inline std::string CanonicalDataParallelMode(const InferenceRuntimeSettings& inference) {
+  if (inference.data_parallel_mode == kDataParallelModeAutoReplicas) {
+    return kDataParallelModeVllmNative;
+  }
+  return inference.data_parallel_mode;
+}
 
 inline bool DataParallelEnabled(const InferenceRuntimeSettings& inference) {
-  return inference.data_parallel_mode == kDataParallelModeAutoReplicas;
+  return CanonicalDataParallelMode(inference) == kDataParallelModeVllmNative;
+}
+
+inline bool NativeDataParallelEnabled(const InferenceRuntimeSettings& inference) {
+  return CanonicalDataParallelMode(inference) == kDataParallelModeVllmNative;
+}
+
+inline bool HybridDataParallelEnabled(const InferenceRuntimeSettings& inference) {
+  return NativeDataParallelEnabled(inference) &&
+         inference.data_parallel_lb_mode == kDataParallelLbModeHybrid;
 }
 
 inline int WorkersPerReplica(const WorkerGroupSpec& worker_group) {
@@ -72,10 +92,35 @@ inline void ValidateReplicaPacking(
   }
   if (eligible_members % workers_per_replica != 0) {
     throw std::runtime_error(
-        "data_parallel_mode=auto_replicas requires eligible worker count (" +
+        "data_parallel_mode=" + inference.data_parallel_mode +
+        " requires eligible worker count (" +
         std::to_string(eligible_members) +
         ") to be divisible by worker_group.expected_workers (" +
         std::to_string(workers_per_replica) + ")");
+  }
+  if (HybridDataParallelEnabled(inference)) {
+    int eligible_index = 0;
+    std::string replica_node_name;
+    for (const auto& member : worker_group.members) {
+      if (!member.enabled) {
+        continue;
+      }
+      if (member.node_name.empty()) {
+        throw std::runtime_error(
+            "data_parallel_lb_mode=hybrid requires enabled worker members to have node_name");
+      }
+      const int local_rank = eligible_index % workers_per_replica;
+      if (local_rank == 0) {
+        replica_node_name = member.node_name;
+      } else if (member.node_name != replica_node_name) {
+        throw std::runtime_error(
+            "data_parallel_lb_mode=hybrid requires node-local replica packing; "
+            "worker '" +
+            member.name + "' is assigned to node '" + member.node_name +
+            "' but replica started on node '" + replica_node_name + "'");
+      }
+      ++eligible_index;
+    }
   }
 }
 
@@ -88,6 +133,38 @@ inline void AssignReplicaTopology(
 
   const bool data_parallel = DataParallelEnabled(inference);
   const int workers_per_replica = WorkersPerReplica(*worker_group);
+  const int replica_count = ExpectedReplicaGroupCount(inference, *worker_group);
+  const std::string data_parallel_head_address =
+      worker_group->rendezvous_host.empty() ? worker_group->infer_instance_name
+                                            : worker_group->rendezvous_host;
+  const int data_parallel_rpc_port =
+      worker_group->rendezvous_port > 0 ? worker_group->rendezvous_port + 100
+                                        : 29600;
+  std::map<std::string, int> node_replica_counts;
+  std::map<std::string, int> node_replica_start_ranks;
+  if (HybridDataParallelEnabled(inference)) {
+    int replica_index = 0;
+    for (const auto& member : worker_group->members) {
+      if (!member.enabled) {
+        continue;
+      }
+      const int current_replica_index =
+          data_parallel ? replica_index / workers_per_replica : 0;
+      const int local_rank =
+          data_parallel ? replica_index % workers_per_replica : replica_index;
+      if (local_rank == 0) {
+        auto& count = node_replica_counts[member.node_name];
+        auto start_it = node_replica_start_ranks.find(member.node_name);
+        if (start_it == node_replica_start_ranks.end()) {
+          node_replica_start_ranks.emplace(member.node_name, current_replica_index);
+        } else {
+          start_it->second = std::min(start_it->second, current_replica_index);
+        }
+        ++count;
+      }
+      ++replica_index;
+    }
+  }
   int eligible_index = 0;
   for (auto& member : worker_group->members) {
     if (!member.enabled) {
@@ -96,6 +173,13 @@ inline void AssignReplicaTopology(
       member.replica_index = 0;
       member.replica_size = workers_per_replica;
       member.replica_leader = false;
+      member.data_parallel_rank = 0;
+      member.data_parallel_size = 1;
+      member.data_parallel_size_local = 1;
+      member.data_parallel_start_rank = 0;
+      member.data_parallel_api_endpoint = false;
+      member.data_parallel_head_address.clear();
+      member.data_parallel_rpc_port = 0;
       member.leader = false;
       continue;
     }
@@ -109,6 +193,26 @@ inline void AssignReplicaTopology(
     member.replica_index = replica_index;
     member.replica_size = workers_per_replica;
     member.replica_leader = local_rank == 0;
+    member.data_parallel_rank = replica_index;
+    member.data_parallel_size = std::max(1, replica_count);
+    member.data_parallel_size_local = 1;
+    member.data_parallel_start_rank = replica_index;
+    member.data_parallel_api_endpoint = member.replica_leader;
+    member.data_parallel_head_address = data_parallel_head_address;
+    member.data_parallel_rpc_port = data_parallel_rpc_port;
+    if (HybridDataParallelEnabled(inference) && !member.node_name.empty()) {
+      const auto count_it = node_replica_counts.find(member.node_name);
+      if (count_it != node_replica_counts.end()) {
+        member.data_parallel_size_local = std::max(1, count_it->second);
+      }
+      const auto start_it = node_replica_start_ranks.find(member.node_name);
+      if (start_it != node_replica_start_ranks.end()) {
+        member.data_parallel_start_rank = std::max(0, start_it->second);
+      }
+      member.data_parallel_api_endpoint =
+          member.replica_leader &&
+          member.data_parallel_rank == member.data_parallel_start_rank;
+    }
     member.leader = member.replica_leader;
     ++eligible_index;
   }

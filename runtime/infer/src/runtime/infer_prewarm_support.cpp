@@ -29,7 +29,6 @@ namespace comet::infer::prewarm_support {
 namespace fs = std::filesystem;
 using control_support::BuildControlPaths;
 using control_support::LoadActiveModel;
-using control_support::LoadWorkerUpstreamContract;
 using nlohmann::json;
 
 namespace {
@@ -301,12 +300,6 @@ std::vector<std::string> ObservedReadyReplicaLeaderBaseUrls(const RuntimeConfig&
   const auto topology = replica_support::InspectReplicaTopology(config);
   if (!topology.ready_replica_base_urls.empty()) {
     return topology.ready_replica_base_urls;
-  }
-
-  const json worker_upstream = LoadWorkerUpstreamContract(config);
-  const std::string advertised = JsonString(worker_upstream, "base_url");
-  if (!advertised.empty()) {
-    return {advertised};
   }
 
   return {};

@@ -312,6 +312,7 @@ json ToJson(const RuntimeStatus& status) {
       {"instance_role", status.instance_role},
       {"node_name", status.node_name},
       {"data_parallel_mode", status.data_parallel_mode},
+      {"data_parallel_lb_mode", status.data_parallel_lb_mode},
       {"runtime_backend", status.runtime_backend},
       {"runtime_phase", status.runtime_phase},
       {"enabled_gpu_nodes", status.enabled_gpu_nodes},
@@ -354,6 +355,8 @@ RuntimeStatus RuntimeStatusFromJson(const json& value) {
   status.instance_role = value.value("instance_role", std::string{});
   status.node_name = value.value("node_name", std::string{});
   status.data_parallel_mode = value.value("data_parallel_mode", std::string("off"));
+  status.data_parallel_lb_mode =
+      value.value("data_parallel_lb_mode", std::string("external"));
   status.runtime_backend = value.value("runtime_backend", std::string{});
   status.runtime_phase = value.value("runtime_phase", std::string{});
   status.enabled_gpu_nodes = value.value("enabled_gpu_nodes", 0);

@@ -82,7 +82,7 @@ bool LocalRuntime::WorkerGroupReady() const {
   if (topology.replica_groups_expected <= 0) {
     return true;
   }
-  return topology.replica_groups_ready > 0;
+  return topology.replica_groups_ready >= topology.replica_groups_expected;
 }
 
 bool LocalRuntime::InferenceReady() const {

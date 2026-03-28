@@ -14,6 +14,7 @@ struct RuntimeConfig {
   std::string primary_infer_node;
   std::string runtime_engine = "llama.cpp";
   std::string data_parallel_mode = "off";
+  std::string data_parallel_lb_mode = "external";
   nlohmann::json worker_group = nlohmann::json::object();
   std::string net_if;
   std::string models_root;

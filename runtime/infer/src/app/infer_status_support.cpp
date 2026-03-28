@@ -120,6 +120,7 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.runtime_backend = backend;
   status.runtime_phase = phase;
   status.data_parallel_mode = topology.data_parallel_mode;
+  status.data_parallel_lb_mode = topology.data_parallel_lb_mode;
   status.replica_groups_expected = topology.replica_groups_expected;
   status.replica_groups_ready = topology.replica_groups_ready;
   status.replica_groups_degraded = topology.replica_groups_degraded;
@@ -145,7 +146,8 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.started_at = started_at;
   status.last_activity_at = started_at;
   const bool replica_topology_ready =
-      topology.replica_groups_expected == 0 || topology.replica_groups_ready > 0;
+      topology.replica_groups_expected == 0 ||
+      topology.replica_groups_ready >= topology.replica_groups_expected;
   status.active_model_ready = !active_model.empty();
   status.gateway_plan_ready = !gateway_plan.empty();
   status.inference_ready = inference_ready;
@@ -254,6 +256,7 @@ int PrintStatus(const RuntimeConfig& config, const std::string& backend, bool ap
   std::cout << "primary_infer_node=" << status.primary_infer_node << "\n";
   std::cout << "runtime_phase=" << status.runtime_phase << "\n";
   std::cout << "data_parallel_mode=" << status.data_parallel_mode << "\n";
+  std::cout << "data_parallel_lb_mode=" << status.data_parallel_lb_mode << "\n";
   std::cout << "enabled_gpu_nodes=" << status.enabled_gpu_nodes << "\n\n";
   std::cout << "[cache]\n";
   std::cout << "registry_entries=" << status.registry_entries << "\n";
@@ -376,6 +379,7 @@ int RunDoctor(const RuntimeConfig& config, const std::string& checks) {
       rc = 1;
     }
     std::cout << "  data parallel mode: " << topology.data_parallel_mode << "\n";
+    std::cout << "  data parallel lb mode: " << topology.data_parallel_lb_mode << "\n";
     std::cout << "  workers per replica: " << topology.workers_per_replica << "\n";
     std::cout << "  replica groups expected: " << topology.replica_groups_expected << "\n";
     std::cout << "  replica groups ready: " << topology.replica_groups_ready << "\n";
@@ -387,13 +391,14 @@ int RunDoctor(const RuntimeConfig& config, const std::string& checks) {
               << "\n";
     std::cout << "  worker group bootstrap: "
               << (topology.replica_groups_expected == 0 ||
-                          topology.replica_groups_ready > 0
+                          topology.replica_groups_ready >= topology.replica_groups_expected
                       ? "OK"
                       : "FAIL")
               << " (" << ready_worker_members << "/" << expected_workers
               << " ready workers; " << topology.replica_groups_ready << "/"
               << topology.replica_groups_expected << " ready replicas)\n";
-    if (topology.replica_groups_expected > 0 && topology.replica_groups_ready == 0) {
+    if (topology.replica_groups_expected > 0 &&
+        topology.replica_groups_ready < topology.replica_groups_expected) {
       rc = 1;
     }
     std::cout << "  colocated serving workers: INFO (" << colocated_serving_workers << ")\n";

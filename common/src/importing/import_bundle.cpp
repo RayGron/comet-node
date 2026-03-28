@@ -689,6 +689,11 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
         OptionalString(runtime, "runtime_engine", state.inference.runtime_engine);
     state.inference.data_parallel_mode =
         OptionalString(runtime, "data_parallel_mode", state.inference.data_parallel_mode);
+    state.inference.data_parallel_lb_mode = OptionalString(
+        runtime, "data_parallel_lb_mode", state.inference.data_parallel_lb_mode);
+    if (state.inference.data_parallel_mode == kDataParallelModeAutoReplicas) {
+      state.inference.data_parallel_mode = kDataParallelModeVllmNative;
+    }
     state.inference.net_if = OptionalString(runtime, "net_if", state.inference.net_if);
     state.inference.models_root =
         OptionalString(runtime, "models_root", state.inference.models_root);

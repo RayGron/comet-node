@@ -4,7 +4,7 @@
 #include <optional>
 #include <string>
 
-#include "comet/sqlite_store.h"
+#include "comet/state/sqlite_store.h"
 
 using nlohmann::json;
 

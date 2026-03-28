@@ -7,10 +7,10 @@
 #include <sstream>
 #include <stdexcept>
 
-#include "comet/compose_renderer.h"
-#include "comet/infer_runtime_config.h"
-#include "comet/planner.h"
-#include "comet/state_json.h"
+#include "comet/planning/compose_renderer.h"
+#include "comet/runtime/infer_runtime_config.h"
+#include "comet/planning/planner.h"
+#include "comet/state/state_json.h"
 
 namespace comet::controller {
 

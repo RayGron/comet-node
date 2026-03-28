@@ -5,7 +5,7 @@
 #include "infra/controller_action.h"
 #include "http/controller_http_server_support.h"
 #include "interaction/interaction_service.h"
-#include "comet/sqlite_store.h"
+#include "comet/state/sqlite_store.h"
 
 using nlohmann::json;
 

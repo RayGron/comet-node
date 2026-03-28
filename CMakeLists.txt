@@ -136,18 +136,18 @@ find_package(unofficial-sodium CONFIG REQUIRED)
 
 add_library(
   comet-common
-  common/src/compose_renderer.cpp
-  common/src/crypto_utils.cpp
-  common/src/demo_state.cpp
-  common/src/execution_plan.cpp
-  common/src/import_bundle.cpp
-  common/src/infer_runtime_config.cpp
-  common/src/planner.cpp
-  common/src/reconcile.cpp
-  common/src/runtime_status.cpp
-  common/src/scheduling_policy.cpp
-  common/src/state_json.cpp
-  common/src/sqlite_store.cpp
+  common/src/planning/compose_renderer.cpp
+  common/src/security/crypto_utils.cpp
+  common/src/state/demo_state.cpp
+  common/src/planning/execution_plan.cpp
+  common/src/importing/import_bundle.cpp
+  common/src/runtime/infer_runtime_config.cpp
+  common/src/planning/planner.cpp
+  common/src/planning/reconcile.cpp
+  common/src/runtime/runtime_status.cpp
+  common/src/planning/scheduling_policy.cpp
+  common/src/state/state_json.cpp
+  common/src/state/sqlite_store.cpp
 )
 
 target_include_directories(comet-common PUBLIC common/include)
@@ -220,7 +220,20 @@ if(WIN32)
 endif()
 comet_enable_strict_warnings(comet-controller)
 
-add_executable(comet-hostd hostd/src/main.cpp hostd/src/hostd_app.cpp)
+add_executable(
+  comet-hostd
+  hostd/src/backend/hostd_backend_factory.cpp
+  hostd/src/backend/http_hostd_backend.cpp
+  hostd/src/backend/local_db_hostd_backend.cpp
+  hostd/src/observation/hostd_observation_service.cpp
+  hostd/src/state_apply/hostd_assignment_service.cpp
+  hostd/src/cli/hostd_cli.cpp
+  hostd/src/cli/hostd_command_line.cpp
+  hostd/src/config/node_config_loader.cpp
+  hostd/src/main.cpp
+  hostd/src/app/hostd_app.cpp
+)
+target_include_directories(comet-hostd PRIVATE hostd/include)
 target_link_libraries(comet-hostd PRIVATE comet-common)
 if(UNIX AND NOT APPLE)
   target_link_libraries(comet-hostd PRIVATE dl)
@@ -230,7 +243,19 @@ if(WIN32)
 endif()
 comet_enable_strict_warnings(comet-hostd)
 
-add_executable(comet-node launcher/src/main.cpp launcher/src/launcher_app.cpp)
+add_executable(
+  comet-node
+  launcher/src/cli/launcher_command_line.cpp
+  launcher/src/config/generated_config_loader.cpp
+  launcher/src/config/install_layout.cpp
+  launcher/src/install/launcher_install_service.cpp
+  launcher/src/platform/process_runner.cpp
+  launcher/src/platform/signal_manager.cpp
+  launcher/src/run/launcher_run_service.cpp
+  launcher/src/main.cpp
+  launcher/src/app/launcher_app.cpp
+)
+target_include_directories(comet-node PRIVATE launcher/include)
 target_link_libraries(comet-node PRIVATE comet-common)
 comet_enable_strict_warnings(comet-node)
 
@@ -239,7 +264,7 @@ if(NOT WIN32)
     comet-inferctl
     runtime/infer/src/infer_app.cpp
     runtime/infer/src/main.cpp
-    common/src/runtime_status.cpp
+    common/src/runtime/runtime_status.cpp
   )
   target_include_directories(comet-inferctl PRIVATE common/include)
   target_include_directories(
@@ -260,7 +285,7 @@ if(NOT WIN32)
     comet-workerd
     runtime/worker/src/worker_app.cpp
     runtime/worker/src/main.cpp
-    common/src/runtime_status.cpp
+    common/src/runtime/runtime_status.cpp
   )
   target_include_directories(comet-workerd PRIVATE common/include)
   target_include_directories(

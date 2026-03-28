@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/crypto_utils.h"
+#include "comet/security/crypto_utils.h"
 
 namespace comet::controller {
 

@@ -8,9 +8,9 @@
 #include <nlohmann/json.hpp>
 
 #include "app/controller_service_interfaces.h"
-#include "comet/models.h"
-#include "comet/scheduling_policy.h"
-#include "comet/sqlite_store.h"
+#include "comet/state/models.h"
+#include "comet/planning/scheduling_policy.h"
+#include "comet/state/sqlite_store.h"
 
 namespace comet::controller {
 

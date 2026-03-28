@@ -10,7 +10,7 @@
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
 #include "interaction/interaction_service.h"
-#include "comet/platform_compat.h"
+#include "comet/core/platform_compat.h"
 
 class InteractionHttpService {
  public:

@@ -9,10 +9,10 @@
 #include "infra/controller_action.h"
 #include "app/controller_service_interfaces.h"
 
-#include "comet/execution_plan.h"
-#include "comet/models.h"
-#include "comet/scheduling_policy.h"
-#include "comet/sqlite_store.h"
+#include "comet/planning/execution_plan.h"
+#include "comet/state/models.h"
+#include "comet/planning/scheduling_policy.h"
+#include "comet/state/sqlite_store.h"
 
 namespace comet::controller {
 

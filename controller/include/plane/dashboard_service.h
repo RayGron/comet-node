@@ -11,10 +11,10 @@
 
 #include "scheduler/scheduler_view_service.h"
 
-#include "comet/models.h"
-#include "comet/runtime_status.h"
-#include "comet/scheduling_policy.h"
-#include "comet/sqlite_store.h"
+#include "comet/state/models.h"
+#include "comet/runtime/runtime_status.h"
+#include "comet/planning/scheduling_policy.h"
+#include "comet/state/sqlite_store.h"
 
 namespace comet::controller {
 

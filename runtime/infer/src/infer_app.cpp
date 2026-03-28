@@ -1,5 +1,5 @@
 #include "infer_app.h"
-#include "comet/runtime_status.h"
+#include "comet/runtime/runtime_status.h"
 
 #include <arpa/inet.h>
 #include <errno.h>

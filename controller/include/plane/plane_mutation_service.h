@@ -7,7 +7,7 @@
 #include "infra/controller_action.h"
 #include "plane/plane_service.h"
 
-#include "comet/models.h"
+#include "comet/state/models.h"
 
 namespace comet::controller {
 

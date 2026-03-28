@@ -8,7 +8,7 @@
 #include <stdexcept>
 
 #include "infra/controller_network_manager.h"
-#include "comet/platform_compat.h"
+#include "comet/core/platform_compat.h"
 
 namespace {
 

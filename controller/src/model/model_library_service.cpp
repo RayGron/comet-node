@@ -12,8 +12,8 @@
 #include <thread>
 #include <utility>
 
-#include "comet/platform_compat.h"
-#include "comet/sqlite_store.h"
+#include "comet/core/platform_compat.h"
+#include "comet/state/sqlite_store.h"
 
 using nlohmann::json;
 

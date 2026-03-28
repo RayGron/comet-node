@@ -6,13 +6,13 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/compose_renderer.h"
-#include "comet/demo_state.h"
-#include "comet/import_bundle.h"
-#include "comet/infer_runtime_config.h"
-#include "comet/planner.h"
-#include "comet/reconcile.h"
-#include "comet/state_json.h"
+#include "comet/planning/compose_renderer.h"
+#include "comet/state/demo_state.h"
+#include "comet/importing/import_bundle.h"
+#include "comet/runtime/infer_runtime_config.h"
+#include "comet/planning/planner.h"
+#include "comet/planning/reconcile.h"
+#include "comet/state/state_json.h"
 
 namespace comet::controller {
 

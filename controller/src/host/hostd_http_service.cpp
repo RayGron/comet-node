@@ -8,9 +8,9 @@
 
 #include "infra/controller_action.h"
 
-#include "comet/crypto_utils.h"
-#include "comet/models.h"
-#include "comet/sqlite_store.h"
+#include "comet/security/crypto_utils.h"
+#include "comet/state/models.h"
+#include "comet/state/sqlite_store.h"
 
 using nlohmann::json;
 

@@ -7,7 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include "app/controller_service_interfaces.h"
-#include "comet/sqlite_store.h"
+#include "comet/state/sqlite_store.h"
 
 namespace comet::controller {
 

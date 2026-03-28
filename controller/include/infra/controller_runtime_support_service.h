@@ -5,9 +5,9 @@
 #include <string>
 #include <vector>
 
-#include "comet/platform_compat.h"
-#include "comet/runtime_status.h"
-#include "comet/sqlite_store.h"
+#include "comet/core/platform_compat.h"
+#include "comet/runtime/runtime_status.h"
+#include "comet/state/sqlite_store.h"
 
 namespace comet::controller {
 

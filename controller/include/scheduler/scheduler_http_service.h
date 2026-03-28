@@ -12,7 +12,7 @@
 #include "read_model/read_model_service.h"
 #include "scheduler/scheduler_service.h"
 
-#include "comet/models.h"
+#include "comet/state/models.h"
 
 class SchedulerHttpService {
  public:

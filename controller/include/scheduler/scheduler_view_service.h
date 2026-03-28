@@ -8,8 +8,8 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/models.h"
-#include "comet/sqlite_store.h"
+#include "comet/state/models.h"
+#include "comet/state/sqlite_store.h"
 
 enum class SchedulerRolloutPhase {
   Planned,

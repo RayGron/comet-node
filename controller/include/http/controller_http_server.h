@@ -12,9 +12,9 @@
 
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
-#include "comet/models.h"
-#include "comet/platform_compat.h"
-#include "comet/sqlite_store.h"
+#include "comet/state/models.h"
+#include "comet/core/platform_compat.h"
+#include "comet/state/sqlite_store.h"
 
 namespace comet::controller {
 

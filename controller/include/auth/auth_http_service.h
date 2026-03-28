@@ -11,8 +11,8 @@
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
 
-#include "comet/models.h"
-#include "comet/sqlite_store.h"
+#include "comet/state/models.h"
+#include "comet/state/sqlite_store.h"
 
 struct PendingWebAuthnFlow {
   std::string flow_id;

@@ -3,7 +3,7 @@
 #include <map>
 #include <string>
 
-#include "comet/platform_compat.h"
+#include "comet/core/platform_compat.h"
 
 struct HttpResponse;
 

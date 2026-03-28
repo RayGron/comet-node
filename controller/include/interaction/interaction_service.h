@@ -8,9 +8,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/models.h"
-#include "comet/runtime_status.h"
-#include "comet/sqlite_store.h"
+#include "comet/state/models.h"
+#include "comet/runtime/runtime_status.h"
+#include "comet/state/sqlite_store.h"
 
 namespace comet::controller {
 

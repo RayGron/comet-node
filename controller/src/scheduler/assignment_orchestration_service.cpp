@@ -2,7 +2,7 @@
 
 #include <iostream>
 
-#include "comet/state_json.h"
+#include "comet/state/state_json.h"
 
 namespace comet::controller {
 

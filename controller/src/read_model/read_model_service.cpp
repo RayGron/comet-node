@@ -5,8 +5,8 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/sqlite_store.h"
-#include "comet/state_json.h"
+#include "comet/state/sqlite_store.h"
+#include "comet/state/state_json.h"
 
 using nlohmann::json;
 

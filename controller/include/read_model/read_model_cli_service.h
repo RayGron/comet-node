@@ -9,8 +9,8 @@
 #include "scheduler/scheduler_view_service.h"
 #include "read_model/state_aggregate_loader.h"
 
-#include "comet/models.h"
-#include "comet/sqlite_store.h"
+#include "comet/state/models.h"
+#include "comet/state/sqlite_store.h"
 
 namespace comet::controller {
 

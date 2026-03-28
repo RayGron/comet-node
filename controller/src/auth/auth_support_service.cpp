@@ -15,7 +15,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "comet/crypto_utils.h"
+#include "comet/security/crypto_utils.h"
 
 using nlohmann::json;
 

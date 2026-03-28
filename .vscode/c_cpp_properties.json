@@ -7,6 +7,7 @@
             "compilerPath": "/usr/bin/clang++",
             "compileCommands": "${workspaceFolder}/build/linux/x64/compile_commands.json",
             "includePath": [
+                "${workspaceFolder}/controller/include",
                 "${workspaceFolder}/common/include",
                 "${workspaceFolder}/vcpkg_installed/x64-linux-root/x64-linux/include"
             ],
@@ -19,6 +20,7 @@
             "compilerPath": "/usr/bin/clang++",
             "compileCommands": "${workspaceFolder}/build/macos/arm64/compile_commands.json",
             "includePath": [
+                "${workspaceFolder}/controller/include",
                 "${workspaceFolder}/common/include",
                 "${workspaceFolder}/vcpkg_installed/arm64-osx-root/arm64-osx/include"
             ],

@@ -317,6 +317,7 @@ if(NOT WIN32)
     runtime/infer/src/http/local_http_server.cpp
     runtime/infer/src/platform/infer_signal_service.cpp
     runtime/infer/src/runtime/infer_control_support.cpp
+    runtime/infer/src/runtime/infer_prewarm_support.cpp
     runtime/infer/src/runtime/infer_replica_support.cpp
     runtime/infer/src/runtime/llama_library_engine.cpp
     runtime/infer/src/runtime/local_runtime.cpp

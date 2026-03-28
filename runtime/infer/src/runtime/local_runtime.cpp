@@ -4,6 +4,7 @@
 #include <thread>
 #include <unistd.h>
 
+#include "runtime/infer_prewarm_support.h"
 #include "runtime/infer_replica_support.h"
 #include "runtime/infer_runtime_support.h"
 
@@ -45,14 +46,26 @@ LocalRuntime::LocalRuntime(
 
 int LocalRuntime::Run() {
   signal_service_.RegisterHandlers();
-  runtime_support::TouchReadyFile();
+  prewarm_support::ResetPrewarmState(config_);
   WriteCurrentRuntimeStatus("starting");
   inference_server_.Start();
+  while (!signal_service_.StopRequested() && !EnsureReplicaLeadersPrewarmed()) {
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    WriteCurrentRuntimeStatus("starting");
+  }
+  if (signal_service_.StopRequested()) {
+    WriteCurrentRuntimeStatus("stopping");
+    inference_server_.Stop();
+    WriteCurrentRuntimeStatus("stopped");
+    return 0;
+  }
   gateway_server_.Start();
+  runtime_support::TouchReadyFile();
   WriteCurrentRuntimeStatus("running");
   while (!signal_service_.StopRequested()) {
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+    EnsureReplicaLeadersPrewarmed();
     WriteCurrentRuntimeStatus("running");
+    std::this_thread::sleep_for(std::chrono::seconds(2));
   }
   WriteCurrentRuntimeStatus("stopping");
   gateway_server_.Stop();
@@ -89,6 +102,18 @@ bool LocalRuntime::InferenceReady() const {
 
 bool LocalRuntime::GatewayReady() const {
   return runtime_support::ProbeUrl(runtime_support::RuntimeGatewayHealthUrl(config_));
+}
+
+bool LocalRuntime::EnsureReplicaLeadersPrewarmed() const {
+  if (!dynamic_upstream_ && !upstream_.has_value()) {
+    return true;
+  }
+  if (!InferenceReady()) {
+    return false;
+  }
+  const auto prewarm_state = prewarm_support::PrewarmReadyReplicaLeaders(config_);
+  return prewarm_state.ready_upstreams == 0 ||
+         prewarm_state.prewarmed_upstreams >= prewarm_state.ready_upstreams;
 }
 
 void LocalRuntime::WriteCurrentRuntimeStatus(const std::string& phase) const {

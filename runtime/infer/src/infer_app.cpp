@@ -7,6 +7,7 @@
 #include "http/local_http_server.h"
 #include "platform/infer_signal_service.h"
 #include "runtime/infer_control_support.h"
+#include "runtime/infer_prewarm_support.h"
 #include "runtime/infer_replica_support.h"
 #include "runtime/infer_runtime_support.h"
 #include "runtime/infer_runtime_types.h"
@@ -72,6 +73,7 @@ using ControlPaths = comet::infer::control_support::ControlPaths;
 namespace cli_output_support = comet::infer::cli_output_support;
 namespace model_cache_support = comet::infer::model_cache_support;
 namespace status_support = comet::infer::status_support;
+namespace prewarm_support = comet::infer::prewarm_support;
 namespace replica_support = comet::infer::replica_support;
 
 struct AssistantTextFilterState {
@@ -79,7 +81,6 @@ struct AssistantTextFilterState {
   std::string emitted_text;
 };
 
-json LoadWorkerUpstreamContract(const RuntimeConfig& config);
 json LoadWorkerGroupStatus(const RuntimeConfig& config);
 std::string Trim(const std::string& value);
 std::string JsonString(const json& object, const char* key);
@@ -151,42 +152,44 @@ UpstreamTarget ParseHttpUrl(const std::string& url) {
   return target;
 }
 
-std::optional<std::string> ResolveRuntimeUpstreamBaseUrl(const RuntimeConfig& config) {
+std::vector<std::string> ObservedRuntimeUpstreamBaseUrls(const RuntimeConfig& config) {
   const char* worker_vllm_upstream = std::getenv("COMET_INFER_VLLM_UPSTREAM_URL");
   if (worker_vllm_upstream != nullptr && std::strlen(worker_vllm_upstream) > 0) {
-    return std::string(worker_vllm_upstream);
+    return {std::string(worker_vllm_upstream)};
   }
-  const auto topology = replica_support::InspectReplicaTopology(config);
-  if (!topology.ready_replica_base_urls.empty()) {
-    return topology.ready_replica_base_urls.front();
-  }
-  const json worker_upstream = LoadWorkerUpstreamContract(config);
-  if (worker_upstream.is_object()) {
-    const std::string advertised = JsonString(worker_upstream, "base_url");
-    if (!advertised.empty()) {
-      return advertised;
-    }
+  const auto ready_leaders = prewarm_support::ObservedReadyReplicaLeaderBaseUrls(config);
+  if (!ready_leaders.empty()) {
+    return ready_leaders;
   }
   if (config.runtime_engine != "vllm") {
-    return "http://127.0.0.1:" + std::to_string(config.api_port);
+    return {"http://127.0.0.1:" + std::to_string(config.api_port)};
+  }
+  return {};
+}
+
+std::optional<std::string> ResolveRuntimeObservedUpstreamBaseUrl(const RuntimeConfig& config) {
+  const auto base_urls = ObservedRuntimeUpstreamBaseUrls(config);
+  if (!base_urls.empty()) {
+    return base_urls.front();
   }
   return std::nullopt;
 }
 
 std::optional<UpstreamTarget> ResolveRuntimeUpstreamTarget(const RuntimeConfig& config) {
-  const char* worker_vllm_upstream = std::getenv("COMET_INFER_VLLM_UPSTREAM_URL");
-  if (worker_vllm_upstream != nullptr && std::strlen(worker_vllm_upstream) > 0) {
-    return ParseHttpUrl(worker_vllm_upstream);
-  }
-  const auto topology = replica_support::InspectReplicaTopology(config);
-  if (!topology.ready_replica_base_urls.empty()) {
+  const auto observed_base_urls = prewarm_support::ObservedReadyReplicaLeaderBaseUrls(config);
+  const auto routable_base_urls =
+      prewarm_support::FilterPrewarmedReplicaBaseUrls(config, observed_base_urls);
+  if (!routable_base_urls.empty()) {
     static std::atomic<std::uint64_t> next_replica{0};
     const std::uint64_t slot = next_replica.fetch_add(1, std::memory_order_relaxed);
     const std::string& base_url =
-        topology.ready_replica_base_urls[slot % topology.ready_replica_base_urls.size()];
+        routable_base_urls[slot % routable_base_urls.size()];
     return ParseHttpUrl(base_url);
   }
-  const auto base_url = ResolveRuntimeUpstreamBaseUrl(config);
+  if (!observed_base_urls.empty()) {
+    return std::nullopt;
+  }
+  const auto base_url = ResolveRuntimeObservedUpstreamBaseUrl(config);
   if (!base_url.has_value()) {
     return std::nullopt;
   }
@@ -494,10 +497,6 @@ ControlPaths BuildControlPaths(const RuntimeConfig& config) {
   return comet::infer::control_support::BuildControlPaths(config);
 }
 
-json LoadWorkerUpstreamContract(const RuntimeConfig& config) {
-  return comet::infer::control_support::LoadWorkerUpstreamContract(config);
-}
-
 json LoadWorkerGroupStatus(const RuntimeConfig& config) {
   return comet::infer::control_support::LoadWorkerGroupStatus(config);
 }
@@ -519,12 +518,12 @@ int EnabledGpuNodeCount(const RuntimeConfig& config) {
 }
 
 std::string RuntimeUpstreamHealthUrl(const RuntimeConfig& config) {
-  const auto base_url = ResolveRuntimeUpstreamBaseUrl(config);
+  const auto base_url = ResolveRuntimeObservedUpstreamBaseUrl(config);
   return base_url.has_value() ? *base_url + "/health" : std::string{};
 }
 
 std::string RuntimeUpstreamModelsUrl(const RuntimeConfig& config) {
-  const auto base_url = ResolveRuntimeUpstreamBaseUrl(config);
+  const auto base_url = ResolveRuntimeObservedUpstreamBaseUrl(config);
   return base_url.has_value() ? *base_url + "/v1/models" : std::string{};
 }
 

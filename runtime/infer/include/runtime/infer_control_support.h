@@ -28,6 +28,7 @@ struct ControlPaths {
   fs::path registry_path;
   fs::path active_model_path;
   fs::path gateway_plan_path;
+  fs::path prewarmed_replicas_path;
   fs::path runtime_status_path;
   fs::path worker_upstream_path;
   fs::path worker_group_dir;

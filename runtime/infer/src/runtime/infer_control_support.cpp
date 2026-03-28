@@ -75,6 +75,7 @@ ControlPaths BuildControlPaths(const RuntimeConfig& config) {
       root / "model-cache-registry.json",
       root / "active-model.json",
       root / "gateway-plan.json",
+      root / "prewarmed-replicas.json",
       root / "runtime-status.json",
       root / "worker-upstream.json",
       root / "worker-group",

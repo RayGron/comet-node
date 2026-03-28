@@ -32,6 +32,7 @@ class LocalRuntime final {
   bool WorkerGroupReady() const;
   bool InferenceReady() const;
   bool GatewayReady() const;
+  bool EnsureReplicaLeadersPrewarmed() const;
   void WriteCurrentRuntimeStatus(const std::string& phase) const;
 
   RuntimeConfig config_;

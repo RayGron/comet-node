@@ -33,7 +33,7 @@ void BackfillDesiredStateJson(sqlite3* db, const LoadDesiredStateFn& load_desire
         db,
         "UPDATE planes SET desired_state_json = ?2 WHERE name = ?1;");
     update_statement.BindText(1, plane_name);
-    update_statement.BindText(2, SerializeDesiredStateJson(*desired_state));
+    update_statement.BindText(2, SerializeDesiredStateV2Json(*desired_state));
     update_statement.StepDone();
   }
   Statement clear_legacy_statement(

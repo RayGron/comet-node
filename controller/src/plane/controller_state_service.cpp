@@ -24,6 +24,7 @@ json ControllerStateService::BuildPayload(
        {
            {"preferred_create_contract_version", 2},
            {"accepted_create_contract_versions", json::array({1, 2})},
+           {"stored_state_format", "v2"},
            {"returned_state_format", "expanded-rendered"},
        }},
   };

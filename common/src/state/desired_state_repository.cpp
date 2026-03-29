@@ -443,7 +443,7 @@ void DesiredStateRepository::ReplaceDesiredState(
       statement.BindText(
           5,
           DesiredStateSqliteCodec::SerializeBootstrapModelSpec(state.bootstrap_model));
-      statement.BindText(6, SerializeDesiredStateJson(state));
+      statement.BindText(6, SerializeDesiredStateV2Json(state));
       statement.BindText(7, DesiredStateSqliteCodec::SerializeInferenceSettings(state.inference));
       statement.BindText(8, DesiredStateSqliteCodec::SerializeGatewaySettings(state.gateway));
       statement.BindText(

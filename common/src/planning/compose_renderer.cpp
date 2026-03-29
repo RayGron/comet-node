@@ -63,8 +63,7 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
     if (!service.depends_on.empty()) {
       out << "    depends_on:\n";
       for (const auto& dependency : service.depends_on) {
-        out << "      " << dependency << ":\n";
-        out << "        condition: service_healthy\n";
+        out << "      - " << dependency << "\n";
       }
     }
 

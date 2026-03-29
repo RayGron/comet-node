@@ -195,6 +195,14 @@ target_link_libraries(comet-state-v2-projector-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-state-v2-projector-tests)
 
 add_executable(
+  comet-compose-renderer-tests
+  common/src/planning/compose_renderer_tests.cpp
+)
+target_include_directories(comet-compose-renderer-tests PRIVATE common/include)
+target_link_libraries(comet-compose-renderer-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-compose-renderer-tests)
+
+add_executable(
   comet-plane-request-tests
   controller/src/plane/plane_desired_state_request_parser.cpp
   controller/src/plane/plane_desired_state_request_parser_tests.cpp

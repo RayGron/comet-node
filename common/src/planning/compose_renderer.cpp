@@ -1,5 +1,6 @@
 #include "comet/planning/compose_renderer.h"
 
+#include <algorithm>
 #include <sstream>
 #include <string_view>
 
@@ -42,6 +43,19 @@ void RenderHealthcheckTest(
   }
 
   out << indent << "test: [\"CMD-SHELL\", \"" << healthcheck << "\"]\n";
+}
+
+std::vector<std::string> UniqueGpuDevices(
+    const std::vector<std::string>& gpu_devices) {
+  std::vector<std::string> result;
+  result.reserve(gpu_devices.size());
+  for (const auto& gpu_device : gpu_devices) {
+    if (std::find(result.begin(), result.end(), gpu_device) != result.end()) {
+      continue;
+    }
+    result.push_back(gpu_device);
+  }
+  return result;
 }
 
 }  // namespace
@@ -124,7 +138,7 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
     out << "        aliases:\n";
     out << "          - " << service.name << "\n";
 
-    std::vector<std::string> gpu_devices = service.gpu_devices;
+    std::vector<std::string> gpu_devices = UniqueGpuDevices(service.gpu_devices);
     if (gpu_devices.empty() && service.gpu_device.has_value()) {
       gpu_devices.push_back(*service.gpu_device);
     }

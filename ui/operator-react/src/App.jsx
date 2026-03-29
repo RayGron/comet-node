@@ -569,7 +569,7 @@ function OnboardingCard({ onCreatePlane }) {
   );
 }
 
-function PlaneEditorDialog({ dialog, setDialog, onClose, onSave }) {
+function PlaneEditorDialog({ dialog, setDialog, onClose, onSave, modelLibraryItems }) {
   if (!dialog.open) {
     return null;
   }
@@ -645,7 +645,7 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave }) {
             dialog={dialog}
             setDialog={setDialog}
             languageOptions={CHAT_LANGUAGE_OPTIONS}
-            modelLibraryItems={modelLibrary.items || []}
+            modelLibraryItems={modelLibraryItems || []}
           />
         ) : null}
         <label className="field-label" htmlFor="plane-editor-json">
@@ -3698,6 +3698,7 @@ function App() {
           })
         }
         onSave={savePlaneDialog}
+        modelLibraryItems={modelLibrary.items || []}
       />
     </div>
   );

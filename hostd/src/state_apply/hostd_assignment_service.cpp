@@ -6,6 +6,7 @@
 #include "backend/local_db_hostd_backend.h"
 #include "comet/state/state_json.h"
 #include "comet/state/sqlite_store.h"
+#include "state_apply/hostd_assignment_lock.h"
 
 namespace comet::hostd {
 
@@ -102,6 +103,12 @@ void HostdAssignmentService::ApplyNextAssignment(
     const std::optional<std::string>& runtime_root,
     const std::string& state_root,
     const ComposeMode compose_mode) const {
+  const auto assignment_lock = HostdAssignmentLock::TryAcquire(state_root, node_name);
+  if (!assignment_lock.has_value()) {
+    std::cout << "assignment apply already in progress for node=" << node_name << "\n";
+    return;
+  }
+
   auto backend = backend_factory_.CreateBackend(
       db_path,
       controller_url,

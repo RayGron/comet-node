@@ -213,6 +213,15 @@ target_link_libraries(comet-hostd-local-state-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-hostd-local-state-tests)
 
 add_executable(
+  comet-hostd-assignment-lock-tests
+  hostd/src/state_apply/hostd_assignment_lock.cpp
+  hostd/src/state_apply/hostd_assignment_lock_tests.cpp
+)
+target_include_directories(comet-hostd-assignment-lock-tests PRIVATE common/include hostd/include)
+target_link_libraries(comet-hostd-assignment-lock-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-assignment-lock-tests)
+
+add_executable(
   comet-controller
   controller/src/auth/auth_http_service.cpp
   controller/src/auth/auth_http_support.cpp
@@ -308,6 +317,7 @@ add_executable(
   hostd/src/observation/default_hostd_observation_support.cpp
   hostd/src/observation/hostd_observation_service.cpp
   hostd/src/state_apply/default_hostd_assignment_support.cpp
+  hostd/src/state_apply/hostd_assignment_lock.cpp
   hostd/src/state_apply/hostd_assignment_service.cpp
   hostd/src/cli/hostd_cli.cpp
   hostd/src/cli/hostd_command_line.cpp

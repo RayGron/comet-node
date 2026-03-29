@@ -227,6 +227,67 @@ def apply_vllm_native_external_lb_hotfix() -> None:
             core_client_py.write_text(
                 source.replace(add_request_async_buggy, add_request_async_fixed, 1)
             )
+            source = core_client_py.read_text()
+            patched = True
+
+        dp_add_request_buggy = (
+            "    async def add_request_async(self, request: EngineCoreRequest) -> None:\n"
+            "        self._ensure_stats_update_task()\n"
+            "\n"
+            "        request.current_wave = self.current_wave\n"
+            "        request.client_index = self.client_index\n"
+            "\n"
+            "        chosen_engine = self.get_core_engine_for_request(request)\n"
+            "        to_await = self._send_input(EngineCoreRequestType.ADD, request, chosen_engine)\n"
+            "        if not self.engines_running:\n"
+            "            # Notify coordinator that we're sending a request\n"
+            "            req_msg = msgspec.msgpack.encode((\"FIRST_REQ\", chosen_engine))\n"
+            "            await self.first_req_send_socket.send(req_msg)\n"
+            "\n"
+            "        await to_await\n"
+            "\n"
+            "        self._ensure_output_queue_task()\n"
+        )
+        dp_add_request_fixed = (
+            "    async def add_request_async(self, request: EngineCoreRequest) -> None:\n"
+            "        self._ensure_stats_update_task()\n"
+            "\n"
+            "        request.current_wave = self.current_wave\n"
+            "        request.client_index = self.client_index\n"
+            "\n"
+            "        chosen_engine = self.get_core_engine_for_request(request)\n"
+            "        to_await = self._send_input(EngineCoreRequestType.ADD, request, chosen_engine)\n"
+            "        print(\n"
+            "            f\"[comet-worker-debug] dp-add-request req={request.request_id} \"\n"
+            "            f\"wave={self.current_wave} engine={chosen_engine}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+            "        if not self.engines_running:\n"
+            "            # Notify coordinator that we're sending a request\n"
+            "            req_msg = msgspec.msgpack.encode((\"FIRST_REQ\", chosen_engine))\n"
+            "            first_req_future = self.first_req_send_socket.send(req_msg)\n"
+            "            if hasattr(first_req_future, \"add_done_callback\"):\n"
+            "                def _log_first_req_error(fut):\n"
+            "                    try:\n"
+            "                        fut.result()\n"
+            "                    except Exception:\n"
+            "                        logger.exception(\"External DP FIRST_REQ send failed\")\n"
+            "                first_req_future.add_done_callback(_log_first_req_error)\n"
+            "\n"
+            "        if hasattr(to_await, \"add_done_callback\"):\n"
+            "            def _log_add_req_error(fut):\n"
+            "                try:\n"
+            "                    fut.result()\n"
+            "                except Exception:\n"
+            "                    logger.exception(\"External DP routed add_request send failed\")\n"
+            "            to_await.add_done_callback(_log_add_req_error)\n"
+            "\n"
+            "        self._ensure_output_queue_task()\n"
+        )
+        if dp_add_request_fixed not in source and dp_add_request_buggy in source:
+            core_client_py.write_text(
+                source.replace(dp_add_request_buggy, dp_add_request_fixed, 1)
+            )
             patched = True
 
     output_processor_py = Path(

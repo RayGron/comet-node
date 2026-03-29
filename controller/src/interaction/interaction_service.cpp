@@ -236,6 +236,24 @@ std::size_t ValidUtf8PrefixLength(const std::string& value) {
   return index;
 }
 
+std::string HybridReplicaGroupKey(const comet::WorkerGroupMemberSpec& member) {
+  const std::string node_name = member.node_name.empty() ? std::string("unknown-node")
+                                                         : member.node_name;
+  return "hybrid-node-" + node_name + "-start-" +
+         std::to_string(std::max(0, member.data_parallel_start_rank));
+}
+
+int ExpectedHybridApiEndpoints(const comet::DesiredState& desired_state) {
+  std::set<std::string> keys;
+  for (const auto& member : desired_state.worker_group.members) {
+    if (!member.enabled || !member.data_parallel_api_endpoint) {
+      continue;
+    }
+    keys.insert(HybridReplicaGroupKey(member));
+  }
+  return static_cast<int>(keys.size());
+}
+
 }  // namespace
 
 InteractionCompletionPolicy NormalizeConfiguredInteractionCompletionPolicy(
@@ -2381,13 +2399,21 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
           : comet::ExpectedReplicaGroupCount(
                 desired_state->inference,
                 desired_state->worker_group);
+  if (hybrid_data_parallel) {
+    expected_replica_groups =
+        resolution.runtime_status.has_value() && resolution.runtime_status->api_endpoints_expected > 0
+            ? resolution.runtime_status->api_endpoints_expected
+            : ExpectedHybridApiEndpoints(*desired_state);
+  }
   int ready_replica_groups =
       resolution.runtime_status.has_value() ? resolution.runtime_status->replica_groups_ready : 0;
   const bool need_fallback_replica_counts =
       !resolution.runtime_status.has_value() ||
       (expected_replica_groups > 0 && ready_replica_groups == 0);
   if (need_fallback_replica_counts) {
-    if (data_parallel) {
+    if (hybrid_data_parallel) {
+      ready_replica_groups = std::min(expected_replica_groups, ready_worker_members);
+    } else if (data_parallel) {
       ready_replica_groups =
           expected_worker_members > 0 ? ready_worker_members / expected_worker_members : 0;
       ready_replica_groups = std::min(expected_replica_groups, ready_replica_groups);

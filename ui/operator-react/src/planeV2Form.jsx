@@ -1597,22 +1597,25 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
         </div>
       ) : null}
 
-      <SectionHeader
-        title="Infer Overrides"
-        description="Optional container overrides for the infer service."
-      />
-      <div className="plane-form-grid">
+      <div className="plane-form-toggle">
         <label className="field-label plane-checkbox">
           <input
             type="checkbox"
             checked={form.inferOverridesEnabled}
             onChange={bindCheck("inferOverridesEnabled")}
           />
-          <InfoLabel info="Enable this only if you want to override the default infer container wiring." className="field-label-inline">Enable Infer Overrides</InfoLabel>
+          <InfoLabel info="Enable this only if you want to override the default infer container wiring." className="field-label-inline">Configure Infer Overrides</InfoLabel>
         </label>
+        <div className="plane-form-toggle-copy">
+          Leave this off to let the platform render the infer container automatically.
+        </div>
       </div>
       {form.inferOverridesEnabled ? (
         <>
+      <SectionHeader
+        title="Infer Overrides"
+        description="Optional container overrides for the infer service."
+      />
       <div className="plane-form-grid">
         <label className="field-label">
           <InfoLabel info={FIELD_INFO.inferImage}>Infer image</InfoLabel>
@@ -1687,18 +1690,21 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
         </>
       ) : null}
 
+      <div className="plane-form-toggle">
+        <label className="field-label plane-checkbox">
+          <input type="checkbox" checked={form.appEnabled} onChange={bindCheck("appEnabled")} />
+          <InfoLabel info={FIELD_INFO.appEnabled} className="field-label-inline">Enable App</InfoLabel>
+        </label>
+        <div className="plane-form-toggle-copy">
+          Leave this off for backend-only planes without an app container.
+        </div>
+      </div>
+      {form.appEnabled ? (
+        <>
       <SectionHeader
         title="App"
         description="Optional app container and its exposed port and writable volume."
       />
-      <div className="plane-form-grid">
-        <label className="field-label plane-checkbox">
-          <input type="checkbox" checked={form.appEnabled} onChange={bindCheck("appEnabled")} />
-          <InfoLabel info={FIELD_INFO.appEnabled} className="field-label-inline">App enabled</InfoLabel>
-        </label>
-      </div>
-      {form.appEnabled ? (
-        <>
       <div className="plane-form-grid">
         <label className="field-label">
           <InfoLabel info={FIELD_INFO.appImage}>App image</InfoLabel>

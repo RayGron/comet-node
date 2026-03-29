@@ -553,6 +553,21 @@ body {
   gap: 10px;
 }
 
+.plane-form-toggle {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(120, 190, 255, 0.14);
+  background: rgba(6, 18, 37, 0.54);
+}
+
+.plane-form-toggle-copy {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 .plane-form-grid {
   display: grid;
   gap: 12px;

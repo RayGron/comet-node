@@ -285,6 +285,7 @@ def apply_vllm_native_external_lb_hotfix() -> None:
             "                    # AsyncLLM: put into queue for handling by generate().\n"
             "                    print(\n"
             "                        f\"[comet-worker-debug] queue-put req={req_id} \"\n"
+            "                        f\"collector={id(req_state.queue)} \"\n"
             "                        f\"finished={request_output.finished} \"\n"
             "                        f\"finish_reason={finish_reason} \"\n"
             "                        f\"tokens={len(new_token_ids)}\",\n"
@@ -305,9 +306,15 @@ def apply_vllm_native_external_lb_hotfix() -> None:
             "                out = q.get_nowait() or await q.get()\n"
         )
         read_output_debug = (
+            "                print(\n"
+            "                    f\"[comet-worker-debug] generate-await req={request_id} \"\n"
+            "                    f\"collector={id(q)}\",\n"
+            "                    flush=True,\n"
+            "                )\n"
             "                out = q.get_nowait() or await q.get()\n"
             "                print(\n"
             "                    f\"[comet-worker-debug] generate-got-output req={request_id} \"\n"
+            "                    f\"collector={id(q)} \"\n"
             "                    f\"type={type(out).__name__} \"\n"
             "                    f\"finished={getattr(out, 'finished', None)}\",\n"
             "                    flush=True,\n"

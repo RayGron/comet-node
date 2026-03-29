@@ -329,6 +329,28 @@ body {
   line-height: 1.6;
 }
 
+.auth-shell {
+  display: grid;
+}
+
+.auth-layout {
+  width: min(100%, 32rem);
+  min-height: calc(100vh - 48px);
+  margin: 0 auto;
+  display: grid;
+  align-items: center;
+}
+
+.auth-panel {
+  width: 100%;
+  padding: 24px;
+}
+
+.auth-form {
+  display: grid;
+  gap: 12px;
+}
+
 .bundle-workflow {
   margin-top: 18px;
   padding-top: 16px;

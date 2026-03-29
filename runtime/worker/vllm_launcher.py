@@ -201,6 +201,32 @@ def apply_vllm_native_external_lb_hotfix() -> None:
         )
         if fixed not in source and buggy in source:
             core_client_py.write_text(source.replace(buggy, fixed, 1))
+            source = core_client_py.read_text()
+            patched = True
+
+        add_request_async_buggy = (
+            "    async def add_request_async(self, request: EngineCoreRequest) -> None:\n"
+            "        request.client_index = self.client_index\n"
+            "        await self._send_input(EngineCoreRequestType.ADD, request)\n"
+            "        self._ensure_output_queue_task()\n"
+        )
+        add_request_async_fixed = (
+            "    async def add_request_async(self, request: EngineCoreRequest) -> None:\n"
+            "        request.client_index = self.client_index\n"
+            "        send_future = self._send_input(EngineCoreRequestType.ADD, request)\n"
+            "        if hasattr(send_future, \"add_done_callback\"):\n"
+            "            def _log_send_error(fut):\n"
+            "                try:\n"
+            "                    fut.result()\n"
+            "                except Exception:\n"
+            "                    logger.exception(\"External DP add_request_async send failed\")\n"
+            "            send_future.add_done_callback(_log_send_error)\n"
+            "        self._ensure_output_queue_task()\n"
+        )
+        if add_request_async_fixed not in source and add_request_async_buggy in source:
+            core_client_py.write_text(
+                source.replace(add_request_async_buggy, add_request_async_fixed, 1)
+            )
             patched = True
 
     output_processor_py = Path(

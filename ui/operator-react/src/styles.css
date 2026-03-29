@@ -330,19 +330,20 @@ body {
 }
 
 .auth-shell {
-  display: grid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
 }
 
 .auth-layout {
-  width: min(100%, 32rem);
-  min-height: calc(100vh - 48px);
-  margin: 0 auto;
-  display: grid;
-  align-items: center;
+  width: min(100%, 34rem);
+  margin: 0;
 }
 
 .auth-panel {
   width: 100%;
+  max-width: 34rem;
   padding: 24px;
 }
 

@@ -545,6 +545,7 @@ std::optional<std::uintmax_t> ModelLibraryService::ProbeContentLength(
   std::ifstream input(temp_headers);
   std::filesystem::remove(temp_headers);
   std::string line;
+  std::optional<std::uintmax_t> last_content_length;
   while (std::getline(input, line)) {
     const std::string trimmed = Trim(line);
     const auto colon = trimmed.find(':');
@@ -556,13 +557,13 @@ std::optional<std::uintmax_t> ModelLibraryService::ProbeContentLength(
       continue;
     }
     try {
-      return static_cast<std::uintmax_t>(
+      last_content_length = static_cast<std::uintmax_t>(
           std::stoull(Trim(trimmed.substr(colon + 1))));
     } catch (...) {
       return std::nullopt;
     }
   }
-  return std::nullopt;
+  return last_content_length;
 }
 
 std::optional<std::uintmax_t> ModelLibraryService::FileSizeIfExists(

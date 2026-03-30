@@ -271,7 +271,12 @@ function modelLibraryJobStatusClass(status) {
 function modelLibraryJobProgress(job) {
   const bytesDone = Number(job?.bytes_done ?? 0);
   const bytesTotal = Number(job?.bytes_total ?? NaN);
-  if (!Number.isFinite(bytesDone) || !Number.isFinite(bytesTotal) || bytesTotal <= 0) {
+  if (
+    !Number.isFinite(bytesDone) ||
+    !Number.isFinite(bytesTotal) ||
+    bytesTotal <= 0 ||
+    bytesTotal < bytesDone
+  ) {
     return null;
   }
   return Math.max(0, Math.min(100, (bytesDone / bytesTotal) * 100));
@@ -279,7 +284,21 @@ function modelLibraryJobProgress(job) {
 
 function modelLibraryJobProgressLabel(job) {
   const progress = modelLibraryJobProgress(job);
-  return progress === null ? "Progress unavailable" : `${Math.round(progress)}% complete`;
+  return progress === null ? "Downloading" : `${Math.round(progress)}% complete`;
+}
+
+function modelLibraryJobByteSummary(job) {
+  const bytesDone = Number(job?.bytes_done ?? 0);
+  const bytesTotal = Number(job?.bytes_total ?? NaN);
+  if (
+    Number.isFinite(bytesDone) &&
+    Number.isFinite(bytesTotal) &&
+    bytesTotal > 0 &&
+    bytesTotal >= bytesDone
+  ) {
+    return `${compactBytes(bytesDone)} / ${compactBytes(bytesTotal)}`;
+  }
+  return `${compactBytes(bytesDone)} downloaded`;
 }
 
 function formatTemperature(value) {
@@ -3154,7 +3173,7 @@ function App() {
                       </div>
                       <div className="list-detail">
                         <div>{job.target_root}{job.target_subdir ? `/${job.target_subdir}` : ""}</div>
-                        <div>{compactBytes(job.bytes_done)} / {compactBytes(job.bytes_total)}</div>
+                        <div>{modelLibraryJobByteSummary(job)}</div>
                         {job.current_item ? <div>{job.current_item}</div> : null}
                         {job.error_message ? <div>{job.error_message}</div> : null}
                       </div>

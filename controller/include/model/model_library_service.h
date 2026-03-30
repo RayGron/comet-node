@@ -2,10 +2,10 @@
 
 #include <atomic>
 #include <filesystem>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -23,7 +23,9 @@ class ModelLibraryService {
   HttpResponse DeleteEntryByPath(
       const std::string& db_path,
       const HttpRequest& request) const;
-  HttpResponse EnqueueDownload(const HttpRequest& request) const;
+  HttpResponse EnqueueDownload(
+      const std::string& db_path,
+      const HttpRequest& request) const;
 
  private:
   struct ModelLibraryEntry {
@@ -39,26 +41,12 @@ class ModelLibraryService {
     bool deletable = true;
   };
 
-  struct ModelLibraryDownloadJob {
-    std::string id;
-    std::string status = "queued";
-    std::string model_id;
-    std::string target_root;
-    std::string target_subdir;
-    std::vector<std::string> source_urls;
-    std::vector<std::string> target_paths;
-    std::string current_item;
-    std::optional<std::uintmax_t> bytes_total;
-    std::uintmax_t bytes_done = 0;
-    int part_count = 0;
-    std::string error_message;
-    std::string created_at;
-    std::string updated_at;
-  };
+  using ModelLibraryDownloadJob = comet::ModelLibraryDownloadJobRecord;
 
   struct State {
     std::mutex jobs_mutex;
-    std::map<std::string, ModelLibraryDownloadJob> jobs;
+    std::set<std::string> active_job_ids;
+    std::set<std::string> resumed_db_paths;
     std::atomic<std::uint64_t> job_counter{0};
   };
 
@@ -86,18 +74,21 @@ class ModelLibraryService {
   std::map<std::string, std::vector<std::string>> BuildReferenceMap(
       const std::string& db_path) const;
   nlohmann::json BuildJobPayload(const ModelLibraryDownloadJob& job) const;
+  void ResumePersistentJobs(const std::string& db_path) const;
   void UpdateJob(
+      const std::string& db_path,
       const std::string& job_id,
       const std::function<void(ModelLibraryDownloadJob&)>& update) const;
   std::vector<ModelLibraryEntry> ScanEntries(const std::string& db_path) const;
   std::string GenerateJobId() const;
   void DownloadFile(
+      const std::string& db_path,
       const std::string& job_id,
       const std::string& source_url,
       const std::filesystem::path& target_path,
       std::uintmax_t aggregate_prefix,
       const std::optional<std::uintmax_t>& aggregate_total) const;
-  void StartDownloadJob(const std::string& job_id) const;
+  void StartDownloadJob(const std::string& db_path, const std::string& job_id) const;
 
   ModelLibrarySupport support_;
   std::shared_ptr<State> state_;

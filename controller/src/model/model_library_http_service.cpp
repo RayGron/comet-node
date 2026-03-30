@@ -47,7 +47,7 @@ std::optional<HttpResponse> ModelLibraryHttpService::HandleRequest(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     try {
-      return support_.model_library_service().EnqueueDownload(request);
+      return support_.model_library_service().EnqueueDownload(db_path, request);
     } catch (const std::exception& error) {
       return support_.build_json_response(
           500,

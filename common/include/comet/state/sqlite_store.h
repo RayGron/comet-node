@@ -249,6 +249,23 @@ struct AuthSessionRecord {
   std::string last_used_at;
 };
 
+struct ModelLibraryDownloadJobRecord {
+  std::string id;
+  std::string status = "queued";
+  std::string model_id;
+  std::string target_root;
+  std::string target_subdir;
+  std::vector<std::string> source_urls;
+  std::vector<std::string> target_paths;
+  std::string current_item;
+  std::optional<std::uintmax_t> bytes_total;
+  std::uintmax_t bytes_done = 0;
+  int part_count = 0;
+  std::string error_message;
+  std::string created_at;
+  std::string updated_at;
+};
+
 class ControllerStore {
  public:
   explicit ControllerStore(std::string db_path);
@@ -335,6 +352,11 @@ class ControllerStore {
   bool TouchAuthSession(
       const std::string& token,
       const std::string& last_used_at);
+  void UpsertModelLibraryDownloadJob(const ModelLibraryDownloadJobRecord& job);
+  std::optional<ModelLibraryDownloadJobRecord> LoadModelLibraryDownloadJob(
+      const std::string& job_id) const;
+  std::vector<ModelLibraryDownloadJobRecord> LoadModelLibraryDownloadJobs(
+      const std::optional<std::string>& status = std::nullopt) const;
   bool UpdatePlaneState(
       const std::string& plane_name,
       const std::string& state);

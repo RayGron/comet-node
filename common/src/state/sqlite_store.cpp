@@ -18,6 +18,7 @@
 #include <array>
 #include <filesystem>
 #include <map>
+#include <nlohmann/json.hpp>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -36,6 +37,7 @@ using sqlite_store_support::EnsureColumn;
 using sqlite_store_support::Exec;
 using sqlite_store_support::ToColumnText;
 using sqlite_store_support::ToOptionalColumnInt;
+using nlohmann::json;
 
 constexpr const char* kBootstrapSql = R"SQL(
 PRAGMA journal_mode=WAL;
@@ -152,6 +154,23 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     revoked_at TEXT NOT NULL DEFAULT '',
     last_used_at TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS model_library_download_jobs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'queued',
+    model_id TEXT NOT NULL DEFAULT '',
+    target_root TEXT NOT NULL DEFAULT '',
+    target_subdir TEXT NOT NULL DEFAULT '',
+    source_urls_json TEXT NOT NULL DEFAULT '[]',
+    target_paths_json TEXT NOT NULL DEFAULT '[]',
+    current_item TEXT NOT NULL DEFAULT '',
+    bytes_total INTEGER,
+    bytes_done INTEGER NOT NULL DEFAULT 0,
+    part_count INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS plane_nodes (
@@ -383,6 +402,47 @@ CREATE TABLE IF NOT EXISTS scheduler_node_runtime (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 )SQL";
+
+std::string SerializeStringArray(const std::vector<std::string>& values) {
+  return json(values).dump();
+}
+
+std::vector<std::string> ParseStringArray(const std::string& payload) {
+  if (payload.empty()) {
+    return {};
+  }
+  try {
+    const json parsed = json::parse(payload);
+    if (!parsed.is_array()) {
+      return {};
+    }
+    return parsed.get<std::vector<std::string>>();
+  } catch (...) {
+    return {};
+  }
+}
+
+ModelLibraryDownloadJobRecord ModelLibraryDownloadJobFromStatement(sqlite3_stmt* statement) {
+  ModelLibraryDownloadJobRecord job;
+  job.id = ToColumnText(statement, 0);
+  job.status = ToColumnText(statement, 1);
+  job.model_id = ToColumnText(statement, 2);
+  job.target_root = ToColumnText(statement, 3);
+  job.target_subdir = ToColumnText(statement, 4);
+  job.source_urls = ParseStringArray(ToColumnText(statement, 5));
+  job.target_paths = ParseStringArray(ToColumnText(statement, 6));
+  job.current_item = ToColumnText(statement, 7);
+  if (sqlite3_column_type(statement, 8) != SQLITE_NULL) {
+    job.bytes_total =
+        static_cast<std::uintmax_t>(sqlite3_column_int64(statement, 8));
+  }
+  job.bytes_done = static_cast<std::uintmax_t>(sqlite3_column_int64(statement, 9));
+  job.part_count = sqlite3_column_int(statement, 10);
+  job.error_message = ToColumnText(statement, 11);
+  job.created_at = ToColumnText(statement, 12);
+  job.updated_at = ToColumnText(statement, 13);
+  return job;
+}
 
 }  // namespace
 
@@ -630,6 +690,87 @@ bool ControllerStore::TouchAuthSession(
     const std::string& token,
     const std::string& last_used_at) {
   return AuthRepository(AsSqlite(db_)).TouchAuthSession(token, last_used_at);
+}
+
+void ControllerStore::UpsertModelLibraryDownloadJob(
+    const ModelLibraryDownloadJobRecord& job) {
+  Statement statement(
+      AsSqlite(db_),
+      "INSERT INTO model_library_download_jobs("
+      "id, status, model_id, target_root, target_subdir, source_urls_json, "
+      "target_paths_json, current_item, bytes_total, bytes_done, part_count, "
+      "error_message, created_at, updated_at) "
+      "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) "
+      "ON CONFLICT(id) DO UPDATE SET "
+      "status = excluded.status, "
+      "model_id = excluded.model_id, "
+      "target_root = excluded.target_root, "
+      "target_subdir = excluded.target_subdir, "
+      "source_urls_json = excluded.source_urls_json, "
+      "target_paths_json = excluded.target_paths_json, "
+      "current_item = excluded.current_item, "
+      "bytes_total = excluded.bytes_total, "
+      "bytes_done = excluded.bytes_done, "
+      "part_count = excluded.part_count, "
+      "error_message = excluded.error_message, "
+      "created_at = excluded.created_at, "
+      "updated_at = excluded.updated_at;");
+  statement.BindText(1, job.id);
+  statement.BindText(2, job.status);
+  statement.BindText(3, job.model_id);
+  statement.BindText(4, job.target_root);
+  statement.BindText(5, job.target_subdir);
+  statement.BindText(6, SerializeStringArray(job.source_urls));
+  statement.BindText(7, SerializeStringArray(job.target_paths));
+  statement.BindText(8, job.current_item);
+  statement.BindOptionalInt64(
+      9,
+      job.bytes_total.has_value()
+          ? std::optional<std::int64_t>(static_cast<std::int64_t>(*job.bytes_total))
+          : std::nullopt);
+  statement.BindInt64(10, static_cast<std::int64_t>(job.bytes_done));
+  statement.BindInt(11, job.part_count);
+  statement.BindText(12, job.error_message);
+  statement.BindText(13, job.created_at);
+  statement.BindText(14, job.updated_at);
+  statement.StepDone();
+}
+
+std::optional<ModelLibraryDownloadJobRecord> ControllerStore::LoadModelLibraryDownloadJob(
+    const std::string& job_id) const {
+  Statement statement(
+      AsSqlite(db_),
+      "SELECT id, status, model_id, target_root, target_subdir, source_urls_json, "
+      "target_paths_json, current_item, bytes_total, bytes_done, part_count, "
+      "error_message, created_at, updated_at "
+      "FROM model_library_download_jobs WHERE id = ?1;");
+  statement.BindText(1, job_id);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return ModelLibraryDownloadJobFromStatement(statement.raw());
+}
+
+std::vector<ModelLibraryDownloadJobRecord> ControllerStore::LoadModelLibraryDownloadJobs(
+    const std::optional<std::string>& status) const {
+  std::string sql =
+      "SELECT id, status, model_id, target_root, target_subdir, source_urls_json, "
+      "target_paths_json, current_item, bytes_total, bytes_done, part_count, "
+      "error_message, created_at, updated_at "
+      "FROM model_library_download_jobs";
+  if (status.has_value()) {
+    sql += " WHERE status = ?1";
+  }
+  sql += " ORDER BY created_at DESC, id DESC;";
+  Statement statement(AsSqlite(db_), sql);
+  if (status.has_value()) {
+    statement.BindText(1, *status);
+  }
+  std::vector<ModelLibraryDownloadJobRecord> jobs;
+  while (statement.StepRow()) {
+    jobs.push_back(ModelLibraryDownloadJobFromStatement(statement.raw()));
+  }
+  return jobs;
 }
 
 bool ControllerStore::UpdatePlaneState(

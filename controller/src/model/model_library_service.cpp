@@ -33,6 +33,7 @@ ModelLibraryService::ModelLibraryService(ModelLibrarySupport support)
     : support_(std::move(support)), state_(std::make_shared<State>()) {}
 
 json ModelLibraryService::BuildPayload(const std::string& db_path) const {
+  ResumePersistentJobs(db_path);
   const auto roots = DiscoverRoots(db_path);
   const auto entries = ScanEntries(db_path);
   json items = json::array();
@@ -50,12 +51,11 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
         {"deletable", entry.deletable},
     });
   }
+  comet::ControllerStore store(db_path);
+  store.Initialize();
   json jobs = json::array();
-  {
-    std::lock_guard<std::mutex> lock(state_->jobs_mutex);
-    for (const auto& [_, job] : state_->jobs) {
-      jobs.push_back(BuildJobPayload(job));
-    }
+  for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
+    jobs.push_back(BuildJobPayload(job));
   }
   return json{{"items", items}, {"roots", roots}, {"jobs", jobs}};
 }
@@ -136,6 +136,7 @@ HttpResponse ModelLibraryService::DeleteEntryByPath(
 }
 
 HttpResponse ModelLibraryService::EnqueueDownload(
+    const std::string& db_path,
     const HttpRequest& request) const {
   const json body = support_.parse_json_request_body(request);
   const std::string target_root = body.value("target_root", std::string{});
@@ -199,11 +200,10 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   job.part_count = static_cast<int>(source_urls.size());
   job.created_at = support_.utc_now_sql_timestamp();
   job.updated_at = job.created_at;
-  {
-    std::lock_guard<std::mutex> lock(state_->jobs_mutex);
-    state_->jobs.emplace(job_id, job);
-  }
-  StartDownloadJob(job_id);
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  store.UpsertModelLibraryDownloadJob(job);
+  StartDownloadJob(db_path, job_id);
   return support_.build_json_response(
       202,
       json{{"status", "accepted"}, {"job", BuildJobPayload(job)}},
@@ -491,16 +491,36 @@ json ModelLibraryService::BuildJobPayload(
   };
 }
 
+void ModelLibraryService::ResumePersistentJobs(const std::string& db_path) const {
+  {
+    std::lock_guard<std::mutex> lock(state_->jobs_mutex);
+    if (state_->resumed_db_paths.count(db_path) != 0) {
+      return;
+    }
+    state_->resumed_db_paths.insert(db_path);
+  }
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
+    if (job.status == "queued" || job.status == "running") {
+      StartDownloadJob(db_path, job.id);
+    }
+  }
+}
+
 void ModelLibraryService::UpdateJob(
+    const std::string& db_path,
     const std::string& job_id,
     const std::function<void(ModelLibraryDownloadJob&)>& update) const {
-  std::lock_guard<std::mutex> lock(state_->jobs_mutex);
-  const auto it = state_->jobs.find(job_id);
-  if (it == state_->jobs.end()) {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  auto job = store.LoadModelLibraryDownloadJob(job_id);
+  if (!job.has_value()) {
     return;
   }
-  update(it->second);
-  it->second.updated_at = support_.utc_now_sql_timestamp();
+  update(*job);
+  job->updated_at = support_.utc_now_sql_timestamp();
+  store.UpsertModelLibraryDownloadJob(*job);
 }
 
 std::vector<ModelLibraryService::ModelLibraryEntry>
@@ -676,6 +696,7 @@ std::string ModelLibraryService::GenerateJobId() const {
 }
 
 void ModelLibraryService::DownloadFile(
+    const std::string& db_path,
     const std::string& job_id,
     const std::string& source_url,
     const std::filesystem::path& target_path,
@@ -696,6 +717,7 @@ void ModelLibraryService::DownloadFile(
          std::future_status::ready) {
     const auto bytes_done = FileSizeIfExists(temp_path).value_or(0);
     UpdateJob(
+        db_path,
         job_id,
         [&](ModelLibraryDownloadJob& job) {
           job.bytes_done = aggregate_prefix + bytes_done;
@@ -712,6 +734,7 @@ void ModelLibraryService::DownloadFile(
   std::filesystem::rename(temp_path, target_path);
   const auto final_size = FileSizeIfExists(target_path).value_or(0);
   UpdateJob(
+      db_path,
       job_id,
       [&](ModelLibraryDownloadJob& job) {
         job.bytes_done = aggregate_prefix + final_size;
@@ -720,15 +743,35 @@ void ModelLibraryService::DownloadFile(
       });
 }
 
-void ModelLibraryService::StartDownloadJob(const std::string& job_id) const {
-  std::thread([service = *this, job_id]() {
+void ModelLibraryService::StartDownloadJob(
+    const std::string& db_path,
+    const std::string& job_id) const {
+  {
+    std::lock_guard<std::mutex> lock(state_->jobs_mutex);
+    if (state_->active_job_ids.count(job_id) != 0) {
+      return;
+    }
+    state_->active_job_ids.insert(job_id);
+  }
+  std::thread([service = *this, db_path, job_id]() {
+    const auto clear_active = [&service, &job_id]() {
+      std::lock_guard<std::mutex> lock(service.state_->jobs_mutex);
+      service.state_->active_job_ids.erase(job_id);
+    };
     try {
-      ModelLibraryDownloadJob snapshot;
-      {
-        std::lock_guard<std::mutex> lock(service.state_->jobs_mutex);
-        snapshot = service.state_->jobs.at(job_id);
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      auto snapshot = store.LoadModelLibraryDownloadJob(job_id);
+      if (!snapshot.has_value()) {
+        clear_active();
+        return;
+      }
+      if (snapshot->status == "completed" || snapshot->status == "failed") {
+        clear_active();
+        return;
       }
       service.UpdateJob(
+          db_path,
           job_id,
           [&](ModelLibraryDownloadJob& job) {
             job.status = "running";
@@ -736,7 +779,7 @@ void ModelLibraryService::StartDownloadJob(const std::string& job_id) const {
             job.bytes_total = std::nullopt;
           });
       std::optional<std::uintmax_t> aggregate_total = std::uintmax_t{0};
-      for (const auto& source_url : snapshot.source_urls) {
+      for (const auto& source_url : snapshot->source_urls) {
         const auto content_length = service.ProbeContentLength(source_url);
         if (!content_length.has_value()) {
           aggregate_total = std::nullopt;
@@ -745,6 +788,7 @@ void ModelLibraryService::StartDownloadJob(const std::string& job_id) const {
         *aggregate_total += *content_length;
       }
       service.UpdateJob(
+          db_path,
           job_id,
           [&](ModelLibraryDownloadJob& job) {
             job.status = "running";
@@ -754,12 +798,13 @@ void ModelLibraryService::StartDownloadJob(const std::string& job_id) const {
             }
           });
       std::uintmax_t aggregate_prefix = 0;
-      for (std::size_t index = 0; index < snapshot.source_urls.size();
+      for (std::size_t index = 0; index < snapshot->source_urls.size();
            ++index) {
-        const std::filesystem::path target_path(snapshot.target_paths.at(index));
+        const std::filesystem::path target_path(snapshot->target_paths.at(index));
         service.DownloadFile(
+            db_path,
             job_id,
-            snapshot.source_urls.at(index),
+            snapshot->source_urls.at(index),
             target_path,
             aggregate_prefix,
             aggregate_total);
@@ -767,6 +812,7 @@ void ModelLibraryService::StartDownloadJob(const std::string& job_id) const {
             FileSizeIfExists(target_path).value_or(0);
       }
       service.UpdateJob(
+          db_path,
           job_id,
           [&](ModelLibraryDownloadJob& job) {
             job.status = "completed";
@@ -776,6 +822,7 @@ void ModelLibraryService::StartDownloadJob(const std::string& job_id) const {
           });
     } catch (const std::exception& error) {
       service.UpdateJob(
+          db_path,
           job_id,
           [&](ModelLibraryDownloadJob& job) {
             job.status = "failed";
@@ -783,5 +830,6 @@ void ModelLibraryService::StartDownloadJob(const std::string& job_id) const {
             job.current_item.clear();
           });
     }
+    clear_active();
   }).detach();
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -17,8 +18,10 @@ class SqliteStatement final {
 
   void BindText(int index, const std::string& value);
   void BindInt(int index, int value);
+  void BindInt64(int index, std::int64_t value);
   void BindDouble(int index, double value);
   void BindOptionalInt(int index, const std::optional<int>& value);
+  void BindOptionalInt64(int index, const std::optional<std::int64_t>& value);
   void BindOptionalText(int index, const std::optional<std::string>& value);
 
   bool StepRow();

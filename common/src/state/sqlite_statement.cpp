@@ -36,6 +36,12 @@ void SqliteStatement::BindInt(int index, int value) {
   }
 }
 
+void SqliteStatement::BindInt64(int index, std::int64_t value) {
+  if (sqlite3_bind_int64(statement_, index, value) != SQLITE_OK) {
+    ThrowSqliteError(db_, "sqlite bind int64 failed");
+  }
+}
+
 void SqliteStatement::BindDouble(int index, double value) {
   if (sqlite3_bind_double(statement_, index, value) != SQLITE_OK) {
     ThrowSqliteError(db_, "sqlite bind double failed");
@@ -48,6 +54,17 @@ void SqliteStatement::BindOptionalInt(int index, const std::optional<int>& value
                         : sqlite3_bind_null(statement_, index);
   if (rc != SQLITE_OK) {
     ThrowSqliteError(db_, "sqlite bind optional int failed");
+  }
+}
+
+void SqliteStatement::BindOptionalInt64(
+    int index,
+    const std::optional<std::int64_t>& value) {
+  const int rc =
+      value.has_value() ? sqlite3_bind_int64(statement_, index, *value)
+                        : sqlite3_bind_null(statement_, index);
+  if (rc != SQLITE_OK) {
+    ThrowSqliteError(db_, "sqlite bind optional int64 failed");
   }
 }
 

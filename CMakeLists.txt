@@ -221,6 +221,21 @@ target_link_libraries(comet-plane-request-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-plane-request-tests)
 
 add_executable(
+  comet-model-library-tests
+  controller/src/app/controller_composition_support.cpp
+  controller/src/app/controller_request_context.cpp
+  controller/src/app/controller_time_support.cpp
+  controller/src/infra/controller_request_support.cpp
+  controller/src/infra/controller_network_manager.cpp
+  controller/src/model/model_library_service.cpp
+  controller/src/model/model_library_service_tests.cpp
+  controller/src/model/model_library_support.cpp
+)
+target_include_directories(comet-model-library-tests PRIVATE common/include controller/include)
+target_link_libraries(comet-model-library-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-model-library-tests)
+
+add_executable(
   comet-controller-plane-deletion-tests
   controller/src/plane/controller_state_service.cpp
   controller/src/plane/plane_deletion_support.cpp

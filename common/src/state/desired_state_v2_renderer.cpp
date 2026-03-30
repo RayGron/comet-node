@@ -140,6 +140,8 @@ void DesiredStateV2Renderer::RenderInteraction() {
   if (interaction_json.contains("system_prompt") && interaction_json.at("system_prompt").is_string()) {
     interaction.system_prompt = interaction_json.at("system_prompt").get<std::string>();
   }
+  interaction.thinking_enabled =
+      interaction_json.value("thinking_enabled", interaction.thinking_enabled);
   interaction.default_response_language =
       interaction_json.value("default_response_language", std::string("en"));
   interaction.follow_user_language = interaction_json.value("follow_user_language", true);

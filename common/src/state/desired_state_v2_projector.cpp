@@ -129,6 +129,7 @@ void DesiredStateV2Projector::ProjectInteraction() {
   if (interaction.system_prompt.has_value() && !interaction.system_prompt->empty()) {
     interaction_json["system_prompt"] = *interaction.system_prompt;
   }
+  interaction_json["thinking_enabled"] = interaction.thinking_enabled;
   if (!interaction.default_response_language.empty()) {
     interaction_json["default_response_language"] = interaction.default_response_language;
   }

@@ -200,6 +200,15 @@ int main() {
       Expect(FindInstance(state, "infer-llama-rpc-backend")
                      .environment.at("COMET_INFER_RUNTIME_BACKEND") == "llama-rpc-head",
              "llama-rpc-backend: infer backend mismatch");
+      Expect(FindInstance(state, "infer-llama-rpc-backend")
+                     .environment.at("COMET_INSTANCE_SUBROLE") == "aggregator",
+             "llama-rpc-backend: primary infer should be aggregator");
+      Expect(FindInstance(state, "infer-llama-rpc-backend-a")
+                     .environment.at("COMET_INSTANCE_SUBROLE") == "infer",
+             "llama-rpc-backend: leaf infer should be rendered for single replica");
+      Expect(FindInstance(state, "worker-llama-rpc-backend-a")
+                     .environment.at("COMET_INFER_INSTANCE_NAME") == "infer-llama-rpc-backend-a",
+             "llama-rpc-backend: worker should target leaf infer");
       Expect(
           FindInstance(state, "infer-llama-rpc-backend")
                   .environment.at("COMET_INFER_RUNTIME_CONFIG") ==

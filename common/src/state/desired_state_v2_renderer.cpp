@@ -256,8 +256,7 @@ void DesiredStateV2Renderer::RenderInferInstance() {
 
   const int infer_count =
       state_.inference.runtime_engine == "llama.cpp" &&
-              state_.inference.distributed_backend == "llama_rpc" &&
-              InferReplicaCount() > 1
+              state_.inference.distributed_backend == "llama_rpc"
           ? InferReplicaCount() + 1
           : 1;
   std::vector<InstanceSpec> rendered_infers;
@@ -281,6 +280,8 @@ void DesiredStateV2Renderer::RenderInferInstance() {
         {"COMET_PLANE_NAME", state_.plane_name},
         {"COMET_INSTANCE_NAME", infer.name},
         {"COMET_INSTANCE_ROLE", "infer"},
+        {"COMET_INSTANCE_SUBROLE",
+         infer_index == 0 && infer_count > 1 ? "aggregator" : "infer"},
         {"COMET_NODE_NAME", infer.node_name},
         {"COMET_INFER_BOOT_MODE", "launch-runtime"},
         {"COMET_INFER_RUNTIME_BACKEND", DefaultInferRuntimeBackend()},
@@ -303,6 +304,7 @@ void DesiredStateV2Renderer::RenderInferInstance() {
     infer.labels = {
         {"comet.plane", state_.plane_name},
         {"comet.role", "infer"},
+        {"comet.subrole", infer_index == 0 && infer_count > 1 ? "aggregator" : "infer"},
         {"comet.node", infer.node_name},
     };
     if (infer_json_.contains("publish") && infer_json_.at("publish").is_array()) {
@@ -643,7 +645,7 @@ std::string DesiredStateV2Renderer::BuildPlaneSharedDiskName() const {
 }
 
 std::string DesiredStateV2Renderer::BuildInferInstanceName(int infer_index) const {
-  if (InferReplicaCount() <= 1 || infer_index == 0) {
+  if (infer_index == 0) {
     return "infer-" + state_.plane_name;
   }
   return "infer-" + state_.plane_name + "-" + static_cast<char>('a' + (infer_index - 1));
@@ -689,7 +691,7 @@ std::string DesiredStateV2Renderer::BuildReplicaUpstreams(
 }
 
 std::string DesiredStateV2Renderer::InferInstanceNameForWorker(int worker_index) const {
-  if (InferReplicaCount() <= 1 || infer_names_.empty()) {
+  if (infer_names_.size() <= 1) {
     return BuildInferInstanceName();
   }
   const int workers_per_replica = std::max(1, WorkerCount() / InferReplicaCount());

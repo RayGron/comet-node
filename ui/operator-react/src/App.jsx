@@ -484,6 +484,48 @@ function observedInstancesForObservation(observation) {
   return Array.isArray(state.instances) ? state.instances : [];
 }
 
+function instanceRole(instance) {
+  const subrole =
+    instance?.labels?.["comet.subrole"] ||
+    instance?.environment?.COMET_INSTANCE_SUBROLE ||
+    "";
+  if (subrole === "aggregator") {
+    return "aggregator";
+  }
+  const upstreams = instance?.environment?.COMET_REPLICA_UPSTREAMS || "";
+  if ((instance?.kind === "infer" || instance?.role === "infer") && upstreams) {
+    return "aggregator";
+  }
+  return instance?.kind || instance?.role || "instance";
+}
+
+function instanceSortWeight(instance) {
+  const role = instanceRole(instance);
+  if (role === "app") {
+    return 0;
+  }
+  if (role === "aggregator") {
+    return 1;
+  }
+  if (role === "infer") {
+    return 2;
+  }
+  if (role === "worker") {
+    return 3;
+  }
+  return 4;
+}
+
+function sortInstances(instances) {
+  return [...(instances || [])].sort((left, right) => {
+    const weightDiff = instanceSortWeight(left) - instanceSortWeight(right);
+    if (weightDiff !== 0) {
+      return weightDiff;
+    }
+    return String(left?.name || "").localeCompare(String(right?.name || ""));
+  });
+}
+
 function deriveObservedRuntime(observationItems, nodeItems) {
   const observedInstances = [];
   const nodeRuntime = new Map();
@@ -528,15 +570,11 @@ function deriveObservedRuntime(observationItems, nodeItems) {
   }
 
   return {
-    observedInstances,
+    observedInstances: sortInstances(observedInstances),
     readyNodes,
     notReadyNodes,
     nodeRuntime,
   };
-}
-
-function instanceRole(instance) {
-  return instance?.kind || instance?.role || "instance";
 }
 
 function hostObservationStatusClass(status) {
@@ -560,7 +598,7 @@ function formatInstanceRoleSummary(instances) {
     roleCounts.set(role, (roleCounts.get(role) || 0) + 1);
   }
 
-  const preferredOrder = ["infer", "worker", "app"];
+  const preferredOrder = ["app", "aggregator", "infer", "worker"];
   const parts = [];
 
   for (const role of preferredOrder) {
@@ -2079,7 +2117,7 @@ function App() {
   const rolloutItems = rolloutState?.actions || [];
   const rebalanceItems = rebalancePlan?.rebalance_plan || [];
   const diskItems = diskState?.items || [];
-  const instances = desiredState?.instances || [];
+  const instances = sortInstances(desiredState?.instances || []);
   const observedRuntime = deriveObservedRuntime(observationItems, nodeItems);
   const observedInstances = observedRuntime.observedInstances;
   const displayedInstances = observedInstances.length > 0 ? observedInstances : instances;

@@ -25,6 +25,9 @@ using nlohmann::json;
 
 namespace {
 
+constexpr std::string_view kJobMetadataPrefix = ".comet-model-job-";
+constexpr std::string_view kJobMetadataSuffix = ".json";
+
 struct MultipartGroup {
   std::string root;
   std::string name;
@@ -37,6 +40,17 @@ class DownloadStoppedError : public std::runtime_error {
  public:
   DownloadStoppedError() : std::runtime_error("download stopped") {}
 };
+
+bool LooksLikeJobMetadataFilename(const std::string& filename) {
+  return filename.size() >
+             kJobMetadataPrefix.size() + kJobMetadataSuffix.size() &&
+         filename.rfind(kJobMetadataPrefix.data(), 0) == 0 &&
+         filename.size() >= kJobMetadataSuffix.size() &&
+         filename.compare(
+             filename.size() - kJobMetadataSuffix.size(),
+             kJobMetadataSuffix.size(),
+             kJobMetadataSuffix.data()) == 0;
+}
 
 }  // namespace
 
@@ -217,6 +231,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   comet::ControllerStore store(db_path);
   store.Initialize();
   store.UpsertModelLibraryDownloadJob(job);
+  PersistDownloadJobMetadata(job);
   StartDownloadJob(db_path, job_id);
   return support_.build_json_response(
       202,
@@ -406,6 +421,7 @@ HttpResponse ModelLibraryService::DeleteDownloadJob(
   ClearStopRequest(*job_id);
   comet::ControllerStore store(db_path);
   store.Initialize();
+  RemoveDownloadJobMetadata(*job);
   store.DeleteModelLibraryDownloadJob(*job_id);
   return support_.build_json_response(
       200,
@@ -680,7 +696,17 @@ std::vector<std::string> ModelLibraryService::DiscoverRoots(
     const std::string& db_path) const {
   comet::ControllerStore store(db_path);
   const auto desired_states = store.LoadDesiredStates();
+  const auto jobs = store.LoadModelLibraryDownloadJobs();
   std::set<std::string> roots;
+  for (const std::string candidate : {
+           std::string("/mnt/shared-storage/models"),
+           std::string("/mnt/shared-storage/models/gguf"),
+           std::string("/mnt/shared-storage/models/vllm"),
+       }) {
+    if (IsUsableAbsoluteHostPath(candidate)) {
+      roots.insert(NormalizePathString(candidate));
+    }
+  }
   if (const char* env_value = std::getenv("COMET_NODE_MODEL_LIBRARY_ROOTS");
       env_value != nullptr && *env_value != '\0') {
     std::string current;
@@ -723,7 +749,206 @@ std::vector<std::string> ModelLibraryService::DiscoverRoots(
     }
     roots.insert(NormalizePathString(path.parent_path()));
   }
+  for (const auto& job : jobs) {
+    if (IsUsableAbsoluteHostPath(job.target_root)) {
+      roots.insert(NormalizePathString(std::filesystem::path(job.target_root)));
+    }
+    for (const auto& target_path : job.target_paths) {
+      if (!IsUsableAbsoluteHostPath(target_path)) {
+        continue;
+      }
+      roots.insert(
+          NormalizePathString(std::filesystem::path(target_path).parent_path()));
+    }
+  }
   return std::vector<std::string>(roots.begin(), roots.end());
+}
+
+std::filesystem::path ModelLibraryService::DownloadJobMetadataDirectory(
+    const ModelLibraryDownloadJob& job) const {
+  if (!IsUsableAbsoluteHostPath(job.target_root)) {
+    return {};
+  }
+  std::filesystem::path directory(job.target_root);
+  if (!job.target_subdir.empty()) {
+    directory /= job.target_subdir;
+  }
+  return directory;
+}
+
+std::filesystem::path ModelLibraryService::DownloadJobMetadataPath(
+    const ModelLibraryDownloadJob& job) const {
+  const auto directory = DownloadJobMetadataDirectory(job);
+  if (directory.empty()) {
+    return {};
+  }
+  return directory /
+         (std::string(kJobMetadataPrefix) + job.id + std::string(kJobMetadataSuffix));
+}
+
+void ModelLibraryService::PersistDownloadJobMetadata(
+    const ModelLibraryDownloadJob& job) const {
+  const auto metadata_path = DownloadJobMetadataPath(job);
+  if (metadata_path.empty()) {
+    return;
+  }
+  std::error_code error;
+  std::filesystem::create_directories(metadata_path.parent_path(), error);
+  if (error) {
+    return;
+  }
+  json payload{
+      {"id", job.id},
+      {"status", job.status},
+      {"model_id", job.model_id},
+      {"target_root", job.target_root},
+      {"target_subdir", job.target_subdir},
+      {"source_urls", job.source_urls},
+      {"target_paths", job.target_paths},
+      {"current_item", job.current_item},
+      {"bytes_total",
+       job.bytes_total.has_value() ? json(*job.bytes_total) : json(nullptr)},
+      {"bytes_done", job.bytes_done},
+      {"part_count", job.part_count},
+      {"error_message", job.error_message},
+      {"hidden", job.hidden},
+      {"created_at", job.created_at},
+      {"updated_at", job.updated_at},
+  };
+  const auto temp_path = metadata_path.string() + ".tmp";
+  {
+    std::ofstream out(temp_path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      return;
+    }
+    out << payload.dump(2);
+  }
+  std::filesystem::rename(temp_path, metadata_path, error);
+  if (error) {
+    std::filesystem::remove(temp_path, error);
+  }
+}
+
+void ModelLibraryService::RemoveDownloadJobMetadata(
+    const ModelLibraryDownloadJob& job) const {
+  const auto metadata_path = DownloadJobMetadataPath(job);
+  if (metadata_path.empty()) {
+    return;
+  }
+  std::error_code error;
+  std::filesystem::remove(metadata_path, error);
+}
+
+void ModelLibraryService::RecoverPersistentJobsFromMetadata(
+    const std::string& db_path) const {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  std::set<std::string> existing_job_ids;
+  for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
+    existing_job_ids.insert(job.id);
+  }
+  for (const auto& root_text : DiscoverRoots(db_path)) {
+    const std::filesystem::path root(root_text);
+    std::error_code error;
+    if (!std::filesystem::exists(root, error) || error ||
+        !std::filesystem::is_directory(root, error) || error) {
+      continue;
+    }
+    for (std::filesystem::recursive_directory_iterator iterator(
+             root,
+             std::filesystem::directory_options::skip_permission_denied,
+             error);
+         !error && iterator != std::filesystem::recursive_directory_iterator();
+         iterator.increment(error)) {
+      if (error) {
+        break;
+      }
+      if (iterator.depth() > 6) {
+        iterator.disable_recursion_pending();
+        continue;
+      }
+      if (!iterator->is_regular_file(error)) {
+        error.clear();
+        continue;
+      }
+      error.clear();
+      const auto filename = iterator->path().filename().string();
+      if (!LooksLikeJobMetadataFilename(filename)) {
+        continue;
+      }
+      std::ifstream input(iterator->path());
+      if (!input.is_open()) {
+        continue;
+      }
+      json payload;
+      try {
+        input >> payload;
+      } catch (...) {
+        continue;
+      }
+      if (!payload.is_object() || !payload.contains("id") ||
+          !payload.at("id").is_string()) {
+        continue;
+      }
+      ModelLibraryDownloadJob job;
+      job.id = payload.value("id", std::string{});
+      if (job.id.empty() || existing_job_ids.count(job.id) != 0) {
+        continue;
+      }
+      job.status = payload.value("status", std::string("queued"));
+      job.model_id = payload.value("model_id", std::string{});
+      job.target_root = payload.value("target_root", std::string{});
+      job.target_subdir = payload.value("target_subdir", std::string{});
+      if (payload.contains("source_urls") && payload.at("source_urls").is_array()) {
+        job.source_urls = payload.at("source_urls").get<std::vector<std::string>>();
+      }
+      if (payload.contains("target_paths") && payload.at("target_paths").is_array()) {
+        job.target_paths = payload.at("target_paths").get<std::vector<std::string>>();
+      }
+      job.current_item = payload.value("current_item", std::string{});
+      if (payload.contains("bytes_total") && !payload.at("bytes_total").is_null()) {
+        job.bytes_total = payload.at("bytes_total").get<std::uintmax_t>();
+      }
+      job.bytes_done = payload.value("bytes_done", std::uintmax_t{0});
+      job.part_count = payload.value("part_count", 0);
+      job.error_message = payload.value("error_message", std::string{});
+      job.hidden = payload.value("hidden", false);
+      job.created_at = payload.value("created_at", support_.utc_now_sql_timestamp());
+      job.updated_at = payload.value("updated_at", job.created_at);
+
+      std::uintmax_t observed_bytes_done = 0;
+      bool all_targets_complete = !job.target_paths.empty();
+      for (const auto& target_path_text : job.target_paths) {
+        std::error_code size_error;
+        const std::filesystem::path target_path(target_path_text);
+        if (std::filesystem::exists(target_path, size_error) && !size_error) {
+          observed_bytes_done += std::filesystem::file_size(target_path, size_error);
+          all_targets_complete = all_targets_complete && !size_error;
+          continue;
+        }
+        size_error.clear();
+        const std::filesystem::path part_path = target_path.string() + ".part";
+        if (std::filesystem::exists(part_path, size_error) && !size_error) {
+          observed_bytes_done += std::filesystem::file_size(part_path, size_error);
+          all_targets_complete = false;
+          continue;
+        }
+        all_targets_complete = false;
+      }
+      if (observed_bytes_done > 0) {
+        job.bytes_done = observed_bytes_done;
+      }
+      if (job.bytes_total.has_value() && all_targets_complete &&
+          observed_bytes_done >= *job.bytes_total) {
+        job.status = "completed";
+      } else if (job.status == "completed" && !all_targets_complete) {
+        job.status = "running";
+      }
+
+      store.UpsertModelLibraryDownloadJob(job);
+      existing_job_ids.insert(job.id);
+    }
+  }
 }
 
 std::map<std::string, std::vector<std::string>>
@@ -784,6 +1009,7 @@ void ModelLibraryService::ResumePersistentJobs(const std::string& db_path) const
     }
     state_->resumed_db_paths.insert(db_path);
   }
+  RecoverPersistentJobsFromMetadata(db_path);
   comet::ControllerStore store(db_path);
   store.Initialize();
   for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
@@ -837,6 +1063,7 @@ void ModelLibraryService::UpdateJob(
   update(*job);
   job->updated_at = support_.utc_now_sql_timestamp();
   store.UpsertModelLibraryDownloadJob(*job);
+  PersistDownloadJobMetadata(*job);
 }
 
 bool ModelLibraryService::IsStopRequested(const std::string& job_id) const {

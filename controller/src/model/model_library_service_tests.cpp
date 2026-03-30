@@ -187,6 +187,52 @@ int main() {
         "deleted model library job should be removed from the database");
     Expect(!fs::exists(second_target_path), "delete download job should remove downloaded file");
 
+#if !defined(_WIN32)
+    const fs::path recovered_dir = dst_root / "recovered";
+    const fs::path recovered_target = recovered_dir / "recovered.gguf";
+    const fs::path recovered_part = recovered_dir / "recovered.gguf.part";
+    const fs::path recovered_metadata =
+        recovered_dir / ".comet-model-job-job-3.json";
+    fs::create_directories(recovered_dir);
+    {
+      std::ofstream out(recovered_part);
+      out << "partial-model-download";
+    }
+    {
+      std::ofstream out(recovered_metadata);
+      out << nlohmann::json{
+          {"id", "job-3"},
+          {"status", "stopped"},
+          {"model_id", "model-3"},
+          {"target_root", dst_root.string()},
+          {"target_subdir", "recovered"},
+          {"source_urls", nlohmann::json::array({FileUrlForPath(source_path)})},
+          {"target_paths", nlohmann::json::array({recovered_target.string()})},
+          {"current_item", "recovered.gguf"},
+          {"bytes_total", 1024},
+          {"bytes_done", 0},
+          {"part_count", 1},
+          {"error_message", ""},
+          {"hidden", false},
+          {"created_at", now},
+          {"updated_at", now},
+      }.dump(2);
+    }
+    setenv("COMET_NODE_MODEL_LIBRARY_ROOTS", dst_root.string().c_str(), 1);
+    ModelLibraryService recovery_service{ModelLibrarySupport(request_support)};
+    const auto recovered_payload = recovery_service.BuildPayload(db_path.string());
+    unsetenv("COMET_NODE_MODEL_LIBRARY_ROOTS");
+    auto recovered_job = store.LoadModelLibraryDownloadJob("job-3");
+    Expect(recovered_job.has_value(), "metadata-backed job should be restored into the database");
+    Expect(recovered_job->status == "stopped", "restored metadata job should preserve status");
+    Expect(
+        recovered_job->bytes_done == fs::file_size(recovered_part),
+        "restored metadata job should recover bytes_done from partial file");
+    Expect(
+        recovered_payload.at("jobs").size() == 2,
+        "metadata-backed job should be visible in jobs payload after recovery");
+#endif
+
     fs::remove_all(temp_root, error);
     std::cout << "model library service tests passed\n";
     return 0;

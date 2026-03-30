@@ -90,6 +90,13 @@ class ModelLibraryService {
       std::string* prefix,
       int* part_index,
       int* part_total);
+  std::filesystem::path DownloadJobMetadataDirectory(
+      const ModelLibraryDownloadJob& job) const;
+  std::filesystem::path DownloadJobMetadataPath(
+      const ModelLibraryDownloadJob& job) const;
+  void PersistDownloadJobMetadata(const ModelLibraryDownloadJob& job) const;
+  void RemoveDownloadJobMetadata(const ModelLibraryDownloadJob& job) const;
+  void RecoverPersistentJobsFromMetadata(const std::string& db_path) const;
   std::vector<std::string> DiscoverRoots(const std::string& db_path) const;
   std::map<std::string, std::vector<std::string>> BuildReferenceMap(
       const std::string& db_path) const;

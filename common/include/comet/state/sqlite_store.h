@@ -357,6 +357,7 @@ class ControllerStore {
       const std::string& job_id) const;
   std::vector<ModelLibraryDownloadJobRecord> LoadModelLibraryDownloadJobs(
       const std::optional<std::string>& status = std::nullopt) const;
+  bool DeleteModelLibraryDownloadJob(const std::string& job_id);
   bool UpdatePlaneState(
       const std::string& plane_name,
       const std::string& state);

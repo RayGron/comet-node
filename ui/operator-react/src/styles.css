@@ -441,6 +441,50 @@ body {
   min-height: 132px;
 }
 
+.model-job-progress {
+  margin-top: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.model-job-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.model-job-progress-bar {
+  width: 100%;
+  height: 10px;
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(120, 190, 255, 0.12);
+}
+
+.model-job-progress-bar::-webkit-progress-bar {
+  background: rgba(120, 190, 255, 0.12);
+  border-radius: 999px;
+}
+
+.model-job-progress-bar::-webkit-progress-value {
+  background: linear-gradient(90deg, rgba(255, 213, 94, 0.88), rgba(120, 190, 255, 0.92));
+  border-radius: 999px;
+}
+
+.model-job-progress-bar::-moz-progress-bar {
+  background: linear-gradient(90deg, rgba(255, 213, 94, 0.88), rgba(120, 190, 255, 0.92));
+  border-radius: 999px;
+}
+
+.model-job-toolbar {
+  margin-top: 12px;
+}
+
 .onboarding-card {
   display: grid;
   gap: 14px;

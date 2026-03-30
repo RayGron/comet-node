@@ -12,6 +12,12 @@
 #include <thread>
 #include <utility>
 
+#if !defined(_WIN32)
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 #include "comet/core/platform_compat.h"
 #include "comet/state/sqlite_store.h"
 
@@ -25,6 +31,11 @@ struct MultipartGroup {
   std::vector<std::string> paths;
   std::uintmax_t size_bytes = 0;
   int part_total = 0;
+};
+
+class DownloadStoppedError : public std::runtime_error {
+ public:
+  DownloadStoppedError() : std::runtime_error("download stopped") {}
 };
 
 }  // namespace
@@ -207,6 +218,174 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   return support_.build_json_response(
       202,
       json{{"status", "accepted"}, {"job", BuildJobPayload(job)}},
+      {});
+}
+
+HttpResponse ModelLibraryService::StopDownloadJob(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  const auto job_id = ExtractJobId(request);
+  if (!job_id.has_value()) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"}, {"message", "job_id is required"}},
+        {});
+  }
+  const auto job = LoadDownloadJob(db_path, *job_id);
+  if (!job.has_value()) {
+    return support_.build_json_response(
+        404,
+        json{{"status", "not_found"}, {"message", "download job not found"}},
+        {});
+  }
+  if (job->status == "completed" || job->status == "failed") {
+    return support_.build_json_response(
+        409,
+        json{{"status", "conflict"},
+             {"message", "only queued or running downloads can be stopped"},
+             {"job", BuildJobPayload(*job)}},
+        {});
+  }
+  if (job->status == "stopped" || job->status == "stopping") {
+    return support_.build_json_response(
+        200,
+        json{{"status", "ok"}, {"job", BuildJobPayload(*job)}},
+        {});
+  }
+  if (job->status == "queued") {
+    UpdateJob(
+        db_path,
+        *job_id,
+        [](ModelLibraryDownloadJob& current) {
+          current.status = "stopped";
+          current.current_item.clear();
+          current.error_message.clear();
+        });
+    const auto stopped = LoadDownloadJob(db_path, *job_id);
+    return support_.build_json_response(
+        200,
+        json{{"status", "stopped"},
+             {"job", stopped.has_value() ? BuildJobPayload(*stopped)
+                                          : json{{"id", *job_id}}}},
+        {});
+  }
+  RequestStop(*job_id);
+  UpdateJob(
+      db_path,
+      *job_id,
+      [](ModelLibraryDownloadJob& current) {
+        current.status = "stopping";
+      });
+  const auto stopping = LoadDownloadJob(db_path, *job_id);
+  return support_.build_json_response(
+      202,
+      json{{"status", "stopping"},
+           {"job", stopping.has_value() ? BuildJobPayload(*stopping)
+                                        : json{{"id", *job_id}}}},
+      {});
+}
+
+HttpResponse ModelLibraryService::ResumeDownloadJob(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  const auto job_id = ExtractJobId(request);
+  if (!job_id.has_value()) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"}, {"message", "job_id is required"}},
+        {});
+  }
+  const auto job = LoadDownloadJob(db_path, *job_id);
+  if (!job.has_value()) {
+    return support_.build_json_response(
+        404,
+        json{{"status", "not_found"}, {"message", "download job not found"}},
+        {});
+  }
+  if (job->status == "running" || job->status == "stopping") {
+    return support_.build_json_response(
+        409,
+        json{{"status", "conflict"},
+             {"message", "running downloads cannot be resumed"},
+             {"job", BuildJobPayload(*job)}},
+        {});
+  }
+  if (job->status == "completed") {
+    return support_.build_json_response(
+        409,
+        json{{"status", "conflict"},
+             {"message", "completed downloads cannot be resumed"},
+             {"job", BuildJobPayload(*job)}},
+        {});
+  }
+
+  for (const auto& target_path_text : job->target_paths) {
+    std::error_code error;
+    const std::filesystem::path target_path(target_path_text);
+    std::filesystem::remove(target_path, error);
+    error.clear();
+    std::filesystem::remove(target_path.string() + ".part", error);
+  }
+
+  ClearStopRequest(*job_id);
+  UpdateJob(
+      db_path,
+      *job_id,
+      [](ModelLibraryDownloadJob& current) {
+        current.status = "queued";
+        current.current_item.clear();
+        current.error_message.clear();
+        current.bytes_done = 0;
+        current.bytes_total = std::nullopt;
+      });
+  StartDownloadJob(db_path, *job_id);
+  const auto resumed = LoadDownloadJob(db_path, *job_id);
+  return support_.build_json_response(
+      202,
+      json{{"status", "accepted"},
+           {"job", resumed.has_value() ? BuildJobPayload(*resumed)
+                                       : json{{"id", *job_id}}}},
+      {});
+}
+
+HttpResponse ModelLibraryService::DeleteDownloadJob(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  const auto job_id = ExtractJobId(request);
+  if (!job_id.has_value()) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"}, {"message", "job_id is required"}},
+        {});
+  }
+  const auto job = LoadDownloadJob(db_path, *job_id);
+  if (!job.has_value()) {
+    return support_.build_json_response(
+        404,
+        json{{"status", "not_found"}, {"message", "download job not found"}},
+        {});
+  }
+  if (job->status == "running" || job->status == "stopping") {
+    return support_.build_json_response(
+        409,
+        json{{"status", "conflict"},
+             {"message", "stop the download before deleting it"},
+             {"job", BuildJobPayload(*job)}},
+        {});
+  }
+
+  std::error_code error;
+  for (const auto& target_path_text : job->target_paths) {
+    std::filesystem::remove(std::filesystem::path(target_path_text).string() + ".part", error);
+    error.clear();
+  }
+  ClearStopRequest(*job_id);
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  store.DeleteModelLibraryDownloadJob(*job_id);
+  return support_.build_json_response(
+      200,
+      json{{"status", "deleted"}, {"job_id", *job_id}},
       {});
 }
 
@@ -480,6 +659,9 @@ json ModelLibraryService::BuildJobPayload(
       {"source_urls", job.source_urls},
       {"target_paths", job.target_paths},
       {"current_item", job.current_item},
+      {"can_stop", job.status == "queued" || job.status == "running"},
+      {"can_resume", job.status == "stopped" || job.status == "failed"},
+      {"can_delete", job.status != "running" && job.status != "stopping"},
       {"bytes_total",
        job.bytes_total.has_value() ? json(*job.bytes_total) : json(nullptr)},
       {"bytes_done", job.bytes_done},
@@ -508,6 +690,37 @@ void ModelLibraryService::ResumePersistentJobs(const std::string& db_path) const
   }
 }
 
+std::optional<std::string> ModelLibraryService::ExtractJobId(
+    const HttpRequest& request) const {
+  json body = json::object();
+  if (!request.body.empty()) {
+    body = support_.parse_json_request_body(request);
+  }
+  if (body.contains("job_id") && body.at("job_id").is_string()) {
+    const auto value = Trim(body.at("job_id").get<std::string>());
+    if (!value.empty()) {
+      return value;
+    }
+  }
+  if (const auto query = support_.find_query_string(request, "job_id");
+      query.has_value()) {
+    const auto value = Trim(*query);
+    if (!value.empty()) {
+      return value;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<ModelLibraryService::ModelLibraryDownloadJob>
+ModelLibraryService::LoadDownloadJob(
+    const std::string& db_path,
+    const std::string& job_id) const {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  return store.LoadModelLibraryDownloadJob(job_id);
+}
+
 void ModelLibraryService::UpdateJob(
     const std::string& db_path,
     const std::string& job_id,
@@ -521,6 +734,40 @@ void ModelLibraryService::UpdateJob(
   update(*job);
   job->updated_at = support_.utc_now_sql_timestamp();
   store.UpsertModelLibraryDownloadJob(*job);
+}
+
+bool ModelLibraryService::IsStopRequested(const std::string& job_id) const {
+  std::lock_guard<std::mutex> lock(state_->jobs_mutex);
+  return state_->stop_requested_job_ids.count(job_id) != 0;
+}
+
+void ModelLibraryService::ClearStopRequest(const std::string& job_id) const {
+  std::lock_guard<std::mutex> lock(state_->jobs_mutex);
+  state_->stop_requested_job_ids.erase(job_id);
+}
+
+void ModelLibraryService::RequestStop(const std::string& job_id) const {
+  std::lock_guard<std::mutex> lock(state_->jobs_mutex);
+  state_->stop_requested_job_ids.insert(job_id);
+#if !defined(_WIN32)
+  if (const auto it = state_->active_download_pids.find(job_id);
+      it != state_->active_download_pids.end() && it->second > 0) {
+    kill(static_cast<pid_t>(it->second), SIGTERM);
+  }
+#endif
+}
+
+void ModelLibraryService::RegisterActiveDownloadProcess(
+    const std::string& job_id,
+    int pid) const {
+  std::lock_guard<std::mutex> lock(state_->jobs_mutex);
+  state_->active_download_pids[job_id] = pid;
+}
+
+void ModelLibraryService::ClearActiveDownloadProcess(
+    const std::string& job_id) const {
+  std::lock_guard<std::mutex> lock(state_->jobs_mutex);
+  state_->active_download_pids.erase(job_id);
 }
 
 std::vector<ModelLibraryService::ModelLibraryEntry>
@@ -704,7 +951,10 @@ void ModelLibraryService::DownloadFile(
     const std::optional<std::uintmax_t>& aggregate_total) const {
   std::filesystem::create_directories(target_path.parent_path());
   const std::filesystem::path temp_path = target_path.string() + ".part";
+  std::error_code cleanup_error;
   std::filesystem::remove(temp_path);
+  std::filesystem::remove(target_path, cleanup_error);
+#if defined(_WIN32)
   auto future = std::async(
       std::launch::async,
       [temp_path_text = temp_path.string(), source_url]() {
@@ -725,12 +975,82 @@ void ModelLibraryService::DownloadFile(
           job.current_item = target_path.filename().string();
           job.status = "running";
         });
+    if (IsStopRequested(job_id)) {
+      std::filesystem::remove(temp_path, cleanup_error);
+      throw DownloadStoppedError();
+    }
   }
   const int rc = future.get();
-  if (rc != 0) {
+  if (rc != 0 || IsStopRequested(job_id)) {
+    std::filesystem::remove(temp_path, cleanup_error);
+    if (IsStopRequested(job_id)) {
+      throw DownloadStoppedError();
+    }
     throw std::runtime_error(
         "failed to download model artifact from " + source_url);
   }
+#else
+  pid_t pid = fork();
+  if (pid < 0) {
+    throw std::runtime_error("fork failed while starting model download");
+  }
+  if (pid == 0) {
+    std::vector<char*> argv;
+    const std::string curl_path = "/usr/bin/curl";
+    const std::string flag_fail = "-fL";
+    const std::string flag_silent = "--silent";
+    const std::string flag_show_error = "--show-error";
+    const std::string flag_output = "--output";
+    argv.push_back(const_cast<char*>(curl_path.c_str()));
+    argv.push_back(const_cast<char*>(flag_fail.c_str()));
+    argv.push_back(const_cast<char*>(flag_silent.c_str()));
+    argv.push_back(const_cast<char*>(flag_show_error.c_str()));
+    argv.push_back(const_cast<char*>(flag_output.c_str()));
+    argv.push_back(const_cast<char*>(temp_path.c_str()));
+    argv.push_back(const_cast<char*>(source_url.c_str()));
+    argv.push_back(nullptr);
+    execv(curl_path.c_str(), argv.data());
+    std::perror("execv curl");
+    _exit(127);
+  }
+  RegisterActiveDownloadProcess(job_id, static_cast<int>(pid));
+  int wait_status = 0;
+  while (true) {
+    const pid_t wait_result = waitpid(pid, &wait_status, WNOHANG);
+    if (wait_result == pid) {
+      break;
+    }
+    if (wait_result < 0) {
+      ClearActiveDownloadProcess(job_id);
+      std::filesystem::remove(temp_path, cleanup_error);
+      throw std::runtime_error("waitpid failed while downloading model artifact");
+    }
+    const auto bytes_done = FileSizeIfExists(temp_path).value_or(0);
+    UpdateJob(
+        db_path,
+        job_id,
+        [&](ModelLibraryDownloadJob& job) {
+          job.bytes_done = aggregate_prefix + bytes_done;
+          job.bytes_total = aggregate_total;
+          job.current_item = target_path.filename().string();
+          job.status = "running";
+        });
+    if (IsStopRequested(job_id)) {
+      kill(pid, SIGTERM);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  }
+  ClearActiveDownloadProcess(job_id);
+  if (IsStopRequested(job_id)) {
+    std::filesystem::remove(temp_path, cleanup_error);
+    throw DownloadStoppedError();
+  }
+  if (!WIFEXITED(wait_status) || WEXITSTATUS(wait_status) != 0) {
+    std::filesystem::remove(temp_path, cleanup_error);
+    throw std::runtime_error(
+        "failed to download model artifact from " + source_url);
+  }
+#endif
   std::filesystem::rename(temp_path, target_path);
   const auto final_size = FileSizeIfExists(target_path).value_or(0);
   UpdateJob(
@@ -763,10 +1083,13 @@ void ModelLibraryService::StartDownloadJob(
       store.Initialize();
       auto snapshot = store.LoadModelLibraryDownloadJob(job_id);
       if (!snapshot.has_value()) {
+        service.ClearStopRequest(job_id);
         clear_active();
         return;
       }
-      if (snapshot->status == "completed" || snapshot->status == "failed") {
+      if (snapshot->status == "completed" || snapshot->status == "failed" ||
+          snapshot->status == "stopped" || snapshot->status == "stopping") {
+        service.ClearStopRequest(job_id);
         clear_active();
         return;
       }
@@ -780,6 +1103,9 @@ void ModelLibraryService::StartDownloadJob(
           });
       std::optional<std::uintmax_t> aggregate_total = std::uintmax_t{0};
       for (const auto& source_url : snapshot->source_urls) {
+        if (service.IsStopRequested(job_id)) {
+          throw DownloadStoppedError();
+        }
         const auto content_length = service.ProbeContentLength(source_url);
         if (!content_length.has_value()) {
           aggregate_total = std::nullopt;
@@ -800,6 +1126,9 @@ void ModelLibraryService::StartDownloadJob(
       std::uintmax_t aggregate_prefix = 0;
       for (std::size_t index = 0; index < snapshot->source_urls.size();
            ++index) {
+        if (service.IsStopRequested(job_id)) {
+          throw DownloadStoppedError();
+        }
         const std::filesystem::path target_path(snapshot->target_paths.at(index));
         service.DownloadFile(
             db_path,
@@ -820,6 +1149,17 @@ void ModelLibraryService::StartDownloadJob(
             job.bytes_total = aggregate_total;
             job.current_item.clear();
           });
+      service.ClearStopRequest(job_id);
+    } catch (const DownloadStoppedError&) {
+      service.UpdateJob(
+          db_path,
+          job_id,
+          [&](ModelLibraryDownloadJob& job) {
+            job.status = "stopped";
+            job.current_item.clear();
+            job.error_message.clear();
+          });
+      service.ClearStopRequest(job_id);
     } catch (const std::exception& error) {
       service.UpdateJob(
           db_path,
@@ -829,6 +1169,7 @@ void ModelLibraryService::StartDownloadJob(
             job.error_message = error.what();
             job.current_item.clear();
           });
+      service.ClearStopRequest(job_id);
     }
     clear_active();
   }).detach();

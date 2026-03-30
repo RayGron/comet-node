@@ -773,6 +773,15 @@ std::vector<ModelLibraryDownloadJobRecord> ControllerStore::LoadModelLibraryDown
   return jobs;
 }
 
+bool ControllerStore::DeleteModelLibraryDownloadJob(const std::string& job_id) {
+  Statement statement(
+      AsSqlite(db_),
+      "DELETE FROM model_library_download_jobs WHERE id = ?1;");
+  statement.BindText(1, job_id);
+  statement.StepDone();
+  return sqlite3_changes(AsSqlite(db_)) > 0;
+}
+
 bool ControllerStore::UpdatePlaneState(
     const std::string& plane_name,
     const std::string& state) {

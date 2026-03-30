@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -26,6 +28,15 @@ class ModelLibraryService {
   HttpResponse EnqueueDownload(
       const std::string& db_path,
       const HttpRequest& request) const;
+  HttpResponse StopDownloadJob(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse ResumeDownloadJob(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse DeleteDownloadJob(
+      const std::string& db_path,
+      const HttpRequest& request) const;
 
  private:
   struct ModelLibraryEntry {
@@ -46,6 +57,8 @@ class ModelLibraryService {
   struct State {
     std::mutex jobs_mutex;
     std::set<std::string> active_job_ids;
+    std::set<std::string> stop_requested_job_ids;
+    std::map<std::string, int> active_download_pids;
     std::set<std::string> resumed_db_paths;
     std::atomic<std::uint64_t> job_counter{0};
   };
@@ -75,10 +88,19 @@ class ModelLibraryService {
       const std::string& db_path) const;
   nlohmann::json BuildJobPayload(const ModelLibraryDownloadJob& job) const;
   void ResumePersistentJobs(const std::string& db_path) const;
+  std::optional<std::string> ExtractJobId(const HttpRequest& request) const;
+  std::optional<ModelLibraryDownloadJob> LoadDownloadJob(
+      const std::string& db_path,
+      const std::string& job_id) const;
   void UpdateJob(
       const std::string& db_path,
       const std::string& job_id,
       const std::function<void(ModelLibraryDownloadJob&)>& update) const;
+  bool IsStopRequested(const std::string& job_id) const;
+  void ClearStopRequest(const std::string& job_id) const;
+  void RequestStop(const std::string& job_id) const;
+  void RegisterActiveDownloadProcess(const std::string& job_id, int pid) const;
+  void ClearActiveDownloadProcess(const std::string& job_id) const;
   std::vector<ModelLibraryEntry> ScanEntries(const std::string& db_path) const;
   std::string GenerateJobId() const;
   void DownloadFile(

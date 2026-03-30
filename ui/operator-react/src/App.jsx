@@ -250,6 +250,37 @@ function compactBytes(value) {
   return `${amount.toFixed(amount >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+function modelLibraryJobStatusClass(status) {
+  switch (String(status || "").toLowerCase()) {
+    case "completed":
+      return "is-healthy";
+    case "failed":
+      return "is-critical";
+    case "stopped":
+    case "stopping":
+      return "is-warning";
+    case "running":
+    case "queued":
+      return "is-booting";
+    default:
+      return "is-booting";
+  }
+}
+
+function modelLibraryJobProgress(job) {
+  const bytesDone = Number(job?.bytes_done ?? 0);
+  const bytesTotal = Number(job?.bytes_total ?? NaN);
+  if (!Number.isFinite(bytesDone) || !Number.isFinite(bytesTotal) || bytesTotal <= 0) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, (bytesDone / bytesTotal) * 100));
+}
+
+function modelLibraryJobProgressLabel(job) {
+  const progress = modelLibraryJobProgress(job);
+  return progress === null ? "Progress unavailable" : `${Math.round(progress)}% complete`;
+}
+
 function formatTemperature(value) {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "n/a";
@@ -1431,6 +1462,69 @@ function App() {
     }
   }
 
+  async function stopModelLibraryJob(job) {
+    if (!job?.id) {
+      return;
+    }
+    setModelLibraryBusy(`stop:${job.id}`);
+    try {
+      await fetchJson(modelLibraryPath("jobs/stop"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ job_id: job.id }),
+      });
+      await refreshModelLibrary();
+    } finally {
+      setModelLibraryBusy("");
+    }
+  }
+
+  async function resumeModelLibraryJob(job) {
+    if (!job?.id) {
+      return;
+    }
+    setModelLibraryBusy(`resume:${job.id}`);
+    try {
+      await fetchJson(modelLibraryPath("jobs/resume"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ job_id: job.id }),
+      });
+      await refreshModelLibrary();
+    } finally {
+      setModelLibraryBusy("");
+    }
+  }
+
+  async function deleteModelLibraryJob(job) {
+    if (!job?.id) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete download job ${job.model_id || job.id}? This removes the queue record but keeps downloaded files on disk.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setModelLibraryBusy(`job-delete:${job.id}`);
+    try {
+      await fetchJson(modelLibraryPath("jobs"), {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ job_id: job.id }),
+      });
+      await refreshModelLibrary();
+    } finally {
+      setModelLibraryBusy("");
+    }
+  }
+
   function scheduleRefresh(planeName) {
     if (refreshTimerRef.current) {
       clearTimeout(refreshTimerRef.current);
@@ -2069,7 +2163,11 @@ function App() {
   const activeModelJobs = Array.isArray(modelLibrary.jobs)
     ? modelLibrary.jobs.filter((job) => {
         const status = String(job?.status || "").toLowerCase();
-        return status !== "" && status !== "completed" && status !== "complete" && status !== "failed";
+        return status !== "" &&
+          status !== "completed" &&
+          status !== "complete" &&
+          status !== "failed" &&
+          status !== "stopped";
       }).length
     : 0;
   const modelsNavClass = apiError
@@ -3004,13 +3102,55 @@ function App() {
                     <article className="list-card" key={job.id}>
                       <div className="card-row">
                         <strong>{job.model_id || job.id}</strong>
-                        <span className="tag">{job.status}</span>
+                        <span className={`tag ${modelLibraryJobStatusClass(job.status)}`}>{job.status}</span>
                       </div>
                       <div className="list-detail">
                         <div>{job.target_root}{job.target_subdir ? `/${job.target_subdir}` : ""}</div>
                         <div>{compactBytes(job.bytes_done)} / {compactBytes(job.bytes_total)}</div>
                         {job.current_item ? <div>{job.current_item}</div> : null}
                         {job.error_message ? <div>{job.error_message}</div> : null}
+                      </div>
+                      <div className="model-job-progress">
+                        <div className="model-job-progress-meta">
+                          <span>{modelLibraryJobProgressLabel(job)}</span>
+                          {modelLibraryJobProgress(job) !== null ? (
+                            <span>{Math.round(modelLibraryJobProgress(job))}%</span>
+                          ) : (
+                            <span>{job.status}</span>
+                          )}
+                        </div>
+                        <progress
+                          className="model-job-progress-bar"
+                          value={modelLibraryJobProgress(job) === null ? undefined : modelLibraryJobProgress(job)}
+                          max="100"
+                          aria-label={modelLibraryJobProgressLabel(job)}
+                        />
+                      </div>
+                      <div className="toolbar model-job-toolbar">
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          disabled={modelLibraryBusy !== "" || job.can_stop !== true}
+                          onClick={() => stopModelLibraryJob(job)}
+                        >
+                          Stop
+                        </button>
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          disabled={modelLibraryBusy !== "" || job.can_resume !== true}
+                          onClick={() => resumeModelLibraryJob(job)}
+                        >
+                          Resume
+                        </button>
+                        <button
+                          className="ghost-button danger-button"
+                          type="button"
+                          disabled={modelLibraryBusy !== "" || job.can_delete !== true}
+                          onClick={() => deleteModelLibraryJob(job)}
+                        >
+                          Delete
+                        </button>
                       </div>
                     </article>
                   ))}

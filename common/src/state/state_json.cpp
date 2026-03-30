@@ -1114,9 +1114,12 @@ std::optional<DesiredState> LoadDesiredStateJson(const std::string& path) {
 
   json value;
   input >> value;
-  DesiredState state =
-      IsDesiredStateV2(value) ? DesiredStateV2Renderer::Render(value)
-                              : DesiredStateFromJson(value);
+  if (!IsDesiredStateV2(value)) {
+    throw std::runtime_error(
+        "desired state file must use version=2 and desired-state.v2.json");
+  }
+
+  DesiredState state = DesiredStateV2Renderer::Render(value);
   try {
     state = ResolvePlacementTargetAliases(std::move(state));
   } catch (const std::runtime_error& error) {

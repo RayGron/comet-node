@@ -233,7 +233,7 @@ Apply a plane desired-state file directly:
 ./build/linux/x64/comet-controller apply-state-file \
   --db var/controller.sqlite \
   --artifacts-root var/artifacts \
-  --state ../lt-cypher-ai/deploy/comet-node/desired-state.json
+  --state ../lt-cypher-ai/deploy/comet-node/desired-state.v2.json
 ```
 
 Validate a plane bundle without applying it:
@@ -696,9 +696,9 @@ Then:
   as system services, and starts them
 - on GPU hosts, the install command also installs a CUDA toolkit automatically when `nvidia-smi`
   is present but `nvcc` is not yet available
-- the run command loads `config/<plane>/desired-state.json` by default, but it can also take
+- the run command loads `config/<plane>/desired-state.v2.json` by default, but it can also take
   `--desired-state <path>` or auto-discover a sibling app-owned config at
-  `../<plane>/deploy/comet-node/desired-state.json`
+  `../<plane>/deploy/comet-node/desired-state.v2.json`
 - this lets application repos such as `lt-cypher-ai` own their own canonical plane config
 - a plane desired-state can optionally declare `post_deploy_script`; when present, `hostd`
   resolves that path from the plane-owning repository and runs it after infer and worker report

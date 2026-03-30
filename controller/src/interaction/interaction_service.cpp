@@ -2162,8 +2162,20 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
             const nlohmann::json& choice = chunk_payload.at("choices").at(0);
             std::string delta_text;
             if (choice.contains("delta") && choice.at("delta").is_object()) {
-              delta_text =
-                  choice.at("delta").value("content", std::string{});
+              const nlohmann::json& delta = choice.at("delta");
+              if (delta.contains("content")) {
+                const nlohmann::json& content = delta.at("content");
+                if (content.is_string()) {
+                  delta_text = content.get<std::string>();
+                } else if (content.is_array()) {
+                  for (const auto& part : content) {
+                    if (part.is_object() && part.contains("text") &&
+                        part.at("text").is_string()) {
+                      delta_text += part.at("text").get<std::string>();
+                    }
+                  }
+                }
+              }
             }
             openai_stream_raw_text += delta_text;
             emit_openai_stream_progress(

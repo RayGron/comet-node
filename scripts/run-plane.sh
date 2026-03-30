@@ -65,10 +65,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "${desired_state_path}" ]]; then
-  desired_state_path="${repo_root}/config/${plane_name}/desired-state.json"
+  desired_state_path="${repo_root}/config/${plane_name}/desired-state.v2.json"
 fi
 if [[ ! -f "${desired_state_path}" ]]; then
-  sibling_app_desired_state="${repo_root}/../${plane_name}/deploy/comet-node/desired-state.json"
+  sibling_app_desired_state="${repo_root}/../${plane_name}/deploy/comet-node/desired-state.v2.json"
   if [[ -f "${sibling_app_desired_state}" ]]; then
     desired_state_path="${sibling_app_desired_state}"
   fi

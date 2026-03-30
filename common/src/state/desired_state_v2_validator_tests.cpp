@@ -107,6 +107,30 @@ int main() {
     }
 
     {
+      const json legacy_state_file{
+          {"plane_name", "legacy-state-file"},
+          {"plane_mode", "llm"},
+      };
+      const auto temp_path =
+          std::filesystem::temp_directory_path() / "comet-state-legacy.json";
+      {
+        std::ofstream output(temp_path);
+        output << legacy_state_file.dump(2) << '\n';
+      }
+      bool rejected = false;
+      try {
+        static_cast<void>(comet::LoadDesiredStateJson(temp_path.string()));
+      } catch (const std::exception& ex) {
+        rejected =
+            std::string_view(ex.what()).find("version=2") != std::string_view::npos;
+      }
+      std::filesystem::remove(temp_path);
+      Expect(rejected,
+             "state-file-v2-only: legacy desired state should be rejected");
+      std::cout << "ok-invalid: state-file-v2-only" << '\n';
+    }
+
+    {
       const json llm_backend_only{
           {"version", 2},
           {"plane_name", "maglev-backend"},

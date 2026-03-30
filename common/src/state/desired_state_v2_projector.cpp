@@ -149,6 +149,7 @@ void DesiredStateV2Projector::ProjectRuntime() {
       {"workers", std::max(1, static_cast<int>(worker_instances_.size()))},
       {"distributed_backend", state_.inference.distributed_backend},
       {"max_model_len", state_.inference.max_model_len},
+      {"llama_ctx_size", state_.inference.llama_ctx_size},
       {"max_num_seqs", state_.inference.max_num_seqs},
       {"gpu_memory_utilization", state_.inference.gpu_memory_utilization},
   };

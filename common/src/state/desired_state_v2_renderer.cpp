@@ -175,6 +175,8 @@ void DesiredStateV2Renderer::RenderRuntime() {
   state_.inference.runtime_log_dir = "/comet/shared/logs/infer";
   state_.inference.max_model_len =
       runtime_json.value("max_model_len", state_.inference.max_model_len);
+  state_.inference.llama_ctx_size =
+      runtime_json.value("llama_ctx_size", state_.inference.llama_ctx_size);
   state_.inference.max_num_seqs =
       runtime_json.value("max_num_seqs", state_.inference.max_num_seqs);
   state_.inference.gpu_memory_utilization =

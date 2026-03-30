@@ -19,9 +19,10 @@
     "engine": "llama.cpp",
     "distributed_backend": "llama_rpc",
     "workers": 2,
-    "max_model_len": 8192,
-    "max_num_seqs": 8,
-    "gpu_memory_utilization": 0.85
+    "max_model_len": 4096,
+    "llama_ctx_size": 4096,
+    "max_num_seqs": 16,
+    "gpu_memory_utilization": 0.9
   },
   "topology": {
     "nodes": [

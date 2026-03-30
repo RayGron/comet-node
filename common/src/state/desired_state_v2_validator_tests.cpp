@@ -160,6 +160,40 @@ int main() {
     }
 
     {
+      const json llama_ctx_runtime{
+          {"version", 2},
+          {"plane_name", "llama-ctx-runtime"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-ctx"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"},
+            {"distributed_backend", "llama_rpc"},
+            {"workers", 1},
+            {"max_model_len", 4096},
+            {"llama_ctx_size", 4096}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(llama_ctx_runtime, "llama-ctx-runtime");
+      Expect(state.inference.max_model_len == 4096,
+             "llama-ctx-runtime: max_model_len should render");
+      Expect(state.inference.llama_ctx_size == 4096,
+             "llama-ctx-runtime: llama_ctx_size should render");
+      const auto runtime_json =
+          nlohmann::json::parse(comet::RenderInferRuntimeConfigJson(state));
+      Expect(runtime_json.at("inference").at("max_model_len").get<int>() == 4096,
+             "llama-ctx-runtime: runtime max_model_len mismatch");
+      Expect(runtime_json.at("inference").at("llama_ctx_size").get<int>() == 4096,
+             "llama-ctx-runtime: runtime llama_ctx_size mismatch");
+      std::cout << "ok: llama-ctx-runtime" << '\n';
+    }
+
+    {
       const json split_topology{
           {"version", 2},
           {"plane_name", "split-backend"},

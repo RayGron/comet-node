@@ -295,8 +295,8 @@ std::optional<std::uintmax_t> ModelLibraryService::ProbeContentLength(
         std::to_string(state_->job_counter.fetch_add(1)) + ".txt"))
           .string();
   const std::string command =
-      "/usr/bin/curl -fsSLI '" + source_url + "' > '" + temp_headers +
-      "' 2>/dev/null || true";
+      "/usr/bin/curl --connect-timeout 5 --max-time 15 -fsSLI '" + source_url +
+      "' > '" + temp_headers + "' 2>/dev/null || true";
   std::system(command.c_str());
   std::ifstream input(temp_headers);
   std::filesystem::remove(temp_headers);
@@ -728,6 +728,13 @@ void ModelLibraryService::StartDownloadJob(const std::string& job_id) const {
         std::lock_guard<std::mutex> lock(service.state_->jobs_mutex);
         snapshot = service.state_->jobs.at(job_id);
       }
+      service.UpdateJob(
+          job_id,
+          [&](ModelLibraryDownloadJob& job) {
+            job.status = "running";
+            job.current_item = "probing";
+            job.bytes_total = std::nullopt;
+          });
       std::optional<std::uintmax_t> aggregate_total = std::uintmax_t{0};
       for (const auto& source_url : snapshot.source_urls) {
         const auto content_length = service.ProbeContentLength(source_url);
@@ -742,6 +749,9 @@ void ModelLibraryService::StartDownloadJob(const std::string& job_id) const {
           [&](ModelLibraryDownloadJob& job) {
             job.status = "running";
             job.bytes_total = aggregate_total;
+            if (job.current_item == "probing") {
+              job.current_item.clear();
+            }
           });
       std::uintmax_t aggregate_prefix = 0;
       for (std::size_t index = 0; index < snapshot.source_urls.size();

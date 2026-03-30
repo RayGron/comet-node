@@ -135,15 +135,20 @@ std::string InteractionHttpSupport::BuildInteractionUpstreamBody(
   payload.erase("max_elapsed_time_ms");
   payload.erase("semantic_goal");
   payload.erase("response_format");
-  const bool uses_vllm_runtime =
+  const bool supports_thinking_control =
       resolution.runtime_status.has_value() &&
-      Lowercase(resolution.runtime_status->runtime_backend).find("vllm") != std::string::npos;
-  if (uses_vllm_runtime) {
+      (Lowercase(resolution.runtime_status->runtime_backend).find("vllm") !=
+           std::string::npos ||
+       Lowercase(resolution.runtime_status->runtime_backend).find("llama") !=
+           std::string::npos);
+  if (supports_thinking_control) {
     if (!payload.contains("chat_template_kwargs") ||
         !payload.at("chat_template_kwargs").is_object()) {
       payload["chat_template_kwargs"] = json::object();
     }
-    payload["chat_template_kwargs"]["enable_thinking"] = false;
+    if (!payload["chat_template_kwargs"].contains("enable_thinking")) {
+      payload["chat_template_kwargs"]["enable_thinking"] = false;
+    }
   }
   if (force_stream) {
     payload["stream"] = true;

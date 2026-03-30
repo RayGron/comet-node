@@ -162,7 +162,9 @@ std::string BuildContinuationPrompt(
     const InteractionCompletionPolicy& policy,
     bool natural_stop_without_marker,
     const std::string& trailing_excerpt = "",
-    int remaining_completion_tokens = 0);
+    int remaining_completion_tokens = 0,
+    bool hidden_thinking_mode = false,
+    bool visible_output_started = false);
 bool StartsWithReasoningPreamble(const std::string& text);
 std::string SanitizeInteractionText(std::string text);
 std::string Utf8SafeSuffix(const std::string& value, std::size_t max_bytes);

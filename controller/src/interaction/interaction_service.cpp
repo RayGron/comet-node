@@ -322,12 +322,12 @@ ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
     }
     if (current.policy.thinking_enabled) {
       current.policy.max_continuations =
-          std::max(current.policy.max_continuations, 2);
+          std::max(current.policy.max_continuations, 6);
       current.policy.max_total_completion_tokens =
           std::max(current.policy.max_total_completion_tokens,
-                   current.policy.max_tokens * 4);
+                   std::max(current.policy.max_tokens * 12, 8192));
       current.policy.max_elapsed_time_ms =
-          std::max(current.policy.max_elapsed_time_ms, 120000);
+          std::max(current.policy.max_elapsed_time_ms, 300000);
     }
     return current;
   };
@@ -437,9 +437,14 @@ std::string BuildContinuationPrompt(
     const InteractionCompletionPolicy& policy,
     bool natural_stop_without_marker,
     const std::string& trailing_excerpt,
-    int remaining_completion_tokens) {
+    int remaining_completion_tokens,
+    bool hidden_thinking_mode,
+    bool visible_output_started) {
   std::ostringstream prompt;
-  if (natural_stop_without_marker) {
+  if (hidden_thinking_mode && !visible_output_started) {
+    prompt << "Your hidden reasoning is not shown to the user. Stop reasoning now and "
+           << "reply with only the final user-visible answer.";
+  } else if (natural_stop_without_marker) {
     prompt << "Your previous segment stopped before you proved the task was complete. "
            << "If the task is already complete, reply with only "
            << policy.completion_marker
@@ -451,6 +456,10 @@ std::string BuildContinuationPrompt(
     prompt << " The last visible excerpt from your previous segment was:\n"
            << trailing_excerpt
            << "\nContinue immediately after that excerpt.";
+  }
+  if (hidden_thinking_mode) {
+    prompt << " Do not output hidden reasoning, <think> blocks, or reasoning preambles."
+           << " The next segment must contain only the final answer that the user should read.";
   }
   if (remaining_completion_tokens > 0) {
     prompt << " You have approximately " << remaining_completion_tokens

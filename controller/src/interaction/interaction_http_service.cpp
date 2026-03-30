@@ -53,7 +53,9 @@ json InteractionHttpService::BuildContinuationPayload(
            policy,
            natural_stop_without_marker,
            trailing_excerpt,
-           remaining_completion_tokens)},
+           remaining_completion_tokens,
+           policy.thinking_enabled,
+           !accumulated_text.empty())},
   });
   payload["messages"] = messages;
   return payload;

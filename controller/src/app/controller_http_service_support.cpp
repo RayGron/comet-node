@@ -91,6 +91,19 @@ std::string BuildInteractionUpstreamBody(
     combined_system_instruction += system_content;
   }
 
+  const bool thinking_enabled =
+      resolution.desired_state.interaction.has_value() &&
+      resolution.desired_state.interaction->thinking_enabled;
+  if (thinking_enabled) {
+    if (!combined_system_instruction.empty()) {
+      combined_system_instruction += "\n\n";
+    }
+    combined_system_instruction +=
+        "Thinking mode is enabled. Keep all reasoning hidden. "
+        "Your visible assistant content must contain only the final answer for the user. "
+        "Do not output <think> blocks, reasoning preambles, or an empty final answer.";
+  }
+
   if (!combined_system_instruction.empty()) {
     merged_messages.push_back(
         nlohmann::json{{"role", "system"}, {"content", combined_system_instruction}});
@@ -117,9 +130,6 @@ std::string BuildInteractionUpstreamBody(
       !payload.at("chat_template_kwargs").is_object()) {
     payload["chat_template_kwargs"] = nlohmann::json::object();
   }
-  const bool thinking_enabled =
-      resolution.desired_state.interaction.has_value() &&
-      resolution.desired_state.interaction->thinking_enabled;
   payload["chat_template_kwargs"]["enable_thinking"] = thinking_enabled;
   if (force_stream) {
     payload["stream"] = true;

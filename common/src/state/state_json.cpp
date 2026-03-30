@@ -1114,7 +1114,9 @@ std::optional<DesiredState> LoadDesiredStateJson(const std::string& path) {
 
   json value;
   input >> value;
-  DesiredState state = DesiredStateFromJson(value);
+  DesiredState state =
+      IsDesiredStateV2(value) ? DesiredStateV2Renderer::Render(value)
+                              : DesiredStateFromJson(value);
   try {
     state = ResolvePlacementTargetAliases(std::move(state));
   } catch (const std::runtime_error& error) {

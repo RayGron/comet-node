@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -10,6 +12,7 @@
 #include "comet/planning/planner.h"
 #include "comet/planning/execution_plan.h"
 #include "comet/runtime/infer_runtime_config.h"
+#include "comet/state/state_json.h"
 #include "comet/state/desired_state_v2_renderer.h"
 #include "comet/state/desired_state_v2_validator.h"
 
@@ -62,6 +65,48 @@ const comet::InstanceSpec& FindInstance(
 int main() {
   try {
     {
+      const json state_file_v2{
+          {"version", 2},
+          {"plane_name", "thinking-flag"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-thinking"},
+           }},
+          {"interaction",
+           {
+               {"thinking_enabled", true},
+               {"default_response_language", "ru"},
+               {"follow_user_language", true},
+               {"supported_response_languages", json::array({"ru", "en"})},
+           }},
+          {"runtime",
+           {
+               {"engine", "llama.cpp"},
+               {"distributed_backend", "llama_rpc"},
+               {"workers", 1},
+           }},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto temp_path =
+          std::filesystem::temp_directory_path() / "comet-state-v2-thinking-flag.json";
+      {
+        std::ofstream output(temp_path);
+        output << state_file_v2.dump(2) << '\n';
+      }
+      const auto loaded = comet::LoadDesiredStateJson(temp_path.string());
+      std::filesystem::remove(temp_path);
+      Expect(loaded.has_value(), "state-file-v2-thinking: state should load");
+      Expect(loaded->interaction.has_value(), "state-file-v2-thinking: interaction missing");
+      Expect(loaded->interaction->thinking_enabled,
+             "state-file-v2-thinking: thinking_enabled should survive apply-state-file path");
+      std::cout << "ok: state-file-v2-thinking" << '\n';
+    }
+
+    {
       const json llm_backend_only{
           {"version", 2},
           {"plane_name", "maglev-backend"},
@@ -85,7 +130,8 @@ int main() {
              "llm-backend-only: local path not rendered");
       Expect(state.worker_group.expected_workers == 1,
              "llm-backend-only: expected_workers should be 1");
-      Expect(state.instances.size() == 2, "llm-backend-only: expected infer + worker");
+      Expect(state.instances.size() == 3,
+             "llm-backend-only: expected aggregator + leaf infer + worker");
       std::cout << "ok: llm-backend-only" << '\n';
     }
 
@@ -594,7 +640,8 @@ int main() {
            }},
       };
       const auto state = RenderValid(llm_with_app, "llm-with-app");
-      Expect(state.instances.size() == 3, "llm-with-app: expected infer + worker + app");
+      Expect(state.instances.size() == 4,
+             "llm-with-app: expected app + aggregator + leaf infer + worker");
       Expect(FindInstance(state, "app-llm-app").image == "example/app:dev",
              "llm-with-app: app image mismatch");
       std::cout << "ok: llm-with-app" << '\n';

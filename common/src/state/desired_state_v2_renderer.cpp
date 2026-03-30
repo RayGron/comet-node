@@ -322,7 +322,8 @@ void DesiredStateV2Renderer::RenderInferInstance() {
     rendered_infers.push_back(std::move(infer));
   }
 
-  if (rendered_infers.size() > 1) {
+  if (rendered_infers.size() > 1 &&
+      rendered_infers.front().environment.count("COMET_REPLICA_UPSTREAMS") == 0) {
     rendered_infers.front().environment["COMET_REPLICA_UPSTREAMS"] =
         BuildReplicaUpstreams(rendered_infers);
   }

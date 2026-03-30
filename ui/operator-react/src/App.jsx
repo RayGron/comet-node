@@ -11,6 +11,7 @@ import {
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
+const MODEL_LIBRARY_ACTIVE_POLL_MS = 1000;
 const EVENT_LIMIT = 24;
 const MODEL_LIBRARY_PAGE_SIZE = 24;
 const MODEL_LIBRARY_JOB_PAGE_SIZE = 8;
@@ -2010,6 +2011,25 @@ function App() {
     }, AUTO_REFRESH_MS);
     return () => clearInterval(timer);
   }, [authState.authenticated, selectedPlane]);
+
+  useEffect(() => {
+    if (!authState.authenticated) {
+      return undefined;
+    }
+    const hasActiveModelJobs = Array.isArray(modelLibrary.jobs)
+      ? modelLibrary.jobs.some((job) => {
+          const status = String(job?.status || "").toLowerCase();
+          return status === "queued" || status === "running" || status === "stopping";
+        })
+      : false;
+    if (!hasActiveModelJobs) {
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      refreshModelLibrary().catch(() => {});
+    }, MODEL_LIBRARY_ACTIVE_POLL_MS);
+    return () => clearInterval(timer);
+  }, [authState.authenticated, modelLibrary.jobs]);
 
   useEffect(() => {
     if (!authState.authenticated || !selectedPlane) {

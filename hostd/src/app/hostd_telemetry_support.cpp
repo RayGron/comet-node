@@ -1307,10 +1307,12 @@ comet::HostObservation BuildObservedStateSnapshot(
   if (!instance_statuses.empty()) {
     observation.instance_runtime_json = comet::SerializeRuntimeStatusListJson(instance_statuses);
   }
+  const comet::DesiredState telemetry_state =
+      local_state.has_value() ? *local_state : comet::DesiredState{};
+  observation.gpu_telemetry_json =
+      comet::SerializeGpuTelemetryJson(
+          CollectGpuTelemetry(telemetry_state, node_name, instance_statuses));
   if (local_state.has_value()) {
-    observation.gpu_telemetry_json =
-        comet::SerializeGpuTelemetryJson(
-            CollectGpuTelemetry(*local_state, node_name, instance_statuses));
     observation.disk_telemetry_json =
         comet::SerializeDiskTelemetryJson(CollectDiskTelemetry(*local_state, node_name));
   }

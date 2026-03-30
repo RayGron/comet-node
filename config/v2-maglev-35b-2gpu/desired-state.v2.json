@@ -1,0 +1,84 @@
+{
+  "version": 2,
+  "plane_name": "maglev-backend-35b-2gpu",
+  "plane_mode": "llm",
+  "protected": true,
+  "model": {
+    "source": {
+      "type": "local",
+      "path": "/mnt/shared-storage/models/gguf/Qwen/Qwen3.5-35B-A3B/Qwen3.5-35B-A3B-Q8_0.gguf",
+      "ref": "Qwen/Qwen3.5-35B-A3B"
+    },
+    "materialization": {
+      "mode": "reference",
+      "local_path": "/mnt/shared-storage/models/gguf/Qwen/Qwen3.5-35B-A3B/Qwen3.5-35B-A3B-Q8_0.gguf"
+    },
+    "served_model_name": "qwen3.5-35b-a3b-maglev"
+  },
+  "runtime": {
+    "engine": "llama.cpp",
+    "distributed_backend": "llama_rpc",
+    "workers": 2,
+    "max_model_len": 8192,
+    "max_num_seqs": 8,
+    "gpu_memory_utilization": 0.85
+  },
+  "topology": {
+    "nodes": [
+      {
+        "name": "local-hostd",
+        "execution_mode": "mixed",
+        "platform": "linux",
+        "gpu_memory_mb": {
+          "0": 97887,
+          "1": 97887,
+          "2": 97887,
+          "3": 97887
+        }
+      }
+    ]
+  },
+  "infer": {
+    "replicas": 2
+  },
+  "worker": {
+    "assignments": [
+      {
+        "node": "local-hostd",
+        "gpu_device": "1"
+      },
+      {
+        "node": "local-hostd",
+        "gpu_device": "2"
+      }
+    ]
+  },
+  "network": {
+    "gateway_port": 18284,
+    "inference_port": 18294,
+    "rendezvous_port": 29700,
+    "server_name": "maglev-backend.internal"
+  },
+  "interaction": {
+    "system_prompt": "You are the backend model serving Maglev, a coding CLI. Follow the user instructions exactly, keep answers grounded in the provided repository context, and do not invent files or commands.",
+    "default_response_language": "en",
+    "follow_user_language": true,
+    "supported_response_languages": [
+      "en",
+      "ru"
+    ],
+    "thinking_enabled": true
+  },
+  "app": {
+    "enabled": false
+  },
+  "resources": {
+    "worker": {
+      "placement_mode": "manual",
+      "share_mode": "exclusive",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 86016
+    },
+    "shared_disk_gb": 120
+  }
+}

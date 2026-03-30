@@ -10,19 +10,6 @@ namespace {
 
 using SocketHandle = comet::platform::SocketHandle;
 
-std::string Lowercase(std::string value) {
-  std::transform(
-      value.begin(),
-      value.end(),
-      value.begin(),
-      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return value;
-}
-
-std::string Trim(const std::string& value) {
-  return composition_support::Trim(value);
-}
-
 }  // namespace
 
 std::string BuildInteractionUpstreamBody(
@@ -126,21 +113,14 @@ std::string BuildInteractionUpstreamBody(
   payload.erase("max_elapsed_time_ms");
   payload.erase("semantic_goal");
   payload.erase("response_format");
-  const bool supports_thinking_control =
-      resolution.runtime_status.has_value() &&
-      (Lowercase(resolution.runtime_status->runtime_backend).find("vllm") !=
-           std::string::npos ||
-       Lowercase(resolution.runtime_status->runtime_backend).find("llama") !=
-           std::string::npos);
-  if (supports_thinking_control) {
-    if (!payload.contains("chat_template_kwargs") ||
-        !payload.at("chat_template_kwargs").is_object()) {
-      payload["chat_template_kwargs"] = nlohmann::json::object();
-    }
-    if (!payload["chat_template_kwargs"].contains("enable_thinking")) {
-      payload["chat_template_kwargs"]["enable_thinking"] = false;
-    }
+  if (!payload.contains("chat_template_kwargs") ||
+      !payload.at("chat_template_kwargs").is_object()) {
+    payload["chat_template_kwargs"] = nlohmann::json::object();
   }
+  const bool thinking_enabled =
+      resolution.desired_state.interaction.has_value() &&
+      resolution.desired_state.interaction->thinking_enabled;
+  payload["chat_template_kwargs"]["enable_thinking"] = thinking_enabled;
   if (force_stream) {
     payload["stream"] = true;
   }

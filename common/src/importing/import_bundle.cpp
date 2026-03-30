@@ -571,6 +571,8 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
             OptionalStringOpt(*interaction, "analysis_system_prompt")) {
       settings.analysis_system_prompt = *analysis_system_prompt;
     }
+    settings.thinking_enabled =
+        interaction->value("thinking_enabled", settings.thinking_enabled);
     settings.default_response_language =
         OptionalString(*interaction, "default_response_language", settings.default_response_language);
     if (interaction->contains("supported_response_languages") &&

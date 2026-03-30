@@ -315,6 +315,22 @@ ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
       LooksLikeRepositoryAnalysisRequest(last_user_message);
   resolved.repository_analysis = repository_analysis;
   resolved.long_form = long_form_task;
+  const auto finalize_resolved = [&](ResolvedInteractionPolicy current) {
+    if (desired_state.interaction.has_value()) {
+      current.policy.thinking_enabled =
+          desired_state.interaction->thinking_enabled;
+    }
+    if (current.policy.thinking_enabled) {
+      current.policy.max_continuations =
+          std::max(current.policy.max_continuations, 2);
+      current.policy.max_total_completion_tokens =
+          std::max(current.policy.max_total_completion_tokens,
+                   current.policy.max_tokens * 4);
+      current.policy.max_elapsed_time_ms =
+          std::max(current.policy.max_elapsed_time_ms, 120000);
+    }
+    return current;
+  };
   if (desired_state.interaction.has_value()) {
     const auto& interaction = *desired_state.interaction;
     if (repository_analysis && long_form_task &&
@@ -322,20 +338,20 @@ ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
       resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
           *interaction.analysis_long_completion_policy);
       resolved.mode = "analysis-long";
-      return resolved;
+      return finalize_resolved(std::move(resolved));
     }
     if (repository_analysis && !long_form_task &&
         interaction.analysis_completion_policy.has_value()) {
       resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
           *interaction.analysis_completion_policy);
       resolved.mode = "analysis-default";
-      return resolved;
+      return finalize_resolved(std::move(resolved));
     }
     if (long_form_task && interaction.long_completion_policy.has_value()) {
       resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
           *interaction.long_completion_policy);
       resolved.mode = "long";
-      return resolved;
+      return finalize_resolved(std::move(resolved));
     }
     if (!long_form_task &&
         interaction.completion_policy.has_value() &&
@@ -346,7 +362,7 @@ ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
       resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
           *interaction.completion_policy);
       resolved.mode = "default";
-      return resolved;
+      return finalize_resolved(std::move(resolved));
     }
     if (long_form_task &&
         interaction.completion_policy.has_value() &&
@@ -357,7 +373,7 @@ ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
       resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
           *interaction.completion_policy);
       resolved.mode = "long";
-      return resolved;
+      return finalize_resolved(std::move(resolved));
     }
   }
   resolved.policy = DefaultChatInteractionCompletionPolicy();
@@ -366,7 +382,7 @@ ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
                                         : "analysis-default-fallback")
                       : (long_form_task ? "long-fallback"
                                         : "default-fallback");
-  return resolved;
+  return finalize_resolved(std::move(resolved));
 }
 
 std::string GenerateInteractionRequestId() {
@@ -776,6 +792,8 @@ nlohmann::json BuildInteractionContractMetadata(
            resolution.desired_state.interaction->completion_policy->response_mode},
           {"max_tokens",
            resolution.desired_state.interaction->completion_policy->max_tokens},
+          {"thinking_enabled",
+           resolution.desired_state.interaction->thinking_enabled},
       };
     }
     if (resolution.desired_state.interaction->long_completion_policy.has_value()) {

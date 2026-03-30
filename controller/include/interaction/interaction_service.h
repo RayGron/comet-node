@@ -37,6 +37,7 @@ struct InteractionCompletionPolicy {
   int max_continuations = 3;
   int max_total_completion_tokens = 1536;
   int max_elapsed_time_ms = 180000;
+  bool thinking_enabled = false;
   std::string semantic_goal;
   std::string completion_marker = "[[TASK_COMPLETE]]";
   bool require_completion_marker = false;

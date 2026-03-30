@@ -215,6 +215,7 @@ json ToJson(const BootstrapModelSpec& bootstrap_model) {
 
 json ToJson(const InteractionSettings& interaction) {
   json result = {
+      {"thinking_enabled", interaction.thinking_enabled},
       {"default_response_language", interaction.default_response_language},
       {"supported_response_languages", interaction.supported_response_languages},
       {"follow_user_language", interaction.follow_user_language},
@@ -541,6 +542,8 @@ InteractionSettings InteractionSettingsFromJson(const json& value) {
     interaction.analysis_system_prompt =
         value.at("analysis_system_prompt").get<std::string>();
   }
+  interaction.thinking_enabled =
+      value.value("thinking_enabled", interaction.thinking_enabled);
   interaction.default_response_language =
       value.value("default_response_language", interaction.default_response_language);
   interaction.supported_response_languages =

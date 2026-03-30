@@ -130,6 +130,8 @@ std::optional<InteractionSettings> DesiredStateSqliteCodec::DeserializeInteracti
     interaction.analysis_system_prompt =
         value.at("analysis_system_prompt").get<std::string>();
   }
+  interaction.thinking_enabled =
+      value.value("thinking_enabled", interaction.thinking_enabled);
   interaction.default_response_language =
       value.value("default_response_language", interaction.default_response_language);
   interaction.supported_response_languages =

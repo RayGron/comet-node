@@ -927,7 +927,9 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave, modelLibraryIte
   const editorCopy = readOnly
     ? "Read-only desired state JSON for the selected plane."
     : showFormBuilder
-      ? "Build or adjust a compact desired-state v2 plane in the form below. The generated JSON preview is staged in the controller when you save."
+      ? dialog.mode === "edit" && dialog.planeState === "running"
+        ? "Build or adjust a compact desired-state v2 plane in the form below. Saving updates the controller state first, and the UI can restart the running plane right after save so the new runtime config takes effect."
+        : "Build or adjust a compact desired-state v2 plane in the form below. The generated JSON preview is staged in the controller when you save."
       : "Edit desired state JSON and stage it in the controller. Runtime changes are applied only after Start plane.";
   const title =
     dialog.mode === "new"
@@ -1032,7 +1034,11 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave, modelLibraryIte
                 onClick={onSave}
                 disabled={dialog.busy || formValidation.errors.length > 0}
               >
-                {dialog.mode === "new" ? "Create plane" : "Save staged changes"}
+                {dialog.mode === "new"
+                  ? "Create plane"
+                  : dialog.planeState === "running"
+                    ? "Save changes"
+                    : "Save staged changes"}
               </button>
             </>
           )}
@@ -1644,6 +1650,7 @@ function App() {
     open: false,
     mode: "new",
     planeName: "",
+    planeState: "",
     text: "",
     form: null,
     originalSkillsEnabled: false,
@@ -2259,13 +2266,16 @@ function App() {
     setActionBusy(action);
     setApiError("");
     try {
-      const request =
-        action === "delete"
-          ? fetchJson(planePath(planeName), { method: "DELETE" })
-          : fetchJson(planePath(planeName, action), { method: "POST" });
-      await request;
+      if (action === "delete") {
+        await fetchJson(planePath(planeName), { method: "DELETE" });
+      } else if (action === "restart") {
+        await fetchJson(planePath(planeName, "stop"), { method: "POST" });
+        await fetchJson(planePath(planeName, "start"), { method: "POST" });
+      } else {
+        await fetchJson(planePath(planeName, action), { method: "POST" });
+      }
       setPendingOperation({
-        kind: action,
+        kind: action === "restart" ? "start" : action,
         planeName,
         startedAt: new Date().toISOString(),
       });
@@ -2286,6 +2296,7 @@ function App() {
           open: true,
           mode,
           planeName: "",
+          planeState: "",
           text: JSON.stringify(buildDesiredStateV2FromForm(form), null, 2),
           form,
           originalSkillsEnabled: false,
@@ -2302,6 +2313,7 @@ function App() {
         open: true,
         mode,
         planeName,
+        planeState: payload?.state || "",
         text: JSON.stringify(payload.desired_state_v2 || payload.desired_state || {}, null, 2),
         form: payload.desired_state_v2
           ? buildPlaneFormStateFromDesiredStateV2(payload.desired_state_v2)
@@ -2359,10 +2371,19 @@ function App() {
         },
         body: JSON.stringify(requestBody),
       });
+      const shouldOfferRestart =
+        planeDialog.mode === "edit" && planeDialog.planeState === "running";
+      let restartAccepted = false;
+      if (shouldOfferRestart) {
+        restartAccepted = window.confirm(
+          "This plane is currently running. The updated desired state is staged in the controller and requires a restart to take effect.\n\nRestart the plane now?",
+        );
+      }
       setPlaneDialog({
         open: false,
         mode: "new",
         planeName: "",
+        planeState: "",
         text: "",
         form: null,
         originalSkillsEnabled: false,
@@ -2372,6 +2393,10 @@ function App() {
       startTransition(() => {
         setSelectedPlane(desiredState.plane_name);
       });
+      if (restartAccepted) {
+        await executePlaneAction("restart", desiredState.plane_name);
+        return;
+      }
       await refreshAll(desiredState.plane_name);
     } catch (error) {
       setPlaneDialog((current) => ({
@@ -3209,10 +3234,11 @@ function App() {
           const displayState = planeDisplayState(plane);
           const displayStateClass = planeDisplayStateClass(plane);
           const planeDeleting = plane.state === "deleting";
+          const planeCanRestart = plane.state === "running" && plane.staged_update;
           const planeStartDisabled =
             actionBusy !== "" ||
             planeDeleting ||
-            plane.state === "running" ||
+            (plane.state === "running" && !planeCanRestart) ||
             plane.state === "starting";
           const planeStopDisabled =
             actionBusy !== "" ||
@@ -3254,9 +3280,9 @@ function App() {
                   className="ghost-button compact-button plane-action-button"
                   type="button"
                   disabled={planeStartDisabled}
-                  onClick={() => executePlaneAction("start", plane.name)}
+                  onClick={() => executePlaneAction(planeCanRestart ? "restart" : "start", plane.name)}
                 >
-                  Start
+                  {planeCanRestart ? "Restart" : "Start"}
                 </button>
                 <button
                   className="ghost-button compact-button plane-action-button"
@@ -3368,18 +3394,23 @@ function App() {
               <h2 id="plane-detail-title">{selectedPlane}</h2>
             </div>
             <div className="toolbar">
+              {(() => {
+                const canRestart = planeRecord?.state === "running" && planeRecord?.staged_update;
+                return (
               <button
                 className="ghost-button"
                 type="button"
-                onClick={() => executePlaneAction("start")}
+                onClick={() => executePlaneAction(canRestart ? "restart" : "start")}
                 disabled={
                   actionBusy !== "" ||
-                  planeRecord?.state === "running" ||
+                  (planeRecord?.state === "running" && !canRestart) ||
                   selectedPlaneDeleting
                 }
               >
-                Start plane
+                {canRestart ? "Restart plane" : "Start plane"}
               </button>
+                );
+              })()}
               <button
                 className="ghost-button"
                 type="button"

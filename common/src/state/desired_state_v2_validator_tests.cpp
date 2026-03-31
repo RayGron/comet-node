@@ -364,22 +364,6 @@ int main() {
       Expect(stale_runtime_config.at("worker_group").at("members").at(0).at("rpc_port").get<int>() ==
                  expected_rpc_port,
              "llama-rpc-backend: infer runtime config should heal legacy worker rpc ports");
-      const auto stale_compose_plans = comet::BuildNodeComposePlans(stale_state);
-      bool found_stale_worker_service = false;
-      for (const auto& service : stale_compose_plans.front().services) {
-        if (service.name != "worker-llama-rpc-backend-a") {
-          continue;
-        }
-        found_stale_worker_service = true;
-        Expect(service.environment.at("COMET_WORKER_RPC_PORT") ==
-                   std::to_string(expected_rpc_port),
-               "llama-rpc-backend: compose worker env should heal legacy rpc port");
-        Expect(service.published_ports.size() == 1 &&
-                   service.published_ports.front().host_port == expected_rpc_port,
-               "llama-rpc-backend: compose worker publish should heal legacy rpc port");
-      }
-      Expect(found_stale_worker_service,
-             "llama-rpc-backend: expected compose service for healed worker");
       std::cout << "ok: llama-rpc-backend" << '\n';
     }
 
@@ -709,6 +693,39 @@ int main() {
              "llama-rpc-replicas: leaf gateway ports should be unique");
       Expect(seen_worker_rpc_ports == expected_worker_rpc_ports,
              "llama-rpc-replicas: worker rpc ports should use stable plane-scoped ports");
+      auto stale_state = state;
+      {
+        auto& worker_a = FindMutableInstance(&stale_state, "worker-llama-rpc-replicas-a");
+        worker_a.environment["COMET_WORKER_RPC_PORT"] = "29600";
+        worker_a.environment["COMET_WORKER_RPC_ENDPOINT"] =
+            "worker-llama-rpc-replicas-a:29600";
+        auto& worker_b = FindMutableInstance(&stale_state, "worker-llama-rpc-replicas-b");
+        worker_b.environment["COMET_WORKER_RPC_PORT"] = "29601";
+        worker_b.environment["COMET_WORKER_RPC_ENDPOINT"] =
+            "worker-llama-rpc-replicas-b:29601";
+        auto& worker_c = FindMutableInstance(&stale_state, "worker-llama-rpc-replicas-c");
+        worker_c.environment["COMET_WORKER_RPC_PORT"] = "29602";
+        worker_c.environment["COMET_WORKER_RPC_ENDPOINT"] =
+            "worker-llama-rpc-replicas-c:29602";
+      }
+      stale_state.worker_group.members.at(0).rpc_port = 29600;
+      stale_state.worker_group.members.at(1).rpc_port = 29601;
+      stale_state.worker_group.members.at(2).rpc_port = 29602;
+      const auto stale_compose_plans = comet::BuildNodeComposePlans(stale_state);
+      std::set<int> healed_worker_rpc_ports;
+      for (const auto& service : stale_compose_plans.front().services) {
+        if (service.name.rfind("worker-llama-rpc-replicas-", 0) != 0) {
+          continue;
+        }
+        Expect(service.published_ports.size() == 1,
+               "llama-rpc-replicas: healed worker should publish one rpc port");
+        healed_worker_rpc_ports.insert(service.published_ports.front().host_port);
+        Expect(service.environment.at("COMET_WORKER_RPC_PORT") ==
+                   std::to_string(service.published_ports.front().host_port),
+               "llama-rpc-replicas: healed worker env should match published rpc port");
+      }
+      Expect(healed_worker_rpc_ports == expected_worker_rpc_ports,
+             "llama-rpc-replicas: compose plans should heal legacy worker rpc ports");
       std::cout << "ok: llama-rpc-replicas" << '\n';
     }
 

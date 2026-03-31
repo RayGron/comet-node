@@ -109,6 +109,24 @@ int main() {
         ReadFile(target_path) == "persistent-model-library-job",
         "downloaded model payload should match source contents");
 
+    const auto set_worker_response = service.SetSkillsFactoryWorker(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/skills-factory-worker",
+            nlohmann::json{{"path", target_path.string()}}));
+    Expect(
+        set_worker_response.status_code == 200,
+        "set skills factory worker should succeed for discovered model");
+    const auto worker_payload = service.BuildPayload(db_path.string());
+    bool found_worker = false;
+    for (const auto& item : worker_payload.at("items")) {
+      if (item.at("path").get<std::string>() == target_path.string()) {
+        found_worker = item.value("skills_factory_worker", false);
+      }
+    }
+    Expect(found_worker, "selected model should be marked as skills_factory_worker");
+
     const fs::path second_target_path = dst_root / "resume.gguf";
     store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
         "job-2",
@@ -160,6 +178,29 @@ int main() {
 
     Expect(resumed_completed, "stopped model library job should complete after resume");
     Expect(fs::exists(second_target_path), "resumed download target should exist");
+
+    const auto replace_worker_response = service.SetSkillsFactoryWorker(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/skills-factory-worker",
+            nlohmann::json{{"path", second_target_path.string()}}));
+    Expect(
+        replace_worker_response.status_code == 200,
+        "replacing skills factory worker should succeed");
+    const auto replaced_worker_payload = service.BuildPayload(db_path.string());
+    bool old_worker_active = false;
+    bool new_worker_active = false;
+    for (const auto& item : replaced_worker_payload.at("items")) {
+      const auto path = item.at("path").get<std::string>();
+      if (path == target_path.string()) {
+        old_worker_active = item.value("skills_factory_worker", false);
+      } else if (path == second_target_path.string()) {
+        new_worker_active = item.value("skills_factory_worker", false);
+      }
+    }
+    Expect(!old_worker_active, "previous skills factory worker should be cleared");
+    Expect(new_worker_active, "replacement model should become the skills factory worker");
 
     const auto hide_response = service.HideDownloadJob(
         db_path.string(),

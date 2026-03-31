@@ -212,7 +212,9 @@ This phase does not provide:
 
 ## Skills Contract
 
-Skills are plane-scoped records stored by the dedicated `skills-<plane>` runtime.
+Canonical Skills content is stored in controller-owned `SkillsFactory`.
+The dedicated `skills-<plane>` runtime remains a plane-local materialized copy used during
+request-time resolution.
 
 Skill shape:
 
@@ -239,3 +241,6 @@ Response metadata when Skills are applied:
 - top-level `applied_skills[]`
 - top-level `skills_session_id`
 - mirrored `applied_skills[]` and `skills_session_id` inside `session`
+
+Plane selection and global catalog behavior for `SkillsFactory` are documented in
+[skills-factory.md](./skills-factory.md).

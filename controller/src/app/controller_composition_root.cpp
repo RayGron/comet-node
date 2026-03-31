@@ -49,6 +49,7 @@ int ControllerCompositionRoot::Serve(
   auto model_library_http_service =
       factory_->CreateModelLibraryHttpService(model_library_service);
   auto plane_http_service = factory_->CreatePlaneHttpService();
+  auto skills_factory_http_service = factory_->CreateSkillsFactoryHttpService();
   auto read_model_service = factory_->CreateReadModelService();
   auto read_model_http_service =
       factory_->CreateReadModelHttpService(read_model_service);
@@ -68,6 +69,7 @@ int ControllerCompositionRoot::Serve(
       bundle_http_service,
       model_library_http_service,
       plane_http_service,
+      skills_factory_http_service,
       read_model_service,
       read_model_http_service,
       scheduler_http_service,

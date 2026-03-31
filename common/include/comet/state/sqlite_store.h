@@ -267,6 +267,25 @@ struct ModelLibraryDownloadJobRecord {
   std::string updated_at;
 };
 
+struct SkillsFactorySkillRecord {
+  std::string id;
+  std::string name;
+  std::string description;
+  std::string content;
+  std::string created_at;
+  std::string updated_at;
+};
+
+struct PlaneSkillBindingRecord {
+  std::string plane_name;
+  std::string skill_id;
+  bool enabled = true;
+  std::vector<std::string> session_ids;
+  std::vector<std::string> comet_links;
+  std::string created_at;
+  std::string updated_at;
+};
+
 class ControllerStore {
  public:
   explicit ControllerStore(std::string db_path);
@@ -358,6 +377,27 @@ class ControllerStore {
       const std::string& job_id) const;
   std::vector<ModelLibraryDownloadJobRecord> LoadModelLibraryDownloadJobs(
       const std::optional<std::string>& status = std::nullopt) const;
+  void UpsertSkillsFactorySkill(const SkillsFactorySkillRecord& skill);
+  std::optional<SkillsFactorySkillRecord> LoadSkillsFactorySkill(
+      const std::string& skill_id) const;
+  std::vector<SkillsFactorySkillRecord> LoadSkillsFactorySkills() const;
+  bool DeleteSkillsFactorySkill(const std::string& skill_id);
+  void UpsertPlaneSkillBinding(const PlaneSkillBindingRecord& binding);
+  std::optional<PlaneSkillBindingRecord> LoadPlaneSkillBinding(
+      const std::string& plane_name,
+      const std::string& skill_id) const;
+  std::vector<PlaneSkillBindingRecord> LoadPlaneSkillBindings(
+      const std::optional<std::string>& plane_name = std::nullopt,
+      const std::optional<std::string>& skill_id = std::nullopt) const;
+  bool DeletePlaneSkillBinding(
+      const std::string& plane_name,
+      const std::string& skill_id);
+  int DeletePlaneSkillBindingsForSkill(const std::string& skill_id);
+  std::optional<std::string> LoadControllerSetting(const std::string& setting_key) const;
+  void UpsertControllerSetting(
+      const std::string& setting_key,
+      const std::string& setting_value);
+  bool DeleteControllerSetting(const std::string& setting_key);
   bool DeleteModelLibraryDownloadJob(const std::string& job_id);
   bool UpdatePlaneState(
       const std::string& plane_name,

@@ -50,6 +50,8 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
     Expect(rerendered.skills.has_value(), name + ": skills missing after rerender");
     Expect(rerendered.skills->enabled == rendered.skills->enabled,
            name + ": skills.enabled mismatch");
+    Expect(rerendered.skills->factory_skill_ids == rendered.skills->factory_skill_ids,
+           name + ": skills.factory_skill_ids mismatch");
   }
   if (source.contains("skills")) {
     Expect(projected.contains("skills"), name + ": skills block missing after projection");
@@ -71,6 +73,12 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
     if (source.at("skills").contains("storage")) {
       Expect(projected.at("skills").at("storage") == source.at("skills").at("storage"),
              name + ": skills.storage mismatch");
+    }
+    if (source.at("skills").contains("factory_skill_ids")) {
+      Expect(
+          projected.at("skills").at("factory_skill_ids") ==
+              source.at("skills").at("factory_skill_ids"),
+          name + ": skills.factory_skill_ids mismatch");
     }
   }
   std::cout << "ok-roundtrip: " << name << '\n';
@@ -249,6 +257,7 @@ int main() {
             {"skills",
              {
                  {"enabled", true},
+                 {"factory_skill_ids", json::array({"skill-alpha", "skill-beta"})},
                  {"node", "skills-hostd"},
                  {"image", "example/skills:dev"},
                  {"env", {{"SKILLS_CUSTOM_FLAG", "enabled"}}},

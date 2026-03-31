@@ -22,6 +22,7 @@ struct ControllerEndpointTarget {
 };
 
 struct PlaneInteractionResolution {
+  std::string db_path;
   comet::DesiredState desired_state;
   std::optional<comet::PlaneRecord> plane_record;
   std::optional<comet::HostObservation> observation;

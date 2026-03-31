@@ -332,6 +332,9 @@ void DesiredStateV2Projector::ProjectSkills() {
   nlohmann::json skills = {
       {"enabled", state_.skills.value_or(SkillsSettings{}).enabled},
   };
+  if (state_.skills.has_value() && !state_.skills->factory_skill_ids.empty()) {
+    skills["factory_skill_ids"] = state_.skills->factory_skill_ids;
+  }
   if (skills_instance_->image != kDefaultSkillsImage) {
     skills["image"] = skills_instance_->image;
   }

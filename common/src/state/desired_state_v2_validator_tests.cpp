@@ -220,6 +220,90 @@ int main() {
     }
 
     {
+      const json llm_with_factory_skills{
+          {"version", 2},
+          {"plane_name", "llm-with-factory-skills"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-skills"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"skills",
+           {
+               {"enabled", true},
+               {"factory_skill_ids", json::array({"skill-alpha", "skill-beta"})},
+           }},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(llm_with_factory_skills, "llm-with-factory-skills");
+      Expect(state.skills.has_value(), "llm-with-factory-skills: skills should render");
+      Expect(
+          state.skills->factory_skill_ids ==
+              std::vector<std::string>({"skill-alpha", "skill-beta"}),
+          "llm-with-factory-skills: factory_skill_ids should render");
+      std::cout << "ok: llm-with-factory-skills" << '\n';
+    }
+
+    {
+      ExpectInvalid(
+          json{
+              {"version", 2},
+              {"plane_name", "duplicate-factory-skills"},
+              {"plane_mode", "llm"},
+              {"model",
+               {
+                   {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                   {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                   {"served_model_name", "qwen-dup"},
+               }},
+              {"runtime",
+               {{"engine", "llama.cpp"},
+                {"distributed_backend", "llama_rpc"},
+                {"workers", 1}}},
+              {"infer", {{"replicas", 1}}},
+              {"skills",
+               {
+                   {"enabled", true},
+                   {"factory_skill_ids", json::array({"skill-alpha", "skill-alpha"})},
+               }},
+              {"app", {{"enabled", false}}},
+          },
+          "duplicate-factory-skill-ids");
+    }
+
+    {
+      ExpectInvalid(
+          json{
+              {"version", 2},
+              {"plane_name", "factory-skills-without-enable"},
+              {"plane_mode", "llm"},
+              {"model",
+               {
+                   {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                   {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                   {"served_model_name", "qwen-disabled"},
+               }},
+              {"runtime",
+               {{"engine", "llama.cpp"},
+                {"distributed_backend", "llama_rpc"},
+                {"workers", 1}}},
+              {"infer", {{"replicas", 1}}},
+              {"skills",
+               {
+                   {"enabled", false},
+                   {"factory_skill_ids", json::array({"skill-alpha"})},
+               }},
+              {"app", {{"enabled", false}}},
+          },
+          "factory-skill-ids-require-enabled-skills");
+    }
+
+    {
       const json split_topology{
           {"version", 2},
           {"plane_name", "split-backend"},

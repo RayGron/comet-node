@@ -4,6 +4,8 @@
 #include <set>
 #include <stdexcept>
 
+#include "skills/plane_skill_runtime_sync_service.h"
+
 namespace comet::controller {
 
 namespace {
@@ -179,6 +181,10 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
   }
 
   try {
+    if (!resolution.db_path.empty()) {
+      (void)PlaneSkillRuntimeSyncService().SyncPlane(
+          resolution.db_path, resolution.desired_state);
+    }
     const HttpResponse response = SendControllerHttpRequest(
         *target, "POST", "/v1/skills/resolve", request_payload.dump(), DefaultJsonHeaders());
     if (response.status_code == 400) {

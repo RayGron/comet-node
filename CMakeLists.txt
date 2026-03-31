@@ -148,6 +148,7 @@ add_library(
   common/src/runtime/runtime_status.cpp
   common/src/state/auth_repository.cpp
   common/src/state/assignment_repository.cpp
+  common/src/state/controller_settings_repository.cpp
   common/src/state/desired_state_repository.cpp
   common/src/state/desired_state_sqlite_codec.cpp
   common/src/state/desired_state_v2_projector.cpp
@@ -164,6 +165,7 @@ add_library(
   common/src/state/sqlite_store_schema.cpp
   common/src/state/sqlite_store_status_codec.cpp
   common/src/state/sqlite_store_support.cpp
+  common/src/state/skills_factory_repository.cpp
   common/src/planning/scheduling_policy.cpp
   common/src/state/state_json.cpp
   common/src/state/sqlite_store.cpp
@@ -267,6 +269,7 @@ add_executable(
   comet-plane-skills-tests
   controller/src/infra/controller_network_manager.cpp
   controller/src/http/controller_http_transport.cpp
+  controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_service.cpp
   controller/src/skills/plane_skills_service_tests.cpp
 )
@@ -274,6 +277,27 @@ target_include_directories(
   comet-plane-skills-tests PRIVATE common/include controller/include)
 target_link_libraries(comet-plane-skills-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-plane-skills-tests)
+
+add_executable(
+  comet-skills-factory-tests
+  controller/src/infra/controller_action.cpp
+  controller/src/http/controller_http_transport.cpp
+  controller/src/infra/controller_network_manager.cpp
+  controller/src/host/host_assignment_reconciliation_service.cpp
+  controller/src/plane/plane_mutation_service.cpp
+  controller/src/plane/controller_state_service.cpp
+  controller/src/plane/plane_deletion_support.cpp
+  controller/src/plane/plane_service.cpp
+  controller/src/skills/plane_skill_catalog_service.cpp
+  controller/src/skills/plane_skill_runtime_sync_service.cpp
+  controller/src/skills/plane_skills_service.cpp
+  controller/src/skills/skills_factory_service.cpp
+  controller/src/skills/skills_factory_service_tests.cpp
+)
+target_include_directories(
+  comet-skills-factory-tests PRIVATE common/include controller/include)
+target_link_libraries(comet-skills-factory-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-skills-factory-tests)
 
 add_executable(
   comet-hostd-local-state-tests
@@ -362,7 +386,11 @@ add_executable(
   controller/src/scheduler/scheduler_http_service.cpp
   controller/src/scheduler/scheduler_view_service.cpp
   controller/src/plane/plane_service.cpp
+  controller/src/skills/plane_skill_catalog_service.cpp
+  controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_service.cpp
+  controller/src/skills/skills_factory_http_service.cpp
+  controller/src/skills/skills_factory_service.cpp
   controller/src/scheduler/scheduler_service.cpp
   controller/src/read_model/state_aggregate_loader.cpp
   controller/src/web/web_ui_service.cpp

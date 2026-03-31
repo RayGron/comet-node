@@ -2466,6 +2466,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     throw std::runtime_error("plane '" + plane_name + "' not found");
   }
   PlaneInteractionResolution resolution;
+  resolution.db_path = db_path;
   resolution.desired_state = *desired_state;
   resolution.plane_record = store.LoadPlane(plane_name);
   const std::string primary_node = desired_state->inference.primary_infer_node;

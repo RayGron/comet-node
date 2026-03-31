@@ -45,6 +45,7 @@ PlaneHttpService CreatePlaneHttpService(
     const PlaneMutationService& plane_mutation_service,
     const PlaneRegistryService& plane_registry_service,
     const ControllerStateService& controller_state_service,
+    const PlaneSkillCatalogService& plane_skill_catalog_service,
     const DashboardService& dashboard_service,
     int stale_after_seconds) {
   return PlaneHttpService(PlaneHttpSupport(
@@ -53,7 +54,8 @@ PlaneHttpService CreatePlaneHttpService(
       plane_registry_service,
       controller_state_service,
       dashboard_service,
-      stale_after_seconds));
+      stale_after_seconds),
+      plane_skill_catalog_service);
 }
 
 PlaneService CreatePlaneService(

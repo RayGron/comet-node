@@ -239,6 +239,7 @@ struct InteractionSettings {
 
 struct SkillsSettings {
   bool enabled = false;
+  std::vector<std::string> factory_skill_ids;
 };
 
 struct DesiredState {

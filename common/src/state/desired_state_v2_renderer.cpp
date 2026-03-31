@@ -77,7 +77,17 @@ void DesiredStateV2Renderer::RenderIdentity() {
   state_.plane_mode = ParsePlaneMode(value_.value("plane_mode", std::string("llm")));
   state_.protected_plane = value_.value("protected", false);
   if (skills_json_.value("enabled", false)) {
-    state_.skills = SkillsSettings{true};
+    SkillsSettings skills_settings;
+    skills_settings.enabled = true;
+    if (skills_json_.contains("factory_skill_ids") &&
+        skills_json_.at("factory_skill_ids").is_array()) {
+      for (const auto& item : skills_json_.at("factory_skill_ids")) {
+        if (item.is_string()) {
+          skills_settings.factory_skill_ids.push_back(item.get<std::string>());
+        }
+      }
+    }
+    state_.skills = std::move(skills_settings);
   }
 }
 

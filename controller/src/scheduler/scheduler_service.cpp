@@ -15,6 +15,7 @@
 #include "read_model/read_model_cli_service.h"
 #include "read_model/state_aggregate_loader.h"
 #include "scheduler/scheduler_execution_support.h"
+#include "skills/plane_skill_runtime_sync_service.h"
 
 #include "comet/planning/execution_plan.h"
 #include "comet/planning/scheduling_policy.h"
@@ -394,6 +395,10 @@ int SchedulerService::SchedulerTick() const {
   store.Initialize();
   const HostAssignmentReconciliationService reconciliation_service;
   (void)reconciliation_service.Reconcile(store);
+  const PlaneSkillRuntimeSyncService runtime_sync_service;
+  for (const auto& state : store.LoadDesiredStates()) {
+    (void)runtime_sync_service.SyncPlane(db_path_, state);
+  }
 
   const auto desired_state = store.LoadDesiredState();
   const auto desired_generation = store.LoadDesiredGeneration();

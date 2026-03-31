@@ -40,6 +40,9 @@ class ModelLibraryService {
   HttpResponse DeleteDownloadJob(
       const std::string& db_path,
       const HttpRequest& request) const;
+  HttpResponse SetSkillsFactoryWorker(
+      const std::string& db_path,
+      const HttpRequest& request) const;
 
  private:
   struct ModelLibraryEntry {

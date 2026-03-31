@@ -3,6 +3,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -108,6 +109,30 @@ void VerifyStoredDesiredStateInference(
         expected_state.plane_name + "': expected {" +
         RenderInferenceKnobs(expected) + "} but stored {" +
         RenderInferenceKnobs(actual) + "}");
+  }
+}
+
+std::set<std::string> SelectedFactorySkillIds(const std::optional<comet::DesiredState>& state) {
+  std::set<std::string> result;
+  if (!state.has_value() || !state->skills.has_value()) {
+    return result;
+  }
+  for (const auto& skill_id : state->skills->factory_skill_ids) {
+    result.insert(skill_id);
+  }
+  return result;
+}
+
+void DetachRemovedFactorySkillBindings(
+    comet::ControllerStore& store,
+    const std::optional<comet::DesiredState>& previous_state,
+    const comet::DesiredState& next_state) {
+  const auto previous_ids = SelectedFactorySkillIds(previous_state);
+  const auto next_ids = SelectedFactorySkillIds(next_state);
+  for (const auto& skill_id : previous_ids) {
+    if (next_ids.count(skill_id) == 0) {
+      store.DeletePlaneSkillBinding(next_state.plane_name, skill_id);
+    }
   }
 }
 
@@ -348,6 +373,7 @@ int BundleCliService::ApplyBundle(
   plane_realization_service_.MaterializeComposeArtifacts(desired_state, host_plans);
   plane_realization_service_.MaterializeInferRuntimeArtifact(desired_state, artifacts_root);
   store.ReplaceDesiredState(desired_state, desired_generation, 0);
+  DetachRemovedFactorySkillBindings(store, current_state, desired_state);
   store.UpdatePlaneArtifactsRoot(desired_state.plane_name, artifacts_root);
   store.ClearSchedulerPlaneRuntime(desired_state.plane_name);
   store.ReplaceRolloutActions(desired_state.plane_name, desired_generation, {});
@@ -417,6 +443,7 @@ int BundleCliService::ApplyDesiredState(
   plane_realization_service_.MaterializeInferRuntimeArtifact(
       effective_desired_state, artifacts_root);
   store.ReplaceDesiredState(effective_desired_state, desired_generation, 0);
+  DetachRemovedFactorySkillBindings(store, current_state, effective_desired_state);
   VerifyStoredDesiredStateInference(store, effective_desired_state);
   store.UpdatePlaneArtifactsRoot(effective_desired_state.plane_name, artifacts_root);
   store.ClearSchedulerPlaneRuntime(effective_desired_state.plane_name);

@@ -121,6 +121,9 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
   ResumePersistentJobs(db_path);
   const auto roots = DiscoverRoots(db_path);
   const auto entries = ScanEntries(db_path);
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  const auto worker_path = store.LoadControllerSetting("skills_factory_worker_model_path");
   json items = json::array();
   for (const auto& entry : entries) {
     items.push_back(json{
@@ -134,10 +137,9 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
         {"part_count", entry.part_count},
         {"referenced_by", entry.referenced_by},
         {"deletable", entry.deletable},
+        {"skills_factory_worker", worker_path.has_value() && *worker_path == entry.path},
     });
   }
-  comet::ControllerStore store(db_path);
-  store.Initialize();
   json jobs = json::array();
   for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
     if (job.hidden) {
@@ -146,6 +148,40 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
     jobs.push_back(BuildJobPayload(job));
   }
   return json{{"items", items}, {"roots", roots}, {"jobs", jobs}};
+}
+
+HttpResponse ModelLibraryService::SetSkillsFactoryWorker(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  const json body = support_.parse_json_request_body(request);
+  const std::string path = body.value("path", std::string{});
+  if (path.empty() || !IsUsableAbsoluteHostPath(path)) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"},
+             {"message", "path must be an absolute host path"}},
+        {});
+  }
+  const auto entries = ScanEntries(db_path);
+  const auto normalized_path = NormalizePathString(path);
+  const auto it = std::find_if(
+      entries.begin(),
+      entries.end(),
+      [&](const ModelLibraryEntry& entry) { return entry.path == normalized_path; });
+  if (it == entries.end()) {
+    return support_.build_json_response(
+        404,
+        json{{"status", "not_found"}, {"message", "model entry not found"}},
+        {});
+  }
+
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  store.UpsertControllerSetting("skills_factory_worker_model_path", normalized_path);
+  return support_.build_json_response(
+      200,
+      json{{"status", "updated"}, {"path", normalized_path}},
+      {});
 }
 
 HttpResponse ModelLibraryService::DeleteEntryByPath(

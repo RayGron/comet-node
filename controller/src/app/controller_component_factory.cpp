@@ -65,6 +65,10 @@ PlaneHttpService ControllerComponentFactory::CreatePlaneHttpService() const {
   return component_factory_support::CreatePlaneHttpService();
 }
 
+SkillsFactoryHttpService ControllerComponentFactory::CreateSkillsFactoryHttpService() const {
+  return component_factory_support::CreateSkillsFactoryHttpService();
+}
+
 ReadModelService ControllerComponentFactory::CreateReadModelService() const {
   return component_factory_support::CreateReadModelService();
 }

@@ -17,6 +17,7 @@ int ServeControllerHttp(
     BundleHttpService& bundle_http_service,
     ModelLibraryHttpService& model_library_http_service,
     PlaneHttpService& plane_http_service,
+    SkillsFactoryHttpService& skills_factory_http_service,
     ReadModelService& read_model_service,
     ReadModelHttpService& read_model_http_service,
     SchedulerHttpService& scheduler_http_service,

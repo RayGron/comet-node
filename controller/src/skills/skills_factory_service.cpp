@@ -1,0 +1,259 @@
+#include "skills/skills_factory_service.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <set>
+#include <stdexcept>
+#include <utility>
+
+#include "comet/state/sqlite_store.h"
+#include "comet/state/state_json.h"
+
+namespace comet::controller {
+
+namespace {
+
+using nlohmann::json;
+
+std::vector<std::string> LoadPlaneNamesUsingSkill(
+    const std::vector<comet::DesiredState>& states,
+    const std::string& skill_id) {
+  std::vector<std::string> result;
+  for (const auto& state : states) {
+    if (!state.skills.has_value()) {
+      continue;
+    }
+    const auto& ids = state.skills->factory_skill_ids;
+    if (std::find(ids.begin(), ids.end(), skill_id) != ids.end()) {
+      result.push_back(state.plane_name);
+    }
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
+
+bool ContainsSkillId(
+    const std::vector<std::string>& items,
+    const std::string& skill_id) {
+  return std::find(items.begin(), items.end(), skill_id) != items.end();
+}
+
+std::vector<std::string> RemoveSkillId(
+    const std::vector<std::string>& items,
+    const std::string& skill_id) {
+  std::vector<std::string> result;
+  result.reserve(items.size());
+  for (const auto& item : items) {
+    if (item != skill_id) {
+      result.push_back(item);
+    }
+  }
+  return result;
+}
+
+}  // namespace
+
+SkillsFactoryService::SkillsFactoryService(
+    PlaneMutationService plane_mutation_service,
+    PlaneSkillRuntimeSyncService runtime_sync_service,
+    ResolveArtifactsRootFn resolve_artifacts_root)
+    : plane_mutation_service_(std::move(plane_mutation_service)),
+      runtime_sync_service_(std::move(runtime_sync_service)),
+      resolve_artifacts_root_(std::move(resolve_artifacts_root)) {}
+
+std::string SkillsFactoryService::GenerateSkillId() {
+  static std::atomic<unsigned long long> counter{0};
+  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  return "skill-" + std::to_string(now) + "-" + std::to_string(++counter);
+}
+
+SkillsFactoryService::CanonicalSkillInput SkillsFactoryService::ParseCanonicalSkillInput(
+    const json& payload,
+    bool partial) {
+  if (!payload.is_object()) {
+    throw std::invalid_argument("request body must be a JSON object");
+  }
+  CanonicalSkillInput input;
+  if (!partial) {
+    for (const char* key : {"name", "description", "content"}) {
+      if (!payload.contains(key) || !payload.at(key).is_string() ||
+          payload.at(key).get<std::string>().empty()) {
+        throw std::invalid_argument(std::string(key) + " is required");
+      }
+    }
+  }
+  if (payload.contains("id")) {
+    if (!payload.at("id").is_string() || payload.at("id").get<std::string>().empty()) {
+      throw std::invalid_argument("id must be a non-empty string");
+    }
+    input.id = payload.at("id").get<std::string>();
+  }
+  if (payload.contains("name")) {
+    if (!payload.at("name").is_string() || payload.at("name").get<std::string>().empty()) {
+      throw std::invalid_argument("name must be a non-empty string");
+    }
+    input.name = payload.at("name").get<std::string>();
+  }
+  if (payload.contains("description")) {
+    if (!payload.at("description").is_string() ||
+        payload.at("description").get<std::string>().empty()) {
+      throw std::invalid_argument("description must be a non-empty string");
+    }
+    input.description = payload.at("description").get<std::string>();
+  }
+  if (payload.contains("content")) {
+    if (!payload.at("content").is_string() || payload.at("content").get<std::string>().empty()) {
+      throw std::invalid_argument("content must be a non-empty string");
+    }
+    input.content = payload.at("content").get<std::string>();
+  }
+  return input;
+}
+
+std::vector<std::string> SkillsFactoryService::LoadPlanesUsingSkill(
+    comet::ControllerStore& store,
+    const std::string& skill_id) const {
+  return LoadPlaneNamesUsingSkill(store.LoadDesiredStates(), skill_id);
+}
+
+nlohmann::json SkillsFactoryService::BuildSkillPayload(
+    const std::string& db_path,
+    const comet::SkillsFactorySkillRecord& skill) const {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  const auto plane_names = LoadPlanesUsingSkill(store, skill.id);
+  return json{
+      {"id", skill.id},
+      {"name", skill.name},
+      {"description", skill.description},
+      {"content", skill.content},
+      {"created_at", skill.created_at},
+      {"updated_at", skill.updated_at},
+      {"plane_names", plane_names},
+      {"plane_count", static_cast<int>(plane_names.size())},
+  };
+}
+
+nlohmann::json SkillsFactoryService::BuildListPayload(const std::string& db_path) const {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  json items = json::array();
+  for (const auto& skill : store.LoadSkillsFactorySkills()) {
+    items.push_back(BuildSkillPayload(db_path, skill));
+  }
+  return json{{"skills", items}};
+}
+
+nlohmann::json SkillsFactoryService::BuildSkillPayload(
+    const std::string& db_path,
+    const std::string& skill_id) const {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  const auto skill = store.LoadSkillsFactorySkill(skill_id);
+  if (!skill.has_value()) {
+    throw std::runtime_error("skill '" + skill_id + "' not found");
+  }
+  return BuildSkillPayload(db_path, *skill);
+}
+
+nlohmann::json SkillsFactoryService::CreateSkill(
+    const std::string& db_path,
+    const nlohmann::json& payload) const {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  auto input = ParseCanonicalSkillInput(payload, false);
+  if (input.id.empty()) {
+    input.id = GenerateSkillId();
+  }
+  comet::SkillsFactorySkillRecord skill;
+  skill.id = input.id;
+  skill.name = input.name;
+  skill.description = input.description;
+  skill.content = input.content;
+  store.UpsertSkillsFactorySkill(skill);
+  return BuildSkillPayload(db_path, input.id);
+}
+
+nlohmann::json SkillsFactoryService::UpdateSkill(
+    const std::string& db_path,
+    const std::string& skill_id,
+    const nlohmann::json& payload,
+    bool partial,
+    const std::string&) const {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  auto current = store.LoadSkillsFactorySkill(skill_id);
+  if (!current.has_value()) {
+    throw std::runtime_error("skill '" + skill_id + "' not found");
+  }
+  const auto input = ParseCanonicalSkillInput(payload, partial);
+  if (!input.name.empty()) {
+    current->name = input.name;
+  }
+  if (!input.description.empty()) {
+    current->description = input.description;
+  }
+  if (!input.content.empty()) {
+    current->content = input.content;
+  }
+  store.UpsertSkillsFactorySkill(*current);
+  SyncAffectedPlanes(db_path, LoadPlanesUsingSkill(store, skill_id));
+  return BuildSkillPayload(db_path, skill_id);
+}
+
+void SkillsFactoryService::SyncAffectedPlanes(
+    const std::string& db_path,
+    const std::vector<std::string>& plane_names) const {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  for (const auto& plane_name : plane_names) {
+    const auto desired_state = store.LoadDesiredState(plane_name);
+    if (desired_state.has_value()) {
+      (void)runtime_sync_service_.SyncPlane(db_path, *desired_state);
+    }
+  }
+}
+
+nlohmann::json SkillsFactoryService::DeleteSkill(
+    const std::string& db_path,
+    const std::string& skill_id,
+    const std::string& fallback_artifacts_root) const {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  if (!store.LoadSkillsFactorySkill(skill_id).has_value()) {
+    throw std::runtime_error("skill '" + skill_id + "' not found");
+  }
+
+  std::vector<std::string> affected_planes;
+  for (const auto& desired_state : store.LoadDesiredStates()) {
+    if (!desired_state.skills.has_value() ||
+        !ContainsSkillId(desired_state.skills->factory_skill_ids, skill_id)) {
+      continue;
+    }
+    auto next_state = desired_state;
+    next_state.skills->factory_skill_ids = RemoveSkillId(next_state.skills->factory_skill_ids, skill_id);
+    const std::string artifacts_root = resolve_artifacts_root_(
+        db_path, desired_state.plane_name, fallback_artifacts_root);
+    const auto result = plane_mutation_service_.ExecuteUpsertPlaneStateAction(
+        db_path,
+        comet::SerializeDesiredStateJson(next_state),
+        artifacts_root,
+        desired_state.plane_name,
+        "skills-factory:detach");
+    if (result.exit_code != 0) {
+      throw std::runtime_error(
+          result.output.empty() ? "failed to persist plane desired state" : result.output);
+    }
+    affected_planes.push_back(desired_state.plane_name);
+  }
+
+  store.DeletePlaneSkillBindingsForSkill(skill_id);
+  store.DeleteSkillsFactorySkill(skill_id);
+  SyncAffectedPlanes(db_path, affected_planes);
+  return json{{"status", "deleted"}, {"skill_id", skill_id}};
+}
+
+}  // namespace comet::controller

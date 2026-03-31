@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "comet/state/sqlite_store.h"
-#include "skills/plane_skills_service.h"
+#include "skills/plane_skill_catalog_service.h"
 
 using nlohmann::json;
 
@@ -17,7 +17,11 @@ bool StartsWithPathPrefix(const std::string& path, const std::string& prefix) {
 
 }  // namespace
 
-PlaneHttpService::PlaneHttpService(PlaneHttpSupport support) : support_(std::move(support)) {}
+PlaneHttpService::PlaneHttpService(
+    PlaneHttpSupport support,
+    comet::controller::PlaneSkillCatalogService plane_skill_catalog_service)
+    : support_(std::move(support)),
+      plane_skill_catalog_service_(std::move(plane_skill_catalog_service)) {}
 
 std::optional<HttpResponse> PlaneHttpService::HandleRequest(
     const std::string& db_path,
@@ -187,31 +191,85 @@ HttpResponse PlaneHttpService::HandlePlanePath(
       const std::string path_suffix =
           remainder.substr(skills_pos + std::string("/skills").size());
       try {
-        comet::ControllerStore store(db_path);
-        store.Initialize();
-        const auto desired_state = store.LoadDesiredState(plane_name);
-        if (!desired_state.has_value()) {
-          return support_.build_json_response(
-              404,
-              json{{"status", "plane_not_found"},
-                   {"message", "plane '" + plane_name + "' not found"},
-                   {"path", request.path}},
-              {});
+        if (path_suffix.empty() || path_suffix == "/") {
+          if (request.method == "GET") {
+            return support_.build_json_response(
+                200,
+                plane_skill_catalog_service_.BuildListPayload(db_path, plane_name),
+                {});
+          }
+          if (request.method == "POST") {
+            return support_.build_json_response(
+                200,
+                plane_skill_catalog_service_.CreateSkill(
+                    db_path,
+                    plane_name,
+                    support_.parse_json_request_body(request),
+                    default_artifacts_root),
+                {});
+          }
+        } else {
+          const std::string skill_id =
+              path_suffix.front() == '/' ? path_suffix.substr(1) : path_suffix;
+          if (!skill_id.empty() && skill_id.find('/') == std::string::npos) {
+            if (request.method == "GET") {
+              return support_.build_json_response(
+                  200,
+                  plane_skill_catalog_service_.BuildSkillPayload(db_path, plane_name, skill_id),
+                  {});
+            }
+            if (request.method == "PUT") {
+              return support_.build_json_response(
+                  200,
+                  plane_skill_catalog_service_.UpdateSkill(
+                      db_path,
+                      plane_name,
+                      skill_id,
+                      support_.parse_json_request_body(request),
+                      false,
+                      default_artifacts_root),
+                  {});
+            }
+            if (request.method == "PATCH") {
+              return support_.build_json_response(
+                  200,
+                  plane_skill_catalog_service_.UpdateSkill(
+                      db_path,
+                      plane_name,
+                      skill_id,
+                      support_.parse_json_request_body(request),
+                      true,
+                      default_artifacts_root),
+                  {});
+            }
+            if (request.method == "DELETE") {
+              return support_.build_json_response(
+                  200,
+                  plane_skill_catalog_service_.DeleteSkill(
+                      db_path,
+                      plane_name,
+                      skill_id,
+                      default_artifacts_root),
+                  {});
+            }
+          }
         }
-        comet::controller::PlaneInteractionResolution resolution;
-        resolution.desired_state = *desired_state;
-        const comet::controller::PlaneSkillsService skills_service;
-        std::string error_code;
-        std::string error_message;
-        const auto proxied = skills_service.ProxyPlaneSkillsRequest(
-            resolution, request.method, path_suffix, request.body, &error_code, &error_message);
-        if (!proxied.has_value()) {
-          return support_.build_json_response(
-              error_code == "skills_disabled" ? 409 : 409,
-              json{{"status", error_code}, {"message", error_message}, {"path", request.path}},
-              {});
-        }
-        return *proxied;
+        return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+      } catch (const std::invalid_argument& error) {
+        return support_.build_json_response(
+            400,
+            json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}},
+            {});
+      } catch (const std::runtime_error& error) {
+        const std::string message = error.what();
+        const int status =
+            message.find("not found") != std::string::npos ? 404 : 409;
+        return support_.build_json_response(
+            status,
+            json{{"status", status == 404 ? "not_found" : "conflict"},
+                 {"message", message},
+                 {"path", request.path}},
+            {});
       } catch (const std::exception& error) {
         return support_.build_json_response(
             500,

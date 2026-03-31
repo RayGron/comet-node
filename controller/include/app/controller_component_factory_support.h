@@ -21,6 +21,7 @@ ModelLibraryService CreateModelLibraryService();
 ModelLibraryHttpService CreateModelLibraryHttpService(
     const ModelLibraryService& model_library_service);
 PlaneHttpService CreatePlaneHttpService();
+SkillsFactoryHttpService CreateSkillsFactoryHttpService();
 ReadModelService CreateReadModelService();
 ReadModelHttpService CreateReadModelHttpService(
     const ReadModelService& read_model_service);

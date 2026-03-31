@@ -24,6 +24,7 @@ using ReadModelHttpService = ::ReadModelHttpService;
 using ModelLibraryService = ::ModelLibraryService;
 using ModelLibraryHttpService = ::ModelLibraryHttpService;
 using PlaneHttpService = ::PlaneHttpService;
+using SkillsFactoryHttpService = comet::controller::SkillsFactoryHttpService;
 using HostdHttpService = ::HostdHttpService;
 using AuthHttpService = ::AuthHttpService;
 using InteractionHttpService = ::InteractionHttpService;
@@ -34,6 +35,19 @@ using comet::controller::composition_support::FilterHostObservationsForPlane;
 
 std::string DefaultArtifactsRoot() {
   return (std::filesystem::path("var") / "artifacts").string();
+}
+
+std::string ResolvePlaneArtifactsRoot(
+    const std::string& db_path,
+    const std::string& plane_name,
+    const std::string& fallback_artifacts_root) {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  const auto plane = store.LoadPlane(plane_name);
+  if (plane.has_value() && !plane->artifacts_root.empty()) {
+    return plane->artifacts_root;
+  }
+  return fallback_artifacts_root;
 }
 
 int DefaultStaleAfterSeconds() {
@@ -230,6 +244,15 @@ PlaneHttpService MakePlaneHttpService() {
   static const comet::controller::ControllerRequestSupport request_support;
   static const comet::controller::PlaneMutationService plane_mutation_service =
       MakePlaneMutationService();
+  static const comet::controller::PlaneSkillRuntimeSyncService runtime_sync_service;
+  static const comet::controller::PlaneSkillCatalogService plane_skill_catalog_service(
+      plane_mutation_service,
+      runtime_sync_service,
+      [](const std::string& db_path,
+         const std::string& plane_name,
+         const std::string& fallback_artifacts_root) {
+        return ResolvePlaneArtifactsRoot(db_path, plane_name, fallback_artifacts_root);
+      });
   static const comet::controller::ControllerRuntimeSupportService runtime_support_service =
       MakeControllerRuntimeSupportService();
   static const comet::controller::PlaneRegistryService plane_registry_service(
@@ -350,6 +373,7 @@ PlaneHttpService MakePlaneHttpService() {
       plane_mutation_service,
       plane_registry_service,
       controller_state_service,
+      plane_skill_catalog_service,
       dashboard_service,
       DefaultStaleAfterSeconds());
 }
@@ -363,6 +387,22 @@ ModelLibraryHttpService MakeModelLibraryHttpService(
     const ModelLibraryService& model_library_service) {
   return comet::controller::http_service_support::CreateModelLibraryHttpService(
       model_library_service);
+}
+
+SkillsFactoryHttpService MakeSkillsFactoryHttpService() {
+  static const comet::controller::ControllerRequestSupport request_support;
+  static const comet::controller::PlaneMutationService plane_mutation_service =
+      MakePlaneMutationService();
+  static const comet::controller::PlaneSkillRuntimeSyncService runtime_sync_service;
+  static const comet::controller::SkillsFactoryService skills_factory_service(
+      plane_mutation_service,
+      runtime_sync_service,
+      [](const std::string& db_path,
+         const std::string& plane_name,
+         const std::string& fallback_artifacts_root) {
+        return ResolvePlaneArtifactsRoot(db_path, plane_name, fallback_artifacts_root);
+      });
+  return SkillsFactoryHttpService(request_support, skills_factory_service);
 }
 
 ReadModelService MakeReadModelService() {
@@ -557,6 +597,10 @@ ModelLibraryHttpService CreateModelLibraryHttpService(
 
 PlaneHttpService CreatePlaneHttpService() {
   return MakePlaneHttpService();
+}
+
+SkillsFactoryHttpService CreateSkillsFactoryHttpService() {
+  return MakeSkillsFactoryHttpService();
 }
 
 ReadModelService CreateReadModelService() {

@@ -1,5 +1,6 @@
 #include "comet/state/auth_repository.h"
 #include "comet/state/assignment_repository.h"
+#include "comet/state/controller_settings_repository.h"
 #include "comet/state/desired_state_repository.h"
 #include "comet/state/desired_state_sqlite_codec.h"
 #include "comet/state/disk_runtime_repository.h"
@@ -9,6 +10,7 @@
 #include "comet/state/plane_repository.h"
 #include "comet/state/registered_host_repository.h"
 #include "comet/state/scheduler_repository.h"
+#include "comet/state/skills_factory_repository.h"
 #include "comet/state/sqlite_store.h"
 #include "comet/state/sqlite_store_schema.h"
 #include "comet/state/sqlite_store_support.h"
@@ -171,6 +173,34 @@ CREATE TABLE IF NOT EXISTS model_library_download_jobs (
     error_message TEXT NOT NULL DEFAULT '',
     hidden INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS skills_factory_skills (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS plane_skill_bindings (
+    plane_name TEXT NOT NULL,
+    skill_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    session_ids_json TEXT NOT NULL DEFAULT '[]',
+    comet_links_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (plane_name, skill_id),
+    FOREIGN KEY (plane_name) REFERENCES planes(name) ON DELETE CASCADE,
+    FOREIGN KEY (skill_id) REFERENCES skills_factory_skills(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS controller_settings (
+    setting_key TEXT PRIMARY KEY,
+    setting_value TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -775,6 +805,64 @@ std::vector<ModelLibraryDownloadJobRecord> ControllerStore::LoadModelLibraryDown
     jobs.push_back(ModelLibraryDownloadJobFromStatement(statement.raw()));
   }
   return jobs;
+}
+
+void ControllerStore::UpsertSkillsFactorySkill(const SkillsFactorySkillRecord& skill) {
+  SkillsFactoryRepository(AsSqlite(db_)).UpsertSkillsFactorySkill(skill);
+}
+
+std::optional<SkillsFactorySkillRecord> ControllerStore::LoadSkillsFactorySkill(
+    const std::string& skill_id) const {
+  return SkillsFactoryRepository(AsSqlite(db_)).LoadSkillsFactorySkill(skill_id);
+}
+
+std::vector<SkillsFactorySkillRecord> ControllerStore::LoadSkillsFactorySkills() const {
+  return SkillsFactoryRepository(AsSqlite(db_)).LoadSkillsFactorySkills();
+}
+
+bool ControllerStore::DeleteSkillsFactorySkill(const std::string& skill_id) {
+  return SkillsFactoryRepository(AsSqlite(db_)).DeleteSkillsFactorySkill(skill_id);
+}
+
+void ControllerStore::UpsertPlaneSkillBinding(const PlaneSkillBindingRecord& binding) {
+  SkillsFactoryRepository(AsSqlite(db_)).UpsertPlaneSkillBinding(binding);
+}
+
+std::optional<PlaneSkillBindingRecord> ControllerStore::LoadPlaneSkillBinding(
+    const std::string& plane_name,
+    const std::string& skill_id) const {
+  return SkillsFactoryRepository(AsSqlite(db_)).LoadPlaneSkillBinding(plane_name, skill_id);
+}
+
+std::vector<PlaneSkillBindingRecord> ControllerStore::LoadPlaneSkillBindings(
+    const std::optional<std::string>& plane_name,
+    const std::optional<std::string>& skill_id) const {
+  return SkillsFactoryRepository(AsSqlite(db_)).LoadPlaneSkillBindings(plane_name, skill_id);
+}
+
+bool ControllerStore::DeletePlaneSkillBinding(
+    const std::string& plane_name,
+    const std::string& skill_id) {
+  return SkillsFactoryRepository(AsSqlite(db_)).DeletePlaneSkillBinding(plane_name, skill_id);
+}
+
+int ControllerStore::DeletePlaneSkillBindingsForSkill(const std::string& skill_id) {
+  return SkillsFactoryRepository(AsSqlite(db_)).DeletePlaneSkillBindingsForSkill(skill_id);
+}
+
+std::optional<std::string> ControllerStore::LoadControllerSetting(
+    const std::string& setting_key) const {
+  return ControllerSettingsRepository(AsSqlite(db_)).LoadSetting(setting_key);
+}
+
+void ControllerStore::UpsertControllerSetting(
+    const std::string& setting_key,
+    const std::string& setting_value) {
+  ControllerSettingsRepository(AsSqlite(db_)).UpsertSetting(setting_key, setting_value);
+}
+
+bool ControllerStore::DeleteControllerSetting(const std::string& setting_key) {
+  return ControllerSettingsRepository(AsSqlite(db_)).DeleteSetting(setting_key);
 }
 
 bool ControllerStore::DeleteModelLibraryDownloadJob(const std::string& job_id) {

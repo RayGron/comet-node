@@ -13,10 +13,13 @@
 #include "plane/plane_desired_state_request_parser.h"
 #include "plane/plane_http_support.h"
 #include "plane/plane_registry_service.h"
+#include "skills/plane_skill_catalog_service.h"
 
 class PlaneHttpService {
  public:
-  explicit PlaneHttpService(PlaneHttpSupport support);
+  PlaneHttpService(
+      PlaneHttpSupport support,
+      comet::controller::PlaneSkillCatalogService plane_skill_catalog_service);
 
   std::optional<HttpResponse> HandleRequest(
       const std::string& db_path,
@@ -40,5 +43,6 @@ class PlaneHttpService {
       const HttpRequest& request) const;
 
   PlaneHttpSupport support_;
+  comet::controller::PlaneSkillCatalogService plane_skill_catalog_service_;
   PlaneDesiredStateRequestParser request_parser_;
 };

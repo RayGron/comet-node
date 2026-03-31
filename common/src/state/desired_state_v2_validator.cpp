@@ -329,8 +329,29 @@ void DesiredStateV2Validator::ValidateSkills() const {
     throw std::runtime_error("desired-state v2 skills are supported only for plane_mode=llm");
   }
   const auto& skills = value_.at("skills");
-  if (!FieldEnabledByDefault(skills, false)) {
+  const bool skills_enabled = FieldEnabledByDefault(skills, false);
+  if (!skills_enabled && skills.contains("factory_skill_ids")) {
+    throw std::runtime_error(
+        "desired-state v2 skills.factory_skill_ids require skills.enabled=true");
+  }
+  if (!skills_enabled) {
     return;
+  }
+  if (skills.contains("factory_skill_ids")) {
+    if (!skills.at("factory_skill_ids").is_array()) {
+      throw std::runtime_error("desired-state v2 skills.factory_skill_ids must be an array");
+    }
+    std::set<std::string> seen_skill_ids;
+    for (const auto& item : skills.at("factory_skill_ids")) {
+      if (!item.is_string() || item.get<std::string>().empty()) {
+        throw std::runtime_error(
+            "desired-state v2 skills.factory_skill_ids items must be non-empty strings");
+      }
+      if (!seen_skill_ids.insert(item.get<std::string>()).second) {
+        throw std::runtime_error(
+            "desired-state v2 skills.factory_skill_ids items must be unique");
+      }
+    }
   }
   if (skills.contains("node") && !skills.at("node").is_string()) {
     throw std::runtime_error("desired-state v2 skills.node must be a string");

@@ -11,6 +11,7 @@
 #include "plane/plane_http_service.h"
 #include "read_model/read_model_http_service.h"
 #include "scheduler/scheduler_http_service.h"
+#include "skills/skills_factory_http_service.h"
 
 namespace comet::controller {
 
@@ -72,6 +73,18 @@ class PlaneHttpRouteHandler final : public IControllerHttpRouteHandler {
 
  private:
   PlaneHttpService& service_;
+};
+
+class SkillsFactoryHttpRouteHandler final : public IControllerHttpRouteHandler {
+ public:
+  explicit SkillsFactoryHttpRouteHandler(SkillsFactoryHttpService& service);
+  std::optional<HttpResponse> TryHandle(
+      const std::string& db_path,
+      const std::string& default_artifacts_root,
+      const HttpRequest& request) const override;
+
+ private:
+  SkillsFactoryHttpService& service_;
 };
 
 class ReadModelHttpRouteHandler final : public IControllerHttpRouteHandler {

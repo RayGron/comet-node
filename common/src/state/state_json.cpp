@@ -315,9 +315,13 @@ json ToJson(const InteractionSettings& interaction) {
 }
 
 json ToJson(const SkillsSettings& skills) {
-  return json{
+  json result = {
       {"enabled", skills.enabled},
   };
+  if (!skills.factory_skill_ids.empty()) {
+    result["factory_skill_ids"] = skills.factory_skill_ids;
+  }
+  return result;
 }
 
 json ToJson(const DiskSpec& disk) {
@@ -829,6 +833,14 @@ DesiredState DesiredStateFromJson(const json& value) {
   if (value.contains("skills") && value.at("skills").is_object()) {
     SkillsSettings skills;
     skills.enabled = value.at("skills").value("enabled", skills.enabled);
+    if (value.at("skills").contains("factory_skill_ids") &&
+        value.at("skills").at("factory_skill_ids").is_array()) {
+      for (const auto& item : value.at("skills").at("factory_skill_ids")) {
+        if (item.is_string()) {
+          skills.factory_skill_ids.push_back(item.get<std::string>());
+        }
+      }
+    }
     state.skills = std::move(skills);
   }
 

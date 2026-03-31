@@ -195,7 +195,13 @@ class SkillsStore:
 
     def create_skill(self, payload):
         skill = normalize_skill_payload(payload, partial=False)
-        skill_id = uuid7_like()
+        skill_id = payload.get("id")
+        if skill_id is not None:
+            if not isinstance(skill_id, str) or not skill_id.strip():
+                raise ApiError(400, "invalid_request", "id must be a non-empty string")
+            skill_id = skill_id.strip()
+        else:
+            skill_id = uuid7_like()
         now = utc_now()
         with self._lock:
             with self._conn:
@@ -220,7 +226,14 @@ class SkillsStore:
     def replace_skill(self, skill_id: str, payload, *, partial: bool):
         update = normalize_skill_payload(payload, partial=partial)
         with self._lock:
-            current = self.get_skill(skill_id)
+            row = self._conn.execute("SELECT * FROM skills WHERE id = ?", (skill_id,)).fetchone()
+            if row is None:
+                if partial:
+                    raise ApiError(404, "skill_not_found", f"skill '{skill_id}' not found")
+                created_payload = dict(payload)
+                created_payload["id"] = skill_id
+                return self.create_skill(created_payload)
+            current = self._skill_from_row(row)
             merged = dict(current)
             merged.update(update)
             merged["session_ids"] = update.get("session_ids", current["session_ids"])

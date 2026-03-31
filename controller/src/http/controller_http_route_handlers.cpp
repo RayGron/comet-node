@@ -48,6 +48,17 @@ std::optional<HttpResponse> PlaneHttpRouteHandler::TryHandle(
   return service_.HandleRequest(db_path, default_artifacts_root, request);
 }
 
+SkillsFactoryHttpRouteHandler::SkillsFactoryHttpRouteHandler(
+    SkillsFactoryHttpService& service)
+    : service_(service) {}
+
+std::optional<HttpResponse> SkillsFactoryHttpRouteHandler::TryHandle(
+    const std::string& db_path,
+    const std::string& default_artifacts_root,
+    const HttpRequest& request) const {
+  return service_.HandleRequest(db_path, default_artifacts_root, request);
+}
+
 ReadModelHttpRouteHandler::ReadModelHttpRouteHandler(ReadModelHttpService& service)
     : service_(service) {}
 

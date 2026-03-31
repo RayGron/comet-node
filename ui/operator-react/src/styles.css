@@ -1226,6 +1226,37 @@ body {
   font-family: var(--font-head);
 }
 
+.summary-value-row {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.metric-sparkline-button {
+  width: 88px;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 190, 255, 0.18);
+  background: rgba(4, 15, 31, 0.62);
+  padding: 4px 6px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.metric-sparkline-button:hover {
+  border-color: rgba(255, 213, 94, 0.36);
+  background: rgba(8, 24, 48, 0.86);
+  transform: translateY(-1px);
+}
+
+.metric-sparkline-button:focus-visible {
+  outline: 1px solid rgba(255, 213, 94, 0.42);
+  border-color: rgba(255, 213, 94, 0.42);
+}
+
 .summary-meta {
   margin-top: 6px;
   color: var(--text-dim);
@@ -1453,6 +1484,20 @@ body {
   width: min(1320px, calc(100vw - 48px));
   display: grid;
   gap: 18px;
+}
+
+.telemetry-chart-modal {
+  width: min(980px, calc(100vw - 48px));
+  display: grid;
+  gap: 18px;
+}
+
+.telemetry-chart-shell {
+  height: min(420px, 56vh);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(120, 190, 255, 0.18);
+  background: rgba(4, 15, 31, 0.56);
+  padding: 14px;
 }
 
 .dashboard-plane-detail-scroll {

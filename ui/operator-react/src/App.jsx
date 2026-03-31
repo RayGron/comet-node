@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState, startTransition } from "react";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
   buildDesiredStateV2FromForm,
   buildNewPlaneFormState,
   buildPlaneFormStateFromDesiredStateV2,
@@ -15,6 +26,7 @@ const MODEL_LIBRARY_ACTIVE_POLL_MS = 1000;
 const EVENT_LIMIT = 24;
 const MODEL_LIBRARY_PAGE_SIZE = 24;
 const MODEL_LIBRARY_JOB_PAGE_SIZE = 8;
+const METRIC_HISTORY_MAX_POINTS = 72;
 const CHAT_LANGUAGE_OPTIONS = [
   { value: "en", label: "English" },
   { value: "de", label: "Deutsch" },
@@ -309,6 +321,170 @@ function formatTemperature(value) {
   return `${Math.round(Number(value))} C`;
 }
 
+function summarizeGlobalObservations(items) {
+  return (items || []).reduce(
+    (summary, observation) => {
+      const cpu = observation?.cpu_telemetry?.summary || {};
+      const gpu = observation?.gpu_telemetry?.summary || {};
+      const network = observation?.network_telemetry?.summary || {};
+      const disk = observation?.disk_telemetry?.summary || {};
+      const status = String(observation?.status || "").toLowerCase();
+      if (status !== "stale" && status !== "failed" && status !== "error") {
+        summary.healthyNodes += 1;
+      }
+      if (
+        observation?.runtime_status?.available !== true &&
+        observation?.instance_runtimes?.available !== true
+      ) {
+        summary.missingRuntime += 1;
+      }
+      summary.totalMemoryBytes += Number(cpu.total_memory_bytes || 0);
+      summary.usedMemoryBytes += Number(cpu.used_memory_bytes || 0);
+      summary.totalGpuVramMb += Number(gpu.total_vram_mb || 0);
+      summary.usedGpuVramMb += Number(gpu.used_vram_mb || 0);
+      summary.gpuDeviceCount += Number(gpu.device_count || 0);
+      if (cpu.temperature_available) {
+        summary.cpuTemperatureHostCount += 1;
+        summary.maxCpuTemperatureC = Math.max(
+          summary.maxCpuTemperatureC,
+          Number(cpu.max_temperature_c || cpu.temperature_c || 0),
+        );
+      }
+      if (Number(gpu.temperature_device_count || 0) > 0) {
+        summary.gpuTemperatureDeviceCount += Number(gpu.temperature_device_count || 0);
+        summary.maxGpuTemperatureC = Math.max(
+          summary.maxGpuTemperatureC,
+          Number(gpu.hottest_temperature_c || 0),
+        );
+      }
+      summary.networkRxBytes += Number(network.rx_bytes || 0);
+      summary.networkTxBytes += Number(network.tx_bytes || 0);
+      summary.diskUsedBytes += Number(disk.used_bytes || 0);
+      summary.diskTotalBytes += Number(disk.total_bytes || 0);
+      return summary;
+    },
+    {
+      healthyNodes: 0,
+      missingRuntime: 0,
+      totalMemoryBytes: 0,
+      usedMemoryBytes: 0,
+      totalGpuVramMb: 0,
+      usedGpuVramMb: 0,
+      gpuDeviceCount: 0,
+      cpuTemperatureHostCount: 0,
+      maxCpuTemperatureC: 0,
+      gpuTemperatureDeviceCount: 0,
+      maxGpuTemperatureC: 0,
+      networkRxBytes: 0,
+      networkTxBytes: 0,
+      diskUsedBytes: 0,
+      diskTotalBytes: 0,
+    },
+  );
+}
+
+function appendMetricHistory(previousHistory, samples, timestamp = Date.now()) {
+  const nextHistory = { ...previousHistory };
+  for (const [key, sample] of Object.entries(samples || {})) {
+    if (!sample || !Number.isFinite(sample.value)) {
+      continue;
+    }
+    const currentSeries = Array.isArray(previousHistory[key]) ? previousHistory[key] : [];
+    const nextPoint = {
+      ts: timestamp,
+      value: Number(sample.value),
+    };
+    const lastPoint = currentSeries[currentSeries.length - 1];
+    if (
+      lastPoint &&
+      lastPoint.value === nextPoint.value &&
+      timestamp - lastPoint.ts < AUTO_REFRESH_MS - 250
+    ) {
+      nextHistory[key] = currentSeries;
+      continue;
+    }
+    nextHistory[key] = [...currentSeries, nextPoint].slice(-METRIC_HISTORY_MAX_POINTS);
+  }
+  return nextHistory;
+}
+
+function buildServerMetricSamples(summary, observedNodeCount) {
+  return {
+    "server.healthy_hosts": { value: Number(summary?.healthyNodes || 0) },
+    "server.used_gpu_vram_mb": { value: Number(summary?.usedGpuVramMb || 0) },
+    "server.used_memory_bytes": { value: Number(summary?.usedMemoryBytes || 0) },
+    "server.max_cpu_temp_c": { value: Number(summary?.maxCpuTemperatureC || 0) },
+    "server.max_gpu_temp_c": { value: Number(summary?.maxGpuTemperatureC || 0) },
+    "server.missing_runtime": { value: Number(summary?.missingRuntime || 0) },
+    "server.observed_nodes": { value: Number(observedNodeCount || 0) },
+  };
+}
+
+function buildPlaneMetricSamples({
+  planeName,
+  readyNodes,
+  observedInstanceCount,
+  rolloutActions,
+  alertCount,
+  missingRuntimeNodes,
+}) {
+  if (!planeName) {
+    return {};
+  }
+  const prefix = `plane.${planeName}`;
+  return {
+    [`${prefix}.ready_nodes`]: { value: Number(readyNodes || 0) },
+    [`${prefix}.observed_instances`]: { value: Number(observedInstanceCount || 0) },
+    [`${prefix}.rollout_actions`]: { value: Number(rolloutActions || 0) },
+    [`${prefix}.alerts`]: { value: Number(alertCount || 0) },
+    [`${prefix}.missing_runtime_nodes`]: { value: Number(missingRuntimeNodes || 0) },
+  };
+}
+
+function formatMetricHistoryTimestamp(ts) {
+  const date = new Date(ts);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function formatMetricChartValue(value, formatter) {
+  if (typeof formatter === "function") {
+    return formatter(value);
+  }
+  return String(value);
+}
+
+function buildMetricChartDomain(history) {
+  const values = (Array.isArray(history) ? history : [])
+    .map((entry) => Number(entry?.value))
+    .filter((value) => Number.isFinite(value));
+  if (values.length === 0) {
+    return [0, 1];
+  }
+
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  if (Math.abs(maxValue - minValue) < 1e-9) {
+    const padding = Math.max(Math.abs(maxValue) * 0.05, 1);
+    const lowerBound = minValue >= 0 ? Math.max(0, minValue - padding) : minValue - padding;
+    return [lowerBound, maxValue + padding];
+  }
+
+  const spread = maxValue - minValue;
+  const magnitude = Math.max(Math.abs(minValue), Math.abs(maxValue), 1);
+  const padding = Math.max(
+    spread * 0.12,
+    Math.min(magnitude * 0.0025, spread),
+    0.05,
+  );
+  const lowerBound = minValue >= 0 ? Math.max(0, minValue - padding) : minValue - padding;
+  const upperBound = maxValue + padding;
+  if (Math.abs(upperBound - lowerBound) < 1e-9) {
+    return [lowerBound, lowerBound + 1];
+  }
+  return [lowerBound, upperBound];
+}
+
 function normalizeChatLanguage(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return CHAT_LANGUAGE_OPTIONS.some((option) => option.value === normalized)
@@ -483,6 +659,16 @@ function observedStateForObservation(observation) {
 function observedInstancesForObservation(observation) {
   const state = observedStateForObservation(observation);
   return Array.isArray(state.instances) ? state.instances : [];
+}
+
+function hostObservationItemsFromPayload(payload) {
+  if (Array.isArray(payload?.observations)) {
+    return payload.observations;
+  }
+  if (Array.isArray(payload?.items)) {
+    return payload.items;
+  }
+  return [];
 }
 
 function instanceRole(instance) {
@@ -790,13 +976,121 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave, modelLibraryIte
   );
 }
 
-function SummaryCard({ label, value, meta }) {
+function MetricSparklineButton({ label, history, onOpen }) {
+  const series = Array.isArray(history) ? history : [];
+  if (series.length < 2) {
+    return null;
+  }
+  const domain = buildMetricChartDomain(series);
+  return (
+    <button
+      className="metric-sparkline-button"
+      type="button"
+      aria-label={`Open ${label} chart`}
+      title={`Open ${label} chart`}
+      onClick={onOpen}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={series}>
+          <YAxis type="number" domain={domain} hide />
+          <Area
+            type="monotone"
+            dataKey="value"
+            stroke="rgba(255, 213, 94, 0.96)"
+            fill="rgba(120, 190, 255, 0.18)"
+            strokeWidth={1.8}
+            isAnimationActive={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </button>
+  );
+}
+
+function SummaryCard({ label, value, meta, history, onOpenTrend }) {
   return (
     <article className="summary-card">
       <div className="summary-label">{label}</div>
-      <div className="summary-value">{value}</div>
+      <div className="summary-value-row">
+        <div className="summary-value">{value}</div>
+        <MetricSparklineButton label={label} history={history} onOpen={onOpenTrend} />
+      </div>
       <div className="summary-meta">{meta}</div>
     </article>
+  );
+}
+
+function TelemetryChartDialog({ chart, onClose }) {
+  if (!chart?.open) {
+    return null;
+  }
+  const series = Array.isArray(chart.data) ? chart.data : [];
+  const domain = buildMetricChartDomain(series);
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="modal-card telemetry-chart-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="telemetry-chart-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Telemetry history</div>
+            <h2 id="telemetry-chart-title">{chart.title}</h2>
+          </div>
+          <button
+            className="ghost-button compact-button icon-button"
+            type="button"
+            aria-label="Close chart"
+            title="Close chart"
+            onClick={onClose}
+          >
+            <ActionIcon kind="close" />
+          </button>
+        </div>
+        <p className="editor-copy">{chart.meta || "Live metric history from controller polling."}</p>
+        <div className="telemetry-chart-shell">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={series}>
+              <CartesianGrid stroke="rgba(120, 190, 255, 0.12)" vertical={false} />
+              <XAxis
+                dataKey="ts"
+                tickFormatter={formatMetricHistoryTimestamp}
+                stroke="rgba(174, 194, 224, 0.56)"
+                minTickGap={28}
+              />
+              <YAxis
+                stroke="rgba(174, 194, 224, 0.56)"
+                domain={domain}
+                allowDataOverflow
+                tickFormatter={(value) => formatMetricChartValue(value, chart.valueFormatter)}
+                width={72}
+              />
+              <Tooltip
+                formatter={(value) => formatMetricChartValue(value, chart.valueFormatter)}
+                labelFormatter={formatMetricHistoryTimestamp}
+                contentStyle={{
+                  borderRadius: 14,
+                  border: "1px solid rgba(120, 190, 255, 0.18)",
+                  background: "rgba(6, 18, 39, 0.96)",
+                }}
+              />
+              <Line
+                type="monotone"
+                dataKey="value"
+                stroke="rgba(255, 213, 94, 0.96)"
+                strokeWidth={2.4}
+                dot={false}
+                activeDot={{ r: 4 }}
+                isAnimationActive={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1080,6 +1374,14 @@ function App() {
   const [chatLanguage, setChatLanguage] = useState("ru");
   const [chatBusy, setChatBusy] = useState(false);
   const [chatError, setChatError] = useState("");
+  const [metricHistory, setMetricHistory] = useState({});
+  const [telemetryChart, setTelemetryChart] = useState({
+    open: false,
+    title: "",
+    meta: "",
+    data: [],
+    valueFormatter: null,
+  });
   const [interactionPaneWidth, setInteractionPaneWidth] = useState(34);
   const [draggingDivider, setDraggingDivider] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1246,10 +1548,24 @@ function App() {
       );
       if (!planeName) {
         const globalHostObservationsPayload = await globalHostObservationsRequest;
+        const globalObservationItems = hostObservationItemsFromPayload(
+          globalHostObservationsPayload,
+        );
+        const serverSummary = summarizeGlobalObservations(globalObservationItems);
         setPlaneDetail(null);
         setDashboard(null);
         setHostObservations(null);
         setGlobalHostObservations(globalHostObservationsPayload);
+        setMetricHistory((current) =>
+          appendMetricHistory(
+            current,
+            buildServerMetricSamples(
+              serverSummary,
+              globalObservationItems.length,
+            ),
+            Date.now(),
+          ),
+        );
         setDiskState(null);
         setRolloutState(null);
         setRebalancePlan(null);
@@ -1306,6 +1622,51 @@ function App() {
       setRebalancePlan(rebalancePayload);
       setEvents(Array.isArray(eventsPayload.events) ? eventsPayload.events : []);
       setInteractionStatus(interactionPayload);
+      const globalObservationItems = hostObservationItemsFromPayload(
+        globalHostObservationsPayload,
+      );
+      const serverSummary = summarizeGlobalObservations(globalObservationItems);
+      const dashboardRuntime = dashboardPayload?.runtime || {};
+      const observationItems = hostObservationItemsFromPayload(hostObservationsPayload);
+      const observedInstancesCount = observationItems.reduce((count, observation) => {
+        const instances = observedInstancesForObservation(observation);
+        return count + instances.length;
+      }, 0);
+      const readyNodeCount =
+        Number(dashboardRuntime.ready_nodes ?? 0) > 0 || observationItems.length === 0
+          ? Number(dashboardRuntime.ready_nodes ?? 0)
+          : observationItems.filter((item) => {
+              const status = String(item?.status || "").toLowerCase();
+              return status !== "stale" && status !== "failed" && status !== "error";
+            }).length;
+      const missingRuntimeCount = observationItems.filter(
+        (observation) =>
+          observation?.runtime_status?.available !== true &&
+          observation?.instance_runtimes?.available !== true,
+      ).length;
+      setMetricHistory((current) =>
+        appendMetricHistory(
+          current,
+          {
+            ...buildServerMetricSamples(
+              serverSummary,
+              globalObservationItems.length,
+            ),
+            ...buildPlaneMetricSamples({
+              planeName,
+              readyNodes: readyNodeCount,
+              observedInstanceCount:
+                observedInstancesCount > 0
+                  ? observedInstancesCount
+                  : Number(dashboardPayload?.plane?.instance_count ?? 0),
+              rolloutActions: Number(dashboardPayload?.rollout?.total_actions ?? 0),
+              alertCount: Number((dashboardPayload?.alerts || {}).total ?? 0),
+              missingRuntimeNodes: missingRuntimeCount,
+            }),
+          },
+          Date.now(),
+        ),
+      );
       setApiHealthy(true);
       setLastRefreshAt(new Date().toISOString());
     } catch (error) {
@@ -1318,6 +1679,16 @@ function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function openTelemetryChart(title, history, meta, valueFormatter = null) {
+    setTelemetryChart({
+      open: true,
+      title,
+      meta,
+      data: Array.isArray(history) ? history : [],
+      valueFormatter,
+    });
   }
 
   async function completeAuthentication(method, beginPayload) {
@@ -2131,8 +2502,8 @@ function App() {
   const chatLanguageOptions = supportedChatLanguageOptions(desiredState, interactionStatus);
   const interactionReady = interactionStatus?.ready === true;
   const nodeItems = dashboard?.nodes || [];
-  const observationItems = hostObservations?.observations || [];
-  const globalObservationItems = globalHostObservations?.observations || [];
+  const observationItems = hostObservationItemsFromPayload(hostObservations);
+  const globalObservationItems = hostObservationItemsFromPayload(globalHostObservations);
   const assignmentItems = dashboard?.assignments?.by_node || [];
   const rolloutItems = rolloutState?.actions || [];
   const rebalanceItems = rebalancePlan?.rebalance_plan || [];
@@ -2178,65 +2549,25 @@ function App() {
       (event) => event.category === "host-assignment" && event.event_type === "failed",
     )?.message ||
     "";
-  const globalObservationSummary = globalObservationItems.reduce(
-    (summary, observation) => {
-      const cpu = observation?.cpu_telemetry?.summary || {};
-      const gpu = observation?.gpu_telemetry?.summary || {};
-      const network = observation?.network_telemetry?.summary || {};
-      const disk = observation?.disk_telemetry?.summary || {};
-      const status = String(observation?.status || "").toLowerCase();
-      if (status !== "stale" && status !== "failed" && status !== "error") {
-        summary.healthyNodes += 1;
-      }
-      if (
-        observation?.runtime_status?.available !== true &&
-        observation?.instance_runtimes?.available !== true
-      ) {
-        summary.missingRuntime += 1;
-      }
-      summary.totalMemoryBytes += Number(cpu.total_memory_bytes || 0);
-      summary.usedMemoryBytes += Number(cpu.used_memory_bytes || 0);
-      summary.totalGpuVramMb += Number(gpu.total_vram_mb || 0);
-      summary.usedGpuVramMb += Number(gpu.used_vram_mb || 0);
-      summary.gpuDeviceCount += Number(gpu.device_count || 0);
-      if (cpu.temperature_available) {
-        summary.cpuTemperatureHostCount += 1;
-        summary.maxCpuTemperatureC = Math.max(
-          summary.maxCpuTemperatureC,
-          Number(cpu.max_temperature_c || cpu.temperature_c || 0),
-        );
-      }
-      if (Number(gpu.temperature_device_count || 0) > 0) {
-        summary.gpuTemperatureDeviceCount += Number(gpu.temperature_device_count || 0);
-        summary.maxGpuTemperatureC = Math.max(
-          summary.maxGpuTemperatureC,
-          Number(gpu.hottest_temperature_c || 0),
-        );
-      }
-      summary.networkRxBytes += Number(network.rx_bytes || 0);
-      summary.networkTxBytes += Number(network.tx_bytes || 0);
-      summary.diskUsedBytes += Number(disk.used_bytes || 0);
-      summary.diskTotalBytes += Number(disk.total_bytes || 0);
-      return summary;
-    },
-    {
-      healthyNodes: 0,
-      missingRuntime: 0,
-      totalMemoryBytes: 0,
-      usedMemoryBytes: 0,
-      totalGpuVramMb: 0,
-      usedGpuVramMb: 0,
-      gpuDeviceCount: 0,
-      cpuTemperatureHostCount: 0,
-      maxCpuTemperatureC: 0,
-      gpuTemperatureDeviceCount: 0,
-      maxGpuTemperatureC: 0,
-      networkRxBytes: 0,
-      networkTxBytes: 0,
-      diskUsedBytes: 0,
-      diskTotalBytes: 0,
-    },
-  );
+  const globalObservationSummary = summarizeGlobalObservations(globalObservationItems);
+  const serverHealthyHostsHistory = metricHistory["server.healthy_hosts"] || [];
+  const serverGpuVramHistory = metricHistory["server.used_gpu_vram_mb"] || [];
+  const serverMemoryHistory = metricHistory["server.used_memory_bytes"] || [];
+  const serverCpuTempHistory = metricHistory["server.max_cpu_temp_c"] || [];
+  const serverGpuTempHistory = metricHistory["server.max_gpu_temp_c"] || [];
+  const planeMetricPrefix = selectedPlane ? `plane.${selectedPlane}` : "";
+  const planeReadyNodesHistory = planeMetricPrefix
+    ? metricHistory[`${planeMetricPrefix}.ready_nodes`] || []
+    : [];
+  const planeObservedInstancesHistory = planeMetricPrefix
+    ? metricHistory[`${planeMetricPrefix}.observed_instances`] || []
+    : [];
+  const planeRolloutHistory = planeMetricPrefix
+    ? metricHistory[`${planeMetricPrefix}.rollout_actions`] || []
+    : [];
+  const planeAlertHistory = planeMetricPrefix
+    ? metricHistory[`${planeMetricPrefix}.alerts`] || []
+    : [];
   const operationProgress = buildOperationProgressModel({
     pendingOperation,
     selectedPlaneName: selectedPlane,
@@ -2349,6 +2680,54 @@ function App() {
   function closePlaneDashboard() {
     setSelectedPlane("");
     setSelectedTab("status");
+  }
+
+  function renderHostCards(hostItems) {
+    const items = [...(hostItems || [])].sort((left, right) => {
+      const leftReady = left?.runtime_status?.available === true ? 0 : 1;
+      const rightReady = right?.runtime_status?.available === true ? 0 : 1;
+      if (leftReady !== rightReady) {
+        return leftReady - rightReady;
+      }
+      return String(left?.node_name || "").localeCompare(String(right?.node_name || ""));
+    });
+
+    return (
+      <div className="plane-list">
+        {items.map((host) => {
+          const cpu = host?.cpu_telemetry?.summary || {};
+          const gpu = host?.gpu_telemetry?.summary || {};
+          const runtimeAvailable = host?.runtime_status?.available === true;
+          const runtimePhase = host?.runtime_status?.phase || "pending";
+          const indicatorClass = runtimeIndicatorClass(runtimeAvailable, host?.status);
+          const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
+          const totalMemoryBytes = Number(cpu.total_memory_bytes || 0);
+          const gpuTempCount = Number(gpu.temperature_device_count || 0);
+          const gpuDeviceCount = Number(gpu.device_count || 0);
+          return (
+            <article className="node-card" key={host?.node_name || host?.observed_at}>
+              <div className="card-row">
+                <strong>{host?.node_name || "unknown-host"}</strong>
+                <div className={`pill ${indicatorClass}`}>
+                  {statusDot(indicatorClass)}
+                  <span>{nodeStatusLabel(runtimeAvailable, runtimePhase, host?.status)}</span>
+                </div>
+              </div>
+              <div className="metric-grid">
+                <div className="metric-row"><span>Status</span><strong>{host?.status || "n/a"}</strong></div>
+                <div className="metric-row"><span>Runtime</span><strong>{runtimePhase}</strong></div>
+                <div className="metric-row"><span>Launch ready</span><strong>{yesNo(runtimeAvailable)}</strong></div>
+                <div className="metric-row"><span>CPU temp</span><strong>{cpu.temperature_available ? formatTemperature(cpu.max_temperature_c ?? cpu.temperature_c) : "n/a"}</strong></div>
+                <div className="metric-row"><span>GPU temp</span><strong>{gpuTempCount > 0 ? formatTemperature(gpu.hottest_temperature_c) : "n/a"}</strong></div>
+                <div className="metric-row"><span>GPU count</span><strong>{gpuDeviceCount || "n/a"}</strong></div>
+                <div className="metric-row"><span>Memory</span><strong>{totalMemoryBytes > 0 ? `${compactBytes(usedMemoryBytes)} / ${compactBytes(totalMemoryBytes)}` : "n/a"}</strong></div>
+                <div className="metric-row"><span>Observed</span><strong>{formatTimestamp(host?.observed_at)}</strong></div>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    );
   }
 
   function renderPlaneCards(planeItems, deleteTargetPage = "planes") {
@@ -2593,24 +2972,56 @@ function App() {
             <div className="dashboard-plane-detail-scroll">
               <div className="summary-grid">
                 <SummaryCard
-                  label="Nodes"
-                  value={dashboard.plane?.node_count ?? 0}
-                  meta={`${readyNodes} ready / ${notReadyNodes} not ready`}
+                  label="Ready nodes"
+                  value={readyNodes}
+                  meta={`${dashboard.plane?.node_count ?? 0} total / ${notReadyNodes} not ready`}
+                  history={planeReadyNodesHistory}
+                  onOpenTrend={() =>
+                    openTelemetryChart(
+                      "Plane ready nodes",
+                      planeReadyNodesHistory,
+                      `Plane ${selectedPlane || "n/a"} readiness over time.`,
+                    )
+                  }
                 />
                 <SummaryCard
-                  label="Instances"
+                  label="Observed instances"
                   value={displayedInstanceCount}
                   meta={instanceRoleSummary}
+                  history={planeObservedInstancesHistory}
+                  onOpenTrend={() =>
+                    openTelemetryChart(
+                      "Plane observed instances",
+                      planeObservedInstancesHistory,
+                      `Plane ${selectedPlane || "n/a"} observed instance count over time.`,
+                    )
+                  }
                 />
                 <SummaryCard
-                  label="Rollout"
+                  label="Rollout actions"
                   value={dashboard.rollout?.total_actions ?? 0}
                   meta={`${dashboard.rollout?.loop_status ?? "n/a"} / ${dashboard.rollout?.loop_reason ?? "n/a"}`}
+                  history={planeRolloutHistory}
+                  onOpenTrend={() =>
+                    openTelemetryChart(
+                      "Plane rollout actions",
+                      planeRolloutHistory,
+                      `Plane ${selectedPlane || "n/a"} rollout queue size over time.`,
+                    )
+                  }
                 />
                 <SummaryCard
                   label="Alerts"
                   value={alertSummary.total ?? 0}
                   meta={`${alertSummary.critical ?? 0} critical / ${alertSummary.warning ?? 0} warning / ${alertSummary.booting ?? 0} booting`}
+                  history={planeAlertHistory}
+                  onOpenTrend={() =>
+                    openTelemetryChart(
+                      "Plane alerts",
+                      planeAlertHistory,
+                      `Plane ${selectedPlane || "n/a"} alert count over time.`,
+                    )
+                  }
                 />
               </div>
 
@@ -3908,23 +4319,49 @@ function App() {
                 </div>
                 <div className="summary-grid server-summary-grid">
                   <SummaryCard
-                    label="Hosts"
-                    value={globalObservationItems.length}
-                    meta={`${globalObservationSummary.healthyNodes} healthy / ${Math.max(0, globalObservationItems.length - globalObservationSummary.healthyNodes)} degraded`}
-                  />
-                  <SummaryCard
-                    label="Physical GPUs"
-                    value={globalObservationSummary.gpuDeviceCount}
-                    meta={
-                      globalObservationSummary.totalGpuVramMb > 0
-                        ? `${globalObservationSummary.usedGpuVramMb}/${globalObservationSummary.totalGpuVramMb} MB VRAM`
-                        : "no GPU telemetry"
+                    label="Healthy hosts"
+                    value={globalObservationSummary.healthyNodes}
+                    meta={`${globalObservationItems.length} observed / ${Math.max(0, globalObservationItems.length - globalObservationSummary.healthyNodes)} degraded`}
+                    history={serverHealthyHostsHistory}
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "Healthy hosts",
+                        serverHealthyHostsHistory,
+                        "Observed healthy hosts over time.",
+                      )
                     }
                   />
                   <SummaryCard
-                    label="Memory total"
-                    value={compactBytes(globalObservationSummary.totalMemoryBytes)}
-                    meta={`used ${compactBytes(globalObservationSummary.usedMemoryBytes)}`}
+                    label="GPU VRAM used"
+                    value={`${Math.round(globalObservationSummary.usedGpuVramMb)} MB`}
+                    meta={
+                      globalObservationSummary.totalGpuVramMb > 0
+                        ? `${Math.round(globalObservationSummary.totalGpuVramMb)} MB total across ${globalObservationSummary.gpuDeviceCount} GPUs`
+                        : "no GPU telemetry"
+                    }
+                    history={serverGpuVramHistory}
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "GPU VRAM used",
+                        serverGpuVramHistory,
+                        "Aggregate used GPU VRAM across observed hosts.",
+                        (value) => `${Math.round(value)} MB`,
+                      )
+                    }
+                  />
+                  <SummaryCard
+                    label="Memory used"
+                    value={compactBytes(globalObservationSummary.usedMemoryBytes)}
+                    meta={`of ${compactBytes(globalObservationSummary.totalMemoryBytes)} total`}
+                    history={serverMemoryHistory}
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "Memory used",
+                        serverMemoryHistory,
+                        "Aggregate used host memory over time.",
+                        (value) => compactBytes(value),
+                      )
+                    }
                   />
                   <SummaryCard
                     label="CPU temp"
@@ -3934,6 +4371,15 @@ function App() {
                         : "n/a"
                     }
                     meta={`${globalObservationSummary.cpuTemperatureHostCount} hosts reporting`}
+                    history={serverCpuTempHistory}
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "CPU temperature",
+                        serverCpuTempHistory,
+                        "Highest reported CPU temperature across observed hosts.",
+                        (value) => formatTemperature(value),
+                      )
+                    }
                   />
                   <SummaryCard
                     label="GPU temp"
@@ -3943,13 +4389,31 @@ function App() {
                         : "n/a"
                     }
                     meta={`${globalObservationSummary.gpuTemperatureDeviceCount} GPU devices reporting`}
-                  />
-                  <SummaryCard
-                    label="Runtime gaps"
-                    value={globalObservationSummary.missingRuntime}
-                    meta="hosts missing runtime payload"
+                    history={serverGpuTempHistory}
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "GPU temperature",
+                        serverGpuTempHistory,
+                        "Highest reported GPU temperature across observed devices.",
+                        (value) => formatTemperature(value),
+                      )
+                    }
                   />
                 </div>
+              </section>
+
+              <section className="subpanel dashboard-hosts-panel">
+                <div className="subpanel-header">
+                  <h3>Hosts</h3>
+                  <span className="subpanel-meta">
+                    Observed hosts with runtime, temperature, GPU, and memory posture.
+                  </span>
+                </div>
+                {globalObservationItems.length === 0 ? (
+                  <EmptyState title="No observed hosts" detail="Waiting for host telemetry to arrive." />
+                ) : (
+                  renderHostCards(globalObservationItems)
+                )}
               </section>
 
               <section className="subpanel dashboard-planes-panel">
@@ -3977,6 +4441,18 @@ function App() {
         )}
       </main>
       {renderDashboardPlaneDetailModal()}
+      <TelemetryChartDialog
+        chart={telemetryChart}
+        onClose={() =>
+          setTelemetryChart({
+            open: false,
+            title: "",
+            meta: "",
+            data: [],
+            valueFormatter: null,
+          })
+        }
+      />
       <PlaneEditorDialog
         dialog={planeDialog}
         setDialog={setPlaneDialog}

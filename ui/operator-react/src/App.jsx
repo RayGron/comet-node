@@ -264,6 +264,45 @@ function compactBytes(value) {
   return `${amount.toFixed(amount >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+function formatDashboardBytesMbGb(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "n/a";
+  }
+  const oneGb = 1024 ** 3;
+  if (numeric >= oneGb) {
+    return `${(numeric / oneGb).toFixed(1)} GB`;
+  }
+  return `${Math.round(numeric / (1024 ** 2))} MB`;
+}
+
+function formatDashboardMegabytesMbGb(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "n/a";
+  }
+  if (numeric >= 1024) {
+    return `${(numeric / 1024).toFixed(1)} GB`;
+  }
+  return `${Math.round(numeric)} MB`;
+}
+
+function formatChartGigabytesFromBytes(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "n/a";
+  }
+  return `${(numeric / (1024 ** 3)).toFixed(2)} GB`;
+}
+
+function formatChartGigabytesFromMegabytes(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "n/a";
+  }
+  return `${(numeric / 1024).toFixed(2)} GB`;
+}
+
 function modelLibraryJobStatusClass(status) {
   switch (String(status || "").toLowerCase()) {
     case "completed":
@@ -4333,10 +4372,10 @@ function App() {
                   />
                   <SummaryCard
                     label="GPU VRAM used"
-                    value={`${Math.round(globalObservationSummary.usedGpuVramMb)} MB`}
+                    value={formatDashboardMegabytesMbGb(globalObservationSummary.usedGpuVramMb)}
                     meta={
                       globalObservationSummary.totalGpuVramMb > 0
-                        ? `${Math.round(globalObservationSummary.totalGpuVramMb)} MB total across ${globalObservationSummary.gpuDeviceCount} GPUs`
+                        ? `${formatDashboardMegabytesMbGb(globalObservationSummary.totalGpuVramMb)} total across ${globalObservationSummary.gpuDeviceCount} GPUs`
                         : "no GPU telemetry"
                     }
                     history={serverGpuVramHistory}
@@ -4345,21 +4384,21 @@ function App() {
                         "GPU VRAM used",
                         serverGpuVramHistory,
                         "Aggregate used GPU VRAM across observed hosts.",
-                        (value) => `${Math.round(value)} MB`,
+                        (value) => formatChartGigabytesFromMegabytes(value),
                       )
                     }
                   />
                   <SummaryCard
                     label="Memory used"
-                    value={compactBytes(globalObservationSummary.usedMemoryBytes)}
-                    meta={`of ${compactBytes(globalObservationSummary.totalMemoryBytes)} total`}
+                    value={formatDashboardBytesMbGb(globalObservationSummary.usedMemoryBytes)}
+                    meta={`of ${formatDashboardBytesMbGb(globalObservationSummary.totalMemoryBytes)} total`}
                     history={serverMemoryHistory}
                     onOpenTrend={() =>
                       openTelemetryChart(
                         "Memory used",
                         serverMemoryHistory,
                         "Aggregate used host memory over time.",
-                        (value) => compactBytes(value),
+                        (value) => formatChartGigabytesFromBytes(value),
                       )
                     }
                   />

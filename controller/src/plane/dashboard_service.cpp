@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "host/host_assignment_reconciliation_service.h"
 #include "comet/state/state_json.h"
 
 using nlohmann::json;
@@ -202,6 +203,7 @@ nlohmann::json DashboardService::BuildPayload(
       plane_name);
   comet::ControllerStore store(db_path);
   store.Initialize();
+  const HostAssignmentReconciliationService reconciliation_service;
   const auto recent_events =
       store.LoadEvents(plane_name, std::nullopt, std::nullopt, std::nullopt, 10);
   const auto rollout_actions =
@@ -272,6 +274,7 @@ nlohmann::json DashboardService::BuildPayload(
     if (effective_plane_applied_generation > plane.applied_generation) {
       store.UpdatePlaneAppliedGeneration(plane.name, effective_plane_applied_generation);
     }
+    (void)reconciliation_service.Reconcile(store, plane.name);
     break;
   }
   const auto availability_override_map =
@@ -315,7 +318,10 @@ nlohmann::json DashboardService::BuildPayload(
       nodes_payload.degraded_gpu_nodes);
 
   const auto latest_assignments_by_node =
-      BuildLatestPlaneAssignmentsByNode(view.assignments);
+      BuildLatestPlaneAssignmentsByNode(
+          plane_name.has_value()
+              ? store.LoadHostAssignments(std::nullopt, std::nullopt, *plane_name)
+              : store.LoadHostAssignments());
   payload["assignments"] = BuildAssignmentsPayload(latest_assignments_by_node);
   payload["rollout"] = BuildRolloutPayload(
       rollout_actions,

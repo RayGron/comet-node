@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "host/host_assignment_reconciliation_service.h"
 #include "plane/plane_deletion_support.h"
 
 using nlohmann::json;
@@ -22,6 +23,7 @@ json PlaneRegistryService::BuildPlanesPayload(const std::string& db_path) const 
 
   comet::ControllerStore store(db_path);
   store.Initialize();
+  const HostAssignmentReconciliationService reconciliation_service;
 
   plane_deletion_support::FinalizeDeletedPlanesIfReady(
       store,
@@ -35,8 +37,6 @@ json PlaneRegistryService::BuildPlanesPayload(const std::string& db_path) const 
     const auto observations = deps_.filter_host_observations_for_plane(
         store.LoadHostObservations(),
         plane.name);
-    const auto assignments =
-        store.LoadHostAssignments(std::nullopt, std::nullopt, plane.name);
     const int effective_applied_generation =
         deps_.compute_effective_applied_generation(
             plane,
@@ -46,6 +46,9 @@ json PlaneRegistryService::BuildPlanesPayload(const std::string& db_path) const 
     if (effective_applied_generation > plane.applied_generation) {
       store.UpdatePlaneAppliedGeneration(plane.name, effective_applied_generation);
     }
+    (void)reconciliation_service.Reconcile(store, plane.name);
+    const auto assignments =
+        store.LoadHostAssignments(std::nullopt, std::nullopt, plane.name);
     const auto latest_assignments_by_node =
         deps_.build_latest_assignments_by_node(assignments);
     int failed_assignments = 0;

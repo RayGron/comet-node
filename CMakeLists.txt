@@ -252,6 +252,7 @@ comet_enable_strict_warnings(comet-controller-apply-state-tests)
 
 add_executable(
   comet-controller-plane-deletion-tests
+  controller/src/host/host_assignment_reconciliation_service.cpp
   controller/src/plane/controller_state_service.cpp
   controller/src/plane/plane_deletion_support.cpp
   controller/src/plane/plane_service.cpp
@@ -286,6 +287,7 @@ add_executable(
   controller/src/auth/auth_http_support.cpp
   controller/src/auth/auth_payload_service.cpp
   controller/src/auth/auth_support_service.cpp
+  controller/src/host/host_assignment_reconciliation_service.cpp
   controller/src/scheduler/assignment_orchestration_service.cpp
   controller/src/bundle/bundle_cli_service.cpp
   controller/src/bundle/bundle_http_service.cpp

@@ -4,6 +4,7 @@
 #include <string>
 
 #include "comet/state/sqlite_store.h"
+#include "host/host_assignment_reconciliation_service.h"
 #include "plane/controller_state_service.h"
 #include "plane/plane_deletion_support.h"
 #include "plane/plane_service.h"
@@ -18,12 +19,50 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-comet::DesiredState BuildDesiredState(const std::string& plane_name) {
+comet::DesiredState BuildDesiredState(
+    const std::string& plane_name,
+    const std::vector<std::string>& node_names = {}) {
   comet::DesiredState state;
   state.plane_name = plane_name;
   state.plane_mode = comet::PlaneMode::Llm;
   state.control_root = "/tmp/" + plane_name;
+  for (const auto& node_name : node_names) {
+    comet::NodeInventory node;
+    node.name = node_name;
+    state.nodes.push_back(node);
+  }
   return state;
+}
+
+comet::HostAssignment BuildHostAssignment(
+    const std::string& plane_name,
+    const std::string& node_name,
+    int desired_generation,
+    comet::HostAssignmentStatus status,
+    const std::string& assignment_type = "apply-node-state") {
+  comet::HostAssignment assignment;
+  assignment.node_name = node_name;
+  assignment.plane_name = plane_name;
+  assignment.desired_generation = desired_generation;
+  assignment.assignment_type = assignment_type;
+  assignment.desired_state_json = "{}";
+  assignment.artifacts_root = "/tmp/artifacts";
+  assignment.status = status;
+  assignment.attempt_count = status == comet::HostAssignmentStatus::Claimed ? 1 : 0;
+  return assignment;
+}
+
+comet::HostObservation BuildHostObservation(
+    const std::string& plane_name,
+    const std::string& node_name,
+    int applied_generation,
+    comet::HostObservationStatus status = comet::HostObservationStatus::Applied) {
+  comet::HostObservation observation;
+  observation.node_name = node_name;
+  observation.plane_name = plane_name;
+  observation.applied_generation = applied_generation;
+  observation.status = status;
+  return observation;
 }
 
 comet::controller::PlaneService BuildPlaneService(const std::string& db_path) {
@@ -106,6 +145,93 @@ int main() {
       }
       Expect(threw_not_found, "show-plane should finalize deleted plane before reading it");
       Expect(!store.LoadPlane("plane-b").has_value(), "plane-b should be removed from store");
+    }
+
+    {
+      comet::ControllerStore store(db_path.string());
+      store.Initialize();
+      const comet::controller::HostAssignmentReconciliationService reconciliation_service;
+
+      store.ReplaceDesiredState(BuildDesiredState("plane-c", {"node-c"}), 4);
+      Expect(
+          store.UpdatePlaneAppliedGeneration("plane-c", 4),
+          "plane-c applied generation should update");
+      store.UpsertHostObservation(BuildHostObservation("plane-c", "node-c", 4));
+      store.ReplaceHostAssignments(
+          {BuildHostAssignment(
+              "plane-c",
+              "node-c",
+              4,
+              comet::HostAssignmentStatus::Claimed)});
+
+      const auto result = reconciliation_service.Reconcile(store, "plane-c");
+      const auto assignment = store.LoadHostAssignments(
+          std::nullopt, std::nullopt, "plane-c");
+      Expect(result.applied == 1, "controller should mark converged claimed assignment applied");
+      Expect(result.superseded == 0, "controller should not supersede converged assignment");
+      Expect(assignment.size() == 1, "plane-c should have one assignment");
+      Expect(
+          assignment.front().status == comet::HostAssignmentStatus::Applied,
+          "plane-c claimed assignment should become applied");
+    }
+
+    {
+      comet::ControllerStore store(db_path.string());
+      store.Initialize();
+      const comet::controller::HostAssignmentReconciliationService reconciliation_service;
+
+      store.ReplaceDesiredState(BuildDesiredState("plane-d", {"node-d"}), 6);
+      store.ReplaceHostAssignments(
+          {BuildHostAssignment(
+               "plane-d",
+               "node-d",
+               5,
+               comet::HostAssignmentStatus::Claimed),
+           BuildHostAssignment(
+               "plane-d",
+               "node-d",
+               6,
+               comet::HostAssignmentStatus::Pending)});
+
+      const auto result = reconciliation_service.Reconcile(store, "plane-d");
+      const auto assignments = store.LoadHostAssignments(
+          std::nullopt, std::nullopt, "plane-d");
+      Expect(result.superseded == 1, "controller should supersede replaced claimed assignment");
+      Expect(result.applied == 0, "controller should not mark replaced assignment applied");
+      Expect(assignments.size() == 2, "plane-d should have two assignments");
+      Expect(
+          assignments.front().status == comet::HostAssignmentStatus::Superseded,
+          "older claimed assignment should be superseded");
+      Expect(
+          assignments.back().status == comet::HostAssignmentStatus::Pending,
+          "newest assignment should remain pending");
+    }
+
+    {
+      comet::ControllerStore store(db_path.string());
+      store.Initialize();
+      const comet::controller::HostAssignmentReconciliationService reconciliation_service;
+
+      store.ReplaceDesiredState(BuildDesiredState("plane-e", {"node-e"}), 5);
+      Expect(
+          store.UpdatePlaneAppliedGeneration("plane-e", 4),
+          "plane-e applied generation should update");
+      store.UpsertHostObservation(BuildHostObservation("plane-e", "node-e", 4));
+      store.ReplaceHostAssignments(
+          {BuildHostAssignment(
+              "plane-e",
+              "node-e",
+              5,
+              comet::HostAssignmentStatus::Claimed)});
+
+      const auto result = reconciliation_service.Reconcile(store, "plane-e");
+      const auto assignment = store.LoadHostAssignments(
+          std::nullopt, std::nullopt, "plane-e");
+      Expect(result.Total() == 0, "controller should not reconcile unconverged assignment");
+      Expect(assignment.size() == 1, "plane-e should have one assignment");
+      Expect(
+          assignment.front().status == comet::HostAssignmentStatus::Claimed,
+          "unconverged assignment should remain claimed");
     }
 
     fs::remove(db_path, error);

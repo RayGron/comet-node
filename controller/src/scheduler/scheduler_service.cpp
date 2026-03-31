@@ -10,6 +10,7 @@
 #include "infra/controller_event_service.h"
 #include "infra/controller_print_service.h"
 #include "infra/controller_runtime_support_service.h"
+#include "host/host_assignment_reconciliation_service.h"
 #include "plane/plane_realization_service.h"
 #include "read_model/read_model_cli_service.h"
 #include "read_model/state_aggregate_loader.h"
@@ -391,6 +392,8 @@ int SchedulerService::ReconcileRebalanceProposals() const {
 int SchedulerService::SchedulerTick() const {
   comet::ControllerStore store(db_path_);
   store.Initialize();
+  const HostAssignmentReconciliationService reconciliation_service;
+  (void)reconciliation_service.Reconcile(store);
 
   const auto desired_state = store.LoadDesiredState();
   const auto desired_generation = store.LoadDesiredGeneration();

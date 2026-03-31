@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "host/host_assignment_reconciliation_service.h"
 #include "plane/plane_deletion_support.h"
 
 namespace comet::controller {
@@ -79,6 +80,7 @@ int PlaneService::ShowPlane(const std::string& plane_name) const {
 int PlaneService::StartPlane(const std::string& plane_name) const {
   comet::ControllerStore store(db_path_);
   store.Initialize();
+  const HostAssignmentReconciliationService reconciliation_service;
   const auto plane = store.LoadPlane(plane_name);
   auto desired_state = store.LoadDesiredState(plane_name);
   if (!plane.has_value()) {
@@ -121,6 +123,7 @@ int PlaneService::StartPlane(const std::string& plane_name) const {
           observations,
           scheduling_report),
       "superseded by start-plane lifecycle transition");
+  (void)reconciliation_service.Reconcile(store, plane_name);
   event_appender_(
       store,
       "plane",
@@ -140,6 +143,7 @@ int PlaneService::StartPlane(const std::string& plane_name) const {
 int PlaneService::StopPlane(const std::string& plane_name) const {
   comet::ControllerStore store(db_path_);
   store.Initialize();
+  const HostAssignmentReconciliationService reconciliation_service;
   const auto plane = store.LoadPlane(plane_name);
   const auto desired_state = store.LoadDesiredState(plane_name);
   if (!plane.has_value()) {
@@ -174,6 +178,7 @@ int PlaneService::StopPlane(const std::string& plane_name) const {
           artifacts_root,
           availability_overrides),
       "superseded by stop-plane lifecycle transition");
+  (void)reconciliation_service.Reconcile(store, plane_name);
   if (!store.UpdatePlaneState(plane_name, "stopped")) {
     throw std::runtime_error("failed to update plane state for '" + plane_name + "'");
   }
@@ -198,6 +203,7 @@ int PlaneService::StopPlane(const std::string& plane_name) const {
 int PlaneService::DeletePlane(const std::string& plane_name) const {
   comet::ControllerStore store(db_path_);
   store.Initialize();
+  const HostAssignmentReconciliationService reconciliation_service;
   const auto plane = store.LoadPlane(plane_name);
   const auto desired_state = store.LoadDesiredState(plane_name);
   if (!plane.has_value()) {
@@ -279,6 +285,7 @@ int PlaneService::DeletePlane(const std::string& plane_name) const {
         return build_delete_assignments_(cleanup_state, plane->generation, artifacts_root);
       }(),
       "superseded by delete-plane lifecycle transition");
+  (void)reconciliation_service.Reconcile(store, plane_name);
   event_appender_(
       store,
       "plane",

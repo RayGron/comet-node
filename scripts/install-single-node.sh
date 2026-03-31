@@ -165,6 +165,8 @@ install_prereqs_if_needed() {
     cmake
     git
     jq
+    nodejs
+    npm
     ninja-build
     pkg-config
     python3
@@ -246,6 +248,31 @@ install_cuda_toolkit_if_needed() {
   run_as_root apt-get clean || true
 }
 
+ensure_operator_ui_deps_if_needed() {
+  local ui_root="${repo_root}/ui/operator-react"
+  local required_package="${ui_root}/node_modules/@simplewebauthn/server/package.json"
+
+  if [[ ! -f "${ui_root}/package.json" ]] || [[ ! -f "${ui_root}/package-lock.json" ]]; then
+    return
+  fi
+
+  if [[ -f "${required_package}" ]]; then
+    return
+  fi
+
+  if ! command -v node >/dev/null 2>&1; then
+    echo "error: node is required to install operator-react dependencies for WebAuthn" >&2
+    exit 1
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "error: npm is required to install operator-react dependencies for WebAuthn" >&2
+    exit 1
+  fi
+
+  echo "[install-single-node] installing operator-react dependencies for WebAuthn helper"
+  run_as_invoking_user bash -lc "cd '${ui_root}' && npm ci"
+}
+
 config_summary="$(
   python3 - <<'PY' "${repo_root}/config/comet-node-config.json"
 import json
@@ -264,6 +291,7 @@ model_cache_root="$(printf '%s\n' "${config_summary}" | sed -n '2p')"
 
 install_prereqs_if_needed
 install_cuda_toolkit_if_needed
+ensure_operator_ui_deps_if_needed
 
 echo "[install-single-node] building host binaries (${build_type})"
 run_as_invoking_user "${script_dir}/build-host.sh" "${build_type}"

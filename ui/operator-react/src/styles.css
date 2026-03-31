@@ -658,6 +658,59 @@ body {
   line-height: 1.5;
 }
 
+.factory-skill-table-shell {
+  border: 1px solid rgba(120, 190, 255, 0.16);
+  border-radius: 14px;
+  background: rgba(4, 15, 31, 0.58);
+  overflow: auto;
+}
+
+.factory-skill-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.factory-skill-table th,
+.factory-skill-table td {
+  padding: 12px 14px;
+  border-top: 1px solid rgba(120, 190, 255, 0.08);
+  text-align: left;
+  vertical-align: top;
+}
+
+.factory-skill-table thead th {
+  border-top: 0;
+  background: rgba(9, 25, 49, 0.92);
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08rem;
+}
+
+.factory-skill-table tbody tr:hover {
+  background: rgba(12, 31, 61, 0.44);
+}
+
+.factory-skill-table td {
+  color: var(--text-dim);
+}
+
+.factory-skill-table td:first-child {
+  width: 72px;
+}
+
+.factory-skill-table-id {
+  font-family: var(--font-mono);
+  color: var(--text);
+  word-break: break-word;
+}
+
+.factory-skill-table-empty {
+  text-align: center !important;
+  color: var(--text-muted) !important;
+}
+
 .plane-form-grid {
   display: grid;
   gap: 12px;
@@ -990,6 +1043,18 @@ body {
   width: 18px;
   height: 18px;
   display: block;
+}
+
+.warning-button {
+  border-color: rgba(255, 213, 94, 0.44) !important;
+  background: linear-gradient(180deg, rgba(126, 96, 18, 0.24), rgba(77, 57, 9, 0.22));
+  color: #fff0b0;
+}
+
+.warning-button:hover:not(:disabled),
+.warning-button:focus-visible:not(:disabled) {
+  border-color: rgba(255, 213, 94, 0.62) !important;
+  background: linear-gradient(180deg, rgba(126, 96, 18, 0.34), rgba(77, 57, 9, 0.3));
 }
 
 .plane-name {

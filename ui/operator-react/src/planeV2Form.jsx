@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { filterPlaneSelectableSkills } from "./skillsFactory.js";
+
 const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
 
 const FIELD_INFO = {
@@ -5,6 +8,7 @@ const FIELD_INFO = {
   skillsEnabled: "Enable a dedicated plane-scoped Skills service for storing and resolving reusable skills.",
   planeMode: "Choose llm for model serving planes or compute for custom GPU workloads without chat interaction.",
   protectedPlane: "Protected planes require an explicit confirmation before destructive actions such as delete.",
+  factorySkillIds: "Select global Skills Factory records that should be copied into this plane when the rollout is applied.",
   runtimeEngine: "Runtime implementation used by infer and worker services.",
   workers: "How many worker instances should be created for this plane.",
   inferReplicas: "How many leaf infer replicas should be created behind the aggregator head.",
@@ -173,6 +177,7 @@ export function buildNewPlaneFormState() {
     skillsEnabled: false,
     planeMode: "llm",
     protectedPlane: false,
+    factorySkillIds: [],
     modelSourceType: "local",
     modelRef: "",
     modelPath: "",
@@ -266,6 +271,9 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     skillsEnabled: Boolean(value?.skills?.enabled),
     planeMode: value?.plane_mode || defaults.planeMode,
     protectedPlane: Boolean(value?.protected),
+    factorySkillIds: Array.isArray(value?.skills?.factory_skill_ids)
+      ? value.skills.factory_skill_ids.filter((item) => typeof item === "string" && item)
+      : [],
     modelSourceType: source.type || defaults.modelSourceType,
     modelRef: source.ref || defaults.modelRef,
     modelPath: source.path || "",
@@ -460,6 +468,9 @@ export function buildDesiredStateV2FromForm(form) {
     if (form.skillsEnabled) {
       desiredState.skills = {
         enabled: true,
+        ...(Array.isArray(form.factorySkillIds) && form.factorySkillIds.length > 0
+          ? { factory_skill_ids: [...new Set(form.factorySkillIds.filter(Boolean))] }
+          : {}),
       };
     }
   }
@@ -707,6 +718,9 @@ export function validatePlaneV2Form(form) {
   if (form?.workerAssignmentsEnabled && !form?.topologyEnabled) {
     warnings.push("Per-worker assignments are easier to reason about when custom topology is enabled.");
   }
+  if (!form?.skillsEnabled && Array.isArray(form?.factorySkillIds) && form.factorySkillIds.length > 0) {
+    warnings.push("Selected Skills Factory records are ignored until Skills is enabled.");
+  }
   if (form?.appEnabled && !String(form?.appStartValue || "").trim()) {
     warnings.push("App start is empty. The app container will rely on its image default command.");
   }
@@ -949,9 +963,16 @@ function WorkerAssignmentRows({ assignments, disabled, onChange }) {
   );
 }
 
-export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLibraryItems = [] }) {
+export function PlaneV2FormBuilder({
+  dialog,
+  setDialog,
+  languageOptions,
+  modelLibraryItems = [],
+  skillsFactoryItems = [],
+}) {
   const form = dialog.form || buildNewPlaneFormState();
   const validation = validatePlaneV2Form(form);
+  const [factorySkillFilter, setFactorySkillFilter] = useState("");
   const topologyNodes = Array.isArray(form.topologyNodes) ? form.topologyNodes : [];
   const activeTopologyNodes = topologyNodes.filter((node) => String(node?.name || "").trim());
   const workerAssignments = Array.isArray(form.workerAssignments) ? form.workerAssignments : [];
@@ -1133,6 +1154,23 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
     });
   }
 
+  function toggleFactorySkill(skillId) {
+    updatePlaneDialogForm(setDialog, (current) => {
+      const currentIds = Array.isArray(current.factorySkillIds) ? current.factorySkillIds : [];
+      return {
+        ...current,
+        factorySkillIds: currentIds.includes(skillId)
+          ? currentIds.filter((item) => item !== skillId)
+          : [...currentIds, skillId],
+      };
+    });
+  }
+
+  const filteredFactorySkills = filterPlaneSelectableSkills(
+    skillsFactoryItems,
+    factorySkillFilter,
+  );
+
   return (
     <div className="plane-form-builder">
       <SectionHeader
@@ -1178,6 +1216,68 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
           onToggle={toggleFeature("protectedPlane")}
         />
       </div>
+      {form.planeMode === "llm" && form.skillsEnabled ? (
+        <div className="plane-form-toggle">
+          <div className="plane-form-section-header">
+            <InfoLabel info={FIELD_INFO.factorySkillIds}>Skills Factory</InfoLabel>
+            <p className="plane-form-section-copy">
+              Select canonical skills that should be mirrored into this plane on rollout.
+            </p>
+          </div>
+          <label className="field-label">
+            <span className="field-label-title">Filter factory skills</span>
+            <input
+              className="text-input"
+              value={factorySkillFilter}
+              onChange={(event) => setFactorySkillFilter(event.target.value)}
+              placeholder="Search by id, name, description, content, or plane usage"
+            />
+          </label>
+          <div className="factory-skill-table-shell">
+            <table className="factory-skill-table">
+              <thead>
+                <tr>
+                  <th>Select</th>
+                  <th>Name</th>
+                  <th>Id</th>
+                  <th>Planes</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredFactorySkills.length === 0 ? (
+                  <tr>
+                    <td colSpan="5" className="factory-skill-table-empty">
+                      No Skills Factory records match the current filter.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredFactorySkills.map((item) => {
+                    const selected = Array.isArray(form.factorySkillIds)
+                      ? form.factorySkillIds.includes(item.id)
+                      : false;
+                    return (
+                      <tr key={item.id}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleFactorySkill(item.id)}
+                          />
+                        </td>
+                        <td>{item.name || "unnamed-skill"}</td>
+                        <td className="factory-skill-table-id">{item.id}</td>
+                        <td>{Array.isArray(item.plane_names) ? item.plane_names.length : item.plane_count || 0}</td>
+                        <td>{item.description || "No description"}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
 
       <SectionHeader
         title="Runtime"

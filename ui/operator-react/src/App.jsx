@@ -19,6 +19,7 @@ import {
   PlaneV2FormBuilder,
   validatePlaneV2Form,
 } from "./planeV2Form.jsx";
+import { filterSkillsFactoryItems, sortSkillsFactoryItems } from "./skillsFactory.js";
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
@@ -73,6 +74,10 @@ function planePath(planeName, suffix = "") {
 
 function modelLibraryPath(suffix = "") {
   return suffix ? `/api/v1/model-library/${suffix}` : "/api/v1/model-library";
+}
+
+function skillsFactoryPath(suffix = "") {
+  return suffix ? `/api/v1/skills-factory/${suffix}` : "/api/v1/skills-factory";
 }
 
 function interactionPath(planeName, suffix) {
@@ -187,6 +192,35 @@ function ActionIcon({ kind }) {
         />
         <path
           d="M13.5 7.5l3 3"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  if (kind === "worker") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path
+          d="M7 11V8.2L12 5l5 3.2V11"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M8.5 11h7l1 7.5a1.7 1.7 0 0 1-1.7 1.9H9.2a1.7 1.7 0 0 1-1.7-1.9L8.5 11Z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M10 8.3h4"
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
@@ -911,7 +945,14 @@ function OnboardingCard({ onCreatePlane }) {
   );
 }
 
-function PlaneEditorDialog({ dialog, setDialog, onClose, onSave, modelLibraryItems }) {
+function PlaneEditorDialog({
+  dialog,
+  setDialog,
+  onClose,
+  onSave,
+  modelLibraryItems,
+  skillsFactoryItems,
+}) {
   if (!dialog.open) {
     return null;
   }
@@ -990,6 +1031,7 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave, modelLibraryIte
             setDialog={setDialog}
             languageOptions={CHAT_LANGUAGE_OPTIONS}
             modelLibraryItems={modelLibraryItems || []}
+            skillsFactoryItems={skillsFactoryItems || []}
           />
         ) : null}
         <label className="field-label" htmlFor="plane-editor-json">
@@ -1577,7 +1619,9 @@ function App() {
   const [planes, setPlanes] = useState([]);
   const [selectedPlane, setSelectedPlane] = useState(initialPlane);
   const [selectedPage, setSelectedPage] = useState(
-    ["dashboard", "planes", "models", "access"].includes(initialPage) ? initialPage : "dashboard",
+    ["dashboard", "planes", "models", "skills-factory", "access"].includes(initialPage)
+      ? initialPage
+      : "dashboard",
   );
   const [authState, setAuthState] = useState({
     loading: true,
@@ -1611,6 +1655,15 @@ function App() {
   const [events, setEvents] = useState([]);
   const [interactionStatus, setInteractionStatus] = useState(null);
   const [modelLibrary, setModelLibrary] = useState({ items: [], roots: [], jobs: [] });
+  const [skillsFactory, setSkillsFactory] = useState({
+    items: [],
+    busy: false,
+    error: "",
+    mode: "create",
+    form: buildEmptySkillForm(),
+    search: "",
+    sort: "name",
+  });
   const [selectedTab, setSelectedTab] = useState("status");
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
@@ -1687,6 +1740,15 @@ function App() {
     setEvents([]);
     setInteractionStatus(null);
     setModelLibrary({ items: [], roots: [], jobs: [] });
+    setSkillsFactory({
+      items: [],
+      busy: false,
+      error: "",
+      mode: "create",
+      form: buildEmptySkillForm(),
+      search: "",
+      sort: "name",
+    });
     setChatMessages([]);
     setChatError("");
     setApiHealthy(false);
@@ -1797,6 +1859,26 @@ function App() {
         return;
       }
       throw error;
+    }
+  }
+
+  async function refreshSkillsFactory() {
+    try {
+      const payload = await fetchJson(skillsFactoryPath());
+      setSkillsFactory((current) => ({
+        ...current,
+        items: Array.isArray(payload.skills) ? payload.skills : [],
+        error: "",
+      }));
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setSkillsFactory((current) => ({
+        ...current,
+        error: error.message || String(error),
+      }));
     }
   }
 
@@ -1986,7 +2068,12 @@ function App() {
       }
       const nextAuth = await refreshAuthState();
       if (nextAuth.authenticated) {
-        await Promise.all([refreshAccessData(), refreshAll(selectedPlane), refreshModelLibrary()]);
+        await Promise.all([
+          refreshAccessData(),
+          refreshAll(selectedPlane),
+          refreshModelLibrary(),
+          refreshSkillsFactory(),
+        ]);
       }
     } catch (error) {
       setAuthError(error.message || String(error));
@@ -2370,6 +2457,7 @@ function App() {
         },
         body: JSON.stringify(requestBody),
       });
+      await refreshSkillsFactory();
       const skillsEnabledNow = Boolean(desiredState?.skills?.enabled);
       const skillsJustEnabled =
         planeDialog.mode === "edit" &&
@@ -2669,6 +2757,7 @@ function App() {
         return Promise.all([
           refreshAll(initialPlane),
           refreshModelLibrary().catch(() => {}),
+          refreshSkillsFactory().catch(() => {}),
           refreshAccessData(),
         ]);
       })
@@ -3080,6 +3169,7 @@ function App() {
         },
       );
       await refreshSkillsDialog(planeName);
+      await refreshSkillsFactory();
       setSkillsDialog((current) => ({
         ...current,
         mode: "create",
@@ -3109,6 +3199,7 @@ function App() {
         body: JSON.stringify({ enabled: !skill.enabled }),
       });
       await refreshSkillsDialog(planeName);
+      await refreshSkillsFactory();
     } catch (error) {
       setSkillsDialog((current) => ({
         ...current,
@@ -3133,6 +3224,7 @@ function App() {
         method: "DELETE",
       });
       await refreshSkillsDialog(planeName);
+      await refreshSkillsFactory();
       if (skillsDialog.form?.id === skill.id) {
         setSkillsDialog((current) => ({
           ...current,
@@ -3146,6 +3238,145 @@ function App() {
         busy: false,
         error: error.message || String(error),
       }));
+    }
+  }
+
+  function startCreateFactorySkill() {
+    setSkillsFactory((current) => ({
+      ...current,
+      mode: "create",
+      form: buildEmptySkillForm(),
+      error: "",
+    }));
+  }
+
+  function startEditFactorySkill(skill) {
+    setSkillsFactory((current) => ({
+      ...current,
+      mode: "edit",
+      form: {
+        id: skill.id || "",
+        name: skill.name || "",
+        description: skill.description || "",
+        content: skill.content || "",
+        enabled: true,
+        sessionIdsText: "",
+        cometLinksText: "",
+      },
+      error: "",
+    }));
+  }
+
+  function updateFactorySkillFormField(key, value) {
+    setSkillsFactory((current) => ({
+      ...current,
+      form: {
+        ...(current.form || buildEmptySkillForm()),
+        [key]: value,
+      },
+    }));
+  }
+
+  async function saveFactorySkillForm() {
+    const payload = {
+      name: String(skillsFactory.form?.name || "").trim(),
+      description: String(skillsFactory.form?.description || "").trim(),
+      content: String(skillsFactory.form?.content || "").trim(),
+    };
+    if (!payload.name || !payload.description || !payload.content) {
+      setSkillsFactory((current) => ({
+        ...current,
+        error: "Name, description, and content are required.",
+      }));
+      return;
+    }
+    setSkillsFactory((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      const editing = skillsFactory.mode === "edit" && skillsFactory.form?.id;
+      await fetchJson(
+        editing
+          ? skillsFactoryPath(encodeURIComponent(skillsFactory.form.id))
+          : skillsFactoryPath(),
+        {
+          method: editing ? "PUT" : "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        },
+      );
+      await refreshSkillsFactory();
+      setSkillsFactory((current) => ({
+        ...current,
+        busy: false,
+        mode: "create",
+        form: buildEmptySkillForm(),
+      }));
+      if (selectedPlane) {
+        await refreshAll(selectedPlane);
+      }
+    } catch (error) {
+      setSkillsFactory((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || String(error),
+      }));
+    }
+  }
+
+  async function deleteFactorySkill(skill) {
+    if (!skill?.id) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete factory skill ${skill.name || skill.id}? This detaches it from every plane.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setSkillsFactory((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      await fetchJson(skillsFactoryPath(encodeURIComponent(skill.id)), {
+        method: "DELETE",
+      });
+      await refreshSkillsFactory();
+      if (skillsDialog.open && skillsDialog.planeName) {
+        await refreshSkillsDialog(skillsDialog.planeName);
+      }
+      if (selectedPlane) {
+        await refreshAll(selectedPlane);
+      }
+      setSkillsFactory((current) => ({
+        ...current,
+        busy: false,
+        mode: current.form?.id === skill.id ? "create" : current.mode,
+        form: current.form?.id === skill.id ? buildEmptySkillForm() : current.form,
+      }));
+    } catch (error) {
+      setSkillsFactory((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || String(error),
+      }));
+    }
+  }
+
+  async function setSkillsFactoryWorker(item) {
+    if (!item?.path) {
+      return;
+    }
+    setModelLibraryBusy(`worker:${item.path}`);
+    try {
+      await fetchJson(modelLibraryPath("skills-factory-worker"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path: item.path }),
+      });
+      await refreshModelLibrary();
+    } finally {
+      setModelLibraryBusy("");
     }
   }
 
@@ -4109,6 +4340,21 @@ function App() {
                     </div>
                     <div className="toolbar">
                       <button
+                        className={`ghost-button compact-button ${
+                          item.skills_factory_worker ? "warning-button" : ""
+                        }`}
+                        type="button"
+                        disabled={modelLibraryBusy !== ""}
+                        onClick={() => setSkillsFactoryWorker(item)}
+                        title={
+                          item.skills_factory_worker
+                            ? "Current Skills Factory Worker"
+                            : "Set as Skills Factory Worker"
+                        }
+                      >
+                        <ActionIcon kind="worker" />
+                      </button>
+                      <button
                         className="ghost-button compact-button danger-button"
                         type="button"
                         disabled={modelLibraryBusy !== "" || item.deletable === false}
@@ -4337,6 +4583,171 @@ function App() {
               </div>
             </div>
           </div>
+        </div>
+      </section>
+    );
+  }
+
+  function renderSkillsFactoryPage() {
+    const filteredItems = sortSkillsFactoryItems(
+      filterSkillsFactoryItems(skillsFactory.items || [], skillsFactory.search),
+      skillsFactory.sort,
+    );
+    const editing = skillsFactory.mode === "edit";
+    const form = skillsFactory.form || buildEmptySkillForm();
+    return (
+      <section className="panel page-panel models-page-panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Skills Factory</div>
+            <h2>Global skill catalog</h2>
+          </div>
+          <div className="toolbar">
+            <button
+              className="ghost-button"
+              type="button"
+              disabled={skillsFactory.busy}
+              onClick={() => refreshSkillsFactory()}
+            >
+              Refresh factory
+            </button>
+            <button
+              className="ghost-button"
+              type="button"
+              disabled={skillsFactory.busy}
+              onClick={startCreateFactorySkill}
+            >
+              New skill
+            </button>
+          </div>
+        </div>
+        <div className="page-copy">
+          Canonical skill content lives here and can be attached to multiple planes.
+        </div>
+        {skillsFactory.error ? <div className="error-banner">{skillsFactory.error}</div> : null}
+        <div className="panel-grid">
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <div>
+                <div className="section-label">Catalog</div>
+                <h3>Skills</h3>
+              </div>
+              <span className="subpanel-meta">{filteredItems.length} item(s)</span>
+            </div>
+            <div className="plane-form-grid plane-form-grid-wide">
+              <label className="field-label">
+                <span className="field-label-title">Search</span>
+                <input
+                  className="text-input"
+                  value={skillsFactory.search}
+                  onChange={(event) =>
+                    setSkillsFactory((current) => ({ ...current, search: event.target.value }))
+                  }
+                  placeholder="Filter by id, name, description, content, or plane usage"
+                />
+              </label>
+              <label className="field-label">
+                <span className="field-label-title">Sort</span>
+                <select
+                  className="text-input"
+                  value={skillsFactory.sort}
+                  onChange={(event) =>
+                    setSkillsFactory((current) => ({ ...current, sort: event.target.value }))
+                  }
+                >
+                  <option value="name">Name</option>
+                  <option value="plane_count">Plane count</option>
+                </select>
+              </label>
+            </div>
+            <div className="list-column model-library-list model-library-list-expanded">
+              {filteredItems.length === 0 ? (
+                <EmptyState
+                  title="No factory skills"
+                  detail="Create the first canonical skill or adjust the current filter."
+                />
+              ) : (
+                filteredItems.map((item) => (
+                  <article className="list-card" key={item.id}>
+                    <div className="card-row">
+                      <strong>{item.name || item.id}</strong>
+                      <span className="tag">{item.plane_count || 0} plane(s)</span>
+                    </div>
+                    <div className="list-detail">
+                      <div>{item.id}</div>
+                      <div>{item.description || "No description"}</div>
+                      <div>{Array.isArray(item.plane_names) && item.plane_names.length > 0 ? item.plane_names.join(", ") : "not attached to any plane"}</div>
+                    </div>
+                    <div className="toolbar">
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        disabled={skillsFactory.busy}
+                        onClick={() => startEditFactorySkill(item)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="ghost-button danger-button"
+                        type="button"
+                        disabled={skillsFactory.busy}
+                        onClick={() => deleteFactorySkill(item)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>{editing ? "Edit factory skill" : "Create factory skill"}</h3>
+            </div>
+            <div className="plane-form-grid">
+              <label className="field-label">
+                <span className="field-label-title">Name</span>
+                <input
+                  className="text-input"
+                  value={form.name}
+                  onChange={(event) => updateFactorySkillFormField("name", event.target.value)}
+                />
+              </label>
+              <label className="field-label">
+                <span className="field-label-title">Id</span>
+                <input className="text-input" value={form.id} readOnly />
+              </label>
+            </div>
+            <label className="field-label">
+              <span className="field-label-title">Description</span>
+              <textarea
+                className="editor-textarea"
+                rows={4}
+                value={form.description}
+                onChange={(event) => updateFactorySkillFormField("description", event.target.value)}
+              />
+            </label>
+            <label className="field-label">
+              <span className="field-label-title">Content</span>
+              <textarea
+                className="editor-textarea"
+                rows={12}
+                value={form.content}
+                onChange={(event) => updateFactorySkillFormField("content", event.target.value)}
+              />
+            </label>
+            <div className="toolbar">
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={skillsFactory.busy}
+                onClick={saveFactorySkillForm}
+              >
+                {editing ? "Save skill" : "Create skill"}
+              </button>
+            </div>
+          </section>
         </div>
       </section>
     );
@@ -4798,6 +5209,22 @@ function App() {
               </span>
             </button>
             <button
+              className={`side-menu-item ${selectedPage === "skills-factory" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setSelectedPage("skills-factory")}
+            >
+              <div className="side-menu-copy">
+                <span className="side-menu-title">Skills Factory</span>
+                <span className="side-menu-meta">
+                  {`${skillsFactory.items.length} canonical skill${skillsFactory.items.length === 1 ? "" : "s"}`}
+                </span>
+              </div>
+              <span className={`tag ${skillsFactory.items.length > 0 ? "is-healthy" : "is-booting"}`}>
+                {statusDot(skillsFactory.items.length > 0 ? "is-healthy" : "is-booting")}
+                <span>{skillsFactory.items.length} items</span>
+              </span>
+            </button>
+            <button
               className={`side-menu-item ${selectedPage === "access" ? "is-active" : ""}`}
               type="button"
               onClick={() => setSelectedPage("access")}
@@ -4817,6 +5244,8 @@ function App() {
           renderPlanesRegistry()
         ) : selectedPage === "models" ? (
           renderModelsLibrary()
+        ) : selectedPage === "skills-factory" ? (
+          renderSkillsFactoryPage()
         ) : selectedPage === "access" ? (
           renderAccessPage()
         ) : (
@@ -5010,6 +5439,7 @@ function App() {
         }
         onSave={savePlaneDialog}
         modelLibraryItems={modelLibrary.items || []}
+        skillsFactoryItems={skillsFactory.items || []}
       />
       <SkillsDialog
         dialog={skillsDialog}

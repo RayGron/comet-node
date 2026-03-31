@@ -23,6 +23,25 @@ void RemoveStateFileIfExists(const std::string& path) {
   }
 }
 
+void WriteLocalStateFile(
+    const comet::DesiredState& state,
+    const std::string& path) {
+  const std::filesystem::path file_path(path);
+  if (file_path.has_parent_path()) {
+    std::filesystem::create_directories(file_path.parent_path());
+  }
+
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  if (!output.is_open()) {
+    throw std::runtime_error("failed to open local state file for write: " + path);
+  }
+
+  output << comet::SerializeDesiredStateJson(state) << "\n";
+  if (!output.good()) {
+    throw std::runtime_error("failed to write local state file: " + path);
+  }
+}
+
 }  // namespace
 
 std::string LocalPlaneRoot(
@@ -237,9 +256,7 @@ void RewriteAggregateLocalState(const std::string& state_root, const std::string
     RemoveStateFileIfExists(LocalStatePath(state_root, node_name));
     return;
   }
-  comet::SaveDesiredStateJson(
-      MergeLocalAppliedStates(states),
-      LocalStatePath(state_root, node_name));
+  WriteLocalStateFile(MergeLocalAppliedStates(states), LocalStatePath(state_root, node_name));
 }
 
 void RewriteAggregateLocalGeneration(
@@ -302,7 +319,7 @@ void SaveLocalAppliedState(
   const std::string path = plane_name.has_value()
                                ? LocalPlaneStatePath(state_root, node_name, effective_plane_name)
                                : LocalStatePath(state_root, node_name);
-  comet::SaveDesiredStateJson(state, path);
+  WriteLocalStateFile(state, path);
 }
 
 void RemoveLocalAppliedPlaneState(

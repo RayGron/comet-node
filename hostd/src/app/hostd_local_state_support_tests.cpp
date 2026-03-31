@@ -4,6 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -46,6 +47,31 @@ comet::DesiredState BuildState(
       {"skills", {{"enabled", true}, {"node", node_name}}},
       {"app", {{"enabled", false}}},
   });
+}
+
+comet::DesiredState BuildPartialLlmStateWithoutInfer(
+    const std::string& plane_name,
+    const std::string& node_name) {
+  auto state = BuildState(plane_name, node_name);
+  state.instances.erase(
+      std::remove_if(
+          state.instances.begin(),
+          state.instances.end(),
+          [](const comet::InstanceSpec& instance) {
+            return instance.role == comet::InstanceRole::Infer;
+          }),
+      state.instances.end());
+  state.disks.erase(
+      std::remove_if(
+          state.disks.begin(),
+          state.disks.end(),
+          [](const comet::DiskSpec& disk) { return disk.kind == comet::DiskKind::InferPrivate; }),
+      state.disks.end());
+  state.worker_group.infer_instance_name.clear();
+  for (auto& member : state.worker_group.members) {
+    member.infer_instance_name.clear();
+  }
+  return state;
 }
 
 }  // namespace
@@ -133,6 +159,32 @@ int main() {
             node_name) == 4,
         "infer aggregator, infer leaf, worker, and skills instances should all contribute runtime statuses");
 
+    const std::string partial_plane = "plane-partial";
+    const comet::DesiredState partial_state =
+        BuildPartialLlmStateWithoutInfer(partial_plane, node_name);
+    comet::hostd::local_state_support::SaveLocalAppliedState(
+        state_root,
+        node_name,
+        partial_state,
+        partial_plane);
+    const auto reloaded_partial_state =
+        comet::hostd::local_state_support::LoadLocalAppliedState(
+            state_root,
+            node_name,
+            partial_plane);
+    Expect(reloaded_partial_state.has_value(),
+           "partial llm state should round-trip through local state persistence");
+    Expect(reloaded_partial_state->plane_name == partial_plane,
+           "partial llm state should preserve plane name");
+    Expect(
+        std::none_of(
+            reloaded_partial_state->instances.begin(),
+            reloaded_partial_state->instances.end(),
+            [](const comet::InstanceSpec& instance) {
+              return instance.role == comet::InstanceRole::Infer;
+            }),
+        "partial llm state should remain infer-free after round-trip");
+
     comet::DesiredState bad_state = BuildState("plane-c", node_name);
     comet::NodeInventory other_node;
     other_node.name = "remote-worker-a";
@@ -149,6 +201,7 @@ int main() {
 
     fs::remove_all(temp_root, cleanup_error);
     std::cout << "ok: recursive-plane-state-removal\n";
+    std::cout << "ok: partial-llm-state-roundtrip\n";
     std::cout << "ok: require-single-node-sliced-state\n";
     return 0;
   } catch (const std::exception& ex) {

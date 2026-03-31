@@ -50,7 +50,12 @@ void ControllerPrintService::PrintStateSummary(const comet::DesiredState& state)
   std::cout << "inference:\n";
   std::cout << "  primary_infer_node=" << state.inference.primary_infer_node
             << " net_if=" << state.inference.net_if
-            << " llama_port=" << state.inference.llama_port << "\n";
+            << " llama_port=" << state.inference.llama_port
+            << " max_model_len=" << state.inference.max_model_len
+            << " llama_ctx_size=" << state.inference.llama_ctx_size
+            << " max_num_seqs=" << state.inference.max_num_seqs
+            << " gpu_memory_utilization=" << state.inference.gpu_memory_utilization
+            << "\n";
   std::cout << "gateway:\n";
   std::cout << "  listen=" << state.gateway.listen_host << ":" << state.gateway.listen_port
             << " server_name=" << state.gateway.server_name << "\n";

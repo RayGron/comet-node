@@ -1,5 +1,6 @@
 #include "bundle/bundle_cli_service.h"
 
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
@@ -75,6 +76,39 @@ std::vector<comet::NodeExecutionPlan> FilterNodeExecutionPlans(
   }
 
   return filtered;
+}
+
+std::string RenderInferenceKnobs(const comet::InferenceRuntimeSettings& inference) {
+  std::ostringstream output;
+  output << "max_model_len=" << inference.max_model_len
+         << " llama_ctx_size=" << inference.llama_ctx_size
+         << " max_num_seqs=" << inference.max_num_seqs
+         << " gpu_memory_utilization=" << inference.gpu_memory_utilization;
+  return output.str();
+}
+
+void VerifyStoredDesiredStateInference(
+    comet::ControllerStore& store,
+    const comet::DesiredState& expected_state) {
+  const auto stored_state = store.LoadDesiredState(expected_state.plane_name);
+  if (!stored_state.has_value()) {
+    throw std::runtime_error(
+        "stored desired state missing after apply for plane '" +
+        expected_state.plane_name + "'");
+  }
+
+  const auto& expected = expected_state.inference;
+  const auto& actual = stored_state->inference;
+  if (expected.max_model_len != actual.max_model_len ||
+      expected.llama_ctx_size != actual.llama_ctx_size ||
+      expected.max_num_seqs != actual.max_num_seqs ||
+      std::abs(expected.gpu_memory_utilization - actual.gpu_memory_utilization) > 1e-9) {
+    throw std::runtime_error(
+        "stored desired state inference mismatch after apply for plane '" +
+        expected_state.plane_name + "': expected {" +
+        RenderInferenceKnobs(expected) + "} but stored {" +
+        RenderInferenceKnobs(actual) + "}");
+  }
 }
 
 }  // namespace
@@ -383,6 +417,7 @@ int BundleCliService::ApplyDesiredState(
   plane_realization_service_.MaterializeInferRuntimeArtifact(
       effective_desired_state, artifacts_root);
   store.ReplaceDesiredState(effective_desired_state, desired_generation, 0);
+  VerifyStoredDesiredStateInference(store, effective_desired_state);
   store.UpdatePlaneArtifactsRoot(effective_desired_state.plane_name, artifacts_root);
   store.ClearSchedulerPlaneRuntime(effective_desired_state.plane_name);
   store.ReplaceRolloutActions(effective_desired_state.plane_name, desired_generation, {});
@@ -419,6 +454,8 @@ int BundleCliService::ApplyDesiredState(
   if (plane.has_value()) {
     std::cout << "applied generation: " << plane->applied_generation << "\n";
   }
+  std::cout << "applied runtime: "
+            << RenderInferenceKnobs(effective_desired_state.inference) << "\n";
   std::cout << "runtime rollout is staged; use start-plane to enqueue host assignments\n";
   return 0;
 }

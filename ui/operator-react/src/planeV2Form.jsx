@@ -503,7 +503,8 @@ export function buildDesiredStateV2FromForm(form) {
     form.workerEnvText.trim() ||
     form.workerNode.trim() ||
     form.workerGpuDevice.trim() ||
-    form.workerStorageEnabled
+    form.workerStorageEnabled ||
+    form.workerAssignmentsEnabled
   ) {
     desiredState.worker = {};
     if (form.workerImage.trim()) {
@@ -679,6 +680,15 @@ export function validatePlaneV2Form(form) {
     if (enabledAssignments.some((assignment) => !String(assignment?.node || "").trim())) {
       errors.push("Each worker assignment must include a node name.");
     }
+  }
+  if (
+    form?.placementMode === "manual" &&
+    !String(form?.workerGpuDevice || "").trim() &&
+    enabledAssignments.length === 0
+  ) {
+    errors.push(
+      "Manual placement requires either a default worker GPU device or per-worker assignments.",
+    );
   }
 
   const referencedNodes = [

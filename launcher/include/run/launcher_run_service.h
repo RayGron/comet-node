@@ -36,12 +36,25 @@ class LauncherRunService {
       SignalManager& signal_manager,
       const std::filesystem::path& hostd_binary,
       const HostdRunOptions& options) const;
-  void PrepareControllerRuntime(const ControllerRunOptions& options) const;
+  void PrepareControllerRuntime(
+      const std::filesystem::path& owner_probe_path,
+      const ControllerRunOptions& options) const;
   int RunControllerSupervisor(
       SignalManager& signal_manager,
       const std::filesystem::path& self_path,
       const std::filesystem::path& controller_binary,
       const ControllerRunOptions& options) const;
+  void PrepareSharedStateAccess(
+      const std::filesystem::path& owner_probe_path,
+      const std::filesystem::path& db_path) const;
+  std::optional<unsigned int> ResolveSharedStateGroupId(
+      const std::filesystem::path& owner_probe_path) const;
+  void EnsureSharedDirectoryAccess(
+      const std::filesystem::path& path,
+      unsigned int group_id) const;
+  void EnsureSharedFileAccess(
+      const std::filesystem::path& path,
+      unsigned int group_id) const;
   std::string DefaultNodeName() const;
   std::string DefaultWebUiControllerUpstream(int listen_port) const;
   std::string Trim(const std::string& value) const;

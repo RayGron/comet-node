@@ -8,6 +8,12 @@
 #include <stdexcept>
 #include <thread>
 
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#endif
+
 #include "comet/security/crypto_utils.h"
 #include "comet/state/sqlite_store.h"
 
@@ -324,6 +330,7 @@ int LauncherRunService::RunHostdLoop(
 }
 
 void LauncherRunService::PrepareControllerRuntime(
+    const std::filesystem::path& owner_probe_path,
     const ControllerRunOptions& options) const {
   std::filesystem::create_directories(options.db_path.parent_path());
   std::filesystem::create_directories(options.artifacts_root);
@@ -352,8 +359,11 @@ void LauncherRunService::PrepareControllerRuntime(
     ensure_keypair(keys_root / "hostd.key.b64", keys_root / "hostd.pub.b64");
   }
 
+  PrepareSharedStateAccess(owner_probe_path, options.db_path);
+
   comet::ControllerStore store(options.db_path.string());
   store.Initialize();
+  PrepareSharedStateAccess(owner_probe_path, options.db_path);
 }
 
 int LauncherRunService::RunControllerSupervisor(
@@ -361,7 +371,7 @@ int LauncherRunService::RunControllerSupervisor(
     const std::filesystem::path& self_path,
     const std::filesystem::path& controller_binary,
     const ControllerRunOptions& options) const {
-  PrepareControllerRuntime(options);
+  PrepareControllerRuntime(self_path, options);
   const std::string local_controller_url =
       "http://127.0.0.1:" + std::to_string(options.listen_port);
   const std::string web_ui_controller_upstream =
@@ -456,6 +466,101 @@ int LauncherRunService::RunControllerSupervisor(
     signal_manager.TerminateChildProcess(static_cast<int>(hostd_pid));
   }
   return 0;
+}
+
+void LauncherRunService::PrepareSharedStateAccess(
+    const std::filesystem::path& owner_probe_path,
+    const std::filesystem::path& db_path) const {
+#if defined(_WIN32)
+  (void)owner_probe_path;
+  (void)db_path;
+#else
+  if (!comet::platform::HasElevatedPrivileges()) {
+    return;
+  }
+
+  const auto group_id = ResolveSharedStateGroupId(owner_probe_path);
+  if (!group_id.has_value()) {
+    return;
+  }
+
+  try {
+    EnsureSharedDirectoryAccess(db_path.parent_path(), *group_id);
+    EnsureSharedFileAccess(db_path, *group_id);
+    EnsureSharedFileAccess(db_path.string() + "-wal", *group_id);
+    EnsureSharedFileAccess(db_path.string() + "-shm", *group_id);
+    ::umask(0002);
+  } catch (const std::exception& error) {
+    std::cerr << "comet-node: warning: failed to prepare shared controller DB access: "
+              << error.what() << "\n";
+  }
+#endif
+}
+
+std::optional<unsigned int> LauncherRunService::ResolveSharedStateGroupId(
+    const std::filesystem::path& owner_probe_path) const {
+#if defined(_WIN32)
+  (void)owner_probe_path;
+  return std::nullopt;
+#else
+  struct stat metadata {};
+  if (::stat(owner_probe_path.c_str(), &metadata) != 0) {
+    return std::nullopt;
+  }
+  return static_cast<unsigned int>(metadata.st_gid);
+#endif
+}
+
+void LauncherRunService::EnsureSharedDirectoryAccess(
+    const std::filesystem::path& path,
+    unsigned int group_id) const {
+#if defined(_WIN32)
+  (void)path;
+  (void)group_id;
+#else
+  if (path.empty() || !std::filesystem::exists(path)) {
+    return;
+  }
+
+  struct stat metadata {};
+  if (::stat(path.c_str(), &metadata) != 0) {
+    throw std::runtime_error("stat failed for '" + path.string() + "'");
+  }
+  if (::chown(path.c_str(), metadata.st_uid, static_cast<gid_t>(group_id)) != 0) {
+    throw std::runtime_error("chown failed for '" + path.string() + "'");
+  }
+
+  constexpr mode_t kSharedDirectoryMode = 02775;
+  if (::chmod(path.c_str(), kSharedDirectoryMode) != 0) {
+    throw std::runtime_error("chmod failed for '" + path.string() + "'");
+  }
+#endif
+}
+
+void LauncherRunService::EnsureSharedFileAccess(
+    const std::filesystem::path& path,
+    unsigned int group_id) const {
+#if defined(_WIN32)
+  (void)path;
+  (void)group_id;
+#else
+  if (path.empty() || !std::filesystem::exists(path)) {
+    return;
+  }
+
+  struct stat metadata {};
+  if (::stat(path.c_str(), &metadata) != 0) {
+    throw std::runtime_error("stat failed for '" + path.string() + "'");
+  }
+  if (::chown(path.c_str(), metadata.st_uid, static_cast<gid_t>(group_id)) != 0) {
+    throw std::runtime_error("chown failed for '" + path.string() + "'");
+  }
+
+  constexpr mode_t kSharedFileMode = 0664;
+  if (::chmod(path.c_str(), kSharedFileMode) != 0) {
+    throw std::runtime_error("chmod failed for '" + path.string() + "'");
+  }
+#endif
 }
 
 std::string LauncherRunService::DefaultNodeName() const {

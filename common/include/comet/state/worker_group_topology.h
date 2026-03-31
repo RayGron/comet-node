@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -14,6 +15,26 @@ inline constexpr const char* kDataParallelModeAutoReplicas = "auto_replicas";
 inline constexpr const char* kDataParallelModeVllmNative = "vllm_native";
 inline constexpr const char* kDataParallelLbModeExternal = "external";
 inline constexpr const char* kDataParallelLbModeHybrid = "hybrid";
+inline constexpr int kLlamaRpcWorkerPublishedPortBase = 40000;
+inline constexpr int kLlamaRpcWorkerPublishedPortSpan = 20000;
+
+inline uint32_t StablePortHash(const std::string& value) {
+  uint32_t hash = 2166136261u;
+  for (unsigned char ch : value) {
+    hash ^= static_cast<uint32_t>(ch);
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
+inline int StableLlamaRpcWorkerPort(
+    const std::string& plane_name,
+    const std::string& worker_name) {
+  const uint32_t offset =
+      StablePortHash(plane_name + ":" + worker_name + ":llama-rpc") %
+      kLlamaRpcWorkerPublishedPortSpan;
+  return kLlamaRpcWorkerPublishedPortBase + static_cast<int>(offset);
+}
 
 inline std::string CanonicalDataParallelMode(const InferenceRuntimeSettings& inference) {
   if (inference.data_parallel_mode == kDataParallelModeAutoReplicas) {

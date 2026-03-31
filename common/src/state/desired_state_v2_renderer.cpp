@@ -24,15 +24,6 @@ constexpr int kSkillsContainerPort = 18120;
 constexpr int kSkillsPublishedPortBase = 24000;
 constexpr int kSkillsPublishedPortSpan = 10000;
 
-uint32_t StablePortHash(const std::string& value) {
-  uint32_t hash = 2166136261u;
-  for (unsigned char ch : value) {
-    hash ^= static_cast<uint32_t>(ch);
-    hash *= 16777619u;
-  }
-  return hash;
-}
-
 }  // namespace
 
 DesiredState DesiredStateV2Renderer::Render(const nlohmann::json& value) {
@@ -408,7 +399,7 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
         {"COMET_WORKER_RUNTIME_STATUS_PATH", "/comet/private/worker-runtime-status.json"},
     };
     if (state_.inference.distributed_backend == "llama_rpc") {
-      const int rpc_port = state_.worker_group.rendezvous_port + 100 + worker_index;
+      const int rpc_port = StableLlamaRpcWorkerPort(state_.plane_name, worker.name);
       worker.environment["COMET_WORKER_RPC_PORT"] = std::to_string(rpc_port);
       worker.environment["COMET_WORKER_RPC_HOST"] = "0.0.0.0";
       worker.environment["COMET_WORKER_RPC_ENDPOINT"] =

@@ -15,6 +15,7 @@
 #include "comet/state/state_json.h"
 #include "comet/state/desired_state_v2_renderer.h"
 #include "comet/state/desired_state_v2_validator.h"
+#include "comet/state/worker_group_topology.h"
 
 namespace {
 
@@ -307,11 +308,18 @@ int main() {
              "llama-rpc-backend: worker group backend mismatch");
       Expect(!state.worker_group.members.empty(),
              "llama-rpc-backend: expected at least one worker group member");
-      Expect(state.worker_group.members.front().rpc_port > 0,
-             "llama-rpc-backend: worker rpc_port should be populated");
+      const int expected_rpc_port = comet::StableLlamaRpcWorkerPort(
+          state.plane_name,
+          "worker-llama-rpc-backend-a");
+      Expect(state.worker_group.members.front().rpc_port == expected_rpc_port,
+             "llama-rpc-backend: worker rpc_port should use stable plane-scoped port");
       Expect(FindInstance(state, "worker-llama-rpc-backend-a")
                      .environment.at("COMET_WORKER_BOOT_MODE") == "llama-rpc",
              "llama-rpc-backend: worker boot mode mismatch");
+      Expect(FindInstance(state, "worker-llama-rpc-backend-a")
+                     .environment.at("COMET_WORKER_RPC_PORT") ==
+                 std::to_string(expected_rpc_port),
+             "llama-rpc-backend: worker rpc env mismatch");
       Expect(FindInstance(state, "infer-llama-rpc-backend")
                      .environment.at("COMET_INFER_RUNTIME_BACKEND") == "llama-rpc-head",
              "llama-rpc-backend: infer backend mismatch");
@@ -602,6 +610,11 @@ int main() {
              "llama-rpc-replicas: expected a single compose plan for single-node topology");
       std::set<int> seen_infer_gateway_ports;
       std::set<int> seen_worker_rpc_ports;
+      const std::set<int> expected_worker_rpc_ports{
+          comet::StableLlamaRpcWorkerPort(state.plane_name, "worker-llama-rpc-replicas-a"),
+          comet::StableLlamaRpcWorkerPort(state.plane_name, "worker-llama-rpc-replicas-b"),
+          comet::StableLlamaRpcWorkerPort(state.plane_name, "worker-llama-rpc-replicas-c"),
+      };
       bool saw_aggregator = false;
       bool saw_leaf_a = false;
       bool saw_leaf_b = false;
@@ -634,29 +647,53 @@ int main() {
           }
         }
         if (service.name == "worker-llama-rpc-replicas-a") {
-          Expect(service.published_ports.size() == 1 &&
-                     service.published_ports.front().host_port == 29600,
-                 "llama-rpc-replicas: worker a rpc port mismatch");
-          seen_worker_rpc_ports.insert(29600);
+          Expect(service.published_ports.size() == 1,
+                 "llama-rpc-replicas: worker a should publish one rpc port");
+          seen_worker_rpc_ports.insert(service.published_ports.front().host_port);
         } else if (service.name == "worker-llama-rpc-replicas-b") {
-          Expect(service.published_ports.size() == 1 &&
-                     service.published_ports.front().host_port == 29601,
-                 "llama-rpc-replicas: worker b rpc port mismatch");
-          seen_worker_rpc_ports.insert(29601);
+          Expect(service.published_ports.size() == 1,
+                 "llama-rpc-replicas: worker b should publish one rpc port");
+          seen_worker_rpc_ports.insert(service.published_ports.front().host_port);
         } else if (service.name == "worker-llama-rpc-replicas-c") {
-          Expect(service.published_ports.size() == 1 &&
-                     service.published_ports.front().host_port == 29602,
-                 "llama-rpc-replicas: worker c rpc port mismatch");
-          seen_worker_rpc_ports.insert(29602);
+          Expect(service.published_ports.size() == 1,
+                 "llama-rpc-replicas: worker c should publish one rpc port");
+          seen_worker_rpc_ports.insert(service.published_ports.front().host_port);
         }
       }
       Expect(saw_aggregator && saw_leaf_a && saw_leaf_b && saw_leaf_c,
              "llama-rpc-replicas: expected compose services for aggregator and all leaf replicas");
       Expect(seen_infer_gateway_ports.size() == 3,
              "llama-rpc-replicas: leaf gateway ports should be unique");
-      Expect(seen_worker_rpc_ports.size() == 3,
-             "llama-rpc-replicas: worker rpc ports should be unique");
+      Expect(seen_worker_rpc_ports == expected_worker_rpc_ports,
+             "llama-rpc-replicas: worker rpc ports should use stable plane-scoped ports");
       std::cout << "ok: llama-rpc-replicas" << '\n';
+    }
+
+    {
+      const auto build_plane = [](const std::string& plane_name) {
+        return json{
+            {"version", 2},
+            {"plane_name", plane_name},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", plane_name + "-model"},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", false}}},
+        };
+      };
+      const auto alpha = RenderValid(build_plane("alpha-plane"), "llama-rpc-alpha-plane");
+      const auto beta = RenderValid(build_plane("beta-plane"), "llama-rpc-beta-plane");
+      const int alpha_rpc_port = alpha.worker_group.members.front().rpc_port;
+      const int beta_rpc_port = beta.worker_group.members.front().rpc_port;
+      Expect(alpha_rpc_port != beta_rpc_port,
+             "llama-rpc-plane-port-isolation: separate planes should not share worker rpc ports");
+      std::cout << "ok: llama-rpc-plane-port-isolation" << '\n';
     }
 
     {

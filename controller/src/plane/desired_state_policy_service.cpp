@@ -266,10 +266,11 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
     return;
   }
 
+  const bool use_llama_rpc = UsesLlamaRpcRuntime(*desired_state);
   desired_state->runtime_gpu_nodes.clear();
   desired_state->worker_group.members.clear();
 
-  for (const auto& instance : desired_state->instances) {
+  for (auto& instance : desired_state->instances) {
     if (instance.role != comet::InstanceRole::Worker) {
       continue;
     }
@@ -293,8 +294,16 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
     member.infer_instance_name = InferInstanceNameForWorker(instance);
     member.node_name = instance.node_name;
     member.gpu_device = instance.gpu_device.value_or("");
-    if (const auto rpc_port_it = instance.environment.find("COMET_WORKER_RPC_PORT");
-        rpc_port_it != instance.environment.end() && !rpc_port_it->second.empty()) {
+    if (use_llama_rpc) {
+      const int rpc_port =
+          comet::StableLlamaRpcWorkerPort(desired_state->plane_name, instance.name);
+      instance.environment["COMET_WORKER_RPC_PORT"] = std::to_string(rpc_port);
+      instance.environment["COMET_WORKER_RPC_HOST"] = "0.0.0.0";
+      instance.environment["COMET_WORKER_RPC_ENDPOINT"] =
+          instance.name + ":" + std::to_string(rpc_port);
+      member.rpc_port = rpc_port;
+    } else if (const auto rpc_port_it = instance.environment.find("COMET_WORKER_RPC_PORT");
+               rpc_port_it != instance.environment.end() && !rpc_port_it->second.empty()) {
       member.rpc_port = std::stoi(rpc_port_it->second);
     }
     member.rank = static_cast<int>(desired_state->worker_group.members.size());
@@ -321,7 +330,7 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
     desired_state->worker_group.rendezvous_host =
         desired_state->worker_group.infer_instance_name;
   }
-  if (UsesLlamaRpcRuntime(*desired_state)) {
+  if (use_llama_rpc) {
     std::map<std::string, int> replica_index_by_infer;
     std::map<std::string, int> replica_size_by_infer;
     int next_replica_index = 0;

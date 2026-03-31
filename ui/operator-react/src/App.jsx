@@ -1418,6 +1418,7 @@ function App() {
     open: false,
     title: "",
     meta: "",
+    historyKey: "",
     data: [],
     valueFormatter: null,
   });
@@ -1720,11 +1721,12 @@ function App() {
     }
   }
 
-  function openTelemetryChart(title, history, meta, valueFormatter = null) {
+  function openTelemetryChart(title, history, meta, valueFormatter = null, historyKey = "") {
     setTelemetryChart({
       open: true,
       title,
       meta,
+      historyKey,
       data: Array.isArray(history) ? history : [],
       valueFormatter,
     });
@@ -2607,6 +2609,9 @@ function App() {
   const planeAlertHistory = planeMetricPrefix
     ? metricHistory[`${planeMetricPrefix}.alerts`] || []
     : [];
+  const resolvedTelemetryChartData = telemetryChart.historyKey
+    ? metricHistory[telemetryChart.historyKey] || []
+    : telemetryChart.data;
   const operationProgress = buildOperationProgressModel({
     pendingOperation,
     selectedPlaneName: selectedPlane,
@@ -3015,53 +3020,61 @@ function App() {
                   value={readyNodes}
                   meta={`${dashboard.plane?.node_count ?? 0} total / ${notReadyNodes} not ready`}
                   history={planeReadyNodesHistory}
-                  onOpenTrend={() =>
-                    openTelemetryChart(
-                      "Plane ready nodes",
-                      planeReadyNodesHistory,
-                      `Plane ${selectedPlane || "n/a"} readiness over time.`,
-                    )
-                  }
-                />
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "Plane ready nodes",
+                        planeReadyNodesHistory,
+                        `Plane ${selectedPlane || "n/a"} readiness over time.`,
+                        null,
+                        `${planeMetricPrefix}.ready_nodes`,
+                      )
+                    }
+                  />
                 <SummaryCard
                   label="Observed instances"
                   value={displayedInstanceCount}
                   meta={instanceRoleSummary}
                   history={planeObservedInstancesHistory}
-                  onOpenTrend={() =>
-                    openTelemetryChart(
-                      "Plane observed instances",
-                      planeObservedInstancesHistory,
-                      `Plane ${selectedPlane || "n/a"} observed instance count over time.`,
-                    )
-                  }
-                />
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "Plane observed instances",
+                        planeObservedInstancesHistory,
+                        `Plane ${selectedPlane || "n/a"} observed instance count over time.`,
+                        null,
+                        `${planeMetricPrefix}.observed_instances`,
+                      )
+                    }
+                  />
                 <SummaryCard
                   label="Rollout actions"
                   value={dashboard.rollout?.total_actions ?? 0}
                   meta={`${dashboard.rollout?.loop_status ?? "n/a"} / ${dashboard.rollout?.loop_reason ?? "n/a"}`}
                   history={planeRolloutHistory}
-                  onOpenTrend={() =>
-                    openTelemetryChart(
-                      "Plane rollout actions",
-                      planeRolloutHistory,
-                      `Plane ${selectedPlane || "n/a"} rollout queue size over time.`,
-                    )
-                  }
-                />
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "Plane rollout actions",
+                        planeRolloutHistory,
+                        `Plane ${selectedPlane || "n/a"} rollout queue size over time.`,
+                        null,
+                        `${planeMetricPrefix}.rollout_actions`,
+                      )
+                    }
+                  />
                 <SummaryCard
                   label="Alerts"
                   value={alertSummary.total ?? 0}
                   meta={`${alertSummary.critical ?? 0} critical / ${alertSummary.warning ?? 0} warning / ${alertSummary.booting ?? 0} booting`}
                   history={planeAlertHistory}
-                  onOpenTrend={() =>
-                    openTelemetryChart(
-                      "Plane alerts",
-                      planeAlertHistory,
-                      `Plane ${selectedPlane || "n/a"} alert count over time.`,
-                    )
-                  }
-                />
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "Plane alerts",
+                        planeAlertHistory,
+                        `Plane ${selectedPlane || "n/a"} alert count over time.`,
+                        null,
+                        `${planeMetricPrefix}.alerts`,
+                      )
+                    }
+                  />
               </div>
 
               {operationProgress ? (
@@ -4367,6 +4380,8 @@ function App() {
                         "Healthy hosts",
                         serverHealthyHostsHistory,
                         "Observed healthy hosts over time.",
+                        null,
+                        "server.healthy_hosts",
                       )
                     }
                   />
@@ -4385,6 +4400,7 @@ function App() {
                         serverGpuVramHistory,
                         "Aggregate used GPU VRAM across observed hosts.",
                         (value) => formatChartGigabytesFromMegabytes(value),
+                        "server.used_gpu_vram_mb",
                       )
                     }
                   />
@@ -4399,6 +4415,7 @@ function App() {
                         serverMemoryHistory,
                         "Aggregate used host memory over time.",
                         (value) => formatChartGigabytesFromBytes(value),
+                        "server.used_memory_bytes",
                       )
                     }
                   />
@@ -4417,6 +4434,7 @@ function App() {
                         serverCpuTempHistory,
                         "Highest reported CPU temperature across observed hosts.",
                         (value) => formatTemperature(value),
+                        "server.max_cpu_temp_c",
                       )
                     }
                   />
@@ -4435,6 +4453,7 @@ function App() {
                         serverGpuTempHistory,
                         "Highest reported GPU temperature across observed devices.",
                         (value) => formatTemperature(value),
+                        "server.max_gpu_temp_c",
                       )
                     }
                   />
@@ -4481,12 +4500,16 @@ function App() {
       </main>
       {renderDashboardPlaneDetailModal()}
       <TelemetryChartDialog
-        chart={telemetryChart}
+        chart={{
+          ...telemetryChart,
+          data: resolvedTelemetryChartData,
+        }}
         onClose={() =>
           setTelemetryChart({
             open: false,
             title: "",
             meta: "",
+            historyKey: "",
             data: [],
             valueFormatter: null,
           })

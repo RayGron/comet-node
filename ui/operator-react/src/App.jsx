@@ -1181,7 +1181,6 @@ function SkillsDialog({
           <section className="subpanel">
             <div className="subpanel-header">
               <h3>{editing ? "Edit skill" : "Create skill"}</h3>
-              <span className="subpanel-meta">Stored in plane-scoped SQLite</span>
             </div>
             <div className="plane-form-grid">
               <label className="field-label">
@@ -2349,7 +2348,7 @@ function App() {
         !Boolean(desiredState?.skills?.enabled)
       ) {
         const confirmed = window.confirm(
-          "Disable Skills for this plane? The dedicated skills service and its SQLite data will be removed on rollout.",
+          "Disable Skills for this plane? The dedicated skills service and its stored data will be removed on rollout.",
         );
         if (!confirmed) {
           setPlaneDialog((current) => ({ ...current, busy: false }));
@@ -2371,9 +2370,20 @@ function App() {
         },
         body: JSON.stringify(requestBody),
       });
+      const skillsEnabledNow = Boolean(desiredState?.skills?.enabled);
+      const skillsJustEnabled =
+        planeDialog.mode === "edit" &&
+        !planeDialog.originalSkillsEnabled &&
+        skillsEnabledNow;
+      const shouldAutoRestartForSkills =
+        planeDialog.mode === "edit" &&
+        planeDialog.planeState === "running" &&
+        skillsJustEnabled;
       const shouldOfferRestart =
-        planeDialog.mode === "edit" && planeDialog.planeState === "running";
-      let restartAccepted = false;
+        planeDialog.mode === "edit" &&
+        planeDialog.planeState === "running" &&
+        !shouldAutoRestartForSkills;
+      let restartAccepted = shouldAutoRestartForSkills;
       if (shouldOfferRestart) {
         restartAccepted = window.confirm(
           "This plane is currently running. The updated desired state is staged in the controller and requires a restart to take effect.\n\nRestart the plane now?",

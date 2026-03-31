@@ -2,7 +2,7 @@ const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
 
 const FIELD_INFO = {
   planeName: "Unique plane identifier used by the controller, runtime artifacts, and API paths.",
-  skillsEnabled: "Enable a dedicated plane-scoped Skills service backed by SQLite for storing and resolving reusable skills.",
+  skillsEnabled: "Enable a dedicated plane-scoped Skills service for storing and resolving reusable skills.",
   planeMode: "Choose llm for model serving planes or compute for custom GPU workloads without chat interaction.",
   protectedPlane: "Protected planes require an explicit confirmation before destructive actions such as delete.",
   runtimeEngine: "Runtime implementation used by infer and worker services.",

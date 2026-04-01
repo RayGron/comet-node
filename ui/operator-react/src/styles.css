@@ -849,6 +849,10 @@ body {
   font-size: 0.84rem;
 }
 
+.skills-factory-card-actions {
+  margin-top: 14px;
+}
+
 .skills-factory-editor-panel {
   position: sticky;
   top: 24px;

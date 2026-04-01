@@ -4282,7 +4282,7 @@ function App() {
                       placeholder="Ask the running model a question"
                       disabled={!interactionReady || chatBusy}
                     />
-                    <div className="toolbar">
+                    <div className="toolbar skills-factory-card-actions">
                       <button
                         className="ghost-button"
                         type="button"

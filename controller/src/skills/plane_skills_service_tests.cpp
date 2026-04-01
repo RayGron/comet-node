@@ -688,6 +688,82 @@ int main() {
 
     {
       SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "lt-cypher-localtrade-copy-trading-actions"},
+                {"name", "localtrade-copy-trading-actions"},
+                {"description",
+                 "Use to follow, unfollow, or subscribe to a LocalTrade trader and require confirmation before any write action."},
+                {"content",
+                 "These are write actions and need explicit confirmation."},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-localtrade-copy-trading-discovery"},
+                {"name", "localtrade-copy-trading-discovery"},
+                {"description",
+                 "Use to discover, compare, and filter LocalTrade copy-trading traders by ROI, drawdown, sharpe ratio, subscribers, and PnL."},
+                {"content",
+                 "Discovery is read-only and should not be confused with follow or subscribe actions."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt",
+                    "Подпиши меня на этого трейдера и сначала запроси подтверждение."}});
+      Expect(
+          selection.mode == "contextual" &&
+              !selection.selected_skill_ids.empty() &&
+              selection.selected_skill_ids.front() ==
+                  "lt-cypher-localtrade-copy-trading-actions",
+          "resolver should prefer LocalTrade copy-trading actions for subscribe prompts");
+      std::cout << "ok: contextual-resolver-prefers-localtrade-copy-actions" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "lt-cypher-localtrade-auth-session"},
+                {"name", "localtrade-auth-session"},
+                {"description",
+                 "Use for LocalTrade sign-in state, Access cookie reuse, GET /auth/me, and logout confirmation."},
+                {"content",
+                 "Check the current session, explain logout, and require confirmation before state-changing session actions."},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-localtrade-copy-trading-actions"},
+                {"name", "localtrade-copy-trading-actions"},
+                {"description",
+                 "Use to follow, unfollow, or subscribe to a LocalTrade trader and require confirmation before any write action."},
+                {"content",
+                 "These are write actions and need explicit confirmation."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt",
+                    "Выйди из моей сессии LocalTrade и сначала запроси подтверждение."}});
+      Expect(
+          selection.mode == "contextual" &&
+              !selection.selected_skill_ids.empty() &&
+              selection.selected_skill_ids.front() ==
+                  "lt-cypher-localtrade-auth-session",
+          "resolver should prefer LocalTrade auth-session for logout prompts");
+      std::cout << "ok: contextual-resolver-prefers-localtrade-logout" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
           {json{{"id", "lt-cypher-localtrade-user-streams"},
                 {"name", "localtrade-user-streams"},
                 {"description",

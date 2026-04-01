@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   buildSkillsFactoryGroupTree,
+  collectSkillsFactoryTreePaths,
   collectGroupSkillIds,
   filterPlaneSelectableSkills,
   formatSkillGroupPath,
@@ -979,6 +980,7 @@ export function PlaneV2FormBuilder({
   const validation = validatePlaneV2Form(form);
   const [factorySkillFilter, setFactorySkillFilter] = useState("");
   const [selectedFactoryGroupPath, setSelectedFactoryGroupPath] = useState("");
+  const [expandedFactoryGroupPaths, setExpandedFactoryGroupPaths] = useState([""]);
   const topologyNodes = Array.isArray(form.topologyNodes) ? form.topologyNodes : [];
   const activeTopologyNodes = topologyNodes.filter((node) => String(node?.name || "").trim());
   const workerAssignments = Array.isArray(form.workerAssignments) ? form.workerAssignments : [];
@@ -1195,17 +1197,45 @@ export function PlaneV2FormBuilder({
     selectedFactoryGroupPath,
   );
   const factoryGroupTree = buildSkillsFactoryGroupTree(skillsFactoryItems);
+  const factoryTreePaths = collectSkillsFactoryTreePaths(factoryGroupTree);
+  const expandedFactoryGroupPathSet = new Set(expandedFactoryGroupPaths);
 
   function renderFactoryGroupNode(node) {
+    const isExpanded = expandedFactoryGroupPathSet.has(node.path || "");
+    const hasChildren = node.children.length > 0;
     return (
       <div className="skills-factory-group-node" key={node.path || "__root__"}>
         <div className="skills-factory-group-row">
+          <button
+            className={`ghost-button compact-button skills-factory-group-toggle ${isExpanded ? "is-expanded" : ""}`}
+            type="button"
+            disabled={!hasChildren}
+            onClick={() =>
+              setExpandedFactoryGroupPaths((current) => {
+                const next = new Set(Array.isArray(current) ? current : [""]);
+                if (next.has(node.path || "")) {
+                  next.delete(node.path || "");
+                } else {
+                  next.add(node.path || "");
+                }
+                return [...next];
+              })
+            }
+            aria-label={isExpanded ? `Collapse ${node.label}` : `Expand ${node.label}`}
+          >
+            <span className="skills-factory-group-toggle-glyph">{hasChildren ? "▾" : "•"}</span>
+          </button>
           <button
             className={`ghost-button skills-factory-group-button ${selectedFactoryGroupPath === node.path ? "is-active" : ""}`}
             type="button"
             onClick={() => setSelectedFactoryGroupPath(node.path)}
           >
-            <span>{node.label}</span>
+            <span className="skills-factory-group-copy">
+              <span>{node.label}</span>
+              {node.direct_skill_count > 0 ? (
+                <span className="skills-factory-group-meta">{node.direct_skill_count} direct</span>
+              ) : null}
+            </span>
             <span className="tag">{node.total_skill_count}</span>
           </button>
           {node.path ? (
@@ -1227,7 +1257,7 @@ export function PlaneV2FormBuilder({
             </div>
           ) : null}
         </div>
-        {node.children.length > 0 ? (
+        {hasChildren && isExpanded ? (
           <div className="skills-factory-group-children">
             {node.children.map((child) => renderFactoryGroupNode(child))}
           </div>
@@ -1311,6 +1341,20 @@ export function PlaneV2FormBuilder({
                   onClick={() => setSelectedFactoryGroupPath("")}
                 >
                   Show all
+                </button>
+                <button
+                  className="ghost-button compact-button"
+                  type="button"
+                  onClick={() => setExpandedFactoryGroupPaths(factoryTreePaths)}
+                >
+                  Expand all
+                </button>
+                <button
+                  className="ghost-button compact-button"
+                  type="button"
+                  onClick={() => setExpandedFactoryGroupPaths([""])}
+                >
+                  Collapse tree
                 </button>
               </div>
               <div className="skills-factory-group-tree">

@@ -712,7 +712,19 @@ body {
 }
 
 .skills-factory-page-grid {
-  grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1.1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.28fr) minmax(320px, 0.95fr);
+  align-items: start;
+}
+
+.skills-factory-overview-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
+.skills-factory-overview-card {
+  min-height: 124px;
 }
 
 .skills-factory-selector-layout {
@@ -750,7 +762,31 @@ body {
 
 .skills-factory-group-row {
   display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
+  align-items: start;
+}
+
+.skills-factory-group-toggle {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.skills-factory-group-toggle:disabled {
+  opacity: 0.7;
+}
+
+.skills-factory-group-toggle-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.92rem;
+  transform: translateY(-1px);
 }
 
 .skills-factory-group-button {
@@ -761,10 +797,61 @@ body {
   text-align: left;
 }
 
+.skills-factory-group-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.skills-factory-group-meta {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 .skills-factory-group-button.is-active {
   border-color: rgba(255, 207, 84, 0.42);
   background: rgba(255, 190, 60, 0.1);
   color: #ffe39a;
+}
+
+.skills-factory-catalog-toolbar {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.46fr) minmax(180px, 0.54fr);
+  margin-bottom: 12px;
+}
+
+.skills-factory-active-filter {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.skills-factory-active-filter-value {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(120, 190, 255, 0.16);
+  background: rgba(4, 15, 31, 0.52);
+  color: var(--text-dim);
+}
+
+.skills-factory-item-head {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.skills-factory-item-group {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.skills-factory-editor-panel {
+  position: sticky;
+  top: 24px;
 }
 
 .plane-form-grid {
@@ -1716,8 +1803,20 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .skills-factory-overview-grid {
+    grid-template-columns: 1fr;
+  }
+
   .skills-factory-selector-layout {
     grid-template-columns: 1fr;
+  }
+
+  .skills-factory-catalog-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .skills-factory-editor-panel {
+    position: static;
   }
 
   .models-page-grid {

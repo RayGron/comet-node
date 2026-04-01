@@ -22,6 +22,7 @@ import {
 import { formatPlaneDashboardSkillsSummary } from "./planeSkills.js";
 import {
   buildSkillsFactoryGroupTree,
+  collectSkillsFactoryTreePaths,
   filterSkillsFactoryItems,
   formatSkillGroupPath,
   sortSkillsFactoryItems,
@@ -1686,6 +1687,7 @@ function App() {
     search: "",
     sort: "name",
     selectedGroupPath: "",
+    expandedGroupPaths: [""],
   });
   const [selectedTab, setSelectedTab] = useState("status");
   const [chatMessages, setChatMessages] = useState([]);
@@ -1772,6 +1774,7 @@ function App() {
       search: "",
       sort: "name",
       selectedGroupPath: "",
+      expandedGroupPaths: [""],
     });
     setChatMessages([]);
     setChatError("");
@@ -1889,9 +1892,15 @@ function App() {
   async function refreshSkillsFactory() {
     try {
       const payload = await fetchJson(skillsFactoryPath());
+      const nextItems = Array.isArray(payload.skills) ? payload.skills : [];
+      const nextTree = buildSkillsFactoryGroupTree(nextItems);
+      const nextPaths = new Set(collectSkillsFactoryTreePaths(nextTree));
       setSkillsFactory((current) => ({
         ...current,
-        items: Array.isArray(payload.skills) ? payload.skills : [],
+        items: nextItems,
+        expandedGroupPaths: Array.isArray(current.expandedGroupPaths)
+          ? current.expandedGroupPaths.filter((path) => nextPaths.has(path))
+          : [""],
         error: "",
       }));
     } catch (error) {
@@ -4628,20 +4637,72 @@ function App() {
   }
 
   function renderSkillsFactoryPage() {
+    const groupTree = buildSkillsFactoryGroupTree(skillsFactory.items || []);
+    const availableTreePaths = collectSkillsFactoryTreePaths(groupTree);
+    const expandedGroupPaths = Array.isArray(skillsFactory.expandedGroupPaths)
+      ? skillsFactory.expandedGroupPaths
+      : [""];
+    const expandedGroupPathSet = new Set(expandedGroupPaths);
+
+    function setExpandedGroupPaths(nextPaths) {
+      setSkillsFactory((current) => ({
+        ...current,
+        expandedGroupPaths: nextPaths,
+      }));
+    }
+
+    function toggleGroupExpansion(path) {
+      const normalizedPath = typeof path === "string" ? path : "";
+      setSkillsFactory((current) => {
+        const currentPaths = new Set(
+          Array.isArray(current.expandedGroupPaths) ? current.expandedGroupPaths : [""],
+        );
+        if (currentPaths.has(normalizedPath)) {
+          currentPaths.delete(normalizedPath);
+        } else {
+          currentPaths.add(normalizedPath);
+        }
+        return {
+          ...current,
+          expandedGroupPaths: [...currentPaths],
+        };
+      });
+    }
+
     function renderGroupNode(node) {
+      const isExpanded = expandedGroupPathSet.has(node.path || "");
+      const hasChildren = node.children.length > 0;
       return (
         <div className="skills-factory-group-node" key={node.path || "__root__"}>
-          <button
-            className={`ghost-button skills-factory-group-button ${skillsFactory.selectedGroupPath === node.path ? "is-active" : ""}`}
-            type="button"
-            onClick={() =>
-              setSkillsFactory((current) => ({ ...current, selectedGroupPath: node.path }))
-            }
-          >
-            <span>{node.label}</span>
-            <span className="tag">{node.total_skill_count}</span>
-          </button>
-          {node.children.length > 0 ? (
+          <div className="skills-factory-group-row">
+            <button
+              className={`ghost-button compact-button skills-factory-group-toggle ${isExpanded ? "is-expanded" : ""}`}
+              type="button"
+              disabled={!hasChildren}
+              onClick={() => toggleGroupExpansion(node.path || "")}
+              aria-label={isExpanded ? `Collapse ${node.label}` : `Expand ${node.label}`}
+            >
+              <span className="skills-factory-group-toggle-glyph">{hasChildren ? "▾" : "•"}</span>
+            </button>
+            <button
+              className={`ghost-button skills-factory-group-button ${skillsFactory.selectedGroupPath === node.path ? "is-active" : ""}`}
+              type="button"
+              onClick={() =>
+                setSkillsFactory((current) => ({ ...current, selectedGroupPath: node.path }))
+              }
+            >
+              <span className="skills-factory-group-copy">
+                <span>{node.label}</span>
+                {node.direct_skill_count > 0 ? (
+                  <span className="skills-factory-group-meta">
+                    {node.direct_skill_count} direct
+                  </span>
+                ) : null}
+              </span>
+              <span className="tag">{node.total_skill_count}</span>
+            </button>
+          </div>
+          {hasChildren && isExpanded ? (
             <div className="skills-factory-group-children">
               {node.children.map((child) => renderGroupNode(child))}
             </div>
@@ -4650,7 +4711,6 @@ function App() {
       );
     }
 
-    const groupTree = buildSkillsFactoryGroupTree(skillsFactory.items || []);
     const filteredItems = sortSkillsFactoryItems(
       filterSkillsFactoryItems(
         skillsFactory.items || [],
@@ -4661,6 +4721,12 @@ function App() {
     );
     const editing = skillsFactory.mode === "edit";
     const form = skillsFactory.form || buildEmptySkillForm();
+    const totalItems = Array.isArray(skillsFactory.items) ? skillsFactory.items.length : 0;
+    const attachedPlaneCount = new Set(
+      (skillsFactory.items || []).flatMap((item) =>
+        Array.isArray(item.plane_names) ? item.plane_names : [],
+      ),
+    ).size;
     return (
       <section className="panel page-panel models-page-panel">
         <div className="panel-header">
@@ -4691,6 +4757,27 @@ function App() {
           Canonical skill content lives here and can be attached to multiple planes.
         </div>
         {skillsFactory.error ? <div className="error-banner">{skillsFactory.error}</div> : null}
+        <div className="skills-factory-overview-grid">
+          <article className="summary-card skills-factory-overview-card">
+            <span className="summary-label">Catalog size</span>
+            <strong className="summary-value">{totalItems}</strong>
+            <span className="summary-meta">Canonical skills in the factory</span>
+          </article>
+          <article className="summary-card skills-factory-overview-card">
+            <span className="summary-label">Visible now</span>
+            <strong className="summary-value">{filteredItems.length}</strong>
+            <span className="summary-meta">
+              {skillsFactory.selectedGroupPath
+                ? formatSkillGroupPath(skillsFactory.selectedGroupPath)
+                : "All groups"}
+            </span>
+          </article>
+          <article className="summary-card skills-factory-overview-card">
+            <span className="summary-label">Planes using skills</span>
+            <strong className="summary-value">{attachedPlaneCount}</strong>
+            <span className="summary-meta">Unique attached planes across the catalog</span>
+          </article>
+        </div>
         <div className="panel-grid skills-factory-page-grid">
           <section className="subpanel">
             <div className="subpanel-header">
@@ -4710,6 +4797,20 @@ function App() {
               >
                 Show all skills
               </button>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => setExpandedGroupPaths(availableTreePaths)}
+              >
+                Expand all
+              </button>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => setExpandedGroupPaths([""])}
+              >
+                Collapse tree
+              </button>
             </div>
             <div className="skills-factory-group-tree">
               {renderGroupNode(groupTree)}
@@ -4723,12 +4824,7 @@ function App() {
               </div>
               <span className="subpanel-meta">{filteredItems.length} item(s)</span>
             </div>
-            {skillsFactory.selectedGroupPath ? (
-              <div className="plane-form-section-meta">
-                Group filter: {formatSkillGroupPath(skillsFactory.selectedGroupPath)}
-              </div>
-            ) : null}
-            <div className="plane-form-grid plane-form-grid-wide">
+            <div className="skills-factory-catalog-toolbar">
               <label className="field-label">
                 <span className="field-label-title">Search</span>
                 <input
@@ -4753,6 +4849,14 @@ function App() {
                   <option value="plane_count">Plane count</option>
                 </select>
               </label>
+              <div className="skills-factory-active-filter">
+                <span className="field-label-title">Scope</span>
+                <div className="skills-factory-active-filter-value">
+                  {skillsFactory.selectedGroupPath
+                    ? formatSkillGroupPath(skillsFactory.selectedGroupPath)
+                    : "All groups"}
+                </div>
+              </div>
             </div>
             <div className="list-column model-library-list model-library-list-expanded">
               {filteredItems.length === 0 ? (
@@ -4764,12 +4868,16 @@ function App() {
                 filteredItems.map((item) => (
                   <article className="list-card" key={item.id}>
                     <div className="card-row">
-                      <strong>{item.name || item.id}</strong>
+                      <div className="skills-factory-item-head">
+                        <strong>{item.name || item.id}</strong>
+                        <span className="skills-factory-item-group">
+                          {formatSkillGroupPath(item.group_path)}
+                        </span>
+                      </div>
                       <span className="tag">{item.plane_count || 0} plane(s)</span>
                     </div>
                     <div className="list-detail">
-                      <div>{item.id}</div>
-                      <div>{formatSkillGroupPath(item.group_path)}</div>
+                      <div className="factory-skill-table-id">{item.id}</div>
                       <div>{item.description || "No description"}</div>
                       <div>{Array.isArray(item.plane_names) && item.plane_names.length > 0 ? item.plane_names.join(", ") : "not attached to any plane"}</div>
                     </div>
@@ -4796,7 +4904,7 @@ function App() {
               )}
             </div>
           </section>
-          <section className="subpanel">
+          <section className="subpanel skills-factory-editor-panel">
             <div className="subpanel-header">
               <h3>{editing ? "Edit / rename factory skill" : "Create factory skill"}</h3>
             </div>

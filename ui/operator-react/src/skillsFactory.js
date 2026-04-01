@@ -90,6 +90,18 @@ export function buildSkillsFactoryGroupTree(items) {
   return sortGroupTree(root);
 }
 
+export function collectSkillsFactoryTreePaths(node) {
+  if (!node || typeof node !== "object") {
+    return [];
+  }
+  return [
+    node.path || "",
+    ...(Array.isArray(node.children)
+      ? node.children.flatMap((child) => collectSkillsFactoryTreePaths(child))
+      : []),
+  ];
+}
+
 export function collectGroupSkillIds(items, selectedGroupPath) {
   return (Array.isArray(items) ? items : [])
     .filter((item) => matchesSelectedGroup(item, selectedGroupPath))

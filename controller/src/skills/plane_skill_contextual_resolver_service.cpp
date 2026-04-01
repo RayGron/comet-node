@@ -199,16 +199,18 @@ std::string NormalizeSkillText(const std::string& value) {
 
 std::vector<std::string> TokenizeRelevantTerms(const std::string& value) {
   static const std::unordered_set<std::string> kIgnoredTokens = {
-      "about",      "agent",      "apply",      "available", "build",
-      "catalog",    "change",     "code",       "context",   "controller",
-      "debug",      "default",    "enabled",    "field",     "from",
-      "have",       "interaction","into",       "local",     "mode",
-      "must",       "plane",      "request",    "response",  "runtime",
+      "about",      "after",      "agent",      "apply",     "available",
+      "before",     "build",      "check",      "catalog",   "change",
+      "code",       "context",    "controller", "debug",     "default",
+      "enabled",    "explain",    "field",      "from",      "have",
+      "interaction","into",       "local",      "mode",      "must",
+      "plane",      "please",     "request",    "response",  "runtime",
       "service",    "should",     "skill",      "skills",    "source",
       "that",       "their",      "this",       "through",   "when",
       "with",       "without",    "пожалуйста", "нужно",     "просто",
       "обычной",    "человеческой","речи",      "сделай",    "сделать",
-      "надо",       "через",
+      "надо",       "через",      "перед",      "тем",       "как",
+      "объясни",
   };
 
   static const std::unordered_map<std::string, std::string> kCanonicalAliases = {

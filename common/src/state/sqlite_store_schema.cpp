@@ -93,6 +93,11 @@ void InitializeSchema(
       "desired_state_json TEXT NOT NULL DEFAULT ''");
   EnsureColumn(
       db,
+      "skills_factory_skills",
+      "group_path",
+      "group_path TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
       "planes",
       "inference_config_json",
       "inference_config_json TEXT NOT NULL DEFAULT ''");

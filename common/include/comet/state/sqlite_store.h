@@ -270,6 +270,7 @@ struct ModelLibraryDownloadJobRecord {
 struct SkillsFactorySkillRecord {
   std::string id;
   std::string name;
+  std::string group_path;
   std::string description;
   std::string content;
   std::string created_at;

@@ -20,7 +20,12 @@ import {
   validatePlaneV2Form,
 } from "./planeV2Form.jsx";
 import { formatPlaneDashboardSkillsSummary } from "./planeSkills.js";
-import { filterSkillsFactoryItems, sortSkillsFactoryItems } from "./skillsFactory.js";
+import {
+  buildSkillsFactoryGroupTree,
+  filterSkillsFactoryItems,
+  formatSkillGroupPath,
+  sortSkillsFactoryItems,
+} from "./skillsFactory.js";
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
@@ -333,6 +338,7 @@ function buildEmptySkillForm() {
   return {
     id: "",
     name: "",
+    groupPath: "",
     description: "",
     content: "",
     enabled: true,
@@ -1679,6 +1685,7 @@ function App() {
     form: buildEmptySkillForm(),
     search: "",
     sort: "name",
+    selectedGroupPath: "",
   });
   const [selectedTab, setSelectedTab] = useState("status");
   const [chatMessages, setChatMessages] = useState([]);
@@ -1764,6 +1771,7 @@ function App() {
       form: buildEmptySkillForm(),
       search: "",
       sort: "name",
+      selectedGroupPath: "",
     });
     setChatMessages([]);
     setChatError("");
@@ -3280,12 +3288,14 @@ function App() {
       form: {
         id: skill.id || "",
         name: skill.name || "",
+        groupPath: skill.group_path || "",
         description: skill.description || "",
         content: skill.content || "",
         enabled: true,
         sessionIdsText: "",
         cometLinksText: "",
       },
+      selectedGroupPath: skill.group_path || current.selectedGroupPath,
       error: "",
     }));
   }
@@ -3303,6 +3313,7 @@ function App() {
   async function saveFactorySkillForm() {
     const payload = {
       name: String(skillsFactory.form?.name || "").trim(),
+      group_path: String(skillsFactory.form?.groupPath || "").trim(),
       description: String(skillsFactory.form?.description || "").trim(),
       content: String(skillsFactory.form?.content || "").trim(),
     };
@@ -4617,8 +4628,35 @@ function App() {
   }
 
   function renderSkillsFactoryPage() {
+    function renderGroupNode(node) {
+      return (
+        <div className="skills-factory-group-node" key={node.path || "__root__"}>
+          <button
+            className={`ghost-button skills-factory-group-button ${skillsFactory.selectedGroupPath === node.path ? "is-active" : ""}`}
+            type="button"
+            onClick={() =>
+              setSkillsFactory((current) => ({ ...current, selectedGroupPath: node.path }))
+            }
+          >
+            <span>{node.label}</span>
+            <span className="tag">{node.total_skill_count}</span>
+          </button>
+          {node.children.length > 0 ? (
+            <div className="skills-factory-group-children">
+              {node.children.map((child) => renderGroupNode(child))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    const groupTree = buildSkillsFactoryGroupTree(skillsFactory.items || []);
     const filteredItems = sortSkillsFactoryItems(
-      filterSkillsFactoryItems(skillsFactory.items || [], skillsFactory.search),
+      filterSkillsFactoryItems(
+        skillsFactory.items || [],
+        skillsFactory.search,
+        skillsFactory.selectedGroupPath,
+      ),
       skillsFactory.sort,
     );
     const editing = skillsFactory.mode === "edit";
@@ -4653,7 +4691,30 @@ function App() {
           Canonical skill content lives here and can be attached to multiple planes.
         </div>
         {skillsFactory.error ? <div className="error-banner">{skillsFactory.error}</div> : null}
-        <div className="panel-grid">
+        <div className="panel-grid skills-factory-page-grid">
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <div>
+                <div className="section-label">Groups</div>
+                <h3>Browse tree</h3>
+              </div>
+            </div>
+            <div className="toolbar">
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={!skillsFactory.selectedGroupPath}
+                onClick={() =>
+                  setSkillsFactory((current) => ({ ...current, selectedGroupPath: "" }))
+                }
+              >
+                Show all skills
+              </button>
+            </div>
+            <div className="skills-factory-group-tree">
+              {renderGroupNode(groupTree)}
+            </div>
+          </section>
           <section className="subpanel">
             <div className="subpanel-header">
               <div>
@@ -4662,6 +4723,11 @@ function App() {
               </div>
               <span className="subpanel-meta">{filteredItems.length} item(s)</span>
             </div>
+            {skillsFactory.selectedGroupPath ? (
+              <div className="plane-form-section-meta">
+                Group filter: {formatSkillGroupPath(skillsFactory.selectedGroupPath)}
+              </div>
+            ) : null}
             <div className="plane-form-grid plane-form-grid-wide">
               <label className="field-label">
                 <span className="field-label-title">Search</span>
@@ -4703,6 +4769,7 @@ function App() {
                     </div>
                     <div className="list-detail">
                       <div>{item.id}</div>
+                      <div>{formatSkillGroupPath(item.group_path)}</div>
                       <div>{item.description || "No description"}</div>
                       <div>{Array.isArray(item.plane_names) && item.plane_names.length > 0 ? item.plane_names.join(", ") : "not attached to any plane"}</div>
                     </div>
@@ -4731,7 +4798,7 @@ function App() {
           </section>
           <section className="subpanel">
             <div className="subpanel-header">
-              <h3>{editing ? "Edit factory skill" : "Create factory skill"}</h3>
+              <h3>{editing ? "Edit / rename factory skill" : "Create factory skill"}</h3>
             </div>
             <div className="plane-form-grid">
               <label className="field-label">
@@ -4746,6 +4813,19 @@ function App() {
                 <span className="field-label-title">Id</span>
                 <input className="text-input" value={form.id} readOnly />
               </label>
+              <label className="field-label">
+                <span className="field-label-title">Group path</span>
+                <input
+                  className="text-input"
+                  value={form.groupPath}
+                  onChange={(event) => updateFactorySkillFormField("groupPath", event.target.value)}
+                  placeholder="code-agent/debugging"
+                />
+              </label>
+            </div>
+            <div className="plane-form-section-meta">
+              Use slash-separated groups. Skill ids stay stable; rename and regroup through this
+              form.
             </div>
             <label className="field-label">
               <span className="field-label-title">Description</span>
@@ -4773,6 +4853,14 @@ function App() {
                 onClick={saveFactorySkillForm}
               >
                 {editing ? "Save skill" : "Create skill"}
+              </button>
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={skillsFactory.busy}
+                onClick={startCreateFactorySkill}
+              >
+                {editing ? "Cancel edit" : "Reset form"}
               </button>
             </div>
           </section>

@@ -98,6 +98,7 @@ int main() {
       store.UpsertSkillsFactorySkill(comet::SkillsFactorySkillRecord{
           "skill-alpha",
           "Alpha skill",
+          "alpha/core",
           "Canonical alpha description",
           "canonical alpha content",
           "",
@@ -128,6 +129,9 @@ int main() {
           item.at("plane_names").get<std::vector<std::string>>() ==
               std::vector<std::string>({"factory-plane"}),
           "factory skill plane_names mismatch");
+      Expect(
+          item.at("group_path").get<std::string>() == "alpha/core",
+          "factory skill group_path mismatch");
 
       const auto deleted =
           factory_service.DeleteSkill(db_path.string(), "skill-alpha", temp_root.string());

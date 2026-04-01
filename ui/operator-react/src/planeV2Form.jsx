@@ -1,5 +1,10 @@
 import { useState } from "react";
-import { filterPlaneSelectableSkills } from "./skillsFactory.js";
+import {
+  buildSkillsFactoryGroupTree,
+  collectGroupSkillIds,
+  filterPlaneSelectableSkills,
+  formatSkillGroupPath,
+} from "./skillsFactory.js";
 
 const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
 
@@ -973,6 +978,7 @@ export function PlaneV2FormBuilder({
   const form = dialog.form || buildNewPlaneFormState();
   const validation = validatePlaneV2Form(form);
   const [factorySkillFilter, setFactorySkillFilter] = useState("");
+  const [selectedFactoryGroupPath, setSelectedFactoryGroupPath] = useState("");
   const topologyNodes = Array.isArray(form.topologyNodes) ? form.topologyNodes : [];
   const activeTopologyNodes = topologyNodes.filter((node) => String(node?.name || "").trim());
   const workerAssignments = Array.isArray(form.workerAssignments) ? form.workerAssignments : [];
@@ -1166,10 +1172,69 @@ export function PlaneV2FormBuilder({
     });
   }
 
+  function applyFactoryGroupSelection(groupPath, nextSelected) {
+    updatePlaneDialogForm(setDialog, (current) => {
+      const currentIds = new Set(Array.isArray(current.factorySkillIds) ? current.factorySkillIds : []);
+      for (const skillId of collectGroupSkillIds(skillsFactoryItems, groupPath)) {
+        if (nextSelected) {
+          currentIds.add(skillId);
+        } else {
+          currentIds.delete(skillId);
+        }
+      }
+      return {
+        ...current,
+        factorySkillIds: [...currentIds],
+      };
+    });
+  }
+
   const filteredFactorySkills = filterPlaneSelectableSkills(
     skillsFactoryItems,
     factorySkillFilter,
+    selectedFactoryGroupPath,
   );
+  const factoryGroupTree = buildSkillsFactoryGroupTree(skillsFactoryItems);
+
+  function renderFactoryGroupNode(node) {
+    return (
+      <div className="skills-factory-group-node" key={node.path || "__root__"}>
+        <div className="skills-factory-group-row">
+          <button
+            className={`ghost-button skills-factory-group-button ${selectedFactoryGroupPath === node.path ? "is-active" : ""}`}
+            type="button"
+            onClick={() => setSelectedFactoryGroupPath(node.path)}
+          >
+            <span>{node.label}</span>
+            <span className="tag">{node.total_skill_count}</span>
+          </button>
+          {node.path ? (
+            <div className="plane-form-section-actions">
+              <button
+                className="ghost-button compact-button"
+                type="button"
+                onClick={() => applyFactoryGroupSelection(node.path, true)}
+              >
+                Select group
+              </button>
+              <button
+                className="ghost-button compact-button"
+                type="button"
+                onClick={() => applyFactoryGroupSelection(node.path, false)}
+              >
+                Clear group
+              </button>
+            </div>
+          ) : null}
+        </div>
+        {node.children.length > 0 ? (
+          <div className="skills-factory-group-children">
+            {node.children.map((child) => renderFactoryGroupNode(child))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="plane-form-builder">
@@ -1233,11 +1298,31 @@ export function PlaneV2FormBuilder({
               placeholder="Search by id, name, description, content, or plane usage"
             />
           </label>
+          <div className="skills-factory-selector-layout">
+            <div className="skills-factory-group-shell">
+              <div className="plane-form-section-header">
+                <span className="field-label-title">Groups</span>
+              </div>
+              <div className="toolbar">
+                <button
+                  className="ghost-button compact-button"
+                  type="button"
+                  disabled={!selectedFactoryGroupPath}
+                  onClick={() => setSelectedFactoryGroupPath("")}
+                >
+                  Show all
+                </button>
+              </div>
+              <div className="skills-factory-group-tree">
+                {renderFactoryGroupNode(factoryGroupTree)}
+              </div>
+            </div>
           <div className="factory-skill-table-shell">
             <table className="factory-skill-table">
               <thead>
                 <tr>
                   <th>Select</th>
+                  <th>Group</th>
                   <th>Name</th>
                   <th>Id</th>
                   <th>Planes</th>
@@ -1247,7 +1332,7 @@ export function PlaneV2FormBuilder({
               <tbody>
                 {filteredFactorySkills.length === 0 ? (
                   <tr>
-                    <td colSpan="5" className="factory-skill-table-empty">
+                    <td colSpan="6" className="factory-skill-table-empty">
                       No Skills Factory records match the current filter.
                     </td>
                   </tr>
@@ -1265,6 +1350,7 @@ export function PlaneV2FormBuilder({
                             onChange={() => toggleFactorySkill(item.id)}
                           />
                         </td>
+                        <td>{formatSkillGroupPath(item.group_path)}</td>
                         <td>{item.name || "unnamed-skill"}</td>
                         <td className="factory-skill-table-id">{item.id}</td>
                         <td>{Array.isArray(item.plane_names) ? item.plane_names.length : item.plane_count || 0}</td>
@@ -1275,6 +1361,7 @@ export function PlaneV2FormBuilder({
                 )}
               </tbody>
             </table>
+          </div>
           </div>
         </div>
       ) : null}

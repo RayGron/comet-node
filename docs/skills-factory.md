@@ -64,6 +64,7 @@ Rules:
 - `GET /api/v1/skills-factory` returns:
   - `id`
   - `name`
+  - `group_path`
   - `description`
   - `content`
   - `created_at`
@@ -134,9 +135,11 @@ The main operator sidebar now includes `Skills Factory`.
 The page supports:
 
 - create, edit, and delete canonical skills
+- rename and regroup canonical skills without changing the stable skill id
 - visibility of:
   - `id`
   - `name`
+  - `group_path`
   - `description`
   - `plane_names`
   - `plane_count`
@@ -144,6 +147,7 @@ The page supports:
   - `name`
   - `plane_count`
 - dynamic search across all visible fields
+- hierarchical group browsing using slash-separated `group_path` values
 
 ### Plane editor
 
@@ -152,6 +156,7 @@ When `Skills` is enabled for an `llm` plane:
 - a `Skills Factory` selector table appears under `Features`
 - selected records persist into `desired-state.v2.skills.factory_skill_ids[]`
 - rollout or restart syncs those skills into the plane runtime copy
+- the selector includes a group tree and bulk select / clear actions for whole groups
 
 ### Plane dashboard
 

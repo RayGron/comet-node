@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS model_library_download_jobs (
 CREATE TABLE IF NOT EXISTS skills_factory_skills (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    group_path TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL,
     content TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

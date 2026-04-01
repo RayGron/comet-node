@@ -7,8 +7,11 @@ import {
   validatePlaneV2Form,
 } from "./planeV2Form.jsx";
 import {
+  buildSkillsFactoryGroupTree,
+  collectGroupSkillIds,
   filterPlaneSelectableSkills,
   filterSkillsFactoryItems,
+  formatSkillGroupPath,
   sortSkillsFactoryItems,
 } from "./skillsFactory.js";
 import { formatPlaneDashboardSkillsSummary } from "./planeSkills.js";
@@ -18,6 +21,7 @@ describe("skillsFactory utils", () => {
     {
       id: "skill-zeta",
       name: "Zeta",
+      group_path: "code-agent/debugging",
       description: "Blue answer",
       content: "Always answer BLUE",
       plane_count: 1,
@@ -26,6 +30,7 @@ describe("skillsFactory utils", () => {
     {
       id: "skill-alpha",
       name: "Alpha",
+      group_path: "code-agent",
       description: "Shared answer",
       content: "Always answer ALPHA",
       plane_count: 3,
@@ -47,6 +52,26 @@ describe("skillsFactory utils", () => {
     expect(filterPlaneSelectableSkills(items, "prod").map((item) => item.id)).toEqual([
       "skill-alpha",
     ]);
+  });
+
+  it("builds a group tree and filters by subtree", () => {
+    const tree = buildSkillsFactoryGroupTree(items);
+    expect(tree.total_skill_count).toBe(2);
+    expect(tree.children.map((item) => item.path)).toEqual(["code-agent"]);
+    expect(tree.children[0].children.map((item) => item.path)).toEqual(["code-agent/debugging"]);
+    expect(filterSkillsFactoryItems(items, "", "code-agent").map((item) => item.id)).toEqual([
+      "skill-zeta",
+      "skill-alpha",
+    ]);
+    expect(
+      filterSkillsFactoryItems(items, "", "code-agent/debugging").map((item) => item.id),
+    ).toEqual(["skill-zeta"]);
+    expect(collectGroupSkillIds(items, "code-agent")).toEqual(["skill-zeta", "skill-alpha"]);
+  });
+
+  it("formats empty group paths as ungrouped", () => {
+    expect(formatSkillGroupPath("")).toBe("Ungrouped");
+    expect(formatSkillGroupPath(" localtrade / streams ")).toBe("localtrade/streams");
   });
 });
 

@@ -39,6 +39,42 @@ bool ContainsSkillId(
   return std::find(items.begin(), items.end(), skill_id) != items.end();
 }
 
+std::string NormalizeGroupPath(const std::string& raw_value) {
+  std::vector<std::string> segments;
+  std::string current;
+  for (const char ch : raw_value) {
+    if (ch == '/' || ch == '\\') {
+      if (!current.empty()) {
+        segments.push_back(current);
+        current.clear();
+      }
+      continue;
+    }
+    current.push_back(ch);
+  }
+  if (!current.empty()) {
+    segments.push_back(current);
+  }
+
+  std::string normalized;
+  for (const auto& segment : segments) {
+    const auto start = segment.find_first_not_of(" \t\r\n");
+    const auto end = segment.find_last_not_of(" \t\r\n");
+    if (start == std::string::npos || end == std::string::npos) {
+      continue;
+    }
+    const std::string trimmed = segment.substr(start, end - start + 1);
+    if (trimmed.empty()) {
+      continue;
+    }
+    if (!normalized.empty()) {
+      normalized += "/";
+    }
+    normalized += trimmed;
+  }
+  return normalized;
+}
+
 std::vector<std::string> RemoveSkillId(
     const std::vector<std::string>& items,
     const std::string& skill_id) {
@@ -97,6 +133,12 @@ SkillsFactoryService::CanonicalSkillInput SkillsFactoryService::ParseCanonicalSk
     }
     input.name = payload.at("name").get<std::string>();
   }
+  if (payload.contains("group_path")) {
+    if (!payload.at("group_path").is_string()) {
+      throw std::invalid_argument("group_path must be a string");
+    }
+    input.group_path = NormalizeGroupPath(payload.at("group_path").get<std::string>());
+  }
   if (payload.contains("description")) {
     if (!payload.at("description").is_string() ||
         payload.at("description").get<std::string>().empty()) {
@@ -128,6 +170,7 @@ nlohmann::json SkillsFactoryService::BuildSkillPayload(
   return json{
       {"id", skill.id},
       {"name", skill.name},
+      {"group_path", skill.group_path},
       {"description", skill.description},
       {"content", skill.content},
       {"created_at", skill.created_at},
@@ -171,6 +214,7 @@ nlohmann::json SkillsFactoryService::CreateSkill(
   comet::SkillsFactorySkillRecord skill;
   skill.id = input.id;
   skill.name = input.name;
+  skill.group_path = input.group_path;
   skill.description = input.description;
   skill.content = input.content;
   store.UpsertSkillsFactorySkill(skill);
@@ -192,6 +236,9 @@ nlohmann::json SkillsFactoryService::UpdateSkill(
   const auto input = ParseCanonicalSkillInput(payload, partial);
   if (!input.name.empty()) {
     current->name = input.name;
+  }
+  if (payload.contains("group_path")) {
+    current->group_path = input.group_path;
   }
   if (!input.description.empty()) {
     current->description = input.description;

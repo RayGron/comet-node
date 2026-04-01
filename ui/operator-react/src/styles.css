@@ -258,6 +258,21 @@ body {
   margin-bottom: 16px;
 }
 
+.panel-header,
+.subpanel-header,
+.card-row,
+.plane-card-top {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.panel-header > div,
+.subpanel-header > div,
+.card-row > div,
+.plane-card-top > div {
+  min-width: 0;
+}
+
 .toolbar {
   flex-wrap: wrap;
 }
@@ -1491,6 +1506,9 @@ body {
 .meta-card {
   border-radius: var(--radius-md);
   padding: 14px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
 }
 
 .summary-label {
@@ -1633,7 +1651,7 @@ body {
 
 .list-detail,
 .event-meta {
-  margin-top: 10px;
+  margin-top: 0;
   display: grid;
   gap: 6px;
   color: var(--text-dim);
@@ -1675,9 +1693,24 @@ body {
 }
 
 .event-message {
-  margin: 10px 0 0;
+  margin: 0;
   color: var(--text);
   line-height: 1.5;
+}
+
+.list-card > .toolbar,
+.subpanel > .toolbar,
+.subpanel > .plane-form-section-actions,
+.plane-card > .toolbar,
+.plane-card > .plane-card-actions,
+.summary-card > .toolbar,
+.model-job-toolbar,
+.skills-factory-card-actions {
+  margin-top: 6px;
+}
+
+.subpanel > .toolbar:first-of-type {
+  margin-top: 0;
 }
 
 .meta-card {

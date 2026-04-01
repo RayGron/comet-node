@@ -4,3 +4,5 @@ COPY runtime/web-ui/nginx.conf.template /etc/nginx/templates/default.conf.templa
 COPY ui/operator-react/dist/ /usr/share/nginx/html/
 
 EXPOSE 8080
+
+CMD ["nginx", "-g", "daemon off; master_process off;"]

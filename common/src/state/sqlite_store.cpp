@@ -187,6 +187,12 @@ CREATE TABLE IF NOT EXISTS skills_factory_skills (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS skills_factory_groups (
+    path TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS plane_skill_bindings (
     plane_name TEXT NOT NULL,
     skill_id TEXT NOT NULL,
@@ -824,6 +830,18 @@ std::vector<SkillsFactorySkillRecord> ControllerStore::LoadSkillsFactorySkills()
 
 bool ControllerStore::DeleteSkillsFactorySkill(const std::string& skill_id) {
   return SkillsFactoryRepository(AsSqlite(db_)).DeleteSkillsFactorySkill(skill_id);
+}
+
+void ControllerStore::UpsertSkillsFactoryGroup(const SkillsFactoryGroupRecord& group) {
+  SkillsFactoryRepository(AsSqlite(db_)).UpsertSkillsFactoryGroup(group);
+}
+
+std::vector<SkillsFactoryGroupRecord> ControllerStore::LoadSkillsFactoryGroups() const {
+  return SkillsFactoryRepository(AsSqlite(db_)).LoadSkillsFactoryGroups();
+}
+
+bool ControllerStore::DeleteSkillsFactoryGroup(const std::string& path) {
+  return SkillsFactoryRepository(AsSqlite(db_)).DeleteSkillsFactoryGroup(path);
 }
 
 void ControllerStore::UpsertPlaneSkillBinding(const PlaneSkillBindingRecord& binding) {

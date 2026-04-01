@@ -1,4 +1,9 @@
+export const NO_GROUP_TREE_PATH = "__no_group__";
+
 function normalizeGroupPath(value) {
+  if (String(value || "") === NO_GROUP_TREE_PATH) {
+    return NO_GROUP_TREE_PATH;
+  }
   return String(value || "")
     .split(/[\\/]/)
     .map((item) => item.trim())
@@ -8,12 +13,12 @@ function normalizeGroupPath(value) {
 
 function splitGroupPath(value) {
   const normalized = normalizeGroupPath(value);
-  return normalized ? normalized.split("/") : [];
+  return normalized && normalized !== NO_GROUP_TREE_PATH ? normalized.split("/") : [];
 }
 
 export function formatSkillGroupPath(groupPath) {
   const normalized = normalizeGroupPath(groupPath);
-  return normalized || "Ungrouped";
+  return normalized && normalized !== NO_GROUP_TREE_PATH ? normalized : "No group";
 }
 
 function buildSkillSearchHaystack(item) {
@@ -36,6 +41,9 @@ function matchesSelectedGroup(item, selectedGroupPath) {
     return true;
   }
   const itemGroup = normalizeGroupPath(item?.group_path);
+  if (normalizedGroup === NO_GROUP_TREE_PATH) {
+    return !itemGroup;
+  }
   return itemGroup === normalizedGroup || itemGroup.startsWith(`${normalizedGroup}/`);
 }
 
@@ -45,7 +53,31 @@ function sortGroupTree(node) {
   return node;
 }
 
-export function buildSkillsFactoryGroupTree(items) {
+function ensureGroupNode(root, pathMap, groupPath) {
+  const segments = splitGroupPath(groupPath);
+  let currentNode = root;
+  let currentPath = "";
+  for (const segment of segments) {
+    currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+    let child = pathMap.get(currentPath);
+    if (!child) {
+      child = {
+        path: currentPath,
+        label: segment,
+        depth: splitGroupPath(currentPath).length,
+        direct_skill_count: 0,
+        total_skill_count: 0,
+        children: [],
+      };
+      pathMap.set(currentPath, child);
+      currentNode.children.push(child);
+    }
+    currentNode = child;
+  }
+  return currentNode;
+}
+
+export function buildSkillsFactoryGroupTree(items, explicitGroups = []) {
   const root = {
     path: "",
     label: "All skills",
@@ -56,31 +88,42 @@ export function buildSkillsFactoryGroupTree(items) {
   };
   const pathMap = new Map([["", root]]);
   const nextItems = Array.isArray(items) ? items : [];
+  const nextGroups = Array.isArray(explicitGroups) ? explicitGroups : [];
 
-  for (const item of nextItems) {
-    const segments = splitGroupPath(item?.group_path);
-    let currentNode = root;
-    currentNode.total_skill_count += 1;
-    if (segments.length === 0) {
-      currentNode.direct_skill_count += 1;
+  for (const group of nextGroups) {
+    const groupPath =
+      typeof group === "string" ? normalizeGroupPath(group) : normalizeGroupPath(group?.path);
+    if (!groupPath || groupPath === NO_GROUP_TREE_PATH) {
       continue;
     }
-    let currentPath = "";
-    for (const segment of segments) {
-      currentPath = currentPath ? `${currentPath}/${segment}` : segment;
-      let child = pathMap.get(currentPath);
-      if (!child) {
-        child = {
-          path: currentPath,
-          label: segment,
-          depth: splitGroupPath(currentPath).length,
+    ensureGroupNode(root, pathMap, groupPath);
+  }
+
+  let noGroupNode = null;
+  for (const item of nextItems) {
+    const segments = splitGroupPath(item?.group_path);
+    root.total_skill_count += 1;
+    if (segments.length === 0) {
+      if (!noGroupNode) {
+        noGroupNode = {
+          path: NO_GROUP_TREE_PATH,
+          label: "No group",
+          depth: 1,
           direct_skill_count: 0,
           total_skill_count: 0,
           children: [],
         };
-        pathMap.set(currentPath, child);
-        currentNode.children.push(child);
+        root.children.push(noGroupNode);
       }
+      noGroupNode.direct_skill_count += 1;
+      noGroupNode.total_skill_count += 1;
+      continue;
+    }
+    let currentNode = root;
+    let currentPath = "";
+    for (const segment of segments) {
+      currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+      const child = pathMap.get(currentPath) || ensureGroupNode(root, pathMap, currentPath);
       child.total_skill_count += 1;
       currentNode = child;
     }
@@ -107,6 +150,10 @@ export function collectGroupSkillIds(items, selectedGroupPath) {
     .filter((item) => matchesSelectedGroup(item, selectedGroupPath))
     .map((item) => item.id)
     .filter(Boolean);
+}
+
+export function isBuiltinSkillsFactoryGroupPath(path) {
+  return normalizeGroupPath(path) === NO_GROUP_TREE_PATH;
 }
 
 export function sortSkillsFactoryItems(items, sortKey) {

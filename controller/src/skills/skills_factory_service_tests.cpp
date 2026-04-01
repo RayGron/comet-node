@@ -123,6 +123,7 @@ int main() {
           });
       const auto payload = factory_service.BuildListPayload(db_path.string());
       Expect(payload.at("skills").size() == 1, "factory list should contain one skill");
+      Expect(payload.at("groups").size() == 0, "factory list should start without explicit groups");
       const auto& item = payload.at("skills").front();
       Expect(item.at("id").get<std::string>() == "skill-alpha", "factory skill id mismatch");
       Expect(item.at("plane_count").get<int>() == 1, "factory skill plane_count mismatch");
@@ -155,6 +156,69 @@ int main() {
           next_state->skills.has_value() && next_state->skills->factory_skill_ids.empty(),
           "factory delete should detach skill id from plane desired state");
       std::cout << "ok: factory-delete-detaches-all-planes" << '\n';
+    }
+
+    {
+      comet::ControllerStore store(db_path.string());
+      store.Initialize();
+      store.UpsertSkillsFactorySkill(comet::SkillsFactorySkillRecord{
+          "skill-grouped",
+          "Grouped skill",
+          "lt-cypher/market/forecast",
+          "Grouped skill description",
+          "Grouped skill content",
+          {"grouped"},
+          "",
+          "",
+      });
+      comet::controller::SkillsFactoryService factory_service(
+          MakeMutationService(),
+          comet::controller::PlaneSkillRuntimeSyncService(),
+          [](const std::string&, const std::string&, const std::string& fallback) {
+            return fallback;
+          });
+
+      const auto created_group = factory_service.CreateGroup(
+          db_path.string(),
+          json{{"path", "lt-cypher/localtrade/auth"}});
+      Expect(
+          created_group.at("path").get<std::string>() == "lt-cypher/localtrade/auth",
+          "factory group create should normalize and return path");
+
+      const auto renamed_group = factory_service.RenameGroup(
+          db_path.string(),
+          json{{"from_path", "lt-cypher"}, {"to_path", "lt-jex"}});
+      Expect(
+          renamed_group.at("to_path").get<std::string>() == "lt-jex",
+          "factory group rename should return new path");
+
+      const auto grouped_skill = store.LoadSkillsFactorySkill("skill-grouped");
+      Expect(grouped_skill.has_value(), "renamed grouped skill should still exist");
+      Expect(
+          grouped_skill->group_path == "lt-jex/market/forecast",
+          "group rename should rewrite skill group path");
+
+      const auto list_after_rename = factory_service.BuildListPayload(db_path.string());
+      Expect(
+          !list_after_rename.at("groups").empty(),
+          "group list should include explicit groups after rename");
+
+      const auto deleted_group = factory_service.DeleteGroup(
+          db_path.string(),
+          json{{"path", "lt-jex/localtrade"}});
+      Expect(
+          deleted_group.at("status").get<std::string>() == "deleted",
+          "factory group delete should return deleted status");
+
+      const auto list_after_delete = factory_service.BuildListPayload(db_path.string());
+      bool found_localtrade_group = false;
+      for (const auto& entry : list_after_delete.at("groups")) {
+        if (entry.at("path").get<std::string>() == "lt-jex/localtrade/auth") {
+          found_localtrade_group = true;
+        }
+      }
+      Expect(!found_localtrade_group, "deleted subtree group should be removed from explicit groups");
+      std::cout << "ok: factory-group-create-rename-delete" << '\n';
     }
 
     {

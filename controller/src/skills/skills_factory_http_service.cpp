@@ -57,6 +57,75 @@ std::optional<HttpResponse> SkillsFactoryHttpService::HandleRequest(
     }
   }
 
+  if (request.path == "/api/v1/skills-factory/groups") {
+    try {
+      if (request.method == "POST") {
+        return BuildJsonResponse(
+            200,
+            service_.CreateGroup(db_path, request_support_.ParseJsonRequestBody(request)));
+      }
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    } catch (const std::invalid_argument& error) {
+      return BuildJsonResponse(
+          400,
+          json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}});
+    } catch (const std::runtime_error& error) {
+      return BuildJsonResponse(
+          404,
+          json{{"status", "not_found"}, {"message", error.what()}, {"path", request.path}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+
+  if (request.path == "/api/v1/skills-factory/groups/rename") {
+    try {
+      if (request.method == "POST") {
+        return BuildJsonResponse(
+            200,
+            service_.RenameGroup(db_path, request_support_.ParseJsonRequestBody(request)));
+      }
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    } catch (const std::invalid_argument& error) {
+      return BuildJsonResponse(
+          400,
+          json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}});
+    } catch (const std::runtime_error& error) {
+      return BuildJsonResponse(
+          404,
+          json{{"status", "not_found"}, {"message", error.what()}, {"path", request.path}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+
+  if (request.path == "/api/v1/skills-factory/groups/delete") {
+    try {
+      if (request.method == "POST") {
+        return BuildJsonResponse(
+            200,
+            service_.DeleteGroup(db_path, request_support_.ParseJsonRequestBody(request)));
+      }
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    } catch (const std::invalid_argument& error) {
+      return BuildJsonResponse(
+          400,
+          json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}});
+    } catch (const std::runtime_error& error) {
+      return BuildJsonResponse(
+          404,
+          json{{"status", "not_found"}, {"message", error.what()}, {"path", request.path}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+
   constexpr std::string_view kPrefix = "/api/v1/skills-factory/";
   if (!request.path.starts_with(kPrefix)) {
     return std::nullopt;

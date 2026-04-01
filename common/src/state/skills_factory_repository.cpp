@@ -106,6 +106,40 @@ bool SkillsFactoryRepository::DeleteSkillsFactorySkill(const std::string& skill_
   return sqlite3_changes(db_) == 1;
 }
 
+void SkillsFactoryRepository::UpsertSkillsFactoryGroup(const SkillsFactoryGroupRecord& group) {
+  Statement statement(
+      db_,
+      "INSERT INTO skills_factory_groups(path, created_at, updated_at) VALUES(?1, ?2, ?3) "
+      "ON CONFLICT(path) DO UPDATE SET "
+      "created_at = excluded.created_at, "
+      "updated_at = excluded.updated_at;");
+  statement.BindText(1, group.path);
+  statement.BindText(2, group.created_at);
+  statement.BindText(3, group.updated_at);
+  statement.StepDone();
+}
+
+std::vector<SkillsFactoryGroupRecord> SkillsFactoryRepository::LoadSkillsFactoryGroups() const {
+  Statement statement(
+      db_,
+      "SELECT path, created_at, updated_at "
+      "FROM skills_factory_groups ORDER BY path ASC;");
+  std::vector<SkillsFactoryGroupRecord> groups;
+  while (statement.StepRow()) {
+    groups.push_back(ReadSkillsFactoryGroup(statement.raw()));
+  }
+  return groups;
+}
+
+bool SkillsFactoryRepository::DeleteSkillsFactoryGroup(const std::string& path) {
+  Statement statement(
+      db_,
+      "DELETE FROM skills_factory_groups WHERE path = ?1;");
+  statement.BindText(1, path);
+  statement.StepDone();
+  return sqlite3_changes(db_) == 1;
+}
+
 void SkillsFactoryRepository::UpsertPlaneSkillBinding(const PlaneSkillBindingRecord& binding) {
   Statement statement(
       db_,
@@ -210,6 +244,14 @@ SkillsFactorySkillRecord SkillsFactoryRepository::ReadSkillsFactorySkill(sqlite3
   skill.created_at = ToColumnText(statement, 6);
   skill.updated_at = ToColumnText(statement, 7);
   return skill;
+}
+
+SkillsFactoryGroupRecord SkillsFactoryRepository::ReadSkillsFactoryGroup(sqlite3_stmt* statement) {
+  SkillsFactoryGroupRecord group;
+  group.path = ToColumnText(statement, 0);
+  group.created_at = ToColumnText(statement, 1);
+  group.updated_at = ToColumnText(statement, 2);
+  return group;
 }
 
 PlaneSkillBindingRecord SkillsFactoryRepository::ReadPlaneSkillBinding(sqlite3_stmt* statement) {

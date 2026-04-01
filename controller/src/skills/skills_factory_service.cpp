@@ -39,6 +39,12 @@ bool ContainsSkillId(
   return std::find(items.begin(), items.end(), skill_id) != items.end();
 }
 
+bool PathMatchesOrIsDescendant(
+    const std::string& path,
+    const std::string& prefix) {
+  return path == prefix || path.starts_with(prefix + "/");
+}
+
 std::string NormalizeGroupPath(const std::string& raw_value) {
   std::vector<std::string> segments;
   std::string current;
@@ -73,6 +79,20 @@ std::string NormalizeGroupPath(const std::string& raw_value) {
     normalized += trimmed;
   }
   return normalized;
+}
+
+std::string RewriteGroupPathPrefix(
+    const std::string& path,
+    const std::string& from_prefix,
+    const std::string& to_prefix) {
+  if (path == from_prefix) {
+    return to_prefix;
+  }
+  if (!path.starts_with(from_prefix + "/")) {
+    return path;
+  }
+  const std::string suffix = path.substr(from_prefix.size() + 1);
+  return to_prefix.empty() ? suffix : to_prefix + "/" + suffix;
 }
 
 std::vector<std::string> RemoveSkillId(
@@ -182,6 +202,22 @@ SkillsFactoryService::CanonicalSkillInput SkillsFactoryService::ParseCanonicalSk
   return input;
 }
 
+SkillsFactoryService::GroupMutationInput SkillsFactoryService::ParseGroupMutationInput(
+    const json& payload,
+    const char* key) {
+  if (!payload.is_object()) {
+    throw std::invalid_argument("request body must be a JSON object");
+  }
+  if (!payload.contains(key) || !payload.at(key).is_string()) {
+    throw std::invalid_argument(std::string(key) + " must be a string");
+  }
+  const std::string normalized = NormalizeGroupPath(payload.at(key).get<std::string>());
+  if (normalized.empty()) {
+    throw std::invalid_argument(std::string(key) + " must not be empty");
+  }
+  return GroupMutationInput{normalized};
+}
+
 std::vector<std::string> SkillsFactoryService::LoadPlanesUsingSkill(
     comet::ControllerStore& store,
     const std::string& skill_id) const {
@@ -215,7 +251,11 @@ nlohmann::json SkillsFactoryService::BuildListPayload(const std::string& db_path
   for (const auto& skill : store.LoadSkillsFactorySkills()) {
     items.push_back(BuildSkillPayload(db_path, skill));
   }
-  return json{{"skills", items}};
+  json groups = json::array();
+  for (const auto& group : store.LoadSkillsFactoryGroups()) {
+    groups.push_back(json{{"path", group.path}});
+  }
+  return json{{"skills", items}, {"groups", groups}};
 }
 
 nlohmann::json SkillsFactoryService::BuildSkillPayload(
@@ -247,7 +287,124 @@ nlohmann::json SkillsFactoryService::CreateSkill(
   skill.content = input.content;
   skill.match_terms = input.match_terms;
   store.UpsertSkillsFactorySkill(skill);
+  if (!skill.group_path.empty()) {
+    store.UpsertSkillsFactoryGroup(comet::SkillsFactoryGroupRecord{
+        skill.group_path,
+        "",
+        "",
+    });
+  }
   return BuildSkillPayload(db_path, input.id);
+}
+
+nlohmann::json SkillsFactoryService::CreateGroup(
+    const std::string& db_path,
+    const nlohmann::json& payload) const {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  const auto input = ParseGroupMutationInput(payload, "path");
+  store.UpsertSkillsFactoryGroup(comet::SkillsFactoryGroupRecord{
+      input.path,
+      "",
+      "",
+  });
+  return json{{"status", "created"}, {"path", input.path}};
+}
+
+nlohmann::json SkillsFactoryService::RenameGroup(
+    const std::string& db_path,
+    const nlohmann::json& payload) const {
+  const auto from_input = ParseGroupMutationInput(payload, "from_path");
+  const auto to_input = ParseGroupMutationInput(payload, "to_path");
+  if (from_input.path == to_input.path) {
+    return json{
+        {"status", "renamed"},
+        {"from_path", from_input.path},
+        {"to_path", to_input.path},
+    };
+  }
+  if (to_input.path.starts_with(from_input.path + "/")) {
+    throw std::invalid_argument("to_path must not be nested inside from_path");
+  }
+
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  const auto groups = store.LoadSkillsFactoryGroups();
+  bool matched_group = false;
+  for (const auto& group : groups) {
+    if (PathMatchesOrIsDescendant(group.path, from_input.path)) {
+      matched_group = true;
+      break;
+    }
+  }
+  auto skills = store.LoadSkillsFactorySkills();
+  for (auto& skill : skills) {
+    if (!PathMatchesOrIsDescendant(skill.group_path, from_input.path)) {
+      continue;
+    }
+    matched_group = true;
+    skill.group_path = RewriteGroupPathPrefix(skill.group_path, from_input.path, to_input.path);
+    store.UpsertSkillsFactorySkill(skill);
+  }
+  if (!matched_group) {
+    throw std::runtime_error("group '" + from_input.path + "' not found");
+  }
+  for (const auto& group : groups) {
+    if (!PathMatchesOrIsDescendant(group.path, from_input.path)) {
+      continue;
+    }
+    store.UpsertSkillsFactoryGroup(comet::SkillsFactoryGroupRecord{
+        RewriteGroupPathPrefix(group.path, from_input.path, to_input.path),
+        group.created_at,
+        group.updated_at,
+    });
+  }
+  for (const auto& group : groups) {
+    if (PathMatchesOrIsDescendant(group.path, from_input.path)) {
+      store.DeleteSkillsFactoryGroup(group.path);
+    }
+  }
+  store.UpsertSkillsFactoryGroup(comet::SkillsFactoryGroupRecord{
+      to_input.path,
+      "",
+      "",
+  });
+  return json{
+      {"status", "renamed"},
+      {"from_path", from_input.path},
+      {"to_path", to_input.path},
+  };
+}
+
+nlohmann::json SkillsFactoryService::DeleteGroup(
+    const std::string& db_path,
+    const nlohmann::json& payload) const {
+  const auto input = ParseGroupMutationInput(payload, "path");
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+
+  bool matched_group = false;
+  for (auto skill : store.LoadSkillsFactorySkills()) {
+    if (!PathMatchesOrIsDescendant(skill.group_path, input.path)) {
+      continue;
+    }
+    matched_group = true;
+    skill.group_path.clear();
+    store.UpsertSkillsFactorySkill(skill);
+  }
+
+  const auto groups = store.LoadSkillsFactoryGroups();
+  for (const auto& group : groups) {
+    if (!PathMatchesOrIsDescendant(group.path, input.path)) {
+      continue;
+    }
+    matched_group = true;
+    store.DeleteSkillsFactoryGroup(group.path);
+  }
+  if (!matched_group) {
+    throw std::runtime_error("group '" + input.path + "' not found");
+  }
+  return json{{"status", "deleted"}, {"path", input.path}};
 }
 
 nlohmann::json SkillsFactoryService::UpdateSkill(
@@ -279,6 +436,13 @@ nlohmann::json SkillsFactoryService::UpdateSkill(
     current->match_terms = input.match_terms;
   }
   store.UpsertSkillsFactorySkill(*current);
+  if (!current->group_path.empty()) {
+    store.UpsertSkillsFactoryGroup(comet::SkillsFactoryGroupRecord{
+        current->group_path,
+        "",
+        "",
+    });
+  }
   SyncAffectedPlanes(db_path, LoadPlanesUsingSkill(store, skill_id));
   return BuildSkillPayload(db_path, skill_id);
 }

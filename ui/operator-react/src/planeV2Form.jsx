@@ -975,6 +975,7 @@ export function PlaneV2FormBuilder({
   languageOptions,
   modelLibraryItems = [],
   skillsFactoryItems = [],
+  skillsFactoryGroups = [],
 }) {
   const form = dialog.form || buildNewPlaneFormState();
   const validation = validatePlaneV2Form(form);
@@ -1196,7 +1197,7 @@ export function PlaneV2FormBuilder({
     factorySkillFilter,
     selectedFactoryGroupPath,
   );
-  const factoryGroupTree = buildSkillsFactoryGroupTree(skillsFactoryItems);
+  const factoryGroupTree = buildSkillsFactoryGroupTree(skillsFactoryItems, skillsFactoryGroups);
   const factoryTreePaths = collectSkillsFactoryTreePaths(factoryGroupTree);
   const expandedFactoryGroupPathSet = new Set(expandedFactoryGroupPaths);
 

@@ -12,6 +12,7 @@ import {
   filterPlaneSelectableSkills,
   filterSkillsFactoryItems,
   formatSkillGroupPath,
+  NO_GROUP_TREE_PATH,
   sortSkillsFactoryItems,
 } from "./skillsFactory.js";
 import { formatPlaneDashboardSkillsSummary } from "./planeSkills.js";
@@ -55,9 +56,9 @@ describe("skillsFactory utils", () => {
   });
 
   it("builds a group tree and filters by subtree", () => {
-    const tree = buildSkillsFactoryGroupTree(items);
+    const tree = buildSkillsFactoryGroupTree(items, [{ path: "lt-jex/localtrade/account" }]);
     expect(tree.total_skill_count).toBe(2);
-    expect(tree.children.map((item) => item.path)).toEqual(["code-agent"]);
+    expect(tree.children.map((item) => item.path)).toEqual(["code-agent", "lt-jex"]);
     expect(tree.children[0].children.map((item) => item.path)).toEqual(["code-agent/debugging"]);
     expect(filterSkillsFactoryItems(items, "", "code-agent").map((item) => item.id)).toEqual([
       "skill-zeta",
@@ -69,9 +70,44 @@ describe("skillsFactory utils", () => {
     expect(collectGroupSkillIds(items, "code-agent")).toEqual(["skill-zeta", "skill-alpha"]);
   });
 
-  it("formats empty group paths as ungrouped", () => {
-    expect(formatSkillGroupPath("")).toBe("Ungrouped");
+  it("formats empty group paths as no group", () => {
+    expect(formatSkillGroupPath("")).toBe("No group");
     expect(formatSkillGroupPath(" localtrade / streams ")).toBe("localtrade/streams");
+  });
+
+  it("adds No group node and filters ungrouped items", () => {
+    const tree = buildSkillsFactoryGroupTree([
+      ...items,
+      {
+        id: "skill-ungrouped",
+        name: "Ungrouped",
+        group_path: "",
+        description: "No group skill",
+        content: "No group content",
+        plane_count: 0,
+        plane_names: [],
+      },
+    ]);
+    expect(tree.children.map((item) => item.path)).toEqual(["code-agent", NO_GROUP_TREE_PATH]);
+    expect(filterSkillsFactoryItems(items, "", NO_GROUP_TREE_PATH)).toEqual([]);
+    expect(
+      filterSkillsFactoryItems(
+        [
+          ...items,
+          {
+            id: "skill-ungrouped",
+            name: "Ungrouped",
+            group_path: "",
+            description: "No group skill",
+            content: "No group content",
+            plane_count: 0,
+            plane_names: [],
+          },
+        ],
+        "",
+        NO_GROUP_TREE_PATH,
+      ).map((item) => item.id),
+    ).toEqual(["skill-ungrouped"]);
   });
 });
 

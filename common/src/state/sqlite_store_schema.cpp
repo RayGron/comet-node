@@ -101,6 +101,13 @@ void InitializeSchema(
       "skills_factory_skills",
       "match_terms_json",
       "match_terms_json TEXT NOT NULL DEFAULT '[]'");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS skills_factory_groups("
+      "path TEXT PRIMARY KEY,"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+      ");");
   EnsureColumn(
       db,
       "planes",

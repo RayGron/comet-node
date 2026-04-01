@@ -278,6 +278,12 @@ struct SkillsFactorySkillRecord {
   std::string updated_at;
 };
 
+struct SkillsFactoryGroupRecord {
+  std::string path;
+  std::string created_at;
+  std::string updated_at;
+};
+
 struct PlaneSkillBindingRecord {
   std::string plane_name;
   std::string skill_id;
@@ -384,6 +390,9 @@ class ControllerStore {
       const std::string& skill_id) const;
   std::vector<SkillsFactorySkillRecord> LoadSkillsFactorySkills() const;
   bool DeleteSkillsFactorySkill(const std::string& skill_id);
+  void UpsertSkillsFactoryGroup(const SkillsFactoryGroupRecord& group);
+  std::vector<SkillsFactoryGroupRecord> LoadSkillsFactoryGroups() const;
+  bool DeleteSkillsFactoryGroup(const std::string& path);
   void UpsertPlaneSkillBinding(const PlaneSkillBindingRecord& binding);
   std::optional<PlaneSkillBindingRecord> LoadPlaneSkillBinding(
       const std::string& plane_name,

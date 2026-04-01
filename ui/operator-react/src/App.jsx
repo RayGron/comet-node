@@ -25,6 +25,7 @@ import {
   collectSkillsFactoryTreePaths,
   filterSkillsFactoryItems,
   formatSkillGroupPath,
+  isBuiltinSkillsFactoryGroupPath,
   sortSkillsFactoryItems,
 } from "./skillsFactory.js";
 
@@ -1055,6 +1056,7 @@ function PlaneEditorDialog({
             languageOptions={CHAT_LANGUAGE_OPTIONS}
             modelLibraryItems={modelLibraryItems || []}
             skillsFactoryItems={skillsFactoryItems || []}
+            skillsFactoryGroups={skillsFactory.groups || []}
           />
         ) : null}
         <label className="field-label" htmlFor="plane-editor-json">
@@ -1680,6 +1682,7 @@ function App() {
   const [modelLibrary, setModelLibrary] = useState({ items: [], roots: [], jobs: [] });
   const [skillsFactory, setSkillsFactory] = useState({
     items: [],
+    groups: [],
     busy: false,
     error: "",
     mode: "create",
@@ -1893,11 +1896,16 @@ function App() {
     try {
       const payload = await fetchJson(skillsFactoryPath());
       const nextItems = Array.isArray(payload.skills) ? payload.skills : [];
-      const nextTree = buildSkillsFactoryGroupTree(nextItems);
+      const nextGroups = Array.isArray(payload.groups) ? payload.groups : [];
+      const nextTree = buildSkillsFactoryGroupTree(nextItems, nextGroups);
       const nextPaths = new Set(collectSkillsFactoryTreePaths(nextTree));
       setSkillsFactory((current) => ({
         ...current,
         items: nextItems,
+        groups: nextGroups,
+        selectedGroupPath: nextPaths.has(current.selectedGroupPath)
+          ? current.selectedGroupPath
+          : "",
         expandedGroupPaths: Array.isArray(current.expandedGroupPaths)
           ? current.expandedGroupPaths.filter((path) => nextPaths.has(path))
           : [""],
@@ -3285,7 +3293,13 @@ function App() {
     setSkillsFactory((current) => ({
       ...current,
       mode: "create",
-      form: buildEmptySkillForm(),
+      form: {
+        ...buildEmptySkillForm(),
+        groupPath:
+          current.selectedGroupPath && !isBuiltinSkillsFactoryGroupPath(current.selectedGroupPath)
+            ? current.selectedGroupPath
+            : "",
+      },
       error: "",
     }));
   }
@@ -3317,6 +3331,107 @@ function App() {
         [key]: value,
       },
     }));
+  }
+
+  async function createFactoryGroup() {
+    const seed =
+      skillsFactory.selectedGroupPath && !isBuiltinSkillsFactoryGroupPath(skillsFactory.selectedGroupPath)
+        ? `${skillsFactory.selectedGroupPath}/`
+        : "";
+    const path = window.prompt("New group path", seed);
+    if (path === null) {
+      return;
+    }
+    setSkillsFactory((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      const created = await fetchJson(skillsFactoryPath("groups"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path }),
+      });
+      await refreshSkillsFactory();
+      setSkillsFactory((current) => ({
+        ...current,
+        busy: false,
+        selectedGroupPath: created.path || current.selectedGroupPath,
+      }));
+    } catch (error) {
+      setSkillsFactory((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || String(error),
+      }));
+    }
+  }
+
+  async function renameFactoryGroup() {
+    const fromPath = String(skillsFactory.selectedGroupPath || "");
+    if (!fromPath || isBuiltinSkillsFactoryGroupPath(fromPath)) {
+      return;
+    }
+    const toPath = window.prompt("Rename group to", fromPath);
+    if (toPath === null) {
+      return;
+    }
+    setSkillsFactory((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      const renamed = await fetchJson(skillsFactoryPath("groups/rename"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ from_path: fromPath, to_path: toPath }),
+      });
+      await refreshSkillsFactory();
+      setSkillsFactory((current) => ({
+        ...current,
+        busy: false,
+        selectedGroupPath: renamed.to_path || "",
+      }));
+    } catch (error) {
+      setSkillsFactory((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || String(error),
+      }));
+    }
+  }
+
+  async function deleteFactoryGroup() {
+    const path = String(skillsFactory.selectedGroupPath || "");
+    if (!path || isBuiltinSkillsFactoryGroupPath(path)) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete group ${formatSkillGroupPath(path)}? Skills in this group will move to No group.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setSkillsFactory((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      await fetchJson(skillsFactoryPath("groups/delete"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path }),
+      });
+      await refreshSkillsFactory();
+      setSkillsFactory((current) => ({
+        ...current,
+        busy: false,
+        selectedGroupPath: "",
+      }));
+    } catch (error) {
+      setSkillsFactory((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || String(error),
+      }));
+    }
   }
 
   async function saveFactorySkillForm() {
@@ -4637,7 +4752,7 @@ function App() {
   }
 
   function renderSkillsFactoryPage() {
-    const groupTree = buildSkillsFactoryGroupTree(skillsFactory.items || []);
+    const groupTree = buildSkillsFactoryGroupTree(skillsFactory.items || [], skillsFactory.groups || []);
     const availableTreePaths = collectSkillsFactoryTreePaths(groupTree);
     const expandedGroupPaths = Array.isArray(skillsFactory.expandedGroupPaths)
       ? skillsFactory.expandedGroupPaths
@@ -4722,6 +4837,7 @@ function App() {
     const editing = skillsFactory.mode === "edit";
     const form = skillsFactory.form || buildEmptySkillForm();
     const totalItems = Array.isArray(skillsFactory.items) ? skillsFactory.items.length : 0;
+    const selectedBuiltinGroup = isBuiltinSkillsFactoryGroupPath(skillsFactory.selectedGroupPath);
     const attachedPlaneCount = new Set(
       (skillsFactory.items || []).flatMap((item) =>
         Array.isArray(item.plane_names) ? item.plane_names : [],
@@ -4787,6 +4903,30 @@ function App() {
               </div>
             </div>
             <div className="toolbar">
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={skillsFactory.busy}
+                onClick={createFactoryGroup}
+              >
+                New group
+              </button>
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={skillsFactory.busy || !skillsFactory.selectedGroupPath || selectedBuiltinGroup}
+                onClick={renameFactoryGroup}
+              >
+                Rename group
+              </button>
+              <button
+                className="ghost-button danger-button"
+                type="button"
+                disabled={skillsFactory.busy || !skillsFactory.selectedGroupPath || selectedBuiltinGroup}
+                onClick={deleteFactoryGroup}
+              >
+                Delete group
+              </button>
               <button
                 className="ghost-button"
                 type="button"
@@ -5664,6 +5804,7 @@ function App() {
         onSave={savePlaneDialog}
         modelLibraryItems={modelLibrary.items || []}
         skillsFactoryItems={skillsFactory.items || []}
+        skillsFactoryGroups={skillsFactory.groups || []}
       />
       <SkillsDialog
         dialog={skillsDialog}

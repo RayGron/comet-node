@@ -32,6 +32,15 @@ class SkillsFactoryService final {
   nlohmann::json CreateSkill(
       const std::string& db_path,
       const nlohmann::json& payload) const;
+  nlohmann::json CreateGroup(
+      const std::string& db_path,
+      const nlohmann::json& payload) const;
+  nlohmann::json RenameGroup(
+      const std::string& db_path,
+      const nlohmann::json& payload) const;
+  nlohmann::json DeleteGroup(
+      const std::string& db_path,
+      const nlohmann::json& payload) const;
   nlohmann::json UpdateSkill(
       const std::string& db_path,
       const std::string& skill_id,
@@ -53,9 +62,16 @@ class SkillsFactoryService final {
     std::vector<std::string> match_terms;
   };
 
+  struct GroupMutationInput {
+    std::string path;
+  };
+
   static CanonicalSkillInput ParseCanonicalSkillInput(
       const nlohmann::json& payload,
       bool partial);
+  static GroupMutationInput ParseGroupMutationInput(
+      const nlohmann::json& payload,
+      const char* key);
   static std::string GenerateSkillId();
 
   nlohmann::json BuildSkillPayload(

@@ -11,5 +11,4 @@ echo "[comet-skills] db_path=${db_path}"
 echo "[comet-skills] status_path=${status_path}"
 echo "[comet-skills] port=${COMET_SKILLS_PORT:-18120}"
 
-exec python3 /runtime/skills/skillsd.py
-
+exec /runtime/bin/comet-skillsd

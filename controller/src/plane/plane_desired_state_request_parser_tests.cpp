@@ -66,7 +66,7 @@ int main() {
           {"version", 2},
           {"plane_name", "gamma"},
           {"plane_mode", "llm"},
-          {"runtime", {{"engine", "vllm"}, {"workers", 1}}},
+          {"runtime", {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
           {"artifacts_root", "var/artifacts"},
       });
       Expect(parsed.source_label == "api/v2", "raw v2 body should map to api/v2");

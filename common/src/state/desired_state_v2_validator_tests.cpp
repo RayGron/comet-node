@@ -1020,7 +1020,7 @@ int main() {
                  {"engine", "llama.cpp"},
                  {"distributed_backend", "llama_rpc"},
                  {"workers", 2},
-                 {"data_parallel_mode", "vllm_native"},
+                 {"data_parallel_mode", "auto_replicas"},
              }},
         },
         "llama-rpc-with-data-parallel-mode");

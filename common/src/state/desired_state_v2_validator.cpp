@@ -114,11 +114,6 @@ void DesiredStateV2Validator::ValidateRuntime() const {
   const std::string distributed_backend =
       runtime.value("distributed_backend", engine == "llama.cpp" ? std::string("llama_rpc")
                                                                   : std::string("local"));
-  if (engine == "vllm") {
-    throw std::runtime_error(
-        "desired-state v2 runtime.engine=vllm is no longer supported; use "
-        "runtime.engine=llama.cpp with runtime.distributed_backend=llama_rpc");
-  }
   if (plane_mode == "llm" && engine != "llama.cpp") {
     throw std::runtime_error(
         "desired-state v2 llm planes require runtime.engine=llama.cpp");

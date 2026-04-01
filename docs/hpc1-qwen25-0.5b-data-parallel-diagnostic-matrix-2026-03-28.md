@@ -34,7 +34,7 @@ Common settings:
 - Controller: `http://127.0.0.1:18080`
 - Model: `Qwen/Qwen2.5-0.5B-Instruct`
 - Served model name: `qwen2.5-0.5b-instruct`
-- Benchmark script: [benchmark-data-parallel-diagnostic.py](/Users/vladislavhalasiuk/Projects/Repos/comet-node/scripts/benchmark-data-parallel-diagnostic.py)
+- Benchmark script: `scripts/benchmark-data-parallel-diagnostic.sh`
 - `max_tokens=128`
 
 Topologies:

@@ -271,8 +271,8 @@ Useful current scripts:
 
 - [`scripts/llama-rpc-smoke.sh`](./scripts/llama-rpc-smoke.sh)
 - [`scripts/llama-rpc-replica-benchmark.sh`](./scripts/llama-rpc-replica-benchmark.sh)
-- [`scripts/benchmark-data-parallel-throughput.py`](./scripts/benchmark-data-parallel-throughput.py)
-- [`scripts/check-external-inference-contract.py`](./scripts/check-external-inference-contract.py)
+- [`scripts/benchmark-data-parallel-throughput.sh`](./scripts/benchmark-data-parallel-throughput.sh)
+- [`scripts/check-external-inference-contract.sh`](./scripts/check-external-inference-contract.sh)
 
 These are the preferred paths for validating the active `llama_rpc` contract.
 

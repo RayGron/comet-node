@@ -244,11 +244,11 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
   runtime.data_parallel_lb_mode = desired_state.inference.data_parallel_lb_mode;
   runtime.data_parallel_size = replica_summary.data_parallel_size;
   runtime.data_parallel_size_local_max = replica_summary.data_parallel_size_local_max;
-  if (desired_state.inference.runtime_engine == "vllm") {
-    runtime.runtime_backend = "worker-vllm";
-  } else if (desired_state.inference.runtime_engine == "llama.cpp" &&
-             desired_state.inference.distributed_backend == "llama_rpc") {
+  if (desired_state.inference.runtime_engine == "llama.cpp" &&
+      desired_state.inference.distributed_backend == "llama_rpc") {
     runtime.runtime_backend = "llama-rpc-head";
+  } else {
+    runtime.runtime_backend = desired_state.inference.runtime_engine;
   }
   runtime.runtime_phase = infer_status->runtime_phase;
   runtime.replica_groups_expected = replica_summary.expected_replica_groups;

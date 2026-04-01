@@ -11,7 +11,7 @@ vLLM plane:
 - Served model name: `qwen2.5-0.5b-instruct`
 - Plane: `qwen25-0.5b-dp-bench`
 - Controller: `http://127.0.0.1:18080`
-- Benchmark harness: `scripts/benchmark-data-parallel-throughput.py`
+- Benchmark harness: `scripts/benchmark-data-parallel-throughput.sh`
 - Prompt: `Explain three practical habits for disciplined trading in one concise paragraph.`
 - Load shape: `12` concurrent workers x `3` requests each = `36` requests total
 - `max_tokens=128`

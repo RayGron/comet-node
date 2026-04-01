@@ -205,7 +205,7 @@ function ActionIcon({ kind }) {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path
-          d="M7 11V8.2L12 5l5 3.2V11"
+          d="M8 9.4c0-2.2 1.8-4 4-4s4 1.8 4 4"
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
@@ -213,7 +213,7 @@ function ActionIcon({ kind }) {
           strokeLinejoin="round"
         />
         <path
-          d="M8.5 11h7l1 7.5a1.7 1.7 0 0 1-1.7 1.9H9.2a1.7 1.7 0 0 1-1.7-1.9L8.5 11Z"
+          d="M7.2 10.2h9.6"
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
@@ -221,7 +221,22 @@ function ActionIcon({ kind }) {
           strokeLinejoin="round"
         />
         <path
-          d="M10 8.3h4"
+          d="M9.2 10.2v1.3M14.8 10.2v1.3"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+        />
+        <circle
+          cx="12"
+          cy="13.6"
+          r="2.1"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+        />
+        <path
+          d="M7.8 20c.7-2.5 2.4-3.8 4.2-3.8s3.5 1.3 4.2 3.8"
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"

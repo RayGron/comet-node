@@ -11,13 +11,6 @@ case "${boot_mode}" in
   llama-load|llama-idle|llama-rpc)
     exec /runtime/bin/comet-workerd
     ;;
-  vllm-openai|vllm-serve)
-    if ! command -v python3 >/dev/null 2>&1; then
-      echo "[comet-worker] vLLM boot mode requires the vLLM worker image with Python runtime" >&2
-      exit 1
-    fi
-    exec python3 /runtime/worker/vllm_launcher.py
-    ;;
   *)
     echo "[comet-worker] unsupported boot mode: ${boot_mode}" >&2
     exit 1

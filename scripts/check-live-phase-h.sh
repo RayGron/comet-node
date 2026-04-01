@@ -50,13 +50,7 @@ cleanup() {
 trap cleanup EXIT
 
 next_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
+  "${script_dir}/comet-devtool.sh" free-port
 }
 
 wait_for_http() {
@@ -147,14 +141,7 @@ curl -fsS "http://127.0.0.1:${ui_port}/api/v1/planes/alpha/dashboard" | grep -F 
 curl -fsS "http://127.0.0.1:${ui_port}/api/v1/planes/alpha/dashboard" | grep -F '"alerts"' >/dev/null
 
 echo "phase-h-live: proxied sse"
-last_event_id="$(python3 - <<'PY' "${db_path}"
-import sqlite3, sys
-conn = sqlite3.connect(sys.argv[1])
-row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM event_log").fetchone()
-conn.close()
-print(row[0] if row and row[0] is not None else 0)
-PY
-)"
+last_event_id="$(sqlite3 "${db_path}" "SELECT COALESCE(MAX(id), 0) FROM event_log;")"
 rm -f "${stream_log}"
 curl -NsS --max-time 10 -H "Last-Event-ID: ${last_event_id}" \
   "http://127.0.0.1:${ui_port}/api/v1/events/stream?plane=alpha&limit=20" >"${stream_log}" 2>/dev/null &

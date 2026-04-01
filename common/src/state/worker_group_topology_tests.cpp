@@ -7,8 +7,8 @@ namespace {
 
 void ExpectThrowsDuplicateHybridGpu() {
   comet::InferenceRuntimeSettings inference;
-  inference.runtime_engine = "vllm";
-  inference.data_parallel_mode = comet::kDataParallelModeVllmNative;
+  inference.runtime_engine = "llama.cpp";
+  inference.data_parallel_mode = "replicas";
   inference.data_parallel_lb_mode = comet::kDataParallelLbModeHybrid;
 
   comet::WorkerGroupSpec worker_group;

@@ -82,14 +82,7 @@ if [[ "${skip_build}" -eq 0 ]]; then
   "${script_dir}/build-target.sh" "${host_os}" "${host_arch}" Debug
 fi
 
-remote_http_port="$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)"
+remote_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
 
 "${build_dir}/comet-controller" init-db --db "${remote_db_path}" >/dev/null
 "${build_dir}/comet-node" install hostd \
@@ -174,14 +167,7 @@ kill "${remote_controller_pid}" >/dev/null 2>&1 || true
 wait "${remote_controller_pid}" >/dev/null 2>&1 || true
 remote_controller_pid=""
 
-local_http_port="$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)"
+local_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
 
 "${build_dir}/comet-node" install controller \
   --with-hostd \

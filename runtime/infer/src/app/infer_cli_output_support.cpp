@@ -194,22 +194,13 @@ void PrintLaunchPlan(const RuntimeConfig& config) {
   }
   if (worker_group.is_object()) {
     std::cout << "  worker-group=id:" << worker_group.value("group_id", std::string{})
-              << " backend:" << worker_group.value("distributed_backend", std::string{"vllm"})
+              << " backend:" << worker_group.value("distributed_backend", std::string{"llama_rpc"})
               << " expected_workers:" << worker_group.value("expected_workers", 0)
               << " rendezvous_port:" << worker_group.value("rendezvous_port", 29500) << "\n";
   }
-  if (config.runtime_engine == "vllm") {
-    std::cout << "  vllm=head:" << config.primary_infer_node << " port:" << config.api_port
-              << " data_parallel_mode:" << config.data_parallel_mode
-              << " lb_mode:" << config.data_parallel_lb_mode
-              << " api_server_count:" << config.api_server_count
-              << " model_cache_dir:" << config.model_cache_dir
-              << " log_dir:" << config.infer_log_dir << "\n";
-  } else {
-    std::cout << "  llama.cpp=head:" << config.primary_infer_node << " port:" << config.llama_port
-              << " gguf_cache_dir:" << config.gguf_cache_dir
-              << " log_dir:" << config.infer_log_dir << "\n";
-  }
+  std::cout << "  llama.cpp=head:" << config.primary_infer_node << " port:" << config.llama_port
+            << " gguf_cache_dir:" << config.gguf_cache_dir
+            << " log_dir:" << config.infer_log_dir << "\n";
   std::cout << "  gateway=listen:" << config.gateway_listen_host << ":"
             << config.gateway_listen_port
             << " server_name:" << config.gateway_server_name << "\n";

@@ -79,8 +79,7 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
       config.data_parallel_lb_mode.empty() ? "external" : config.data_parallel_lb_mode;
   const bool llama_rpc_runtime =
       config.runtime_engine == "llama.cpp" && config.distributed_backend == "llama_rpc";
-  const bool hybrid_mode =
-      topology.data_parallel_mode == "vllm_native" && topology.data_parallel_lb_mode == "hybrid";
+  const bool hybrid_mode = false;
 
   const json configured_members = config.worker_group.value("members", json::array());
   const json observed_worker_group = LoadWorkerGroupStatus(config);
@@ -164,12 +163,8 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
     topology.data_parallel_size_local_max = std::max(
         topology.data_parallel_size_local_max,
         member.value("data_parallel_size_local", 1));
-    const bool api_endpoint = topology.data_parallel_mode == "vllm_native"
-                                  ? member.value(
-                                        "data_parallel_api_endpoint",
-                                        member.value("replica_leader", member.value("leader", false)))
-                                  : member.value(
-                                        "replica_leader", member.value("leader", false));
+    const bool api_endpoint =
+        member.value("replica_leader", member.value("leader", false));
     if (api_endpoint) {
       configured_api_endpoint_keys.insert(key);
     }
@@ -217,12 +212,8 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
       }
     }
 
-    const bool api_endpoint = config.data_parallel_mode == "vllm_native"
-                                  ? member.value(
-                                        "data_parallel_api_endpoint",
-                                        member.value("replica_leader", member.value("leader", false)))
-                                  : member.value(
-                                        "replica_leader", member.value("leader", false));
+    const bool api_endpoint =
+        member.value("replica_leader", member.value("leader", false));
     if (api_endpoint) {
       group.leader_ready = ready;
       if (ready) {

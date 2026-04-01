@@ -90,14 +90,7 @@ int LocalRuntime::Run() {
 }
 
 bool LocalRuntime::WorkerGroupReady() const {
-  if (config_.runtime_engine != "vllm") {
-    return true;
-  }
-  const auto topology = replica_support::InspectReplicaTopology(config_);
-  if (topology.replica_groups_expected <= 0) {
-    return true;
-  }
-  return topology.replica_groups_ready >= topology.replica_groups_expected;
+  return true;
 }
 
 bool LocalRuntime::InferenceReady() const {

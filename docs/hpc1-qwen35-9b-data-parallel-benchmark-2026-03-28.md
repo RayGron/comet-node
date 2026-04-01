@@ -50,7 +50,7 @@ Common settings:
 - Controller: `http://127.0.0.1:18080`
 - Model: `Qwen/Qwen3.5-9B`
 - Served model name: `qwen3.5-9b`
-- Benchmark script: [benchmark-data-parallel-diagnostic.py](/Users/vladislavhalasiuk/Projects/Repos/comet-node/scripts/benchmark-data-parallel-diagnostic.py)
+- Benchmark script: `scripts/benchmark-data-parallel-diagnostic.sh`
 - `max_tokens=128`
 - unique prompts enabled for every request
 

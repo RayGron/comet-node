@@ -96,27 +96,12 @@ echo "[live-storage] init db"
 
 echo "[live-storage] prepare compact live bundle"
 mkdir -p "${live_bundle}/workers"
-python3 - <<'PY' "${repo_root}" "${live_bundle}"
-import json
-import pathlib
-import sys
-
-repo_root = pathlib.Path(sys.argv[1])
-live_bundle = pathlib.Path(sys.argv[2])
-
-plane = json.loads((repo_root / "config/demo-plane/plane.json").read_text())
-plane["shared_disk_gb"] = 1
-(live_bundle / "plane.json").write_text(json.dumps(plane, indent=2) + "\n")
-
-infer = json.loads((repo_root / "config/demo-plane/infer.json").read_text())
-infer["private_disk_gb"] = 1
-(live_bundle / "infer.json").write_text(json.dumps(infer, indent=2) + "\n")
-
-for worker_name in ("worker-a", "worker-b"):
-    worker = json.loads((repo_root / f"config/demo-plane/workers/{worker_name}.json").read_text())
-    worker["private_disk_gb"] = 1
-    (live_bundle / "workers" / f"{worker_name}.json").write_text(json.dumps(worker, indent=2) + "\n")
-PY
+"${script_dir}/comet-devtool.sh" prepare-demo-bundle \
+  --repo-root "${repo_root}" \
+  --output "${live_bundle}" \
+  --shared-disk-gb 1 \
+  --infer-private-disk-gb 1 \
+  --worker-private-disk-gb 1
 
 echo "[live-storage] apply full bundle"
 "${build_dir}/comet-controller" apply-bundle \
@@ -151,15 +136,7 @@ run_as_root "test -f '${shared_a}/container-check.txt'"
 run_as_root "test -f '${private_infer}/container-check.txt'"
 
 echo "[live-storage] verify restart reconciliation"
-python3 - <<'PY' "${db_path}"
-import sqlite3
-import sys
-db_path = sys.argv[1]
-conn = sqlite3.connect(db_path)
-conn.execute("DELETE FROM disk_runtime_state")
-conn.commit()
-conn.close()
-PY
+sqlite3 "${db_path}" "DELETE FROM disk_runtime_state;"
 
 run_hostd_apply_as_root "'${build_dir}/comet-hostd' apply-state-ops --db '${db_path}' --node node-a --artifacts-root '${artifacts_root}' --runtime-root '${runtime_root}' --state-root '${state_root}' --compose-mode skip >/dev/null"
 run_hostd_apply_as_root "'${build_dir}/comet-hostd' apply-state-ops --db '${db_path}' --node node-b --artifacts-root '${artifacts_root}' --runtime-root '${runtime_root}' --state-root '${state_root}' --compose-mode skip >/dev/null"
@@ -170,26 +147,13 @@ run_hostd_apply_as_root "'${build_dir}/comet-hostd' apply-state-ops --db '${db_p
 echo "[live-storage] prepare reduced bundle for teardown"
 mkdir -p "${reduced_bundle}"
 mkdir -p "${reduced_bundle}/workers"
-python3 - <<'PY' "${repo_root}" "${reduced_bundle}"
-import json
-import pathlib
-import sys
-
-repo_root = pathlib.Path(sys.argv[1])
-bundle_root = pathlib.Path(sys.argv[2])
-
-plane = json.loads((repo_root / "config/demo-plane/plane.json").read_text())
-plane["shared_disk_gb"] = 1
-(bundle_root / "plane.json").write_text(json.dumps(plane, indent=2) + "\n")
-
-infer = json.loads((repo_root / "config/demo-plane/infer.json").read_text())
-infer["private_disk_gb"] = 1
-(bundle_root / "infer.json").write_text(json.dumps(infer, indent=2) + "\n")
-
-worker = json.loads((repo_root / "config/demo-plane/workers/worker-a.json").read_text())
-worker["private_disk_gb"] = 1
-(bundle_root / "workers" / "worker-a.json").write_text(json.dumps(worker, indent=2) + "\n")
-PY
+"${script_dir}/comet-devtool.sh" prepare-demo-bundle \
+  --repo-root "${repo_root}" \
+  --output "${reduced_bundle}" \
+  --shared-disk-gb 1 \
+  --infer-private-disk-gb 1 \
+  --worker-private-disk-gb 1 \
+  --workers worker-a
 
 echo "[live-storage] apply reduced bundle"
 "${build_dir}/comet-controller" apply-bundle \
@@ -208,27 +172,14 @@ fi
 
 echo "[live-storage] prepare infer-move bundle for infer private teardown"
 mkdir -p "${infer_move_bundle}/workers"
-python3 - <<'PY' "${repo_root}" "${infer_move_bundle}"
-import json
-import pathlib
-import sys
-
-repo_root = pathlib.Path(sys.argv[1])
-bundle_root = pathlib.Path(sys.argv[2])
-
-plane = json.loads((repo_root / "config/demo-plane/plane.json").read_text())
-plane["shared_disk_gb"] = 1
-(bundle_root / "plane.json").write_text(json.dumps(plane, indent=2) + "\n")
-
-infer = json.loads((repo_root / "config/demo-plane/infer.json").read_text())
-infer["node"] = "node-b"
-infer["private_disk_gb"] = 1
-(bundle_root / "infer.json").write_text(json.dumps(infer, indent=2) + "\n")
-
-worker = json.loads((repo_root / "config/demo-plane/workers/worker-a.json").read_text())
-worker["private_disk_gb"] = 1
-(bundle_root / "workers" / "worker-a.json").write_text(json.dumps(worker, indent=2) + "\n")
-PY
+"${script_dir}/comet-devtool.sh" prepare-demo-bundle \
+  --repo-root "${repo_root}" \
+  --output "${infer_move_bundle}" \
+  --shared-disk-gb 1 \
+  --infer-private-disk-gb 1 \
+  --worker-private-disk-gb 1 \
+  --infer-node node-b \
+  --workers worker-a
 
 echo "[live-storage] apply infer-move bundle"
 "${build_dir}/comet-controller" apply-bundle \
@@ -252,38 +203,20 @@ run_as_root "mountpoint -q '${private_infer_node_b}'"
 
 echo "[live-storage] prepare plane-rename bundle for shared disk teardown"
 mkdir -p "${plane_live_bundle}/workers" "${plane_rename_bundle}/workers"
-python3 - <<'PY' "${repo_root}" "${plane_live_bundle}" "${plane_rename_bundle}"
-import json
-import pathlib
-import sys
-
-repo_root = pathlib.Path(sys.argv[1])
-live_bundle_root = pathlib.Path(sys.argv[2])
-rename_bundle_root = pathlib.Path(sys.argv[3])
-
-plane_alpha = json.loads((repo_root / "config/demo-plane/plane.json").read_text())
-plane_alpha["shared_disk_gb"] = 1
-(live_bundle_root / "plane.json").write_text(json.dumps(plane_alpha, indent=2) + "\n")
-
-infer = json.loads((repo_root / "config/demo-plane/infer.json").read_text())
-infer["private_disk_gb"] = 1
-(live_bundle_root / "infer.json").write_text(json.dumps(infer, indent=2) + "\n")
-
-for worker_name in ("worker-a", "worker-b"):
-    worker = json.loads((repo_root / f"config/demo-plane/workers/{worker_name}.json").read_text())
-    worker["private_disk_gb"] = 1
-    (live_bundle_root / "workers" / f"{worker_name}.json").write_text(json.dumps(worker, indent=2) + "\n")
-
-plane_beta = dict(plane_alpha)
-plane_beta["name"] = "beta"
-plane_beta["control_root"] = "/comet/shared/control/beta"
-(rename_bundle_root / "plane.json").write_text(json.dumps(plane_beta, indent=2) + "\n")
-(rename_bundle_root / "infer.json").write_text(json.dumps(infer, indent=2) + "\n")
-for worker_name in ("worker-a", "worker-b"):
-    worker = json.loads((repo_root / f"config/demo-plane/workers/{worker_name}.json").read_text())
-    worker["private_disk_gb"] = 1
-    (rename_bundle_root / "workers" / f"{worker_name}.json").write_text(json.dumps(worker, indent=2) + "\n")
-PY
+"${script_dir}/comet-devtool.sh" prepare-demo-bundle \
+  --repo-root "${repo_root}" \
+  --output "${plane_live_bundle}" \
+  --shared-disk-gb 1 \
+  --infer-private-disk-gb 1 \
+  --worker-private-disk-gb 1
+"${script_dir}/comet-devtool.sh" prepare-demo-bundle \
+  --repo-root "${repo_root}" \
+  --output "${plane_rename_bundle}" \
+  --shared-disk-gb 1 \
+  --infer-private-disk-gb 1 \
+  --worker-private-disk-gb 1 \
+  --plane-name beta \
+  --control-root /comet/shared/control/beta
 
 echo "[live-storage] init separate db for shared teardown"
 "${build_dir}/comet-controller" init-db --db "${plane_db_path}" >/dev/null

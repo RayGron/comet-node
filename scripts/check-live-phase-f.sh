@@ -50,13 +50,7 @@ cmake -E remove_directory "${preemption_runtime}"
 cmake -E remove_directory "${preemption_state}"
 
 next_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
+  "${script_dir}/comet-devtool.sh" free-port
 }
 
 start_server() {
@@ -103,18 +97,9 @@ curl -fsS -X POST "http://127.0.0.1:${basic_port}/api/v1/bundles/preview?bundle=
 curl -fsS -X POST "http://127.0.0.1:${basic_port}/api/v1/bundles/import?bundle=${PWD}/config/demo-plane" | grep -F '"action":"import-bundle"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${basic_port}/api/v1/bundles/apply?bundle=${PWD}/config/demo-plane&artifacts_root=${basic_artifacts}" | grep -F '"action":"apply-bundle"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${basic_port}/api/v1/node-availability?node=node-b&availability=unavailable&message=phase-f-live" | grep -F '"action":"set-node-availability"' >/dev/null
-failed_assignment_id="$(python3 - <<'PY' "${basic_db}"
-import sqlite3, sys
-conn = sqlite3.connect(sys.argv[1])
-row = conn.execute("SELECT id FROM host_assignments WHERE status='pending' ORDER BY id LIMIT 1").fetchone()
-if row is None:
-    raise SystemExit("no pending assignment found")
-conn.execute("UPDATE host_assignments SET status='failed', status_message='phase-f-live fixture' WHERE id=?", (row[0],))
-conn.commit()
-conn.close()
-print(row[0])
-PY
-)"
+failed_assignment_id="$(sqlite3 "${basic_db}" "SELECT id FROM host_assignments WHERE status='pending' ORDER BY id LIMIT 1;")"
+test -n "${failed_assignment_id}"
+sqlite3 "${basic_db}" "UPDATE host_assignments SET status='failed', status_message='phase-f-live fixture' WHERE id=${failed_assignment_id};"
 curl -fsS -X POST "http://127.0.0.1:${basic_port}/api/v1/retry-host-assignment?id=${failed_assignment_id}" | grep -F '"action":"retry-host-assignment"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${basic_port}/api/v1/scheduler-tick?artifacts_root=${basic_artifacts}" | grep -F '"action":"scheduler-tick"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${basic_port}/api/v1/reconcile-rebalance-proposals?artifacts_root=${basic_artifacts}" | grep -F '"action":"reconcile-rebalance-proposals"' >/dev/null
@@ -155,26 +140,10 @@ preemption_port="$(next_port)"
 start_server "${preemption_db}" "${preemption_port}"
 curl -fsS -X POST "http://127.0.0.1:${preemption_port}/api/v1/bundles/import?bundle=${preemption_bundle_dir}" | grep -F '"action":"import-bundle"' >/dev/null
 curl -fsS "http://127.0.0.1:${preemption_port}/api/v1/rollout-actions?node=node-a" | grep -F '"actions":' >/dev/null
-first_action_id="$(python3 - <<'PY' "${preemption_db}"
-import sqlite3, sys
-conn = sqlite3.connect(sys.argv[1])
-row = conn.execute("SELECT id FROM rollout_actions WHERE step=1 ORDER BY id LIMIT 1").fetchone()
-if row is None:
-    raise SystemExit("no first rollout action")
-conn.close()
-print(row[0])
-PY
-)"
-second_action_id="$(python3 - <<'PY' "${preemption_db}"
-import sqlite3, sys
-conn = sqlite3.connect(sys.argv[1])
-row = conn.execute("SELECT id FROM rollout_actions WHERE step=2 ORDER BY id LIMIT 1").fetchone()
-if row is None:
-    raise SystemExit("no second rollout action")
-conn.close()
-print(row[0])
-PY
-)"
+first_action_id="$(sqlite3 "${preemption_db}" "SELECT id FROM rollout_actions WHERE step=1 ORDER BY id LIMIT 1;")"
+second_action_id="$(sqlite3 "${preemption_db}" "SELECT id FROM rollout_actions WHERE step=2 ORDER BY id LIMIT 1;")"
+test -n "${first_action_id}"
+test -n "${second_action_id}"
 curl -fsS -X POST "http://127.0.0.1:${preemption_port}/api/v1/set-rollout-action-status?id=${first_action_id}&status=acknowledged&message=phase-f-live" | grep -F '"action":"set-rollout-action-status"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${preemption_port}/api/v1/enqueue-rollout-eviction?id=${first_action_id}" | grep -F '"action":"enqueue-rollout-eviction"' >/dev/null
 "${build_dir}/comet-hostd" apply-next-assignment --db "${preemption_db}" --node node-a --runtime-root "${preemption_runtime}" --state-root "${preemption_state}" --compose-mode skip >/dev/null
@@ -194,26 +163,10 @@ manual_port="$(next_port)"
 stop_server
 start_server "${manual_db}" "${manual_port}"
 curl -fsS -X POST "http://127.0.0.1:${manual_port}/api/v1/bundles/import?bundle=${manual_bundle_dir}" | grep -F '"action":"import-bundle"' >/dev/null
-manual_second_action_id="$(python3 - <<'PY' "${manual_db}"
-import sqlite3, sys
-conn = sqlite3.connect(sys.argv[1])
-row = conn.execute("SELECT id FROM rollout_actions WHERE step=2 ORDER BY id LIMIT 1").fetchone()
-if row is None:
-    raise SystemExit("no retry rollout action")
-conn.close()
-print(row[0])
-PY
-)"
-manual_first_action_id="$(python3 - <<'PY' "${manual_db}"
-import sqlite3, sys
-conn = sqlite3.connect(sys.argv[1])
-row = conn.execute("SELECT id FROM rollout_actions WHERE step=1 ORDER BY id LIMIT 1").fetchone()
-if row is None:
-    raise SystemExit("no eviction rollout action")
-conn.close()
-print(row[0])
-PY
-)"
+manual_second_action_id="$(sqlite3 "${manual_db}" "SELECT id FROM rollout_actions WHERE step=2 ORDER BY id LIMIT 1;")"
+manual_first_action_id="$(sqlite3 "${manual_db}" "SELECT id FROM rollout_actions WHERE step=1 ORDER BY id LIMIT 1;")"
+test -n "${manual_second_action_id}"
+test -n "${manual_first_action_id}"
 curl -fsS -X POST "http://127.0.0.1:${manual_port}/api/v1/set-rollout-action-status?id=${manual_first_action_id}&status=ready-to-retry&message=phase-f-live" | grep -F '"action":"set-rollout-action-status"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${manual_port}/api/v1/set-rollout-action-status?id=${manual_second_action_id}&status=ready-to-retry&message=phase-f-live" | grep -F '"action":"set-rollout-action-status"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${manual_port}/api/v1/apply-ready-rollout-action?id=${manual_second_action_id}&artifacts_root=${manual_artifacts}" | grep -F '"action":"apply-ready-rollout-action"' >/dev/null

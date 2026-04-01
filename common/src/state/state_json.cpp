@@ -39,9 +39,6 @@ void NormalizeInferenceSettings(InferenceRuntimeSettings* settings) {
   if (settings->data_parallel_mode.empty()) {
     settings->data_parallel_mode = kDataParallelModeOff;
   }
-  if (settings->data_parallel_mode == kDataParallelModeAutoReplicas) {
-    settings->data_parallel_mode = kDataParallelModeVllmNative;
-  }
   if (settings->data_parallel_lb_mode.empty()) {
     settings->data_parallel_lb_mode = kDataParallelLbModeExternal;
   }

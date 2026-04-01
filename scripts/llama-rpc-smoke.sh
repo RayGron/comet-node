@@ -143,38 +143,31 @@ COMET_NODE_NAME=local-hostd \
 "$INFER_BIN" launch-runtime --config "$INFER_CONFIG" --backend auto >"$INFER_LOG" 2>&1 &
 INFER_PID=$!
 
-python3 - <<'PY'
-import json, time, urllib.request
-
-base = "http://127.0.0.1:19080"
-for path in ["/health", "/v1/models"]:
-    for _ in range(60):
-        try:
-            with urllib.request.urlopen(base + path, timeout=2) as r:
-                print(path, r.status)
-                print(r.read(400).decode("utf-8", "ignore"))
-                break
-        except Exception:
-            time.sleep(1)
-    else:
-        raise SystemExit(f"timeout waiting for {path}")
-
-req = urllib.request.Request(
-    base + "/v1/chat/completions",
-    data=json.dumps(
-        {
-            "model": "stories260k-rpc",
-            "messages": [{"role": "user", "content": "Say hello in one short sentence."}],
-            "max_tokens": 16,
-            "temperature": 0.1,
-        }
-    ).encode("utf-8"),
-    headers={"content-type": "application/json"},
-)
-with urllib.request.urlopen(req, timeout=30) as r:
-    body = json.load(r)
-    print("chat-ok", body["choices"][0]["message"]["content"])
-PY
+base_url="http://127.0.0.1:19080"
+for path in /health /v1/models; do
+  ready=no
+  for _ in $(seq 1 60); do
+    if response="$(curl -fsS --max-time 2 "${base_url}${path}" 2>/dev/null)"; then
+      printf '%s %s\n' "${path}" "200"
+      printf '%s\n' "${response}" | head -c 400
+      printf '\n'
+      ready=yes
+      break
+    fi
+    sleep 1
+  done
+  if [[ "${ready}" != "yes" ]]; then
+    echo "timeout waiting for ${base_url}${path}" >&2
+    exit 1
+  fi
+done
+chat_response="$(
+  curl -fsS --max-time 30 \
+    -H 'content-type: application/json' \
+    -d '{"model":"stories260k-rpc","messages":[{"role":"user","content":"Say hello in one short sentence."}],"max_tokens":16,"temperature":0.1}' \
+    "${base_url}/v1/chat/completions"
+)"
+printf 'chat-ok %s\n' "$(printf '%s' "${chat_response}" | jq -r '.choices[0].message.content')"
 
 echo
 echo "WORKER STATUS"

@@ -469,6 +469,40 @@ comet_enable_strict_warnings(comet-node)
 
 if(NOT WIN32)
   add_executable(
+    comet-devtool
+    tools/devtool/src/http_client.cpp
+    tools/devtool/src/main.cpp
+  )
+  target_include_directories(comet-devtool PRIVATE tools/devtool/include)
+  target_link_libraries(
+    comet-devtool
+    PRIVATE
+      nlohmann_json::nlohmann_json
+      Threads::Threads
+  )
+  comet_enable_strict_warnings(comet-devtool)
+
+  add_executable(
+    comet-skillsd
+    controller/src/http/controller_http_server_support.cpp
+    controller/src/infra/controller_network_manager.cpp
+    runtime/skills/src/skills_server.cpp
+    runtime/skills/src/skills_store.cpp
+    runtime/skills/src/main.cpp
+    common/src/runtime/runtime_status.cpp
+    common/src/state/sqlite_statement.cpp
+  )
+  target_include_directories(
+    comet-skillsd PRIVATE common/include controller/include runtime/skills/include)
+  target_link_libraries(
+    comet-skillsd
+    PRIVATE
+      nlohmann_json::nlohmann_json
+      unofficial::sqlite3::sqlite3
+  )
+  comet_enable_strict_warnings(comet-skillsd)
+
+  add_executable(
     comet-inferctl
     runtime/infer/src/app/infer_command_line.cpp
     runtime/infer/src/app/infer_cli_output_support.cpp

@@ -122,14 +122,13 @@ std::vector<BootstrapModelArtifact> BuildBootstrapModelArtifacts(
     const comet::DesiredState& state,
     const std::string& node_name) {
   const auto& shared_disk = RequirePlaneSharedDiskForNode(deps, state, node_name);
-  const bool use_vllm_runtime = state.inference.runtime_engine == "vllm";
   const fs::path target_root = deps.shared_disk_host_path_for_container_path(
       shared_disk,
-      use_vllm_runtime ? state.inference.model_cache_dir : state.inference.gguf_cache_dir,
-      use_vllm_runtime ? "models/cache" : "models/gguf");
+      state.inference.gguf_cache_dir,
+      "models/gguf");
 
   std::vector<BootstrapModelArtifact> artifacts;
-  std::string filename = use_vllm_runtime ? "model" : "model.gguf";
+  std::string filename = "model.gguf";
   if (!state.bootstrap_model.has_value()) {
     artifacts.push_back(BootstrapModelArtifact{
         std::nullopt,
@@ -160,7 +159,7 @@ std::vector<BootstrapModelArtifact> BuildBootstrapModelArtifacts(
     filename = FilenameFromUrl(*bootstrap_model.source_url);
   }
   if (filename.empty()) {
-    filename = use_vllm_runtime ? "model" : "model.gguf";
+    filename = "model.gguf";
   }
   artifacts.push_back(BootstrapModelArtifact{
       bootstrap_model.local_path,
@@ -553,7 +552,6 @@ void HostdBootstrapModelSupport::BootstrapPlaneModelIfNeeded(
   }
 
   const auto& bootstrap_model = *state.bootstrap_model;
-  const bool use_vllm_runtime = state.inference.runtime_engine == "vllm";
   if (bootstrap_model.materialization_mode == "reference" &&
       bootstrap_model.local_path.has_value() &&
       !bootstrap_model.local_path->empty()) {
@@ -581,28 +579,6 @@ void HostdBootstrapModelSupport::BootstrapPlaneModelIfNeeded(
         *bootstrap_model.local_path);
     return;
   }
-  if (use_vllm_runtime && bootstrap_model.local_path.has_value() &&
-      !bootstrap_model.local_path->empty() &&
-      LooksLikeReadySharedModelDirectory(*bootstrap_model.local_path)) {
-    PublishAssignmentProgress(
-        deps_,
-        backend,
-        assignment_id,
-        "using-shared-model-cache",
-        "Using shared model cache",
-        "Using the ready vLLM model directory directly from shared storage.",
-        72,
-        state.plane_name,
-        node_name);
-    WriteBootstrapActiveModel(
-        deps_,
-        state,
-        node_name,
-        *bootstrap_model.local_path,
-        *bootstrap_model.local_path);
-    return;
-  }
-
   const std::string target_path = BootstrapModelTargetPath(deps_, state, node_name);
   const auto artifacts = BuildBootstrapModelArtifacts(deps_, state, node_name);
   const std::string bootstrap_owner_node = SharedModelBootstrapOwnerNode(state);

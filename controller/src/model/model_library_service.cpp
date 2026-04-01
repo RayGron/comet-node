@@ -789,7 +789,6 @@ std::vector<std::string> ModelLibraryService::DiscoverRoots(
     for (const std::string& candidate : {
              std::string("/mnt/shared-storage/models"),
              std::string("/mnt/shared-storage/models/gguf"),
-             std::string("/mnt/shared-storage/models/vllm"),
          }) {
       if (IsUsableAbsoluteHostPath(candidate)) {
         roots.insert(NormalizePathString(candidate));

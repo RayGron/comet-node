@@ -11,8 +11,6 @@
 namespace comet {
 
 inline constexpr const char* kDataParallelModeOff = "off";
-inline constexpr const char* kDataParallelModeAutoReplicas = "auto_replicas";
-inline constexpr const char* kDataParallelModeVllmNative = "vllm_native";
 inline constexpr const char* kDataParallelLbModeExternal = "external";
 inline constexpr const char* kDataParallelLbModeHybrid = "hybrid";
 inline constexpr int kLlamaRpcWorkerPublishedPortBase = 40000;
@@ -37,18 +35,16 @@ inline int StableLlamaRpcWorkerPort(
 }
 
 inline std::string CanonicalDataParallelMode(const InferenceRuntimeSettings& inference) {
-  if (inference.data_parallel_mode == kDataParallelModeAutoReplicas) {
-    return kDataParallelModeVllmNative;
-  }
-  return inference.data_parallel_mode;
+  return inference.data_parallel_mode.empty() ? std::string(kDataParallelModeOff)
+                                              : inference.data_parallel_mode;
 }
 
 inline bool DataParallelEnabled(const InferenceRuntimeSettings& inference) {
-  return CanonicalDataParallelMode(inference) == kDataParallelModeVllmNative;
+  return CanonicalDataParallelMode(inference) != kDataParallelModeOff;
 }
 
 inline bool NativeDataParallelEnabled(const InferenceRuntimeSettings& inference) {
-  return CanonicalDataParallelMode(inference) == kDataParallelModeVllmNative;
+  return DataParallelEnabled(inference);
 }
 
 inline bool HybridDataParallelEnabled(const InferenceRuntimeSettings& inference) {
@@ -68,14 +64,8 @@ inline int EligibleWorkerMemberCount(const WorkerGroupSpec& worker_group) {
 }
 
 inline int DefaultWorkersPerReplica(
-    const InferenceRuntimeSettings& inference,
+    const InferenceRuntimeSettings&,
     int eligible_worker_members) {
-  if (DataParallelEnabled(inference) && inference.runtime_engine == "vllm") {
-    return std::max(
-        1,
-        std::max(1, inference.tensor_parallel_size) *
-            std::max(1, inference.pipeline_parallel_size));
-  }
   return std::max(1, eligible_worker_members);
 }
 

@@ -33,9 +33,6 @@ infer_tag="${2:-comet/infer-runtime:dev}"
 worker_tag="${3:-comet/worker-runtime:dev}"
 web_ui_tag="${4:-comet/web-ui:dev}"
 skills_tag="${5:-comet/skills-runtime:dev}"
-build_vllm_worker="${COMET_BUILD_VLLM_WORKER:-no}"
-worker_vllm_tag="${COMET_WORKER_VLLM_TAG:-comet/worker-vllm-runtime:dev}"
-worker_vllm_base_image="${COMET_WORKER_VLLM_BASE_IMAGE:-vllm/vllm-openai:latest}"
 
 build_web_ui_image() {
   local temp_root
@@ -98,15 +95,6 @@ echo "building ${skills_tag}"
   -t "${skills_tag}" \
   "${repo_root}"
 
-if [[ "${build_vllm_worker}" == "yes" ]]; then
-  echo "building ${worker_vllm_tag}"
-  "${docker_cmd}" build \
-    --build-arg "VLLM_BASE_IMAGE=${worker_vllm_base_image}" \
-    -f "${repo_root}/runtime/worker-vllm/Dockerfile" \
-    -t "${worker_vllm_tag}" \
-    "${repo_root}"
-fi
-
 if [[ "${skip_web_ui}" != "yes" ]]; then
   echo "building ${web_ui_tag}"
   build_web_ui_image
@@ -117,9 +105,6 @@ echo "  base=${base_tag}"
 echo "  infer=${infer_tag}"
 echo "  worker=${worker_tag}"
 echo "  skills=${skills_tag}"
-if [[ "${build_vllm_worker}" == "yes" ]]; then
-  echo "  worker_vllm=${worker_vllm_tag}"
-fi
 if [[ "${skip_web_ui}" != "yes" ]]; then
   echo "  web_ui=${web_ui_tag}"
 fi

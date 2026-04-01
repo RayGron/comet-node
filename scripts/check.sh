@@ -157,14 +157,7 @@ cmake -E rm -f "${bad_state_root}"
 
 "${build_dir}/comet-node" version | grep -F 'comet-node 0.1.0' >/dev/null
 "${build_dir}/comet-node" doctor controller | grep -F 'controller_binary=yes' >/dev/null
-default_http_port="$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)"
+default_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
 launcher_install_output="$(COMET_INSTALL_ROOT="${launcher_default_root}" \
 "${build_dir}/comet-node" install controller \
   --with-hostd \
@@ -227,27 +220,17 @@ grep -F 'ExecStart=' "${launcher_systemd_dir}/comet-node-controller.service" >/d
   --address http://127.0.0.1:29090 \
   --public-key "${launcher_state_root}/keys/hostd.pub.b64" >/dev/null
 "${build_dir}/comet-controller" show-hostd-hosts --db "${launcher_db_path}" --node gpu-b | grep -F '"node_name": "gpu-b"' >/dev/null
-python3 - <<'PY' "${launcher_db_path}"
-import sqlite3, sys
-db = sqlite3.connect(sys.argv[1])
-row = db.execute("select node_name, advertised_address, registration_state from registered_hosts where node_name='gpu-b'").fetchone()
-assert row == ("gpu-b", "http://127.0.0.1:29090", "registered"), row
-db.close()
-PY
+test "$(
+  sqlite3 -readonly "${launcher_db_path}" \
+    "SELECT node_name || '|' || advertised_address || '|' || registration_state FROM registered_hosts WHERE node_name='gpu-b';"
+)" = "gpu-b|http://127.0.0.1:29090|registered"
 "${build_dir}/comet-node" service uninstall controller-hostd \
   --systemd-dir "${launcher_systemd_dir}" \
   --skip-systemctl >/dev/null
 test ! -f "${launcher_systemd_dir}/comet-node-controller.service"
 test ! -f "${launcher_systemd_dir}/comet-node-hostd.service"
 "${build_dir}/comet-controller" init-db --db "${remote_agent_db_path}" >/dev/null
-remote_http_port="$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)"
+remote_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
 "${build_dir}/comet-node" install hostd \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
@@ -341,14 +324,7 @@ http_server_pid=""
 "${build_dir}/comet-controller" init-db --db "${db_path}" >/dev/null
 mkdir -p "${ui_smoke_root}/assets"
 cp -R "${PWD}/ui/operator/." "${ui_smoke_root}"
-http_port="$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)"
+http_port="$("${script_dir}/comet-devtool.sh" free-port)"
 "${build_dir}/comet-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${http_port}" --ui-root "${ui_smoke_root}" >/tmp/comet-controller-serve.log 2>&1 &
 http_server_pid="$!"
 for _ in $(seq 1 50); do
@@ -396,14 +372,7 @@ grep -F 'COMET_CONTROLLER_UPSTREAM: http://host.docker.internal:18080' "${web_ui
 "${build_dir}/comet-controller" show-web-ui-status --web-ui-root "${web_ui_runtime_root}" | grep -F 'materialized=no' >/dev/null
 "${build_dir}/comet-controller" show-events --db "${db_path}" --category web-ui | grep -F 'category=web-ui type=stopped' >/dev/null
 "${build_dir}/comet-controller" init-db --db "${api_db_path}" >/dev/null
-http_api_port="$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)"
+http_api_port="$("${script_dir}/comet-devtool.sh" free-port)"
 "${build_dir}/comet-controller" serve --db "${api_db_path}" --listen-host 127.0.0.1 --listen-port "${http_api_port}" >/tmp/comet-controller-api-mutations.log 2>&1 &
 http_server_pid="$!"
 for _ in $(seq 1 50); do
@@ -468,14 +437,9 @@ kill "${sse_bundle_pid}" >/dev/null 2>&1 || true
 wait "${sse_bundle_pid}" >/dev/null 2>&1 || true
 grep -F 'event: bundle.imported' "${sse_bundle_output}" >/dev/null
 grep -F '"category":"bundle"' "${sse_bundle_output}" >/dev/null
-last_seen_event_id="$(python3 - <<'PY' "${api_db_path}"
-import sqlite3, sys
-db_path = sys.argv[1]
-conn = sqlite3.connect(db_path)
-row = conn.execute("SELECT MAX(id) FROM event_log").fetchone()
-conn.close()
-print(row[0] if row and row[0] is not None else 0)
-PY
+last_seen_event_id="$(
+  sqlite3 -readonly "${api_db_path}" \
+    "SELECT COALESCE(MAX(id), 0) FROM event_log;"
 )"
 test -n "${last_seen_event_id}"
 curl -NsS --max-time 5 -H "Last-Event-ID: ${last_seen_event_id}" "http://127.0.0.1:${http_api_port}/api/v1/events/stream?node=node-a" >"${sse_replay_output}" 2>/tmp/comet-controller-events-stream-replay.log &
@@ -484,24 +448,13 @@ sleep 0.2
 api_availability_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/node-availability?node=node-b&availability=unavailable&message=api-http")"
 printf '%s' "${api_availability_output}" | grep -F '"action":"set-node-availability"' >/dev/null
 printf '%s' "${api_availability_output}" | grep -F 'updated node availability for node-b' >/dev/null
-api_failed_assignment_id="$(python3 - <<'PY' "${api_db_path}"
-import sqlite3, sys
-db_path = sys.argv[1]
-conn = sqlite3.connect(db_path)
-row = conn.execute(
-    "SELECT id FROM host_assignments WHERE status='pending' ORDER BY id LIMIT 1"
-).fetchone()
-if row is None:
-    raise SystemExit("no pending assignment found for retry fixture")
-conn.execute(
-    "UPDATE host_assignments SET status='failed', status_message='api-fixture failed assignment' WHERE id=?",
-    (row[0],),
-)
-conn.commit()
-conn.close()
-print(row[0])
-PY
+api_failed_assignment_id="$(
+  sqlite3 -readonly "${api_db_path}" \
+    "SELECT id FROM host_assignments WHERE status='pending' ORDER BY id LIMIT 1;"
 )"
+test -n "${api_failed_assignment_id}"
+sqlite3 "${api_db_path}" \
+  "UPDATE host_assignments SET status='failed', status_message='api-fixture failed assignment' WHERE id=${api_failed_assignment_id};"
 test -n "${api_failed_assignment_id}"
 api_retry_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/retry-host-assignment?id=${api_failed_assignment_id}")"
 printf '%s' "${api_retry_output}" | grep -F '"action":"retry-host-assignment"' >/dev/null
@@ -576,14 +529,7 @@ first_rollout_action_id="$("${build_dir}/comet-controller" show-rollout-actions 
 second_rollout_action_id="$("${build_dir}/comet-controller" show-rollout-actions --db "${preemption_db_path}" --node node-a | sed -n 's/^  - id=\([0-9][0-9]*\).*/\1/p' | sed -n '2p')"
 test -n "${first_rollout_action_id}"
 test -n "${second_rollout_action_id}"
-http_preemption_port="$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)"
+http_preemption_port="$("${script_dir}/comet-devtool.sh" free-port)"
 "${build_dir}/comet-controller" serve --db "${preemption_db_path}" --listen-host 127.0.0.1 --listen-port "${http_preemption_port}" >/tmp/comet-controller-preemption-serve.log 2>&1 &
 http_server_pid="$!"
 for _ in $(seq 1 50); do
@@ -641,14 +587,7 @@ perl -0pi -e 's/"name": "worker-b",/"name": "worker-b",\n  "placement_mode": "mo
 "${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "cluster_ready=yes active_rollouts=0 blocking_assignment_nodes=0 unconverged_nodes=0" >/dev/null
 "${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "state=actionable reason=safe-direct-workers=1" >/dev/null
 "${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "actionable=1 safe_direct=1 rollout_class=0 gated=0 blocked_active_rollouts=0 assignment_busy=0 observation_gated=0 stable_holds=0 below_threshold=0 deferred=0 no_candidate=0" >/dev/null
-http_rebalance_port="$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)"
+http_rebalance_port="$("${script_dir}/comet-devtool.sh" free-port)"
 "${build_dir}/comet-controller" serve --db "${rebalance_db_path}" --listen-host 127.0.0.1 --listen-port "${http_rebalance_port}" >/tmp/comet-controller-rebalance-serve.log 2>&1 &
 http_server_pid="$!"
 for _ in $(seq 1 50); do
@@ -791,19 +730,14 @@ perl -0pi -e 's/"name": "worker-b",/"name": "worker-b",\n  "placement_mode": "mo
 "${build_dir}/comet-controller" apply-bundle --bundle "${drain_bundle_dir}" --db "${drain_db_path}" --artifacts-root "${drain_artifacts_root}" >/dev/null
 "${build_dir}/comet-hostd" apply-next-assignment --db "${drain_db_path}" --node node-a --runtime-root "${drain_runtime_root}" --state-root "${drain_state_root}" --compose-mode skip >/dev/null
 "${build_dir}/comet-hostd" apply-next-assignment --db "${drain_db_path}" --node node-b --runtime-root "${drain_runtime_root}" --state-root "${drain_state_root}" --compose-mode skip >/dev/null
-python3 - <<'PY' "${drain_db_path}"
-import sqlite3, sys
-db_path = sys.argv[1]
-conn = sqlite3.connect(db_path)
-conn.execute(
-    "INSERT INTO node_availability_overrides(node_name, availability, status_message, updated_at) "
-    "VALUES(?, ?, ?, datetime('now')) "
-    "ON CONFLICT(node_name) DO UPDATE SET availability=excluded.availability, status_message=excluded.status_message, updated_at=excluded.updated_at",
-    ("node-b", "draining", "test fixture"),
-)
-conn.commit()
-conn.close()
-PY
+sqlite3 "${drain_db_path}" <<'SQL'
+INSERT INTO node_availability_overrides(node_name, availability, status_message, updated_at)
+VALUES('node-b', 'draining', 'test fixture', datetime('now'))
+ON CONFLICT(node_name) DO UPDATE SET
+  availability=excluded.availability,
+  status_message=excluded.status_message,
+  updated_at=excluded.updated_at;
+SQL
 "${build_dir}/comet-controller" show-rebalance-plan --db "${drain_db_path}" | grep -F "worker=worker-b placement_mode=movable current=node-b:0 class=safe-direct decision=propose state=ready-drain-move target=node-a:1 action=upgrade-to-exclusive" >/dev/null
 "${build_dir}/comet-controller" show-rebalance-plan --db "${drain_db_path}" | grep -F "actionable=1 safe_direct=1 rollout_class=0 gated=0 blocked_active_rollouts=0 assignment_busy=0 observation_gated=0 stable_holds=0 below_threshold=0 deferred=0 no_candidate=0" >/dev/null
 compute_bundle_dir="$(mktemp -d "${PWD}/var/compute-bundle.XXXXXX")"
@@ -813,60 +747,50 @@ perl -0pi -e 's/"name": "worker-b",/"name": "worker-b",\n  "placement_mode": "mo
 "${build_dir}/comet-controller" apply-bundle --bundle "${compute_bundle_dir}" --db "${compute_db_path}" --artifacts-root "${compute_artifacts_root}" >/dev/null
 "${build_dir}/comet-hostd" apply-next-assignment --db "${compute_db_path}" --node node-a --runtime-root "${compute_runtime_root}" --state-root "${compute_state_root}" --compose-mode skip >/dev/null
 "${build_dir}/comet-hostd" apply-next-assignment --db "${compute_db_path}" --node node-b --runtime-root "${compute_runtime_root}" --state-root "${compute_state_root}" --compose-mode skip >/dev/null
-python3 - <<'PY' "${compute_db_path}"
-import json, sqlite3, sys
-db_path = sys.argv[1]
-conn = sqlite3.connect(db_path)
-telemetry = {
-    "degraded": False,
-    "source": "fixture",
-    "devices": [
-        {
-            "gpu_device": "1",
-            "total_vram_mb": 24576,
-            "used_vram_mb": 2048,
-            "free_vram_mb": 22000,
-            "gpu_utilization_pct": 97,
-            "processes": [
-                {"pid": 4242, "used_vram_mb": 1024, "instance_name": "foreign-load"}
-            ],
-        }
-    ],
-}
-conn.execute(
-    "UPDATE host_observations SET status=?, applied_generation=?, gpu_telemetry_json=?, heartbeat_at=datetime('now') WHERE node_name=?",
-    ("idle", 1, json.dumps(telemetry), "node-a"),
-)
-conn.commit()
-conn.close()
-PY
+compute_pressure_telemetry_json="$(
+  jq -cn '{
+    degraded: false,
+    source: "fixture",
+    devices: [
+      {
+        gpu_device: "1",
+        total_vram_mb: 24576,
+        used_vram_mb: 2048,
+        free_vram_mb: 22000,
+        gpu_utilization_pct: 97,
+        processes: [
+          {
+            pid: 4242,
+            used_vram_mb: 1024,
+            instance_name: "foreign-load"
+          }
+        ]
+      }
+    ]
+  }'
+)"
+sqlite3 "${compute_db_path}" \
+  "UPDATE host_observations SET status='idle', applied_generation=1, gpu_telemetry_json='${compute_pressure_telemetry_json}', heartbeat_at=datetime('now') WHERE node_name='node-a';"
 "${build_dir}/comet-controller" show-rebalance-plan --db "${compute_db_path}" | grep -F "worker=worker-b placement_mode=movable current=node-b:0 class=gated decision=hold state=gated-target target=node-a:1 action=upgrade-to-exclusive" >/dev/null
 "${build_dir}/comet-controller" show-rebalance-plan --db "${compute_db_path}" | grep -F "gate_reason=compute-pressure" >/dev/null
-python3 - <<'PY' "${compute_db_path}"
-import json, sqlite3, sys
-db_path = sys.argv[1]
-conn = sqlite3.connect(db_path)
-telemetry = {
-    "degraded": False,
-    "source": "fixture",
-    "devices": [
-        {
-            "gpu_device": "1",
-            "total_vram_mb": 24576,
-            "used_vram_mb": 22000,
-            "free_vram_mb": 2048,
-            "gpu_utilization_pct": 10,
-            "processes": [],
-        }
-    ],
-}
-conn.execute(
-    "UPDATE host_observations SET status=?, applied_generation=?, gpu_telemetry_json=?, heartbeat_at=datetime('now') WHERE node_name=?",
-    ("idle", 1, json.dumps(telemetry), "node-a"),
-)
-conn.commit()
-conn.close()
-PY
+compute_vram_gate_telemetry_json="$(
+  jq -cn '{
+    degraded: false,
+    source: "fixture",
+    devices: [
+      {
+        gpu_device: "1",
+        total_vram_mb: 24576,
+        used_vram_mb: 22000,
+        free_vram_mb: 2048,
+        gpu_utilization_pct: 10,
+        processes: []
+      }
+    ]
+  }'
+)"
+sqlite3 "${compute_db_path}" \
+  "UPDATE host_observations SET status='idle', applied_generation=1, gpu_telemetry_json='${compute_vram_gate_telemetry_json}', heartbeat_at=datetime('now') WHERE node_name='node-a';"
 "${build_dir}/comet-controller" show-rebalance-plan --db "${compute_db_path}" | grep -F "gate_reason=observed-insufficient-vram" >/dev/null
 "${build_dir}/comet-controller" show-rebalance-plan --db "${compute_db_path}" | grep -F "observation_gated=1" >/dev/null
 "${build_dir}/comet-controller" preview-bundle --bundle "${PWD}/config/demo-plane" --node node-a >/dev/null
@@ -928,38 +852,13 @@ test ! -e /mnt/e/dev/Repos/comet-node/runtime/infer/runtime_launcher.py
 /mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh bootstrap-runtime --config "${artifacts_root}/alpha/infer-runtime.json" --profile generic | grep -F "runtime_mode=llama-library" >/dev/null
 /mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh plan-launch --config "${artifacts_root}/alpha/infer-runtime.json" | grep -F "serving-worker=node:node-a worker:worker-a gpu:0 fraction:1 colocated_with_primary_infer:yes" >/dev/null
 mkdir -p "${infer_model_root}"
-perl -MJSON::PP -e '
-  use strict;
-  use warnings;
-  use utf8;
-  use Cwd qw(abs_path);
-  use File::Spec;
-
-  my ($src, $dst, $root) = @ARGV;
-  open my $in, "<:raw", $src or die "open $src: $!";
-  local $/;
-  my $json_text = <$in>;
-  close $in;
-
-  my $data = JSON::PP->new->utf8->decode($json_text);
-  my $control_root = File::Spec->catdir($root, "control");
-  $data->{plane}->{control_root} = $control_root;
-  $data->{control}->{root} = $control_root;
-
-  my %path_map = (
-    models_root => File::Spec->catdir($root, "models"),
-    gguf_cache_dir => File::Spec->catdir($root, "models", "gguf"),
-    infer_log_dir => File::Spec->catdir($root, "logs", "infer"),
-  );
-
-  for my $key (keys %path_map) {
-    $data->{inference}->{$key} = $path_map{$key};
-  }
-
-  open my $out, ">:raw", $dst or die "open $dst: $!";
-  print {$out} JSON::PP->new->utf8->canonical->pretty->encode($data);
-  close $out;
-' "${artifacts_root}/alpha/infer-runtime.json" "${infer_model_config}" "${infer_model_root}"
+"${script_dir}/comet-devtool.sh" rewrite-infer-runtime-config \
+  --input "${artifacts_root}/alpha/infer-runtime.json" \
+  --output "${infer_model_config}" \
+  --control-root "${infer_model_root}/control" \
+  --models-root "${infer_model_root}/models" \
+  --gguf-cache-dir "${infer_model_root}/models/gguf" \
+  --infer-log-dir "${infer_model_root}/logs/infer"
 /mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh preload-model --config "${infer_model_config}" --alias qwen35 --source-model-id Qwen/Qwen3.5-7B-Instruct --local-model-path "${infer_model_root}/models/qwen35" --apply | grep -F "preload-model-plan:" >/dev/null
 /mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh cache-status --config "${infer_model_config}" --alias qwen35 --local-model-path "${infer_model_root}/models/qwen35" | grep -F "registry=present" >/dev/null
 /mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh switch-model --config "${infer_model_config}" --model-id Qwen/Qwen3.5-7B-Instruct --tp 1 --pp 1 --gpu-memory-utilization 0.85 --runtime-profile qwen3_5 --apply | grep -F 'runtime_profile="qwen3_5"' >/dev/null
@@ -977,38 +876,14 @@ perl -MJSON::PP -e '
 "${build_dir}/comet-hostd" show-runtime-status --node node-a --state-root "${state_root}" | grep -F "runtime_status: empty" >/dev/null
 "${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk-runtime-state:" >/dev/null
 "${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk=plane-alpha-shared node=node-a state=directory-backed" >/dev/null
-perl -MJSON::PP -e '
-  use strict;
-  use warnings;
-  use utf8;
-  use File::Spec;
-
-  my ($src, $dst, $runtime_root) = @ARGV;
-  open my $in, "<:raw", $src or die "open $src: $!";
-  local $/;
-  my $json_text = <$in>;
-  close $in;
-
-  my $data = JSON::PP->new->utf8->decode($json_text);
-  my $shared_root = File::Spec->catdir($runtime_root, "var", "lib", "comet", "disks", "planes", "alpha", "shared");
-  my $control_root = File::Spec->catdir($shared_root, "control", "alpha");
-  $data->{plane}->{control_root} = $control_root;
-  $data->{control}->{root} = $control_root;
-
-  my %path_map = (
-    models_root => File::Spec->catdir($shared_root, "models"),
-    gguf_cache_dir => File::Spec->catdir($shared_root, "models", "gguf"),
-    infer_log_dir => File::Spec->catdir($shared_root, "logs", "infer"),
-  );
-
-  for my $key (keys %path_map) {
-    $data->{inference}->{$key} = $path_map{$key};
-  }
-
-  open my $out, ">:raw", $dst or die "open $dst: $!";
-  print {$out} JSON::PP->new->utf8->canonical->pretty->encode($data);
-  close $out;
-' "${artifacts_root}/alpha/infer-runtime.json" "${runtime_infer_config}" "${runtime_root}"
+runtime_shared_root="${runtime_root}/var/lib/comet/disks/planes/alpha/shared"
+"${script_dir}/comet-devtool.sh" rewrite-infer-runtime-config \
+  --input "${artifacts_root}/alpha/infer-runtime.json" \
+  --output "${runtime_infer_config}" \
+  --control-root "${runtime_shared_root}/control/alpha" \
+  --models-root "${runtime_shared_root}/models" \
+  --gguf-cache-dir "${runtime_shared_root}/models/gguf" \
+  --infer-log-dir "${runtime_shared_root}/logs/infer"
 /mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh preload-model --config "${runtime_infer_config}" --alias qwen35 --source-model-id Qwen/Qwen3.5-7B-Instruct --local-model-path "${runtime_root}/var/lib/comet/disks/planes/alpha/shared/models/qwen35" --apply | grep -F "preload-model-plan:" >/dev/null
 /mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh switch-model --config "${runtime_infer_config}" --model-id Qwen/Qwen3.5-7B-Instruct --tp 1 --pp 1 --gpu-memory-utilization 0.85 --runtime-profile qwen3_5 --apply | grep -F 'runtime_profile="qwen3_5"' >/dev/null
 /mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh gateway-plan --config "${runtime_infer_config}" --apply | grep -F "upstream_models_url=http://127.0.0.1:8000/v1/models" >/dev/null
@@ -1072,18 +947,8 @@ fi
 "${build_dir}/comet-hostd" show-local-state --node node-b --state-root "${state_root}" >/dev/null
 "${build_dir}/comet-hostd" show-state-ops --db "${db_path}" --node node-b --artifacts-root "${artifacts_root}" --runtime-root "${runtime_root}" --state-root "${state_root}" >/dev/null
 "${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk=worker-b-private node=node-b state=directory-backed" >/dev/null
-python3 - <<'PY' "${db_path}"
-import sqlite3
-import sys
-db_path = sys.argv[1]
-conn = sqlite3.connect(db_path)
-conn.execute(
-    "DELETE FROM disk_runtime_state WHERE disk_name = ? AND node_name = ?",
-    ("worker-b-private", "node-b"),
-)
-conn.commit()
-conn.close()
-PY
+sqlite3 "${db_path}" \
+  "DELETE FROM disk_runtime_state WHERE disk_name='worker-b-private' AND node_name='node-b';"
 rm -rf "${runtime_root}/nodes/node-b/var/lib/comet/disks/instances/worker-b/private"
 "${build_dir}/comet-hostd" apply-state-ops --db "${db_path}" --node node-b --artifacts-root "${artifacts_root}" --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode skip >/dev/null
 test -d "${runtime_root}/nodes/node-b/var/lib/comet/disks/instances/worker-b/private"

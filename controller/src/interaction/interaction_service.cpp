@@ -2646,10 +2646,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     runtime.plane_name = desired_state->plane_name;
     runtime.control_root = desired_state->control_root;
     runtime.primary_infer_node = desired_state->inference.primary_infer_node;
-    runtime.runtime_backend =
-        desired_state->inference.runtime_engine == "vllm"
-            ? "worker-vllm"
-            : desired_state->inference.runtime_engine;
+    runtime.runtime_backend = desired_state->inference.runtime_engine;
     if (const auto infer_instance_name = find_infer_instance_name_(*desired_state);
         infer_instance_name.has_value()) {
       runtime.instance_name = *infer_instance_name;
@@ -2780,9 +2777,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   } else if (!resolution.runtime_status->gateway_ready) {
     reason = "gateway_not_ready";
   } else if (!resolution.runtime_status->inference_ready) {
-    reason = desired_state->inference.runtime_engine == "vllm"
-                 ? "distributed_bootstrap_pending"
-                 : "inference_not_ready";
+    reason = "inference_not_ready";
   } else if (!resolution.target.has_value()) {
     reason = "gateway_target_missing";
   }

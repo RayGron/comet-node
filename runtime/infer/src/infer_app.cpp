@@ -155,10 +155,6 @@ UpstreamTarget ParseHttpUrl(const std::string& url) {
 }
 
 std::vector<std::string> ObservedRuntimeUpstreamBaseUrls(const RuntimeConfig& config) {
-  const char* worker_vllm_upstream = std::getenv("COMET_INFER_VLLM_UPSTREAM_URL");
-  if (worker_vllm_upstream != nullptr && std::strlen(worker_vllm_upstream) > 0) {
-    return {std::string(worker_vllm_upstream)};
-  }
   if (!config.replica_upstreams.empty()) {
     return config.replica_upstreams;
   }
@@ -169,10 +165,7 @@ std::vector<std::string> ObservedRuntimeUpstreamBaseUrls(const RuntimeConfig& co
   if (config.runtime_engine == "llama.cpp" && config.distributed_backend == "llama_rpc") {
     return {"http://127.0.0.1:" + std::to_string(config.llama_port)};
   }
-  if (config.runtime_engine != "vllm") {
-    return {"http://127.0.0.1:" + std::to_string(config.api_port)};
-  }
-  return {};
+  return {"http://127.0.0.1:" + std::to_string(config.api_port)};
 }
 
 std::optional<std::string> ResolveRuntimeObservedUpstreamBaseUrl(const RuntimeConfig& config) {
@@ -1541,17 +1534,6 @@ int LaunchLlamaRpcHeadRuntime(
   return runtime.Run();
 }
 
-int LaunchWorkerVllmRuntime(const RuntimeConfig& config, InferSignalService& signal_service) {
-  LocalRuntime runtime(
-      config,
-      "worker-vllm",
-      UtcNowIso(),
-      nullptr,
-      signal_service,
-      true);
-  return runtime.Run();
-}
-
 int LaunchRuntime(
     const RuntimeConfig& config,
     const std::string& requested_backend,
@@ -1565,14 +1547,8 @@ int LaunchRuntime(
   if (requested_backend == "llama-rpc-head") {
     return LaunchLlamaRpcHeadRuntime(config, signal_service);
   }
-  if (requested_backend == "worker-vllm" || requested_backend == "vllm") {
-    return LaunchWorkerVllmRuntime(config, signal_service);
-  }
   if (requested_backend != "auto") {
     Throw("unsupported backend: " + requested_backend);
-  }
-  if (config.runtime_engine == "vllm") {
-    return LaunchWorkerVllmRuntime(config, signal_service);
   }
   if (config.runtime_engine == "llama.cpp" &&
       config.distributed_backend == "llama_rpc") {

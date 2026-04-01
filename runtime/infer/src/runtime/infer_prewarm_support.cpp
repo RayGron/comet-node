@@ -292,11 +292,6 @@ bool PrewarmBaseUrl(const RuntimeConfig& config, const std::string& base_url) {
 }  // namespace
 
 std::vector<std::string> ObservedReadyReplicaLeaderBaseUrls(const RuntimeConfig& config) {
-  if (const char* worker_vllm_upstream = std::getenv("COMET_INFER_VLLM_UPSTREAM_URL");
-      worker_vllm_upstream != nullptr && std::strlen(worker_vllm_upstream) > 0) {
-    return {std::string(worker_vllm_upstream)};
-  }
-
   const auto topology = replica_support::InspectReplicaTopology(config);
   if (!topology.ready_replica_base_urls.empty()) {
     return topology.ready_replica_base_urls;

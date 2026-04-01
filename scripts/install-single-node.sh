@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  install-single-node.sh [--build-type Debug|Release] [--listen-port <port>] [--node <name>] [--with-web-ui] [--without-vllm-worker] [--skip-prereqs] [--skip-image-build]
+  install-single-node.sh [--build-type Debug|Release] [--listen-port <port>] [--node <name>] [--with-web-ui] [--skip-prereqs] [--skip-image-build]
 
 Builds comet-node on the current Linux host, installs controller+local-hostd as systemd services,
 and starts them.
@@ -18,7 +18,6 @@ build_type="Debug"
 listen_port="18080"
 node_name="local-hostd"
 with_web_ui="no"
-with_vllm_worker="yes"
 skip_prereqs="no"
 skip_image_build="no"
 
@@ -38,10 +37,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --with-web-ui)
       with_web_ui="yes"
-      shift
-      ;;
-    --without-vllm-worker)
-      with_vllm_worker="no"
       shift
       ;;
     --skip-prereqs)
@@ -169,8 +164,7 @@ install_prereqs_if_needed() {
     npm
     ninja-build
     pkg-config
-    python3
-    python3-venv
+    sqlite3
   )
   local docker_packages=(
     docker.io
@@ -273,19 +267,7 @@ ensure_operator_ui_deps_if_needed() {
   run_as_invoking_user bash -lc "cd '${ui_root}' && npm ci"
 }
 
-config_summary="$(
-  python3 - <<'PY' "${repo_root}/config/comet-node-config.json"
-import json
-import pathlib
-import sys
-
-config_path = pathlib.Path(sys.argv[1])
-payload = json.loads(config_path.read_text())
-paths = payload.get("paths", {})
-print(paths.get("storage_root", "/var/lib/comet"))
-print(paths.get("model_cache_root", ""))
-PY
-)"
+config_summary="$("${repo_root}/scripts/comet-devtool.sh" config-summary --config "${repo_root}/config/comet-node-config.json")"
 storage_root="$(printf '%s\n' "${config_summary}" | sed -n '1p')"
 model_cache_root="$(printf '%s\n' "${config_summary}" | sed -n '2p')"
 
@@ -302,11 +284,7 @@ if [[ "${skip_image_build}" != "yes" ]]; then
   if [[ "${with_web_ui}" != "yes" ]]; then
     image_build_args+=(--skip-web-ui)
   fi
-  image_build_env=(env PATH="${PATH}" HOME="${HOME}")
-  if [[ "${with_vllm_worker}" == "yes" ]]; then
-    image_build_env+=(COMET_BUILD_VLLM_WORKER=yes)
-  fi
-  run_as_root "${image_build_env[@]}" "${script_dir}/build-runtime-images.sh" "${image_build_args[@]}"
+  run_as_root env PATH="${PATH}" HOME="${HOME}" "${script_dir}/build-runtime-images.sh" "${image_build_args[@]}"
 fi
 
 build_dir="$("${script_dir}/print-host-build-dir.sh")"
@@ -349,4 +327,4 @@ echo "storage_root=${storage_root}"
 if [[ -n "${model_cache_root}" ]]; then
   echo "model_cache_root=${model_cache_root}"
 fi
-echo "next_step=${repo_root}/scripts/run-plane.sh qwen35-9b-min"
+echo "next_step=${repo_root}/scripts/run-plane.sh v2-llama-rpc-backend"

@@ -1,5 +1,7 @@
 FROM nginx:1.29-alpine
 
+RUN rm -f /docker-entrypoint.d/30-tune-worker-processes.sh
+
 COPY runtime/web-ui/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY ui/operator-react/dist/ /usr/share/nginx/html/
 

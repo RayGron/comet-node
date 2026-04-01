@@ -546,14 +546,16 @@ int ScoreCandidate(
       {"discover", "compare", "copytrading", "trader", "drawdown", "sharpe",
        "pnl", "roi"});
   const bool prompt_spot_order = contains_term(
-      prompt_terms, {"order", "limit", "buy", "sell", "confirm"});
+      prompt_terms, {"order", "limit", "buy", "sell"});
   const bool prompt_streams = contains_term(
       prompt_terms, {"socketio", "room", "stream", "user"});
 
   const bool candidate_session = contains_term(
       id_terms, {"session", "auth"}) ||
       contains_term(name_terms, {"session", "auth"}) ||
-      contains_term(description_terms, {"session", "auth"});
+      contains_term(
+          description_terms,
+          {"session", "login", "logout", "bearer", "access", "cookie"});
   const bool candidate_balance = contains_term(
       id_terms, {"balance"}) ||
       contains_term(name_terms, {"balance"}) ||

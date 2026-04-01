@@ -51,13 +51,14 @@ void SkillsFactoryRepository::UpsertSkillsFactorySkill(const SkillsFactorySkillR
   Statement statement(
       db_,
       "INSERT INTO skills_factory_skills("
-      "id, name, group_path, description, content, created_at, updated_at"
-      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7) "
+      "id, name, group_path, description, content, match_terms_json, created_at, updated_at"
+      ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) "
       "ON CONFLICT(id) DO UPDATE SET "
       "name = excluded.name, "
       "group_path = excluded.group_path, "
       "description = excluded.description, "
       "content = excluded.content, "
+      "match_terms_json = excluded.match_terms_json, "
       "created_at = excluded.created_at, "
       "updated_at = excluded.updated_at;");
   statement.BindText(1, skill.id);
@@ -65,8 +66,9 @@ void SkillsFactoryRepository::UpsertSkillsFactorySkill(const SkillsFactorySkillR
   statement.BindText(3, skill.group_path);
   statement.BindText(4, skill.description);
   statement.BindText(5, skill.content);
-  statement.BindText(6, skill.created_at);
-  statement.BindText(7, skill.updated_at);
+  statement.BindText(6, SerializeStringArray(skill.match_terms));
+  statement.BindText(7, skill.created_at);
+  statement.BindText(8, skill.updated_at);
   statement.StepDone();
 }
 
@@ -74,7 +76,7 @@ std::optional<SkillsFactorySkillRecord> SkillsFactoryRepository::LoadSkillsFacto
     const std::string& skill_id) const {
   Statement statement(
       db_,
-      "SELECT id, name, group_path, description, content, created_at, updated_at "
+      "SELECT id, name, group_path, description, content, match_terms_json, created_at, updated_at "
       "FROM skills_factory_skills WHERE id = ?1;");
   statement.BindText(1, skill_id);
   if (!statement.StepRow()) {
@@ -86,7 +88,7 @@ std::optional<SkillsFactorySkillRecord> SkillsFactoryRepository::LoadSkillsFacto
 std::vector<SkillsFactorySkillRecord> SkillsFactoryRepository::LoadSkillsFactorySkills() const {
   Statement statement(
       db_,
-      "SELECT id, name, group_path, description, content, created_at, updated_at "
+      "SELECT id, name, group_path, description, content, match_terms_json, created_at, updated_at "
       "FROM skills_factory_skills ORDER BY group_path ASC, updated_at DESC, name ASC, id ASC;");
   std::vector<SkillsFactorySkillRecord> skills;
   while (statement.StepRow()) {
@@ -204,8 +206,9 @@ SkillsFactorySkillRecord SkillsFactoryRepository::ReadSkillsFactorySkill(sqlite3
   skill.group_path = ToColumnText(statement, 2);
   skill.description = ToColumnText(statement, 3);
   skill.content = ToColumnText(statement, 4);
-  skill.created_at = ToColumnText(statement, 5);
-  skill.updated_at = ToColumnText(statement, 6);
+  skill.match_terms = DeserializeStringArray(ToColumnText(statement, 5));
+  skill.created_at = ToColumnText(statement, 6);
+  skill.updated_at = ToColumnText(statement, 7);
   return skill;
 }
 

@@ -101,6 +101,7 @@ int main() {
           "alpha/core",
           "Canonical alpha description",
           "canonical alpha content",
+          {"alpha", "core"},
           "",
           "",
       });
@@ -132,6 +133,10 @@ int main() {
       Expect(
           item.at("group_path").get<std::string>() == "alpha/core",
           "factory skill group_path mismatch");
+      Expect(
+          item.at("match_terms").get<std::vector<std::string>>() ==
+              std::vector<std::string>({"alpha", "core"}),
+          "factory skill match_terms mismatch");
 
       const auto deleted =
           factory_service.DeleteSkill(db_path.string(), "skill-alpha", temp_root.string());
@@ -170,6 +175,7 @@ int main() {
               {"name", "Catalog skill"},
               {"description", "Plane-owned binding using canonical content"},
               {"content", "always answer CATALOG-SKILL"},
+              {"match_terms", json::array({"catalog", "canonical"})},
               {"enabled", false},
               {"session_ids", json::array({"session-1", "session-2"})},
               {"comet_links", json::array({"comet://one"})},
@@ -190,6 +196,9 @@ int main() {
       Expect(
           canonical->content == "always answer CATALOG-SKILL",
           "catalog create should persist canonical content");
+      Expect(
+          canonical->match_terms == std::vector<std::string>({"catalog", "canonical"}),
+          "catalog create should persist canonical match_terms");
       const auto binding = store.LoadPlaneSkillBinding("catalog-plane", skill_id);
       Expect(binding.has_value(), "catalog create should persist plane binding");
       Expect(!binding->enabled, "catalog create should persist plane-local enabled=false");

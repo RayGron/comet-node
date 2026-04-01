@@ -21,6 +21,7 @@ struct ContextualSkillCandidate {
   std::string name;
   std::string description;
   std::string content;
+  std::vector<std::string> match_terms;
 };
 
 constexpr int kMinimumContextualScore = 6;
@@ -426,6 +427,40 @@ std::string JoinTerms(const std::vector<std::string>& items) {
   return joined;
 }
 
+std::vector<std::string> TokenizeTermList(const std::vector<std::string>& values) {
+  std::vector<std::string> tokens;
+  std::set<std::string> seen;
+  for (const auto& value : values) {
+    for (const auto& token : TokenizeRelevantTerms(value)) {
+      if (seen.insert(token).second) {
+        tokens.push_back(token);
+      }
+    }
+  }
+  return tokens;
+}
+
+std::vector<std::string> ParseStringArray(const nlohmann::json& value) {
+  if (!value.is_array()) {
+    return {};
+  }
+  std::vector<std::string> result;
+  std::set<std::string> seen;
+  for (const auto& item : value) {
+    if (!item.is_string()) {
+      continue;
+    }
+    const auto term = item.get<std::string>();
+    if (term.empty()) {
+      continue;
+    }
+    if (seen.insert(term).second) {
+      result.push_back(term);
+    }
+  }
+  return result;
+}
+
 std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
     const DesiredState& desired_state) {
   if (!desired_state.skills.has_value() || !desired_state.skills->enabled) {
@@ -468,6 +503,7 @@ std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
         item.value("name", std::string{}),
         item.value("description", std::string{}),
         item.value("content", std::string{}),
+        ParseStringArray(item.value("match_terms", nlohmann::json::array())),
     });
   }
   return candidates;
@@ -479,22 +515,15 @@ int ScoreCandidate(
     std::string* rationale) {
   const std::string prompt_normalized = NormalizeSkillText(prompt_text);
   const auto prompt_terms = TokenizeRelevantTerms(prompt_text);
+  const auto match_term_tokens = TokenizeTermList(candidate.match_terms);
   const auto id_terms = TokenizeRelevantTerms(candidate.id);
   const auto name_terms = TokenizeRelevantTerms(candidate.name);
   const auto description_terms = TokenizeRelevantTerms(candidate.description);
   const auto content_terms = TokenizeRelevantTerms(candidate.content);
 
-  auto contains_term = [](const std::vector<std::string>& terms,
-                          std::initializer_list<const char*> candidates) {
-    for (const auto* candidate_term : candidates) {
-      if (std::find(terms.begin(), terms.end(), candidate_term) != terms.end()) {
-        return true;
-      }
-    }
-    return false;
-  };
-
   int score = 0;
+  std::vector<std::string> matched_match_terms;
+  std::vector<std::string> matched_match_phrases;
   std::vector<std::string> matched_id_terms;
   std::vector<std::string> matched_name_terms;
   std::vector<std::string> matched_description_terms;
@@ -506,7 +535,24 @@ int ScoreCandidate(
     score += 12;
   }
 
+  for (const auto& phrase : candidate.match_terms) {
+    const auto normalized_phrase = NormalizeSkillText(phrase);
+    if (normalized_phrase.size() < 3) {
+      continue;
+    }
+    if (prompt_normalized.find(normalized_phrase) != std::string::npos) {
+      matched_match_phrases.push_back(phrase);
+      score += 10;
+    }
+  }
+
   for (const auto& term : prompt_terms) {
+    if (std::find(match_term_tokens.begin(), match_term_tokens.end(), term) !=
+        match_term_tokens.end()) {
+      matched_match_terms.push_back(term);
+      score += 8;
+      continue;
+    }
     if (std::find(id_terms.begin(), id_terms.end(), term) != id_terms.end()) {
       matched_id_terms.push_back(term);
       score += 6;
@@ -520,7 +566,7 @@ int ScoreCandidate(
     if (std::find(description_terms.begin(), description_terms.end(), term) !=
         description_terms.end()) {
       matched_description_terms.push_back(term);
-      score += 2;
+      score += 3;
       continue;
     }
     if (std::find(content_terms.begin(), content_terms.end(), term) !=
@@ -529,118 +575,18 @@ int ScoreCandidate(
       score += 1;
     }
   }
-
-  const bool prompt_session = contains_term(
-      prompt_terms, {"session", "auth", "login", "logout"});
-  const bool prompt_balance = contains_term(
-      prompt_terms, {"balance", "available"});
-  const bool prompt_public_market = contains_term(
-      prompt_terms,
-      {"public", "pairs", "market", "chart", "orderbook", "pairs_state"});
-  const bool prompt_protected_user = contains_term(
-      prompt_terms, {"user", "protected", "balance", "session", "auth"});
-  const bool prompt_copy_action = contains_term(
-      prompt_terms, {"subscribe", "follow", "unfollow"});
-  const bool prompt_copy_discovery = contains_term(
-      prompt_terms,
-      {"discover", "compare", "copytrading", "trader", "drawdown", "sharpe",
-       "pnl", "roi"});
-  const bool prompt_spot_order = contains_term(
-      prompt_terms, {"order", "limit", "buy", "sell"});
-  const bool prompt_streams = contains_term(
-      prompt_terms, {"socketio", "room", "stream", "user"});
-
-  const bool candidate_session = contains_term(
-      id_terms, {"session", "auth"}) ||
-      contains_term(name_terms, {"session", "auth"}) ||
-      contains_term(
-          description_terms,
-          {"session", "login", "logout", "bearer", "access", "cookie"});
-  const bool candidate_balance = contains_term(
-      id_terms, {"balance"}) ||
-      contains_term(name_terms, {"balance"}) ||
-      contains_term(description_terms, {"balance", "available"});
-  const bool candidate_public_market = contains_term(
-      id_terms, {"market"}) ||
-      contains_term(name_terms, {"market"}) ||
-      contains_term(description_terms,
-                    {"public", "pairs", "chart", "orderbook", "pairs_state"});
-  const bool candidate_copy_action = contains_term(
-      id_terms, {"subscribe", "follow", "unfollow"}) ||
-      contains_term(name_terms, {"subscribe", "follow", "unfollow"}) ||
-      contains_term(description_terms,
-                    {"subscribe", "follow", "unfollow", "confirm"});
-  const bool candidate_copy_discovery = contains_term(
-      id_terms, {"copytrading", "trader", "discovery"}) ||
-      contains_term(name_terms, {"copytrading", "trader", "discovery"}) ||
-      contains_term(description_terms,
-                    {"compare", "discover", "copytrading", "trader", "roi",
-                     "drawdown", "sharpe", "pnl"});
-  const bool candidate_spot_order = contains_term(
-      id_terms, {"order", "limit"}) ||
-      contains_term(name_terms, {"order", "limit"}) ||
-      contains_term(description_terms, {"order", "limit", "buy", "sell", "confirm"});
-  const bool candidate_streams = contains_term(
-      id_terms, {"stream", "user"}) ||
-      contains_term(name_terms, {"stream", "user"}) ||
-      contains_term(description_terms, {"socketio", "room", "stream", "user"});
-
-  if (prompt_session) {
-    score += candidate_session ? 8 : 0;
-    if (candidate_streams && !candidate_session) {
-      score -= 2;
-    }
-  }
-  if (prompt_balance) {
-    score += candidate_balance ? 7 : 0;
-    if (candidate_session && !candidate_balance) {
-      score -= 2;
-    }
-  }
-  if (prompt_public_market) {
-    score += candidate_public_market ? 8 : 0;
-    if ((candidate_streams || candidate_session || candidate_balance) &&
-        !candidate_public_market) {
-      score -= 3;
-    }
-    if (candidate_streams && !prompt_protected_user) {
-      score -= 6;
-    }
-  }
-  if (prompt_copy_action) {
-    score += candidate_copy_action ? 8 : 0;
-    if (!candidate_copy_action &&
-        (candidate_public_market || candidate_streams || candidate_balance)) {
-      score -= 2;
-    }
-  }
-  if (prompt_copy_discovery) {
-    score += candidate_copy_discovery ? 8 : 0;
-    if (candidate_copy_action && !prompt_copy_action) {
-      score -= 4;
-    }
-  }
-  if (prompt_spot_order) {
-    score += candidate_spot_order ? 8 : 0;
-    if (candidate_public_market && !candidate_spot_order) {
-      score -= 2;
-    }
-  }
-  if (prompt_streams) {
-    score += candidate_streams ? 8 : 0;
-    if (candidate_public_market && !candidate_streams) {
-      score -= 1;
-    }
-    if (candidate_streams && prompt_public_market && !prompt_protected_user) {
-      score -= 4;
-    }
-    if (candidate_balance && !candidate_streams) {
-      score -= 4;
-    }
+  if (!matched_match_terms.empty() || !matched_match_phrases.empty()) {
+    score += 4;
   }
 
-  if (matched_description_terms.size() > 3) {
-    score -= static_cast<int>(matched_description_terms.size() - 3);
+  if (matched_match_terms.empty() && matched_match_phrases.empty() &&
+      matched_id_terms.empty() && matched_name_terms.empty() &&
+      matched_description_terms.empty()) {
+    score = 0;
+  }
+
+  if (matched_description_terms.size() > 4) {
+    score -= static_cast<int>(matched_description_terms.size() - 4);
   }
   if (matched_content_terms.size() > 4) {
     score -= static_cast<int>(matched_content_terms.size() - 4);
@@ -648,6 +594,12 @@ int ScoreCandidate(
 
   if (rationale != nullptr) {
     std::vector<std::string> parts;
+    if (!matched_match_phrases.empty()) {
+      parts.push_back("match phrases: " + JoinTerms(matched_match_phrases));
+    }
+    if (!matched_match_terms.empty()) {
+      parts.push_back("match terms: " + JoinTerms(matched_match_terms));
+    }
     if (!matched_id_terms.empty()) {
       parts.push_back("id terms: " + JoinTerms(matched_id_terms));
     }

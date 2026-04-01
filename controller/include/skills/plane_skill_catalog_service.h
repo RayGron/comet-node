@@ -54,6 +54,7 @@ class PlaneSkillCatalogService final {
     std::string name;
     std::string description;
     std::string content;
+    std::vector<std::string> match_terms;
     bool enabled = true;
     std::vector<std::string> session_ids;
     std::vector<std::string> comet_links;

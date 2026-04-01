@@ -182,6 +182,7 @@ CREATE TABLE IF NOT EXISTS skills_factory_skills (
     group_path TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL,
     content TEXT NOT NULL,
+    match_terms_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

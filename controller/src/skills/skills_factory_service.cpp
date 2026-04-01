@@ -88,6 +88,32 @@ std::vector<std::string> RemoveSkillId(
   return result;
 }
 
+std::vector<std::string> UniqueNonEmptyStringArray(
+    const json& payload,
+    const std::string& key) {
+  if (!payload.contains(key) || payload.at(key).is_null()) {
+    return {};
+  }
+  if (!payload.at(key).is_array()) {
+    throw std::invalid_argument(key + " must be an array");
+  }
+  std::vector<std::string> result;
+  std::set<std::string> seen;
+  for (const auto& item : payload.at(key)) {
+    if (!item.is_string()) {
+      throw std::invalid_argument(key + " items must be strings");
+    }
+    const std::string value = item.get<std::string>();
+    if (value.empty()) {
+      throw std::invalid_argument(key + " items must not be empty");
+    }
+    if (seen.insert(value).second) {
+      result.push_back(value);
+    }
+  }
+  return result;
+}
+
 }  // namespace
 
 SkillsFactoryService::SkillsFactoryService(
@@ -152,6 +178,7 @@ SkillsFactoryService::CanonicalSkillInput SkillsFactoryService::ParseCanonicalSk
     }
     input.content = payload.at("content").get<std::string>();
   }
+  input.match_terms = UniqueNonEmptyStringArray(payload, "match_terms");
   return input;
 }
 
@@ -173,6 +200,7 @@ nlohmann::json SkillsFactoryService::BuildSkillPayload(
       {"group_path", skill.group_path},
       {"description", skill.description},
       {"content", skill.content},
+      {"match_terms", skill.match_terms},
       {"created_at", skill.created_at},
       {"updated_at", skill.updated_at},
       {"plane_names", plane_names},
@@ -217,6 +245,7 @@ nlohmann::json SkillsFactoryService::CreateSkill(
   skill.group_path = input.group_path;
   skill.description = input.description;
   skill.content = input.content;
+  skill.match_terms = input.match_terms;
   store.UpsertSkillsFactorySkill(skill);
   return BuildSkillPayload(db_path, input.id);
 }
@@ -245,6 +274,9 @@ nlohmann::json SkillsFactoryService::UpdateSkill(
   }
   if (!input.content.empty()) {
     current->content = input.content;
+  }
+  if (payload.contains("match_terms")) {
+    current->match_terms = input.match_terms;
   }
   store.UpsertSkillsFactorySkill(*current);
   SyncAffectedPlanes(db_path, LoadPlanesUsingSkill(store, skill_id));

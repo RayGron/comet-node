@@ -45,6 +45,33 @@ std::string FormatHex(std::uint64_t value, int width) {
   return out.str();
 }
 
+json ParseStringArray(const std::string& raw) {
+  const auto parsed = json::parse(raw.empty() ? "[]" : raw, nullptr, false);
+  if (!parsed.is_array()) {
+    return json::array();
+  }
+  return parsed;
+}
+
+void EnsureColumn(sqlite3* db, const std::string& table, const std::string& column_definition) {
+  const std::string sql =
+      "ALTER TABLE " + table + " ADD COLUMN " + column_definition;
+  char* error_message = nullptr;
+  const int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &error_message);
+  if (rc == SQLITE_OK) {
+    return;
+  }
+  const std::string message =
+      error_message == nullptr ? "unknown sqlite alter error" : error_message;
+  if (error_message != nullptr) {
+    sqlite3_free(error_message);
+  }
+  if (message.find("duplicate column name") != std::string::npos) {
+    return;
+  }
+  throw std::runtime_error(message);
+}
+
 }  // namespace
 
 ApiError::ApiError(int status, std::string code, std::string message)
@@ -97,6 +124,7 @@ void SkillsStore::InitializeSchema() {
           name TEXT NOT NULL,
           description TEXT NOT NULL,
           content TEXT NOT NULL,
+          match_terms_json TEXT NOT NULL DEFAULT '[]',
           enabled INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
@@ -116,6 +144,7 @@ void SkillsStore::InitializeSchema() {
           FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
         );
       )SQL");
+  EnsureColumn(db_, "skills", "match_terms_json TEXT NOT NULL DEFAULT '[]'");
 }
 
 std::string SkillsStore::UtcNow() {
@@ -243,6 +272,12 @@ json SkillsStore::NormalizeSkillPayload(const json& payload, bool partial) {
     normalized["comet_links"] = json::array();
   }
 
+  if (payload.contains("match_terms")) {
+    normalized["match_terms"] = NormalizeStringList(payload.at("match_terms"), "match_terms");
+  } else if (!partial) {
+    normalized["match_terms"] = json::array();
+  }
+
   return normalized;
 }
 
@@ -277,11 +312,12 @@ json SkillsStore::SkillFromStatementLocked(sqlite3_stmt* statement) {
       {"name", ToColumnText(statement, 1)},
       {"description", ToColumnText(statement, 2)},
       {"content", ToColumnText(statement, 3)},
-      {"enabled", sqlite3_column_int(statement, 4) != 0},
+      {"match_terms", ParseStringArray(ToColumnText(statement, 4))},
+      {"enabled", sqlite3_column_int(statement, 5) != 0},
       {"session_ids", arrays.session_ids},
       {"comet_links", arrays.comet_links},
-      {"created_at", ToColumnText(statement, 5)},
-      {"updated_at", ToColumnText(statement, 6)},
+      {"created_at", ToColumnText(statement, 6)},
+      {"updated_at", ToColumnText(statement, 7)},
   };
 }
 
@@ -314,7 +350,7 @@ void SkillsStore::ReplaceArraysLocked(
 }
 
 std::optional<json> SkillsStore::FindSkillLocked(const std::string& skill_id, bool enabled_only) {
-  std::string sql = "SELECT id, name, description, content, enabled, created_at, updated_at "
+  std::string sql = "SELECT id, name, description, content, match_terms_json, enabled, created_at, updated_at "
                     "FROM skills WHERE id = ?";
   if (enabled_only) {
     sql += " AND enabled = 1";
@@ -332,7 +368,7 @@ nlohmann::json SkillsStore::ListSkills() {
   json items = json::array();
   SqliteStatement statement(
       db_,
-      "SELECT id, name, description, content, enabled, created_at, updated_at "
+      "SELECT id, name, description, content, match_terms_json, enabled, created_at, updated_at "
       "FROM skills ORDER BY updated_at DESC, name ASC");
   while (statement.StepRow()) {
     items.push_back(SkillFromStatementLocked(statement.raw()));
@@ -372,15 +408,16 @@ nlohmann::json SkillsStore::CreateSkill(const json& payload) {
     try {
       SqliteStatement insert(
           db_,
-          "INSERT INTO skills(id, name, description, content, enabled, created_at, updated_at) "
-          "VALUES (?, ?, ?, ?, ?, ?, ?)");
+          "INSERT INTO skills(id, name, description, content, match_terms_json, enabled, created_at, updated_at) "
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
       insert.BindText(1, skill_id);
       insert.BindText(2, normalized.at("name").get<std::string>());
       insert.BindText(3, normalized.at("description").get<std::string>());
       insert.BindText(4, normalized.at("content").get<std::string>());
-      insert.BindInt(5, normalized.at("enabled").get<bool>() ? 1 : 0);
-      insert.BindText(6, now);
+      insert.BindText(5, normalized.at("match_terms").dump());
+      insert.BindInt(6, normalized.at("enabled").get<bool>() ? 1 : 0);
       insert.BindText(7, now);
+      insert.BindText(8, now);
       insert.StepDone();
       ReplaceArraysLocked(
           skill_id,
@@ -432,14 +469,15 @@ nlohmann::json SkillsStore::ReplaceSkill(
     try {
       SqliteStatement statement(
           db_,
-          "UPDATE skills SET name = ?, description = ?, content = ?, enabled = ?, updated_at = ? "
+          "UPDATE skills SET name = ?, description = ?, content = ?, match_terms_json = ?, enabled = ?, updated_at = ? "
           "WHERE id = ?");
       statement.BindText(1, merged.at("name").get<std::string>());
       statement.BindText(2, merged.at("description").get<std::string>());
       statement.BindText(3, merged.at("content").get<std::string>());
-      statement.BindInt(4, merged.at("enabled").get<bool>() ? 1 : 0);
-      statement.BindText(5, merged.at("updated_at").get<std::string>());
-      statement.BindText(6, skill_id);
+      statement.BindText(4, merged.at("match_terms").dump());
+      statement.BindInt(5, merged.at("enabled").get<bool>() ? 1 : 0);
+      statement.BindText(6, merged.at("updated_at").get<std::string>());
+      statement.BindText(7, skill_id);
       statement.StepDone();
       ReplaceArraysLocked(
           skill_id,
@@ -503,7 +541,7 @@ nlohmann::json SkillsStore::ResolveSkills(const json& payload) {
   if (session_id.has_value()) {
     SqliteStatement statement(
         db_,
-        "SELECT s.id, s.name, s.description, s.content, s.enabled, s.created_at, s.updated_at "
+        "SELECT s.id, s.name, s.description, s.content, s.match_terms_json, s.enabled, s.created_at, s.updated_at "
         "FROM skills s "
         "JOIN skill_session_bindings ss ON ss.skill_id = s.id "
         "WHERE ss.session_id = ? AND s.enabled = 1 "

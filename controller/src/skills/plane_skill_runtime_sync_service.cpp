@@ -34,6 +34,7 @@ json BuildSyncedSkillPayload(
   payload["name"] = canonical.name;
   payload["description"] = canonical.description;
   payload["content"] = canonical.content;
+  payload["match_terms"] = canonical.match_terms;
   payload["enabled"] = !binding.has_value() || binding->enabled;
   payload["session_ids"] = binding.has_value() ? json(binding->session_ids) : json::array();
   payload["comet_links"] = binding.has_value() ? json(binding->comet_links) : json::array();

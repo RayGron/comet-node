@@ -529,6 +529,40 @@ int main() {
 
     {
       SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "skill-alpha"},
+                {"name", "generic skill alpha"},
+                {"description", "Generic description with no domain hints."},
+                {"content", "Generic content."},
+                {"match_terms", json::array({"logout", "session end", "выйди", "выйти"})},
+                {"enabled", true}},
+           json{{"id", "skill-beta"},
+                {"name", "generic skill beta"},
+                {"description", "Generic description with no domain hints."},
+                {"content", "Generic content."},
+                {"match_terms", json::array({"subscribe", "follow", "подпиши"})},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt", "Выйди из моей текущей сессии."}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.selected_skill_ids.size() == 1 &&
+              selection.selected_skill_ids.front() == "skill-alpha",
+          "resolver should honor skill match_terms from runtime payload");
+      std::cout << "ok: contextual-resolver-prefers-runtime-match-terms" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
           {json{{"id", "lt-cypher-localtrade-spot-order-clarification"},
                 {"name", "localtrade-spot-order-clarification"},
                 {"description",

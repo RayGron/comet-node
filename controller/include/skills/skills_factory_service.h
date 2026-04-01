@@ -50,6 +50,7 @@ class SkillsFactoryService final {
     std::string group_path;
     std::string description;
     std::string content;
+    std::vector<std::string> match_terms;
   };
 
   static CanonicalSkillInput ParseCanonicalSkillInput(

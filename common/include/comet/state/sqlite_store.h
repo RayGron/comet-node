@@ -273,6 +273,7 @@ struct SkillsFactorySkillRecord {
   std::string group_path;
   std::string description;
   std::string content;
+  std::vector<std::string> match_terms;
   std::string created_at;
   std::string updated_at;
 };

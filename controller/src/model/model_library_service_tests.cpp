@@ -524,6 +524,7 @@ int main() {
       std::ofstream out(safetensors_source);
       out << "safetensors-payload";
     }
+    unsetenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN");
     const auto conversion_response = service.EnqueueDownload(
         db_path.string(),
         JsonRequest(
@@ -557,6 +558,7 @@ int main() {
         !fs::exists(completed_conversion_job.staging_directory),
         "staging directory should be removed after successful conversion");
 
+    setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize.string().c_str(), 1);
     const auto quantized_response = service.EnqueueDownload(
         db_path.string(),
         JsonRequest(

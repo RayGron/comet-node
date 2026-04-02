@@ -266,10 +266,6 @@ ModelConversionService::LlamaCppToolLocator::Resolve() const {
     throw std::runtime_error(
         "failed to locate convert_hf_to_gguf.py; set COMET_MODEL_LIBRARY_CONVERT_SCRIPT");
   }
-  if (paths.quantize_executable_path.empty()) {
-    throw std::runtime_error(
-        "failed to locate llama-quantize; set COMET_MODEL_LIBRARY_QUANTIZE_BIN");
-  }
   return paths;
 }
 
@@ -308,6 +304,10 @@ ModelConversionService::GgufQuantizationService::GgufQuantizationService(
 void ModelConversionService::GgufQuantizationService::Quantize(
     const Plan& plan,
     const JobHooks& hooks) const {
+  if (tool_paths_.quantize_executable_path.empty()) {
+    throw std::runtime_error(
+        "failed to locate llama-quantize; set COMET_MODEL_LIBRARY_QUANTIZE_BIN");
+  }
   for (std::size_t index = 0; index < plan.quantizations.size(); ++index) {
     const auto& quantization = plan.quantizations.at(index);
     const auto& output_path = plan.staged_quantized_output_paths.at(index);

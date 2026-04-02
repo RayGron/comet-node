@@ -11,6 +11,7 @@
 
 #if !defined(_WIN32)
 #include <csignal>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -32,6 +33,26 @@ std::filesystem::path JoinNormalized(
     const std::filesystem::path& left,
     const std::filesystem::path& right) {
   return (left / right).lexically_normal();
+}
+
+std::string SanitizeLogLabel(std::string value) {
+  std::transform(
+      value.begin(),
+      value.end(),
+      value.begin(),
+      [](unsigned char ch) {
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) {
+          return static_cast<char>(ch);
+        }
+        return '-';
+      });
+  while (!value.empty() && value.back() == '-') {
+    value.pop_back();
+  }
+  while (!value.empty() && value.front() == '-') {
+    value.erase(value.begin());
+  }
+  return value.empty() ? std::string("command") : value;
 }
 
 }  // namespace
@@ -454,6 +475,19 @@ void ModelConversionService::RunCommand(
   if (pid == 0) {
     if (!working_directory.empty()) {
       chdir(working_directory.c_str());
+      const auto log_path =
+          working_directory / (".comet-" + SanitizeLogLabel(phase) + ".log");
+      const int log_fd =
+          open(log_path.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0664);
+      if (log_fd >= 0) {
+        dup2(log_fd, STDOUT_FILENO);
+        dup2(log_fd, STDERR_FILENO);
+        if (log_fd > STDERR_FILENO) {
+          close(log_fd);
+        }
+      } else {
+        std::perror(("open " + log_path.string()).c_str());
+      }
     }
     std::vector<char*> raw_argv;
     raw_argv.reserve(argv.size() + 1);

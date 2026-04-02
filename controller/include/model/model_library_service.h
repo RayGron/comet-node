@@ -15,6 +15,7 @@
 
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
+#include "model/model_conversion_service.h"
 #include "model/model_library_support.h"
 
 class ModelLibraryService {
@@ -64,7 +65,7 @@ class ModelLibraryService {
     std::mutex jobs_mutex;
     std::set<std::string> active_job_ids;
     std::set<std::string> stop_requested_job_ids;
-    std::map<std::string, int> active_download_pids;
+    std::map<std::string, int> active_job_pids;
     std::set<std::string> resumed_db_paths;
     std::atomic<std::uint64_t> job_counter{0};
   };
@@ -78,6 +79,11 @@ class ModelLibraryService {
   static std::string NormalizePathString(const std::filesystem::path& path);
   static bool IsUsableAbsoluteHostPath(const std::string& value);
   static std::string FilenameFromUrl(const std::string& source_url);
+  static std::string DetectModelSourceFormat(
+      const std::vector<std::string>& source_urls);
+  static std::string NormalizeModelOutputFormat(const std::string& value);
+  static std::vector<std::string> NormalizeQuantizationValues(
+      const std::vector<std::string>& values);
   std::optional<std::uintmax_t> ProbeContentLength(
       const std::string& source_url) const;
   static std::optional<std::uintmax_t> FileSizeIfExists(
@@ -116,8 +122,8 @@ class ModelLibraryService {
   bool IsStopRequested(const std::string& job_id) const;
   void ClearStopRequest(const std::string& job_id) const;
   void RequestStop(const std::string& job_id) const;
-  void RegisterActiveDownloadProcess(const std::string& job_id, int pid) const;
-  void ClearActiveDownloadProcess(const std::string& job_id) const;
+  void RegisterActiveJobProcess(const std::string& job_id, int pid) const;
+  void ClearActiveJobProcess(const std::string& job_id) const;
   std::vector<ModelLibraryEntry> ScanEntries(const std::string& db_path) const;
   std::string GenerateJobId() const;
   void DownloadFile(
@@ -131,4 +137,5 @@ class ModelLibraryService {
 
   ModelLibrarySupport support_;
   std::shared_ptr<State> state_;
+  std::shared_ptr<ModelConversionService> conversion_service_;
 };

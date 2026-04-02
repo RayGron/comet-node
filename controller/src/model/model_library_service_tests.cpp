@@ -34,6 +34,32 @@ std::string FileUrlForPath(const fs::path& path) {
   return "file://" + fs::absolute(path).string();
 }
 
+void WriteExecutableScript(const fs::path& path, const std::string& body) {
+  {
+    std::ofstream out(path);
+    out << body;
+  }
+  fs::permissions(
+      path,
+      fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+      fs::perm_options::replace);
+}
+
+comet::ModelLibraryDownloadJobRecord WaitForJobStatus(
+    comet::ControllerStore& store,
+    const std::string& job_id,
+    const std::string& expected_status) {
+  for (int attempt = 0; attempt < 80; ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    auto job = store.LoadModelLibraryDownloadJob(job_id);
+    Expect(job.has_value(), "job should remain persisted while waiting");
+    if (job->status == expected_status) {
+      return *job;
+    }
+  }
+  throw std::runtime_error("timed out waiting for model library job status " + expected_status);
+}
+
 HttpRequest JsonRequest(
     const std::string& method,
     const std::string& path,
@@ -64,26 +90,68 @@ int main() {
       std::ofstream out(source_path);
       out << "persistent-model-library-job";
     }
+    const fs::path tools_root = temp_root / "tools";
+    fs::create_directories(tools_root);
+    const fs::path fake_convert = tools_root / "fake-convert.sh";
+    const fs::path fake_quantize = tools_root / "fake-quantize.sh";
+    const fs::path fake_quantize_fail = tools_root / "fake-quantize-fail.sh";
+    WriteExecutableScript(
+        fake_convert,
+        "#!/bin/sh\n"
+        "out=\"\"\n"
+        "model=\"\"\n"
+        "while [ $# -gt 0 ]; do\n"
+        "  if [ \"$1\" = \"--outfile\" ]; then out=\"$2\"; shift 2; continue; fi\n"
+        "  model=\"$1\"\n"
+        "  shift\n"
+        "done\n"
+        "input=$(find \"$model\" -name '*.safetensors' | sort | head -n 1)\n"
+        "mkdir -p \"$(dirname \"$out\")\"\n"
+        "printf 'GGUF:' > \"$out\"\n"
+        "cat \"$input\" >> \"$out\"\n");
+    WriteExecutableScript(
+        fake_quantize,
+        "#!/bin/sh\n"
+        "input=\"$1\"\n"
+        "output=\"$2\"\n"
+        "quant=\"$3\"\n"
+        "mkdir -p \"$(dirname \"$output\")\"\n"
+        "printf '%s:' \"$quant\" > \"$output\"\n"
+        "cat \"$input\" >> \"$output\"\n");
+    WriteExecutableScript(
+        fake_quantize_fail,
+        "#!/bin/sh\n"
+        "exit 17\n");
+    setenv("COMET_MODEL_LIBRARY_PYTHON", "/bin/sh", 1);
+    setenv("COMET_MODEL_LIBRARY_CONVERT_SCRIPT", fake_convert.string().c_str(), 1);
+    setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize.string().c_str(), 1);
 
     comet::ControllerStore store(db_path.string());
     store.Initialize();
     const std::string now = "2026-03-30 00:00:00";
     store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
-        "job-1",
-        "queued",
-        "model-1",
-        dst_root.string(),
-        "",
-        {FileUrlForPath(source_path)},
-        {target_path.string()},
-        "",
-        std::nullopt,
-        0,
-        1,
-        "",
-        false,
-        now,
-        now,
+        .id = "job-1",
+        .status = "queued",
+        .phase = "queued",
+        .model_id = "model-1",
+        .target_root = dst_root.string(),
+        .target_subdir = "",
+        .detected_source_format = "gguf",
+        .desired_output_format = "gguf",
+        .source_urls = {FileUrlForPath(source_path)},
+        .target_paths = {target_path.string()},
+        .quantizations = {},
+        .retained_output_paths = {target_path.string()},
+        .current_item = "",
+        .staging_directory = "",
+        .bytes_total = std::nullopt,
+        .bytes_done = 0,
+        .part_count = 1,
+        .keep_base_gguf = true,
+        .error_message = "",
+        .hidden = false,
+        .created_at = now,
+        .updated_at = now,
     });
 
     comet::controller::ControllerRequestSupport request_support;
@@ -129,21 +197,28 @@ int main() {
 
     const fs::path second_target_path = dst_root / "resume.gguf";
     store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
-        "job-2",
-        "queued",
-        "model-2",
-        dst_root.string(),
-        "",
-        {FileUrlForPath(source_path)},
-        {second_target_path.string()},
-        "",
-        std::nullopt,
-        0,
-        1,
-        "",
-        false,
-        now,
-        now,
+        .id = "job-2",
+        .status = "queued",
+        .phase = "queued",
+        .model_id = "model-2",
+        .target_root = dst_root.string(),
+        .target_subdir = "",
+        .detected_source_format = "gguf",
+        .desired_output_format = "gguf",
+        .source_urls = {FileUrlForPath(source_path)},
+        .target_paths = {second_target_path.string()},
+        .quantizations = {},
+        .retained_output_paths = {second_target_path.string()},
+        .current_item = "",
+        .staging_directory = "",
+        .bytes_total = std::nullopt,
+        .bytes_done = 0,
+        .part_count = 1,
+        .keep_base_gguf = true,
+        .error_message = "",
+        .hidden = false,
+        .created_at = now,
+        .updated_at = now,
     });
 
     const auto stop_response = service.StopDownloadJob(
@@ -245,15 +320,22 @@ int main() {
       out << nlohmann::json{
           {"id", "job-3"},
           {"status", "stopped"},
+          {"phase", "stopped"},
           {"model_id", "model-3"},
           {"target_root", dst_root.string()},
           {"target_subdir", "recovered"},
+          {"detected_source_format", "gguf"},
+          {"desired_output_format", "gguf"},
           {"source_urls", nlohmann::json::array({FileUrlForPath(source_path)})},
           {"target_paths", nlohmann::json::array({recovered_target.string()})},
+          {"quantizations", nlohmann::json::array()},
+          {"retained_output_paths", nlohmann::json::array({recovered_target.string()})},
           {"current_item", "recovered.gguf"},
+          {"staging_directory", ""},
           {"bytes_total", 1024},
           {"bytes_done", 0},
           {"part_count", 1},
+          {"keep_base_gguf", true},
           {"error_message", ""},
           {"hidden", false},
           {"created_at", now},
@@ -295,21 +377,28 @@ int main() {
       out.write(prefix.data(), static_cast<std::streamsize>(input.gcount()));
     }
     store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
-        "job-5",
-        "stopped",
-        "model-5",
-        dst_root.string(),
-        "",
-        {FileUrlForPath(resumable_source_path)},
-        {resumed_target_path.string()},
-        resumed_target_path.filename().string(),
-        fs::file_size(resumable_source_path),
-        fs::file_size(resumed_part_path),
-        1,
-        "",
-        false,
-        now,
-        now,
+        .id = "job-5",
+        .status = "stopped",
+        .phase = "stopped",
+        .model_id = "model-5",
+        .target_root = dst_root.string(),
+        .target_subdir = "",
+        .detected_source_format = "gguf",
+        .desired_output_format = "gguf",
+        .source_urls = {FileUrlForPath(resumable_source_path)},
+        .target_paths = {resumed_target_path.string()},
+        .quantizations = {},
+        .retained_output_paths = {resumed_target_path.string()},
+        .current_item = resumed_target_path.filename().string(),
+        .staging_directory = "",
+        .bytes_total = fs::file_size(resumable_source_path),
+        .bytes_done = fs::file_size(resumed_part_path),
+        .part_count = 1,
+        .keep_base_gguf = true,
+        .error_message = "",
+        .hidden = false,
+        .created_at = now,
+        .updated_at = now,
     });
     const auto resumable_resume_response = service.ResumeDownloadJob(
         db_path.string(),
@@ -350,21 +439,28 @@ int main() {
       out << "multipart-part-1";
     }
     store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
-        "job-4",
-        "running",
-        "model-4",
-        dst_root.string(),
-        "multipart",
-        {FileUrlForPath(source_path), FileUrlForPath(source_path)},
-        {part1.string(), part2.string()},
-        part1.filename().string(),
-        2048,
-        512,
-        2,
-        "",
-        false,
-        now,
-        now,
+        .id = "job-4",
+        .status = "running",
+        .phase = "running",
+        .model_id = "model-4",
+        .target_root = dst_root.string(),
+        .target_subdir = "multipart",
+        .detected_source_format = "gguf",
+        .desired_output_format = "gguf",
+        .source_urls = {FileUrlForPath(source_path), FileUrlForPath(source_path)},
+        .target_paths = {part1.string(), part2.string()},
+        .quantizations = {},
+        .retained_output_paths = {part1.string(), part2.string()},
+        .current_item = part1.filename().string(),
+        .staging_directory = "",
+        .bytes_total = 2048,
+        .bytes_done = 512,
+        .part_count = 2,
+        .keep_base_gguf = true,
+        .error_message = "",
+        .hidden = false,
+        .created_at = now,
+        .updated_at = now,
     });
 
     const auto payload_with_running_multipart = service.BuildPayload(db_path.string());
@@ -385,21 +481,28 @@ int main() {
       out << "multipart-part-2";
     }
     store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
-        "job-4",
-        "completed",
-        "model-4",
-        dst_root.string(),
-        "multipart",
-        {FileUrlForPath(source_path), FileUrlForPath(source_path)},
-        {part1.string(), part2.string()},
-        "",
-        2048,
-        2048,
-        2,
-        "",
-        false,
-        now,
-        now,
+        .id = "job-4",
+        .status = "completed",
+        .phase = "completed",
+        .model_id = "model-4",
+        .target_root = dst_root.string(),
+        .target_subdir = "multipart",
+        .detected_source_format = "gguf",
+        .desired_output_format = "gguf",
+        .source_urls = {FileUrlForPath(source_path), FileUrlForPath(source_path)},
+        .target_paths = {part1.string(), part2.string()},
+        .quantizations = {},
+        .retained_output_paths = {part1.string(), part2.string()},
+        .current_item = "",
+        .staging_directory = "",
+        .bytes_total = 2048,
+        .bytes_done = 2048,
+        .part_count = 2,
+        .keep_base_gguf = true,
+        .error_message = "",
+        .hidden = false,
+        .created_at = now,
+        .updated_at = now,
     });
     const auto payload_with_completed_multipart = service.BuildPayload(db_path.string());
     bool found_completed_multipart_entry = false;
@@ -415,6 +518,109 @@ int main() {
         found_completed_multipart_entry,
         "completed multipart model should appear in catalog after all parts finish");
 #endif
+
+    const fs::path safetensors_source = src_root / "sample-model.safetensors";
+    {
+      std::ofstream out(safetensors_source);
+      out << "safetensors-payload";
+    }
+    const auto conversion_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "google/gemma-4-E2B"},
+                {"target_root", dst_root.string()},
+                {"target_subdir", "converted-base"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(safetensors_source)})},
+                {"format", "gguf"},
+                {"quantizations", nlohmann::json::array()},
+                {"keep_base_gguf", true},
+            }));
+    Expect(conversion_response.status_code == 202, "safetensors conversion job should be accepted");
+    const auto conversion_job_id =
+        nlohmann::json::parse(conversion_response.body).at("job").at("id").get<std::string>();
+    const auto completed_conversion_job = WaitForJobStatus(store, conversion_job_id, "completed");
+    const fs::path converted_base_path = dst_root / "converted-base" / "gemma-4-E2B.gguf";
+    Expect(fs::exists(converted_base_path), "converted base GGUF should exist");
+    Expect(
+        ReadFile(converted_base_path) == "GGUF:safetensors-payload",
+        "converted base GGUF should come from fake converter output");
+    Expect(
+        completed_conversion_job.phase == "completed",
+        "completed conversion job should expose completed phase");
+    Expect(
+        !completed_conversion_job.staging_directory.empty(),
+        "conversion job should persist its staging directory");
+    Expect(
+        !fs::exists(completed_conversion_job.staging_directory),
+        "staging directory should be removed after successful conversion");
+
+    const auto quantized_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "google/gemma-4-E2B"},
+                {"target_root", dst_root.string()},
+                {"target_subdir", "converted-quants"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(safetensors_source)})},
+                {"format", "gguf"},
+                {"quantizations", nlohmann::json::array({"Q4_K_M", "Q8_0"})},
+                {"keep_base_gguf", false},
+            }));
+    Expect(
+        quantized_response.status_code == 202,
+        "safetensors quantization job should be accepted");
+    const auto quantized_job_id =
+        nlohmann::json::parse(quantized_response.body).at("job").at("id").get<std::string>();
+    const auto completed_quantized_job = WaitForJobStatus(store, quantized_job_id, "completed");
+    const fs::path quantized_root = dst_root / "converted-quants";
+    Expect(
+        fs::exists(quantized_root / "gemma-4-E2B-Q4_K_M.gguf"),
+        "Q4_K_M output should exist after quantization");
+    Expect(
+        fs::exists(quantized_root / "gemma-4-E2B-Q8_0.gguf"),
+        "Q8_0 output should exist after quantization");
+    Expect(
+        !fs::exists(quantized_root / "gemma-4-E2B.gguf"),
+        "base GGUF should not be retained when keep_base_gguf is false");
+    Expect(
+        completed_quantized_job.retained_output_paths.size() == 2,
+        "quantized job should persist retained output paths");
+
+    setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize_fail.string().c_str(), 1);
+    const auto failed_quantized_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "google/gemma-4-E2B"},
+                {"target_root", dst_root.string()},
+                {"target_subdir", "converted-failed"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(safetensors_source)})},
+                {"format", "gguf"},
+                {"quantizations", nlohmann::json::array({"Q4_K_M"})},
+                {"keep_base_gguf", true},
+            }));
+    Expect(
+        failed_quantized_response.status_code == 202,
+        "failed quantization job should still be accepted");
+    const auto failed_job_id =
+        nlohmann::json::parse(failed_quantized_response.body).at("job").at("id").get<std::string>();
+    const auto failed_job = WaitForJobStatus(store, failed_job_id, "failed");
+    Expect(
+        failed_job.phase == "quantizing",
+        "failed quantization job should preserve failing phase");
+    Expect(
+        !failed_job.staging_directory.empty() && fs::exists(failed_job.staging_directory),
+        "failed quantization job should retain staging directory for inspection or resume");
+    unsetenv("COMET_MODEL_LIBRARY_PYTHON");
+    unsetenv("COMET_MODEL_LIBRARY_CONVERT_SCRIPT");
+    unsetenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN");
 
     fs::remove_all(temp_root, error);
     std::cout << "model library service tests passed\n";

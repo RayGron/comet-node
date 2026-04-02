@@ -252,15 +252,22 @@ struct AuthSessionRecord {
 struct ModelLibraryDownloadJobRecord {
   std::string id;
   std::string status = "queued";
+  std::string phase = "queued";
   std::string model_id;
   std::string target_root;
   std::string target_subdir;
+  std::string detected_source_format;
+  std::string desired_output_format;
   std::vector<std::string> source_urls;
   std::vector<std::string> target_paths;
+  std::vector<std::string> quantizations;
+  std::vector<std::string> retained_output_paths;
   std::string current_item;
+  std::string staging_directory;
   std::optional<std::uintmax_t> bytes_total;
   std::uintmax_t bytes_done = 0;
   int part_count = 0;
+  bool keep_base_gguf = true;
   std::string error_message;
   bool hidden = false;
   std::string created_at;

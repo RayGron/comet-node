@@ -73,6 +73,41 @@ void InitializeSchema(
     std::string_view bootstrap_sql,
     const LoadDesiredStateFn& load_desired_state) {
   Exec(db, std::string(bootstrap_sql));
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
+      "phase",
+      "phase TEXT NOT NULL DEFAULT 'queued'");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
+      "detected_source_format",
+      "detected_source_format TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
+      "desired_output_format",
+      "desired_output_format TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
+      "quantizations_json",
+      "quantizations_json TEXT NOT NULL DEFAULT '[]'");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
+      "retained_output_paths_json",
+      "retained_output_paths_json TEXT NOT NULL DEFAULT '[]'");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
+      "staging_directory",
+      "staging_directory TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
+      "keep_base_gguf",
+      "keep_base_gguf INTEGER NOT NULL DEFAULT 1");
   EnsureColumn(db, "planes", "control_root", "control_root TEXT NOT NULL DEFAULT ''");
   EnsureColumn(db, "planes", "artifacts_root", "artifacts_root TEXT NOT NULL DEFAULT ''");
   EnsureColumn(db, "planes", "plane_mode", "plane_mode TEXT NOT NULL DEFAULT 'compute'");

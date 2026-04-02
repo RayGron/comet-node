@@ -21,6 +21,13 @@ import {
 } from "./planeV2Form.jsx";
 import { formatPlaneDashboardSkillsSummary } from "./planeSkills.js";
 import {
+  detectModelSourceFormat,
+  MODEL_LIBRARY_FORMAT_OPTIONS,
+  MODEL_LIBRARY_GGUF_QUANTIZATIONS,
+  normalizeModelDownloadSourceUrls,
+  shouldShowGgufConversionOptions,
+} from "./modelLibrary.js";
+import {
   buildSkillsFactoryGroupTree,
   collectSkillsFactoryTreePaths,
   filterSkillsFactoryItems,
@@ -407,6 +414,9 @@ function modelLibraryJobStatusClass(status) {
 }
 
 function modelLibraryJobProgress(job) {
+  if (String(job?.phase || "").toLowerCase() !== "running") {
+    return null;
+  }
   const bytesDone = Number(job?.bytes_done ?? 0);
   const bytesTotal = Number(job?.bytes_total ?? NaN);
   if (
@@ -421,11 +431,34 @@ function modelLibraryJobProgress(job) {
 }
 
 function modelLibraryJobProgressLabel(job) {
+  const phase = String(job?.phase || job?.status || "").toLowerCase();
   const progress = modelLibraryJobProgress(job);
-  return progress === null ? "Downloading" : `${Math.round(progress)}% complete`;
+  if (progress !== null) {
+    return `${Math.round(progress)}% complete`;
+  }
+  if (phase === "converting") {
+    return "Converting to GGUF";
+  }
+  if (phase === "quantizing") {
+    return "Quantizing GGUF";
+  }
+  if (phase === "cleaning") {
+    return "Finalizing outputs";
+  }
+  if (phase === "completed") {
+    return "Completed";
+  }
+  if (phase === "failed") {
+    return "Failed";
+  }
+  if (phase === "stopped") {
+    return "Stopped";
+  }
+  return "Downloading";
 }
 
 function modelLibraryJobByteSummary(job) {
+  const phase = String(job?.phase || job?.status || "").toLowerCase();
   const bytesDone = Number(job?.bytes_done ?? 0);
   const bytesTotal = Number(job?.bytes_total ?? NaN);
   if (
@@ -435,6 +468,9 @@ function modelLibraryJobByteSummary(job) {
     bytesTotal >= bytesDone
   ) {
     return `${compactBytes(bytesDone)} / ${compactBytes(bytesTotal)}`;
+  }
+  if (phase === "converting" || phase === "quantizing" || phase === "cleaning") {
+    return "Waiting on conversion pipeline";
   }
   return `${compactBytes(bytesDone)} downloaded`;
 }
@@ -1720,6 +1756,10 @@ function App() {
     targetRoot: "",
     targetSubdir: "",
     sourceUrls: "",
+    format: "unknown",
+    formatLocked: false,
+    quantizations: [],
+    keepBaseGguf: true,
   });
   const [apiError, setApiError] = useState("");
   const [apiHealthy, setApiHealthy] = useState(false);
@@ -2263,10 +2303,7 @@ function App() {
   }
 
   async function enqueueModelLibraryDownload() {
-    const sourceUrls = modelDownloadForm.sourceUrls
-      .split(/\r?\n/)
-      .map((value) => value.trim())
-      .filter(Boolean);
+    const sourceUrls = normalizeModelDownloadSourceUrls(modelDownloadForm.sourceUrls);
     if (!modelDownloadForm.targetRoot.trim() || sourceUrls.length === 0) {
       return;
     }
@@ -2282,11 +2319,30 @@ function App() {
           target_root: modelDownloadForm.targetRoot.trim(),
           target_subdir: modelDownloadForm.targetSubdir.trim() || undefined,
           source_urls: sourceUrls,
+          format: modelDownloadForm.format,
+          quantizations:
+            shouldShowGgufConversionOptions(
+              detectModelSourceFormat(sourceUrls),
+              modelDownloadForm.format,
+            )
+              ? modelDownloadForm.quantizations
+              : [],
+          keep_base_gguf:
+            shouldShowGgufConversionOptions(
+              detectModelSourceFormat(sourceUrls),
+              modelDownloadForm.format,
+            )
+              ? modelDownloadForm.keepBaseGguf
+              : true,
         }),
       });
       setModelDownloadForm((current) => ({
         ...current,
         sourceUrls: "",
+        format: "unknown",
+        formatLocked: false,
+        quantizations: [],
+        keepBaseGguf: true,
       }));
       await refreshModelLibrary();
       await refreshAll(selectedPlane);
@@ -4438,6 +4494,11 @@ function App() {
   }
 
   function renderModelsLibrary() {
+    const detectedSourceFormat = detectModelSourceFormat(modelDownloadForm.sourceUrls);
+    const showGgufConversionOptions = shouldShowGgufConversionOptions(
+      detectedSourceFormat,
+      modelDownloadForm.format,
+    );
     return (
       <section className="panel page-panel models-page-panel">
         <div className="panel-header">
@@ -4583,7 +4644,16 @@ function App() {
                       </div>
                       <div className="list-detail">
                         <div>{job.target_root}{job.target_subdir ? `/${job.target_subdir}` : ""}</div>
+                        {job.detected_source_format || job.desired_output_format ? (
+                          <div>
+                            {job.detected_source_format || "unknown"} -&gt;{" "}
+                            {job.desired_output_format || "unknown"}
+                          </div>
+                        ) : null}
                         <div>{modelLibraryJobByteSummary(job)}</div>
+                        {job.phase && job.phase !== job.status ? (
+                          <div>phase {job.phase}</div>
+                        ) : null}
                         {job.current_item ? <div>{job.current_item}</div> : null}
                         {job.error_message ? <div>{job.error_message}</div> : null}
                       </div>
@@ -4733,6 +4803,70 @@ function App() {
                 }
                 placeholder="One URL per line. Multipart models are supported."
               />
+              <div className="plane-form-section-meta">
+                Detected source format: {detectedSourceFormat}
+              </div>
+              <label className="field-label" htmlFor="model-format-select">
+                Format
+              </label>
+              <select
+                id="model-format-select"
+                className="text-input"
+                value={modelDownloadForm.format}
+                onChange={(event) =>
+                  setModelDownloadForm((current) => ({
+                    ...current,
+                    format: event.target.value,
+                    formatLocked: true,
+                  }))
+                }
+              >
+                {modelDownloadForm.format === "unknown" ? (
+                  <option value="unknown">Auto detect</option>
+                ) : null}
+                {MODEL_LIBRARY_FORMAT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {showGgufConversionOptions ? (
+                <>
+                  <label className="field-label">Quantizations</label>
+                  <div className="selection-grid">
+                    {MODEL_LIBRARY_GGUF_QUANTIZATIONS.map((quantization) => (
+                      <label className="selection-option" key={quantization}>
+                        <input
+                          type="checkbox"
+                          checked={modelDownloadForm.quantizations.includes(quantization)}
+                          onChange={(event) =>
+                            setModelDownloadForm((current) => ({
+                              ...current,
+                              quantizations: event.target.checked
+                                ? [...current.quantizations, quantization]
+                                : current.quantizations.filter((item) => item !== quantization),
+                            }))
+                          }
+                        />
+                        <span>{quantization}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <label className="selection-option">
+                    <input
+                      type="checkbox"
+                      checked={modelDownloadForm.keepBaseGguf}
+                      onChange={(event) =>
+                        setModelDownloadForm((current) => ({
+                          ...current,
+                          keepBaseGguf: event.target.checked,
+                        }))
+                      }
+                    />
+                    <span>Keep base GGUF</span>
+                  </label>
+                </>
+              ) : null}
               <div className="toolbar">
                 <button
                   className="ghost-button"
@@ -5430,6 +5564,24 @@ function App() {
       targetRoot: modelLibrary.roots[0],
     }));
   }, [modelDownloadForm.targetRoot, modelLibrary.roots]);
+
+  useEffect(() => {
+    const detectedSourceFormat = detectModelSourceFormat(modelDownloadForm.sourceUrls);
+    if (modelDownloadForm.formatLocked) {
+      return;
+    }
+    if (modelDownloadForm.format === detectedSourceFormat) {
+      return;
+    }
+    setModelDownloadForm((current) => ({
+      ...current,
+      format: detectedSourceFormat,
+      quantizations:
+        detectedSourceFormat === "gguf" ? [] : current.quantizations,
+      keepBaseGguf:
+        detectedSourceFormat === "gguf" ? true : current.keepBaseGguf,
+    }));
+  }, [modelDownloadForm.sourceUrls, modelDownloadForm.format, modelDownloadForm.formatLocked]);
 
   useEffect(() => {
     if (!authState.authenticated) {

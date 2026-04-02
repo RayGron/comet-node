@@ -115,7 +115,9 @@ std::uintmax_t ExistingDownloadBytesForJob(
 }  // namespace
 
 ModelLibraryService::ModelLibraryService(ModelLibrarySupport support)
-    : support_(std::move(support)), state_(std::make_shared<State>()) {}
+    : support_(std::move(support)),
+      state_(std::make_shared<State>()),
+      conversion_service_(std::make_shared<ModelConversionService>()) {}
 
 json ModelLibraryService::BuildPayload(const std::string& db_path) const {
   ResumePersistentJobs(db_path);
@@ -273,6 +275,14 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   } else if (!source_url.empty()) {
     source_urls.push_back(source_url);
   }
+  std::vector<std::string> quantizations;
+  if (body.contains("quantizations") && body.at("quantizations").is_array()) {
+    quantizations = body.at("quantizations").get<std::vector<std::string>>();
+  }
+  const bool keep_base_gguf = body.value("keep_base_gguf", true);
+  const std::string detected_source_format = DetectModelSourceFormat(source_urls);
+  const std::string desired_output_format = NormalizeModelOutputFormat(
+      body.value("format", detected_source_format));
   if (target_root.empty() || !IsUsableAbsoluteHostPath(target_root)) {
     return support_.build_json_response(
         400,
@@ -287,6 +297,27 @@ HttpResponse ModelLibraryService::EnqueueDownload(
              {"message", "source_url or source_urls is required"}},
         {});
   }
+  if (detected_source_format == "unknown") {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"},
+             {"message", "failed to detect source format from source_urls"}},
+        {});
+  }
+  if (desired_output_format != "gguf" && desired_output_format != "safetensors") {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"},
+             {"message", "format must be gguf or safetensors"}},
+        {});
+  }
+  if (detected_source_format == "gguf" && desired_output_format != "gguf") {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"},
+             {"message", "gguf sources can only retain GGUF output format"}},
+        {});
+  }
 
   std::filesystem::path destination_root(target_root);
   if (!target_subdir.empty()) {
@@ -294,8 +325,54 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   }
 
   std::vector<std::string> target_paths;
-  target_paths.reserve(source_urls.size());
   try {
+    if (detected_source_format == "safetensors" &&
+        desired_output_format == "gguf") {
+      const std::string job_id = GenerateJobId();
+      const std::filesystem::path staging_directory =
+          destination_root /
+          (std::string(kJobMetadataPrefix) + job_id + "-staging");
+      const auto plan = conversion_service_->BuildPlan(ModelConversionService::Request{
+          .job_id = job_id,
+          .model_id = model_id,
+          .destination_root = destination_root,
+          .source_urls = source_urls,
+          .detected_source_format = detected_source_format,
+          .desired_output_format = desired_output_format,
+          .quantizations = NormalizeQuantizationValues(quantizations),
+          .keep_base_gguf = keep_base_gguf,
+          .staging_directory = staging_directory,
+      });
+      for (const auto& retained_output_path : plan.retained_output_paths) {
+        target_paths.push_back(NormalizePathString(retained_output_path));
+      }
+      ModelLibraryDownloadJob job;
+      job.id = job_id;
+      job.model_id = model_id;
+      job.target_root = NormalizePathString(std::filesystem::path(target_root));
+      job.target_subdir = target_subdir;
+      job.detected_source_format = detected_source_format;
+      job.desired_output_format = desired_output_format;
+      job.source_urls = source_urls;
+      job.target_paths = target_paths;
+      job.quantizations = NormalizeQuantizationValues(quantizations);
+      job.retained_output_paths = target_paths;
+      job.staging_directory = NormalizePathString(plan.staging_directory);
+      job.keep_base_gguf = keep_base_gguf;
+      job.part_count = static_cast<int>(source_urls.size());
+      job.created_at = support_.utc_now_sql_timestamp();
+      job.updated_at = job.created_at;
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      store.UpsertModelLibraryDownloadJob(job);
+      PersistDownloadJobMetadata(job);
+      StartDownloadJob(db_path, job_id);
+      return support_.build_json_response(
+          202,
+          json{{"status", "accepted"}, {"job", BuildJobPayload(job)}},
+          {});
+    }
+    target_paths.reserve(source_urls.size());
     for (std::size_t index = 0; index < source_urls.size(); ++index) {
       const auto filename =
           source_urls.size() == 1 && body.contains("target_filename") &&
@@ -303,8 +380,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
                   !body.at("target_filename").get<std::string>().empty()
               ? body.at("target_filename").get<std::string>()
               : FilenameFromUrl(source_urls.at(index));
-      target_paths.push_back(
-          NormalizePathString(destination_root / filename));
+      target_paths.push_back(NormalizePathString(destination_root / filename));
     }
   } catch (const std::exception& error) {
     return support_.build_json_response(
@@ -319,8 +395,13 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   job.model_id = model_id;
   job.target_root = NormalizePathString(std::filesystem::path(target_root));
   job.target_subdir = target_subdir;
+  job.detected_source_format = detected_source_format;
+  job.desired_output_format = desired_output_format;
   job.source_urls = source_urls;
   job.target_paths = target_paths;
+  job.retained_output_paths = target_paths;
+  job.quantizations = NormalizeQuantizationValues(quantizations);
+  job.keep_base_gguf = keep_base_gguf;
   job.part_count = static_cast<int>(source_urls.size());
   job.created_at = support_.utc_now_sql_timestamp();
   job.updated_at = job.created_at;
@@ -372,6 +453,7 @@ HttpResponse ModelLibraryService::StopDownloadJob(
         *job_id,
         [](ModelLibraryDownloadJob& current) {
           current.status = "stopped";
+          current.phase = "stopped";
           current.current_item.clear();
           current.error_message.clear();
         });
@@ -389,6 +471,7 @@ HttpResponse ModelLibraryService::StopDownloadJob(
       *job_id,
       [](ModelLibraryDownloadJob& current) {
         current.status = "stopping";
+        current.phase = current.phase.empty() ? "stopping" : current.phase;
       });
   const auto stopping = LoadDownloadJob(db_path, *job_id);
   return support_.build_json_response(
@@ -439,6 +522,7 @@ HttpResponse ModelLibraryService::ResumeDownloadJob(
       *job_id,
       [](ModelLibraryDownloadJob& current) {
         current.status = "queued";
+        current.phase = "queued";
         current.current_item.clear();
         current.error_message.clear();
         current.bytes_done = ExistingDownloadBytesForJob(current);
@@ -495,6 +579,19 @@ HttpResponse ModelLibraryService::DeleteDownloadJob(
     }
     if (!RemovePathIfExists(
             std::filesystem::path(target_path_text).string() + ".part",
+            &deleted_paths,
+            &delete_error_message)) {
+      return support_.build_json_response(
+          500,
+          json{{"status", "internal_error"},
+               {"message", delete_error_message},
+               {"job", BuildJobPayload(*job)}},
+          {});
+    }
+  }
+  if (!job->staging_directory.empty()) {
+    if (!RemovePathIfExists(
+            std::filesystem::path(job->staging_directory),
             &deleted_paths,
             &delete_error_message)) {
       return support_.build_json_response(
@@ -631,6 +728,21 @@ std::string ModelLibraryService::FilenameFromUrl(
         "failed to infer filename from URL: " + source_url);
   }
   return filename;
+}
+
+std::string ModelLibraryService::DetectModelSourceFormat(
+    const std::vector<std::string>& source_urls) {
+  return ModelConversionService::DetectSourceFormat(source_urls);
+}
+
+std::string ModelLibraryService::NormalizeModelOutputFormat(
+    const std::string& value) {
+  return ModelConversionService::NormalizeOutputFormat(value);
+}
+
+std::vector<std::string> ModelLibraryService::NormalizeQuantizationValues(
+    const std::vector<std::string>& values) {
+  return ModelConversionService::NormalizeQuantizations(values);
 }
 
 std::optional<std::uintmax_t> ModelLibraryService::ProbeContentLength(
@@ -888,16 +1000,23 @@ void ModelLibraryService::PersistDownloadJobMetadata(
   json payload{
       {"id", job.id},
       {"status", job.status},
+      {"phase", job.phase},
       {"model_id", job.model_id},
       {"target_root", job.target_root},
       {"target_subdir", job.target_subdir},
+      {"detected_source_format", job.detected_source_format},
+      {"desired_output_format", job.desired_output_format},
       {"source_urls", job.source_urls},
       {"target_paths", job.target_paths},
+      {"quantizations", job.quantizations},
+      {"retained_output_paths", job.retained_output_paths},
       {"current_item", job.current_item},
+      {"staging_directory", job.staging_directory},
       {"bytes_total",
        job.bytes_total.has_value() ? json(*job.bytes_total) : json(nullptr)},
       {"bytes_done", job.bytes_done},
       {"part_count", job.part_count},
+      {"keep_base_gguf", job.keep_base_gguf},
       {"error_message", job.error_message},
       {"hidden", job.hidden},
       {"created_at", job.created_at},
@@ -984,21 +1103,36 @@ void ModelLibraryService::RecoverPersistentJobsFromMetadata(
         continue;
       }
       job.status = payload.value("status", std::string("queued"));
+      job.phase = payload.value("phase", job.status);
       job.model_id = payload.value("model_id", std::string{});
       job.target_root = payload.value("target_root", std::string{});
       job.target_subdir = payload.value("target_subdir", std::string{});
+      job.detected_source_format =
+          payload.value("detected_source_format", std::string{});
+      job.desired_output_format =
+          payload.value("desired_output_format", std::string{});
       if (payload.contains("source_urls") && payload.at("source_urls").is_array()) {
         job.source_urls = payload.at("source_urls").get<std::vector<std::string>>();
       }
       if (payload.contains("target_paths") && payload.at("target_paths").is_array()) {
         job.target_paths = payload.at("target_paths").get<std::vector<std::string>>();
       }
+      if (payload.contains("quantizations") && payload.at("quantizations").is_array()) {
+        job.quantizations = payload.at("quantizations").get<std::vector<std::string>>();
+      }
+      if (payload.contains("retained_output_paths") &&
+          payload.at("retained_output_paths").is_array()) {
+        job.retained_output_paths =
+            payload.at("retained_output_paths").get<std::vector<std::string>>();
+      }
       job.current_item = payload.value("current_item", std::string{});
+      job.staging_directory = payload.value("staging_directory", std::string{});
       if (payload.contains("bytes_total") && !payload.at("bytes_total").is_null()) {
         job.bytes_total = payload.at("bytes_total").get<std::uintmax_t>();
       }
       job.bytes_done = payload.value("bytes_done", std::uintmax_t{0});
       job.part_count = payload.value("part_count", 0);
+      job.keep_base_gguf = payload.value("keep_base_gguf", true);
       job.error_message = payload.value("error_message", std::string{});
       job.hidden = payload.value("hidden", false);
       job.created_at = payload.value("created_at", support_.utc_now_sql_timestamp());
@@ -1064,11 +1198,23 @@ json ModelLibraryService::BuildJobPayload(
   return json{
       {"id", job.id},
       {"status", job.status},
+      {"phase", job.phase.empty() ? job.status : job.phase},
       {"model_id", job.model_id},
       {"target_root", job.target_root},
       {"target_subdir", job.target_subdir},
+      {"detected_source_format",
+       job.detected_source_format.empty() ? json(nullptr)
+                                          : json(job.detected_source_format)},
+      {"desired_output_format",
+       job.desired_output_format.empty() ? json(nullptr)
+                                         : json(job.desired_output_format)},
       {"source_urls", job.source_urls},
       {"target_paths", job.target_paths},
+      {"quantizations", job.quantizations},
+      {"keep_base_gguf", job.keep_base_gguf},
+      {"staging_directory",
+       job.staging_directory.empty() ? json(nullptr) : json(job.staging_directory)},
+      {"retained_output_paths", job.retained_output_paths},
       {"current_item", job.current_item},
       {"can_stop", job.status == "queued" || job.status == "running"},
       {"can_resume", job.status == "stopped" || job.status == "failed"},
@@ -1168,24 +1314,24 @@ void ModelLibraryService::RequestStop(const std::string& job_id) const {
   std::lock_guard<std::mutex> lock(state_->jobs_mutex);
   state_->stop_requested_job_ids.insert(job_id);
 #if !defined(_WIN32)
-  if (const auto it = state_->active_download_pids.find(job_id);
-      it != state_->active_download_pids.end() && it->second > 0) {
+  if (const auto it = state_->active_job_pids.find(job_id);
+      it != state_->active_job_pids.end() && it->second > 0) {
     kill(static_cast<pid_t>(it->second), SIGTERM);
   }
 #endif
 }
 
-void ModelLibraryService::RegisterActiveDownloadProcess(
+void ModelLibraryService::RegisterActiveJobProcess(
     const std::string& job_id,
     int pid) const {
   std::lock_guard<std::mutex> lock(state_->jobs_mutex);
-  state_->active_download_pids[job_id] = pid;
+  state_->active_job_pids[job_id] = pid;
 }
 
-void ModelLibraryService::ClearActiveDownloadProcess(
+void ModelLibraryService::ClearActiveJobProcess(
     const std::string& job_id) const {
   std::lock_guard<std::mutex> lock(state_->jobs_mutex);
-  state_->active_download_pids.erase(job_id);
+  state_->active_job_pids.erase(job_id);
 }
 
 std::vector<ModelLibraryService::ModelLibraryEntry>
@@ -1419,6 +1565,7 @@ void ModelLibraryService::DownloadFile(
           job.bytes_total = aggregate_total;
           job.current_item = target_path.filename().string();
           job.status = "running";
+          job.phase = "running";
         });
     return;
   }
@@ -1443,6 +1590,7 @@ void ModelLibraryService::DownloadFile(
           job.bytes_total = aggregate_total;
           job.current_item = target_path.filename().string();
           job.status = "running";
+          job.phase = "running";
         });
     if (IsStopRequested(job_id)) {
       std::filesystem::remove(temp_path, cleanup_error);
@@ -1486,7 +1634,7 @@ void ModelLibraryService::DownloadFile(
     std::perror("execv curl");
     _exit(127);
   }
-  RegisterActiveDownloadProcess(job_id, static_cast<int>(pid));
+  RegisterActiveJobProcess(job_id, static_cast<int>(pid));
   int wait_status = 0;
   while (true) {
     const pid_t wait_result = waitpid(pid, &wait_status, WNOHANG);
@@ -1494,7 +1642,7 @@ void ModelLibraryService::DownloadFile(
       break;
     }
     if (wait_result < 0) {
-      ClearActiveDownloadProcess(job_id);
+      ClearActiveJobProcess(job_id);
       throw std::runtime_error("waitpid failed while downloading model artifact");
     }
     const auto bytes_done = FileSizeIfExists(temp_path).value_or(0);
@@ -1506,13 +1654,14 @@ void ModelLibraryService::DownloadFile(
           job.bytes_total = aggregate_total;
           job.current_item = target_path.filename().string();
           job.status = "running";
+          job.phase = "running";
         });
     if (IsStopRequested(job_id)) {
       kill(pid, SIGTERM);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
   }
-  ClearActiveDownloadProcess(job_id);
+  ClearActiveJobProcess(job_id);
   if (IsStopRequested(job_id)) {
     throw DownloadStoppedError();
   }
@@ -1530,6 +1679,7 @@ void ModelLibraryService::DownloadFile(
         job.bytes_done = aggregate_prefix + final_size;
         job.bytes_total = aggregate_total;
         job.current_item = target_path.filename().string();
+        job.phase = "running";
       });
 }
 
@@ -1563,11 +1713,15 @@ void ModelLibraryService::StartDownloadJob(
         clear_active();
         return;
       }
+      const bool requires_conversion =
+          NormalizeModelOutputFormat(snapshot->detected_source_format) == "safetensors" &&
+          NormalizeModelOutputFormat(snapshot->desired_output_format) == "gguf";
       service.UpdateJob(
           db_path,
           job_id,
           [&](ModelLibraryDownloadJob& job) {
             job.status = "running";
+            job.phase = "queued";
             job.current_item = "probing";
             job.bytes_done = ExistingDownloadBytesForJob(job);
           });
@@ -1588,36 +1742,124 @@ void ModelLibraryService::StartDownloadJob(
           job_id,
           [&](ModelLibraryDownloadJob& job) {
             job.status = "running";
+            job.phase = "running";
             job.bytes_total = aggregate_total;
             if (job.current_item == "probing") {
               job.current_item.clear();
             }
           });
       std::uintmax_t aggregate_prefix = 0;
-      for (std::size_t index = 0; index < snapshot->source_urls.size();
-           ++index) {
-        if (service.IsStopRequested(job_id)) {
-          throw DownloadStoppedError();
+      std::vector<std::filesystem::path> download_targets;
+      if (requires_conversion) {
+        const std::filesystem::path destination_root =
+            snapshot->target_subdir.empty()
+                ? std::filesystem::path(snapshot->target_root)
+                : std::filesystem::path(snapshot->target_root) / snapshot->target_subdir;
+        const auto plan = service.conversion_service_->BuildPlan(
+            ModelConversionService::Request{
+                .job_id = snapshot->id,
+                .model_id = snapshot->model_id,
+                .destination_root = destination_root,
+                .source_urls = snapshot->source_urls,
+                .detected_source_format = snapshot->detected_source_format,
+                .desired_output_format = snapshot->desired_output_format,
+                .quantizations = snapshot->quantizations,
+                .keep_base_gguf = snapshot->keep_base_gguf,
+                .staging_directory = snapshot->staging_directory.empty()
+                    ? destination_root /
+                          (std::string(kJobMetadataPrefix) + snapshot->id + "-staging")
+                    : std::filesystem::path(snapshot->staging_directory),
+            });
+        download_targets = plan.downloaded_source_paths;
+        for (std::size_t index = 0; index < snapshot->source_urls.size(); ++index) {
+          if (service.IsStopRequested(job_id)) {
+            throw DownloadStoppedError();
+          }
+          service.DownloadFile(
+              db_path,
+              job_id,
+              snapshot->source_urls.at(index),
+              download_targets.at(index),
+              aggregate_prefix,
+              aggregate_total);
+          aggregate_prefix += FileSizeIfExists(download_targets.at(index)).value_or(0);
         }
-        const std::filesystem::path target_path(snapshot->target_paths.at(index));
-        service.DownloadFile(
+        service.UpdateJob(
             db_path,
             job_id,
-            snapshot->source_urls.at(index),
-            target_path,
-            aggregate_prefix,
-            aggregate_total);
-        aggregate_prefix +=
-            FileSizeIfExists(target_path).value_or(0);
+            [&](ModelLibraryDownloadJob& job) {
+              job.status = "running";
+              job.phase = "converting";
+              job.bytes_total = std::nullopt;
+              job.bytes_done = 0;
+            });
+        service.conversion_service_->Execute(
+            ModelConversionService::Request{
+                .job_id = snapshot->id,
+                .model_id = snapshot->model_id,
+                .destination_root = destination_root,
+                .source_urls = snapshot->source_urls,
+                .detected_source_format = snapshot->detected_source_format,
+                .desired_output_format = snapshot->desired_output_format,
+                .quantizations = snapshot->quantizations,
+                .keep_base_gguf = snapshot->keep_base_gguf,
+                .staging_directory = plan.staging_directory,
+            },
+            plan,
+            ModelConversionService::JobHooks{
+                .stop_requested =
+                    [&service, &job_id]() { return service.IsStopRequested(job_id); },
+                .register_pid =
+                    [&service, &job_id](int pid) {
+                      service.RegisterActiveJobProcess(job_id, pid);
+                    },
+                .clear_pid =
+                    [&service, &job_id]() { service.ClearActiveJobProcess(job_id); },
+                .update_job =
+                    [&service, &db_path, &job_id](
+                        const std::string& phase,
+                        const std::string& current_item,
+                        const std::optional<std::uintmax_t>& bytes_total,
+                        std::uintmax_t bytes_done) {
+                      service.UpdateJob(
+                          db_path,
+                          job_id,
+                          [&](ModelLibraryDownloadJob& job) {
+                            job.status = "running";
+                            job.phase = phase;
+                            job.current_item = current_item;
+                            job.bytes_total = bytes_total;
+                            job.bytes_done = bytes_done;
+                          });
+                    },
+            });
+      } else {
+        for (std::size_t index = 0; index < snapshot->source_urls.size();
+             ++index) {
+          if (service.IsStopRequested(job_id)) {
+            throw DownloadStoppedError();
+          }
+          const std::filesystem::path target_path(snapshot->target_paths.at(index));
+          service.DownloadFile(
+              db_path,
+              job_id,
+              snapshot->source_urls.at(index),
+              target_path,
+              aggregate_prefix,
+              aggregate_total);
+          aggregate_prefix += FileSizeIfExists(target_path).value_or(0);
+        }
       }
       service.UpdateJob(
           db_path,
           job_id,
           [&](ModelLibraryDownloadJob& job) {
             job.status = "completed";
+            job.phase = "completed";
             job.bytes_done = aggregate_prefix;
-            job.bytes_total = aggregate_total;
+            job.bytes_total = requires_conversion ? std::nullopt : aggregate_total;
             job.current_item.clear();
+            job.error_message.clear();
           });
       service.ClearStopRequest(job_id);
     } catch (const DownloadStoppedError&) {
@@ -1626,16 +1868,38 @@ void ModelLibraryService::StartDownloadJob(
           job_id,
           [&](ModelLibraryDownloadJob& job) {
             job.status = "stopped";
+            if (job.phase.empty() || job.phase == "queued") {
+              job.phase = "stopped";
+            }
             job.current_item.clear();
             job.error_message.clear();
           });
       service.ClearStopRequest(job_id);
     } catch (const std::exception& error) {
+      if (service.IsStopRequested(job_id)) {
+        service.UpdateJob(
+            db_path,
+            job_id,
+            [&](ModelLibraryDownloadJob& job) {
+              job.status = "stopped";
+              if (job.phase.empty() || job.phase == "queued") {
+                job.phase = "stopped";
+              }
+              job.current_item.clear();
+              job.error_message.clear();
+            });
+        service.ClearStopRequest(job_id);
+        clear_active();
+        return;
+      }
       service.UpdateJob(
           db_path,
           job_id,
           [&](ModelLibraryDownloadJob& job) {
             job.status = "failed";
+            if (job.phase.empty()) {
+              job.phase = "failed";
+            }
             job.error_message = error.what();
             job.current_item.clear();
           });

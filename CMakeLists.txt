@@ -231,12 +231,19 @@ add_executable(
   controller/src/app/controller_time_support.cpp
   controller/src/infra/controller_request_support.cpp
   controller/src/infra/controller_network_manager.cpp
+  controller/src/model/model_conversion_service.cpp
   controller/src/model/model_library_service.cpp
   controller/src/model/model_library_service_tests.cpp
   controller/src/model/model_library_support.cpp
 )
 target_include_directories(comet-model-library-tests PRIVATE common/include controller/include)
 target_link_libraries(comet-model-library-tests PRIVATE comet-common)
+target_compile_definitions(
+  comet-model-library-tests
+  PRIVATE
+    COMET_LLAMA_CPP_SOURCE_TREE="${llama_cpp_SOURCE_DIR}"
+    COMET_LLAMA_CPP_RUNTIME_OUTPUT_DIR="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+)
 comet_enable_strict_warnings(comet-model-library-tests)
 
 add_executable(
@@ -375,6 +382,7 @@ add_executable(
   controller/src/interaction/interaction_service.cpp
   controller/src/model/model_library_http_service.cpp
   controller/src/model/model_library_http_support.cpp
+  controller/src/model/model_conversion_service.cpp
   controller/src/model/model_library_service.cpp
   controller/src/model/model_library_support.cpp
   controller/src/plane/plane_http_service.cpp
@@ -409,6 +417,15 @@ add_executable(
 )
 target_include_directories(comet-controller PRIVATE controller/include)
 target_link_libraries(comet-controller PRIVATE comet-common)
+target_compile_definitions(
+  comet-controller
+  PRIVATE
+    COMET_LLAMA_CPP_SOURCE_TREE="${llama_cpp_SOURCE_DIR}"
+    COMET_LLAMA_CPP_RUNTIME_OUTPUT_DIR="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+)
+if(TARGET llama-quantize)
+  add_dependencies(comet-controller llama-quantize)
+endif()
 if(WIN32)
   target_link_libraries(comet-controller PRIVATE ws2_32)
 endif()

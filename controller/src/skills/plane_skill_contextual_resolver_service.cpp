@@ -22,6 +22,7 @@ struct ContextualSkillCandidate {
   std::string description;
   std::string content;
   std::vector<std::string> match_terms;
+  bool internal = false;
 };
 
 constexpr int kMinimumContextualScore = 6;
@@ -494,7 +495,8 @@ std::vector<std::string> ParseStringArray(const nlohmann::json& value) {
 }
 
 std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
-    const DesiredState& desired_state) {
+    const DesiredState& desired_state,
+    bool include_internal) {
   if (!desired_state.skills.has_value() || !desired_state.skills->enabled) {
     return {};
   }
@@ -530,12 +532,19 @@ std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
         !item.at("enabled").get<bool>()) {
       continue;
     }
+    const bool internal =
+        item.contains("internal") && item.at("internal").is_boolean() &&
+        item.at("internal").get<bool>();
+    if (internal && !include_internal) {
+      continue;
+    }
     candidates.push_back(ContextualSkillCandidate{
         item.value("id", std::string{}),
         item.value("name", std::string{}),
         item.value("description", std::string{}),
         item.value("content", std::string{}),
         ParseStringArray(item.value("match_terms", nlohmann::json::array())),
+        internal,
     });
   }
   return candidates;
@@ -682,6 +691,16 @@ std::string PlaneSkillContextualResolverService::ExtractPromptText(
   return text;
 }
 
+bool ExtractIncludeInternal(const nlohmann::json& payload) {
+  if (!payload.contains("include_internal")) {
+    return false;
+  }
+  if (!payload.at("include_internal").is_boolean()) {
+    throw std::invalid_argument("include_internal must be a boolean when provided");
+  }
+  return payload.at("include_internal").get<bool>();
+}
+
 ContextualSkillSelection PlaneSkillContextualResolverService::Resolve(
     const std::string& db_path,
     const PlaneInteractionResolution& resolution,
@@ -694,7 +713,9 @@ ContextualSkillSelection PlaneSkillContextualResolverService::Resolve(
   }
 
   const auto prompt_text = ExtractPromptText(payload);
-  const auto candidates = LoadPlaneLocalCandidates(resolution.desired_state);
+  const bool include_internal = ExtractIncludeInternal(payload);
+  const auto candidates =
+      LoadPlaneLocalCandidates(resolution.desired_state, include_internal);
   selection.candidate_count = static_cast<int>(candidates.size());
   if (prompt_text.empty() || candidates.empty()) {
     return selection;

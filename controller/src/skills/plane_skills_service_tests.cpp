@@ -563,6 +563,72 @@ int main() {
 
     {
       SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "skill-internal"},
+                {"name", "technical support skill"},
+                {"description", "Internal-only orchestration helper."},
+                {"content", "Never expose this support-layer skill directly to end users."},
+                {"match_terms", json::array({"session", "cookie", "handshake"})},
+                {"internal", true},
+                {"enabled", true}},
+           json{{"id", "skill-public"},
+                {"name", "public skill"},
+                {"description", "Normal user-facing skill."},
+                {"content", "Handle public requests."},
+                {"match_terms", json::array({"public"})},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt", "Проверь сессию, куки и handshake авторизации."}});
+      Expect(
+          selection.mode == "none" &&
+              selection.candidate_count == 1 &&
+              selection.selected_skill_ids.empty(),
+          "resolver should exclude internal skills from ordinary user-triggered matching");
+      std::cout << "ok: contextual-resolver-excludes-internal-skills-by-default" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "skill-internal"},
+                {"name", "technical support skill"},
+                {"description", "Internal-only orchestration helper."},
+                {"content", "Never expose this support-layer skill directly to end users."},
+                {"match_terms", json::array({"session", "cookie", "handshake"})},
+                {"internal", true},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt", "Проверь сессию, куки и handshake авторизации."},
+                   {"include_internal", true}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.candidate_count == 1 &&
+              selection.selected_skill_ids.size() == 1 &&
+              selection.selected_skill_ids.front() == "skill-internal",
+          "resolver should allow internal skills only when explicitly requested by system callers");
+      std::cout << "ok: contextual-resolver-allows-internal-skills-with-opt-in" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
           {json{{"id", "lt-cypher-localtrade-spot-order-clarification"},
                 {"name", "localtrade-spot-order-clarification"},
                 {"description",

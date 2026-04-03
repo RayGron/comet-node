@@ -135,6 +135,12 @@ void DesiredStateV2Projector::ProjectInteraction() {
     interaction_json["system_prompt"] = *interaction.system_prompt;
   }
   interaction_json["thinking_enabled"] = interaction.thinking_enabled;
+  if (interaction.default_temperature.has_value()) {
+    interaction_json["default_temperature"] = *interaction.default_temperature;
+  }
+  if (interaction.default_top_p.has_value()) {
+    interaction_json["default_top_p"] = *interaction.default_top_p;
+  }
   if (!interaction.default_response_language.empty()) {
     interaction_json["default_response_language"] = interaction.default_response_language;
   }

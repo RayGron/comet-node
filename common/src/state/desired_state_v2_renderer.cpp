@@ -164,6 +164,15 @@ void DesiredStateV2Renderer::RenderInteraction() {
   }
   interaction.thinking_enabled =
       interaction_json.value("thinking_enabled", interaction.thinking_enabled);
+  if (interaction_json.contains("default_temperature") &&
+      !interaction_json.at("default_temperature").is_null()) {
+    interaction.default_temperature =
+        interaction_json.at("default_temperature").get<double>();
+  }
+  if (interaction_json.contains("default_top_p") &&
+      !interaction_json.at("default_top_p").is_null()) {
+    interaction.default_top_p = interaction_json.at("default_top_p").get<double>();
+  }
   interaction.default_response_language =
       interaction_json.value("default_response_language", std::string("en"));
   interaction.follow_user_language = interaction_json.value("follow_user_language", true);

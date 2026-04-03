@@ -156,10 +156,18 @@ std::string BuildInteractionUpstreamBody(
   }
   payload["max_tokens"] = policy.max_tokens;
   if (!payload.contains("temperature")) {
-    payload["temperature"] = 0.2;
+    payload["temperature"] =
+        resolution.desired_state.interaction.has_value() &&
+                resolution.desired_state.interaction->default_temperature.has_value()
+            ? *resolution.desired_state.interaction->default_temperature
+            : 0.2;
   }
   if (!payload.contains("top_p")) {
-    payload["top_p"] = 0.8;
+    payload["top_p"] =
+        resolution.desired_state.interaction.has_value() &&
+                resolution.desired_state.interaction->default_top_p.has_value()
+            ? *resolution.desired_state.interaction->default_top_p
+            : 0.8;
   }
   payload["response_mode"] = policy.response_mode;
   return payload.dump();

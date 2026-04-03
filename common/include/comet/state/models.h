@@ -228,6 +228,8 @@ struct InteractionSettings {
   std::optional<std::string> system_prompt;
   std::optional<std::string> analysis_system_prompt;
   bool thinking_enabled = false;
+  std::optional<double> default_temperature;
+  std::optional<double> default_top_p;
   std::string default_response_language = "en";
   std::vector<std::string> supported_response_languages;
   bool follow_user_language = true;

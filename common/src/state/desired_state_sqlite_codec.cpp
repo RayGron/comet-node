@@ -132,6 +132,13 @@ std::optional<InteractionSettings> DesiredStateSqliteCodec::DeserializeInteracti
   }
   interaction.thinking_enabled =
       value.value("thinking_enabled", interaction.thinking_enabled);
+  if (value.contains("default_temperature") &&
+      !value.at("default_temperature").is_null()) {
+    interaction.default_temperature = value.at("default_temperature").get<double>();
+  }
+  if (value.contains("default_top_p") && !value.at("default_top_p").is_null()) {
+    interaction.default_top_p = value.at("default_top_p").get<double>();
+  }
   interaction.default_response_language =
       value.value("default_response_language", interaction.default_response_language);
   interaction.supported_response_languages =

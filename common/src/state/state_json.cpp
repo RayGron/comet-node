@@ -229,6 +229,12 @@ json ToJson(const InteractionSettings& interaction) {
   if (interaction.analysis_system_prompt.has_value()) {
     result["analysis_system_prompt"] = *interaction.analysis_system_prompt;
   }
+  if (interaction.default_temperature.has_value()) {
+    result["default_temperature"] = *interaction.default_temperature;
+  }
+  if (interaction.default_top_p.has_value()) {
+    result["default_top_p"] = *interaction.default_top_p;
+  }
   if (interaction.completion_policy.has_value()) {
     json completion_policy = {
         {"response_mode", interaction.completion_policy->response_mode},
@@ -557,6 +563,13 @@ InteractionSettings InteractionSettingsFromJson(const json& value) {
   }
   interaction.thinking_enabled =
       value.value("thinking_enabled", interaction.thinking_enabled);
+  if (value.contains("default_temperature") &&
+      !value.at("default_temperature").is_null()) {
+    interaction.default_temperature = value.at("default_temperature").get<double>();
+  }
+  if (value.contains("default_top_p") && !value.at("default_top_p").is_null()) {
+    interaction.default_top_p = value.at("default_top_p").get<double>();
+  }
   interaction.default_response_language =
       value.value("default_response_language", interaction.default_response_language);
   interaction.supported_response_languages =

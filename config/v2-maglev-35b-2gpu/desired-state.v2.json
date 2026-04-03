@@ -6,14 +6,14 @@
   "model": {
     "source": {
       "type": "local",
-      "path": "/mnt/shared-storage/models/gguf/Qwen/Qwen3.5-35B-A3B/Qwen3.5-35B-A3B-Q8_0.gguf",
-      "ref": "Qwen/Qwen3.5-35B-A3B"
+      "path": "/mnt/shared-storage/models/Google/Gemma-4-31B-it/Gemma-4-31B-it-Q8_0.gguf",
+      "ref": "Google/Gemma-4-31B-it"
     },
     "materialization": {
       "mode": "reference",
-      "local_path": "/mnt/shared-storage/models/gguf/Qwen/Qwen3.5-35B-A3B/Qwen3.5-35B-A3B-Q8_0.gguf"
+      "local_path": "/mnt/shared-storage/models/Google/Gemma-4-31B-it/Gemma-4-31B-it-Q8_0.gguf"
     },
-    "served_model_name": "qwen3.5-35b-a3b-maglev"
+    "served_model_name": "gemma-4-31b-it-maglev"
   },
   "runtime": {
     "engine": "llama.cpp",

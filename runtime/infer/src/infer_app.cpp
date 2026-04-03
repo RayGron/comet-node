@@ -399,9 +399,24 @@ std::string RemoveThinkBlocks(std::string value) {
   }
 }
 
+std::string StripLeadingGemmaChannelBlocks(std::string value) {
+  while (true) {
+    const std::string trimmed = TrimLeadingWhitespace(value);
+    if (!trimmed.starts_with("<|channel>")) {
+      return value;
+    }
+    const std::size_t close = trimmed.find("<channel|>");
+    if (close == std::string::npos) {
+      return value;
+    }
+    value = trimmed.substr(close + std::string("<channel|>").size());
+  }
+}
+
 std::string SanitizeAssistantText(const std::string& raw_text) {
   std::string sanitized = raw_text;
   sanitized = RemoveThinkBlocks(sanitized);
+  sanitized = StripLeadingGemmaChannelBlocks(sanitized);
   sanitized = TruncateAtFirstMarker(
       sanitized,
       {
@@ -415,6 +430,7 @@ std::string SanitizeAssistantText(const std::string& raw_text) {
       });
   sanitized = CollapseAssistantTaggedTranscript(sanitized);
   sanitized = StripRepeatedAssistantPrefixes(sanitized);
+  sanitized = StripLeadingGemmaChannelBlocks(sanitized);
   return sanitized;
 }
 
@@ -1025,10 +1041,46 @@ std::optional<SimpleResponse> ParseUpstreamResponse(const std::string& response)
   };
 }
 
+void SanitizeChatCompletionPayload(json& payload) {
+  if (!payload.contains("choices") || !payload.at("choices").is_array()) {
+    return;
+  }
+  for (auto& choice : payload["choices"]) {
+    if (!choice.is_object()) {
+      continue;
+    }
+    if (choice.contains("message") && choice.at("message").is_object()) {
+      auto& message = choice["message"];
+      if (message.contains("content") && message.at("content").is_string()) {
+        message["content"] = SanitizeAssistantText(message.at("content").get<std::string>());
+      }
+    }
+  }
+}
+
 bool ProxyHttpRequest(
     int client_fd,
     const std::string& request_data,
     const UpstreamTarget& upstream) {
+  const HttpRequest request = comet::infer::runtime_support::ParseHttpRequest(request_data);
+  if (request.method == "POST" && request.path == "/v1/chat/completions" &&
+      !RequestWantsStream(request)) {
+    auto response = comet::infer::runtime_support::ForwardHttpRequest(request, upstream);
+    if (!response.has_value()) {
+      return false;
+    }
+    if (response->content_type.starts_with("application/json")) {
+      try {
+        json payload = json::parse(response->body);
+        SanitizeChatCompletionPayload(payload);
+        response->body = payload.dump();
+      } catch (const std::exception&) {
+      }
+    }
+    SendResponse(client_fd, *response);
+    return true;
+  }
+
   const int upstream_fd = ConnectTcpHost(upstream.host, upstream.port);
   if (upstream_fd < 0) {
     std::cerr << "[comet-infer] proxy connect failed upstream="

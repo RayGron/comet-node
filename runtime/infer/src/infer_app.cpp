@@ -413,9 +413,35 @@ std::string StripLeadingGemmaChannelBlocks(std::string value) {
   }
 }
 
+std::string RemoveGemmaChannelBlocks(std::string value) {
+  constexpr std::string_view kOpen = "<|channel>";
+  constexpr std::string_view kClose = "<channel|>";
+  while (true) {
+    const std::size_t begin = value.find(kOpen);
+    if (begin == std::string::npos) {
+      break;
+    }
+    const std::size_t end = value.find(kClose, begin + kOpen.size());
+    if (end == std::string::npos) {
+      value.erase(begin);
+      break;
+    }
+    value.erase(begin, end + kClose.size() - begin);
+  }
+  while (true) {
+    const std::size_t close = value.find(kClose);
+    if (close == std::string::npos) {
+      break;
+    }
+    value.erase(close, kClose.size());
+  }
+  return value;
+}
+
 std::string SanitizeAssistantText(const std::string& raw_text) {
   std::string sanitized = raw_text;
   sanitized = RemoveThinkBlocks(sanitized);
+  sanitized = RemoveGemmaChannelBlocks(sanitized);
   sanitized = StripLeadingGemmaChannelBlocks(sanitized);
   sanitized = TruncateAtFirstMarker(
       sanitized,
@@ -1054,7 +1080,9 @@ void SanitizeChatCompletionPayload(json& payload) {
       if (message.contains("content") && message.at("content").is_string()) {
         message["content"] = SanitizeAssistantText(message.at("content").get<std::string>());
       }
+      message.erase("reasoning_content");
     }
+    choice.erase("reasoning_content");
   }
 }
 

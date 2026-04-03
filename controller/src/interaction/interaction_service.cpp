@@ -574,8 +574,34 @@ bool StartsWithReasoningPreamble(const std::string& text) {
          lowered.rfind("chain of thought:", 0) == 0;
 }
 
+std::string RemoveGemmaChannelBlocks(std::string value) {
+  constexpr std::string_view kOpen = "<|channel>";
+  constexpr std::string_view kClose = "<channel|>";
+  while (true) {
+    const std::size_t begin = value.find(kOpen);
+    if (begin == std::string::npos) {
+      break;
+    }
+    const std::size_t end = value.find(kClose, begin + kOpen.size());
+    if (end == std::string::npos) {
+      value.erase(begin);
+      break;
+    }
+    value.erase(begin, end + kClose.size() - begin);
+  }
+  while (true) {
+    const std::size_t close = value.find(kClose);
+    if (close == std::string::npos) {
+      break;
+    }
+    value.erase(close, kClose.size());
+  }
+  return value;
+}
+
 std::string SanitizeInteractionText(std::string text) {
   text = RemoveThinkBlocks(std::move(text));
+  text = RemoveGemmaChannelBlocks(std::move(text));
   text = TrimCopy(text);
   if (StartsWithReasoningPreamble(text)) {
     const auto paragraphs = SplitParagraphs(text);

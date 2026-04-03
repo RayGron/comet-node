@@ -105,11 +105,12 @@ elseif(DEFINED CMAKE_CUDA_COMPILER)
     set(_comet_cuda_available ON)
   endif()
 endif()
-if(_comet_cuda_available)
-  set(GGML_CUDA ON CACHE BOOL "" FORCE)
-else()
-  set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+if(NOT _comet_cuda_available)
+  message(FATAL_ERROR
+    "CUDA toolkit is required for comet-node builds. "
+    "Provide CUDAToolkit_ROOT or CMAKE_CUDA_COMPILER so GGML_CUDA can be enabled.")
 endif()
+set(GGML_CUDA ON CACHE BOOL "" FORCE)
 
 if(COMET_LLAMA_CPP_SOURCE_DIR AND EXISTS "${COMET_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
   FetchContent_Declare(

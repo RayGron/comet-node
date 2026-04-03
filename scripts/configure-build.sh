@@ -118,6 +118,10 @@ if detect_cuda_root; then
   export CUDA_PATH="${cuda_root}"
   export CUDA_BIN_PATH="${cuda_root}/bin"
   export CUDACXX="${cuda_nvcc}"
+else
+  echo "[cmake] CUDA toolkit is required for comet-node builds; none was found" >&2
+  echo "[cmake] checked CUDA_TOOLKIT_ROOT_DIR, CUDA_HOME, CUDA_PATH, /usr/local/cuda*, and nvcc on PATH" >&2
+  exit 1
 fi
 
 if detect_macos_openmp; then
@@ -228,14 +232,8 @@ cmake_args=(
   -DVCPKG_INSTALLED_DIR="${vcpkg_installed_dir}"
 )
 
-if [[ -n "${cuda_root}" ]]; then
-  cmake_args+=("-DCUDAToolkit_ROOT=${cuda_root}")
-fi
-if [[ -n "${cuda_nvcc}" ]]; then
-  cmake_args+=("-DCMAKE_CUDA_COMPILER=${cuda_nvcc}")
-else
-  cmake_args+=("-DGGML_CUDA=OFF")
-fi
+cmake_args+=("-DCUDAToolkit_ROOT=${cuda_root}")
+cmake_args+=("-DCMAKE_CUDA_COMPILER=${cuda_nvcc}")
 if [[ -n "${openmp_root}" ]]; then
   cmake_args+=(
     "-DOpenMP_ROOT=${openmp_root}"

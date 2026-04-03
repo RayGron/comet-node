@@ -76,6 +76,11 @@ void InitializeSchema(
   EnsureColumn(
       db,
       "model_library_download_jobs",
+      "job_kind",
+      "job_kind TEXT NOT NULL DEFAULT 'download'");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
       "phase",
       "phase TEXT NOT NULL DEFAULT 'queued'");
   EnsureColumn(

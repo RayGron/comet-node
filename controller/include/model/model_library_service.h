@@ -29,6 +29,9 @@ class ModelLibraryService {
   HttpResponse EnqueueDownload(
       const std::string& db_path,
       const HttpRequest& request) const;
+  HttpResponse EnqueueQuantization(
+      const std::string& db_path,
+      const HttpRequest& request) const;
   HttpResponse StopDownloadJob(
       const std::string& db_path,
       const HttpRequest& request) const;
@@ -57,6 +60,8 @@ class ModelLibraryService {
     int part_count = 1;
     std::vector<std::string> referenced_by;
     bool deletable = true;
+    std::string quantization = "base";
+    std::string quantized_from_path;
   };
 
   using ModelLibraryDownloadJob = comet::ModelLibraryDownloadJobRecord;
@@ -99,6 +104,13 @@ class ModelLibraryService {
       std::string* prefix,
       int* part_index,
       int* part_total);
+  static std::string NormalizeJobKind(const std::string& value);
+  static bool IsQuantizationJob(const ModelLibraryDownloadJob& job);
+  static std::string DetectEntryQuantization(const std::string& stem_or_prefix);
+  static std::string StripKnownQuantizationSuffix(const std::string& stem);
+  static std::string BuildQuantizedDisplayName(
+      const std::string& raw_name,
+      const std::string& quantization);
   std::filesystem::path DownloadJobMetadataDirectory(
       const ModelLibraryDownloadJob& job) const;
   std::filesystem::path DownloadJobMetadataPath(

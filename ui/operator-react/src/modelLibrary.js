@@ -10,6 +10,11 @@ export const MODEL_LIBRARY_GGUF_QUANTIZATIONS = [
   "IQ4_NL",
 ];
 
+export const MODEL_LIBRARY_QUANTIZATION_FILTERS = [
+  "base",
+  ...MODEL_LIBRARY_GGUF_QUANTIZATIONS,
+];
+
 export function normalizeModelDownloadSourceUrls(value) {
   if (Array.isArray(value)) {
     return value.map((item) => String(item || "").trim()).filter(Boolean);
@@ -65,4 +70,26 @@ export function shouldShowGgufConversionOptions(detectedSourceFormat, desiredFor
     normalizeModelDownloadFormat(detectedSourceFormat) === "safetensors" &&
     normalizeModelDownloadFormat(desiredFormat) === "gguf"
   );
+}
+
+export function normalizeModelLibraryJobKind(value) {
+  return String(value || "").trim().toLowerCase() === "quantization"
+    ? "quantization"
+    : "download";
+}
+
+export function normalizeModelLibraryItemQuantization(value) {
+  const normalized = String(value || "").trim();
+  return MODEL_LIBRARY_QUANTIZATION_FILTERS.includes(normalized) ? normalized : "base";
+}
+
+export function formatModelLibraryDisplayName(item) {
+  const quantization = normalizeModelLibraryItemQuantization(item?.quantization);
+  const rawName = String(item?.name || "").trim();
+  const withoutExtension = rawName.replace(/\.gguf$/i, "");
+  if (quantization === "base") {
+    return withoutExtension || rawName;
+  }
+  const normalizedSuffix = new RegExp(`-${quantization}$`, "i");
+  return `${withoutExtension.replace(normalizedSuffix, "")} - ${quantization}`;
 }

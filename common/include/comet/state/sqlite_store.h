@@ -251,6 +251,7 @@ struct AuthSessionRecord {
 
 struct ModelLibraryDownloadJobRecord {
   std::string id;
+  std::string job_kind = "download";
   std::string status = "queued";
   std::string phase = "queued";
   std::string model_id;

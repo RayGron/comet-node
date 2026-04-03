@@ -160,6 +160,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 
 CREATE TABLE IF NOT EXISTS model_library_download_jobs (
     id TEXT PRIMARY KEY,
+    job_kind TEXT NOT NULL DEFAULT 'download',
     status TEXT NOT NULL DEFAULT 'queued',
     phase TEXT NOT NULL DEFAULT 'queued',
     model_id TEXT NOT NULL DEFAULT '',
@@ -471,30 +472,31 @@ std::vector<std::string> ParseStringArray(const std::string& payload) {
 ModelLibraryDownloadJobRecord ModelLibraryDownloadJobFromStatement(sqlite3_stmt* statement) {
   ModelLibraryDownloadJobRecord job;
   job.id = ToColumnText(statement, 0);
-  job.status = ToColumnText(statement, 1);
-  job.phase = ToColumnText(statement, 2);
-  job.model_id = ToColumnText(statement, 3);
-  job.target_root = ToColumnText(statement, 4);
-  job.target_subdir = ToColumnText(statement, 5);
-  job.detected_source_format = ToColumnText(statement, 6);
-  job.desired_output_format = ToColumnText(statement, 7);
-  job.source_urls = ParseStringArray(ToColumnText(statement, 8));
-  job.target_paths = ParseStringArray(ToColumnText(statement, 9));
-  job.quantizations = ParseStringArray(ToColumnText(statement, 10));
-  job.retained_output_paths = ParseStringArray(ToColumnText(statement, 11));
-  job.current_item = ToColumnText(statement, 12);
-  job.staging_directory = ToColumnText(statement, 13);
-  if (sqlite3_column_type(statement, 14) != SQLITE_NULL) {
+  job.job_kind = ToColumnText(statement, 1);
+  job.status = ToColumnText(statement, 2);
+  job.phase = ToColumnText(statement, 3);
+  job.model_id = ToColumnText(statement, 4);
+  job.target_root = ToColumnText(statement, 5);
+  job.target_subdir = ToColumnText(statement, 6);
+  job.detected_source_format = ToColumnText(statement, 7);
+  job.desired_output_format = ToColumnText(statement, 8);
+  job.source_urls = ParseStringArray(ToColumnText(statement, 9));
+  job.target_paths = ParseStringArray(ToColumnText(statement, 10));
+  job.quantizations = ParseStringArray(ToColumnText(statement, 11));
+  job.retained_output_paths = ParseStringArray(ToColumnText(statement, 12));
+  job.current_item = ToColumnText(statement, 13);
+  job.staging_directory = ToColumnText(statement, 14);
+  if (sqlite3_column_type(statement, 15) != SQLITE_NULL) {
     job.bytes_total =
-        static_cast<std::uintmax_t>(sqlite3_column_int64(statement, 14));
+        static_cast<std::uintmax_t>(sqlite3_column_int64(statement, 15));
   }
-  job.bytes_done = static_cast<std::uintmax_t>(sqlite3_column_int64(statement, 15));
-  job.part_count = sqlite3_column_int(statement, 16);
-  job.keep_base_gguf = sqlite3_column_int(statement, 17) != 0;
-  job.error_message = ToColumnText(statement, 18);
-  job.hidden = sqlite3_column_int(statement, 19) != 0;
-  job.created_at = ToColumnText(statement, 20);
-  job.updated_at = ToColumnText(statement, 21);
+  job.bytes_done = static_cast<std::uintmax_t>(sqlite3_column_int64(statement, 16));
+  job.part_count = sqlite3_column_int(statement, 17);
+  job.keep_base_gguf = sqlite3_column_int(statement, 18) != 0;
+  job.error_message = ToColumnText(statement, 19);
+  job.hidden = sqlite3_column_int(statement, 20) != 0;
+  job.created_at = ToColumnText(statement, 21);
+  job.updated_at = ToColumnText(statement, 22);
   return job;
 }
 
@@ -751,12 +753,13 @@ void ControllerStore::UpsertModelLibraryDownloadJob(
   Statement statement(
       AsSqlite(db_),
       "INSERT INTO model_library_download_jobs("
-      "id, status, phase, model_id, target_root, target_subdir, detected_source_format, "
+      "id, job_kind, status, phase, model_id, target_root, target_subdir, detected_source_format, "
       "desired_output_format, source_urls_json, target_paths_json, quantizations_json, "
       "retained_output_paths_json, current_item, staging_directory, bytes_total, "
       "bytes_done, part_count, keep_base_gguf, error_message, hidden, created_at, updated_at) "
-      "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22) "
+      "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23) "
       "ON CONFLICT(id) DO UPDATE SET "
+      "job_kind = excluded.job_kind, "
       "status = excluded.status, "
       "phase = excluded.phase, "
       "model_id = excluded.model_id, "
@@ -779,31 +782,32 @@ void ControllerStore::UpsertModelLibraryDownloadJob(
       "created_at = excluded.created_at, "
       "updated_at = excluded.updated_at;");
   statement.BindText(1, job.id);
-  statement.BindText(2, job.status);
-  statement.BindText(3, job.phase);
-  statement.BindText(4, job.model_id);
-  statement.BindText(5, job.target_root);
-  statement.BindText(6, job.target_subdir);
-  statement.BindText(7, job.detected_source_format);
-  statement.BindText(8, job.desired_output_format);
-  statement.BindText(9, SerializeStringArray(job.source_urls));
-  statement.BindText(10, SerializeStringArray(job.target_paths));
-  statement.BindText(11, SerializeStringArray(job.quantizations));
-  statement.BindText(12, SerializeStringArray(job.retained_output_paths));
-  statement.BindText(13, job.current_item);
-  statement.BindText(14, job.staging_directory);
+  statement.BindText(2, job.job_kind);
+  statement.BindText(3, job.status);
+  statement.BindText(4, job.phase);
+  statement.BindText(5, job.model_id);
+  statement.BindText(6, job.target_root);
+  statement.BindText(7, job.target_subdir);
+  statement.BindText(8, job.detected_source_format);
+  statement.BindText(9, job.desired_output_format);
+  statement.BindText(10, SerializeStringArray(job.source_urls));
+  statement.BindText(11, SerializeStringArray(job.target_paths));
+  statement.BindText(12, SerializeStringArray(job.quantizations));
+  statement.BindText(13, SerializeStringArray(job.retained_output_paths));
+  statement.BindText(14, job.current_item);
+  statement.BindText(15, job.staging_directory);
   statement.BindOptionalInt64(
-      15,
+      16,
       job.bytes_total.has_value()
           ? std::optional<std::int64_t>(static_cast<std::int64_t>(*job.bytes_total))
           : std::nullopt);
-  statement.BindInt64(16, static_cast<std::int64_t>(job.bytes_done));
-  statement.BindInt(17, job.part_count);
-  statement.BindInt(18, job.keep_base_gguf ? 1 : 0);
-  statement.BindText(19, job.error_message);
-  statement.BindInt(20, job.hidden ? 1 : 0);
-  statement.BindText(21, job.created_at);
-  statement.BindText(22, job.updated_at);
+  statement.BindInt64(17, static_cast<std::int64_t>(job.bytes_done));
+  statement.BindInt(18, job.part_count);
+  statement.BindInt(19, job.keep_base_gguf ? 1 : 0);
+  statement.BindText(20, job.error_message);
+  statement.BindInt(21, job.hidden ? 1 : 0);
+  statement.BindText(22, job.created_at);
+  statement.BindText(23, job.updated_at);
   statement.StepDone();
 }
 
@@ -811,7 +815,7 @@ std::optional<ModelLibraryDownloadJobRecord> ControllerStore::LoadModelLibraryDo
     const std::string& job_id) const {
   Statement statement(
       AsSqlite(db_),
-      "SELECT id, status, phase, model_id, target_root, target_subdir, detected_source_format, "
+      "SELECT id, job_kind, status, phase, model_id, target_root, target_subdir, detected_source_format, "
       "desired_output_format, source_urls_json, target_paths_json, quantizations_json, "
       "retained_output_paths_json, current_item, staging_directory, bytes_total, bytes_done, "
       "part_count, keep_base_gguf, error_message, hidden, created_at, updated_at "
@@ -826,7 +830,7 @@ std::optional<ModelLibraryDownloadJobRecord> ControllerStore::LoadModelLibraryDo
 std::vector<ModelLibraryDownloadJobRecord> ControllerStore::LoadModelLibraryDownloadJobs(
     const std::optional<std::string>& status) const {
   std::string sql =
-      "SELECT id, status, phase, model_id, target_root, target_subdir, detected_source_format, "
+      "SELECT id, job_kind, status, phase, model_id, target_root, target_subdir, detected_source_format, "
       "desired_output_format, source_urls_json, target_paths_json, quantizations_json, "
       "retained_output_paths_json, current_item, staging_directory, bytes_total, bytes_done, "
       "part_count, keep_base_gguf, error_message, hidden, created_at, updated_at "

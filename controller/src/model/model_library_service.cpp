@@ -1,6 +1,7 @@
 #include "model/model_library_service.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
@@ -27,6 +28,12 @@ namespace {
 
 constexpr std::string_view kJobMetadataPrefix = ".comet-model-job-";
 constexpr std::string_view kJobMetadataSuffix = ".json";
+constexpr std::array<std::string_view, 4> kKnownGgufQuantizations = {
+    "Q8_0",
+    "Q5_K_M",
+    "Q4_K_M",
+    "IQ4_NL",
+};
 
 struct MultipartGroup {
   std::string root;
@@ -133,6 +140,10 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
         {"name", entry.name},
         {"kind", entry.kind},
         {"format", entry.format},
+        {"quantization", entry.quantization},
+        {"quantized_from_path",
+         entry.quantized_from_path.empty() ? json(nullptr)
+                                           : json(entry.quantized_from_path)},
         {"root", entry.root},
         {"paths", entry.paths},
         {"size_bytes", entry.size_bytes},
@@ -275,14 +286,11 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   } else if (!source_url.empty()) {
     source_urls.push_back(source_url);
   }
-  std::vector<std::string> quantizations;
-  if (body.contains("quantizations") && body.at("quantizations").is_array()) {
-    quantizations = body.at("quantizations").get<std::vector<std::string>>();
-  }
-  const bool keep_base_gguf = body.value("keep_base_gguf", true);
   const std::string detected_source_format = DetectModelSourceFormat(source_urls);
   const std::string desired_output_format = NormalizeModelOutputFormat(
       body.value("format", detected_source_format));
+  const std::vector<std::string> quantizations;
+  const bool keep_base_gguf = true;
   if (target_root.empty() || !IsUsableAbsoluteHostPath(target_root)) {
     return support_.build_json_response(
         400,
@@ -348,6 +356,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
       }
       ModelLibraryDownloadJob job;
       job.id = job_id;
+      job.job_kind = "download";
       job.model_id = model_id;
       job.target_root = NormalizePathString(std::filesystem::path(target_root));
       job.target_subdir = target_subdir;
@@ -392,6 +401,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   const std::string job_id = GenerateJobId();
   ModelLibraryDownloadJob job;
   job.id = job_id;
+  job.job_kind = "download";
   job.model_id = model_id;
   job.target_root = NormalizePathString(std::filesystem::path(target_root));
   job.target_subdir = target_subdir;
@@ -414,6 +424,123 @@ HttpResponse ModelLibraryService::EnqueueDownload(
       202,
       json{{"status", "accepted"}, {"job", BuildJobPayload(job)}},
       {});
+}
+
+HttpResponse ModelLibraryService::EnqueueQuantization(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  const json body = support_.parse_json_request_body(request);
+  const std::string source_path_value = body.value("source_path", std::string{});
+  const std::string quantization = Trim(body.value("quantization", std::string{}));
+  const bool replace_existing = body.value("replace_existing", true);
+  if (source_path_value.empty() || !IsUsableAbsoluteHostPath(source_path_value)) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"},
+             {"message", "source_path must be an absolute host path"}},
+        {});
+  }
+  if (quantization.empty()) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"},
+             {"message", "quantization is required"}},
+        {});
+  }
+  const auto normalized_quantizations = NormalizeQuantizationValues({quantization});
+  if (normalized_quantizations.size() != 1 ||
+      std::none_of(
+          kKnownGgufQuantizations.begin(),
+          kKnownGgufQuantizations.end(),
+          [&](std::string_view value) { return value == normalized_quantizations.front(); })) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"},
+             {"message", "quantization must be a single supported value"}},
+        {});
+  }
+
+  const std::filesystem::path source_path(source_path_value);
+  std::error_code error;
+  if (!std::filesystem::exists(source_path, error) || error ||
+      !std::filesystem::is_regular_file(source_path, error) || error ||
+      !EndsWithIgnoreCase(source_path.filename().string(), ".gguf")) {
+    return support_.build_json_response(
+        404,
+        json{{"status", "not_found"},
+             {"message", "source GGUF model not found"}},
+        {});
+  }
+
+  const auto entries = ScanEntries(db_path);
+  const auto normalized_source_path = NormalizePathString(source_path);
+  const auto entry_it = std::find_if(
+      entries.begin(),
+      entries.end(),
+      [&](const ModelLibraryEntry& entry) {
+        return entry.kind == "file" && entry.format == "gguf" &&
+               entry.path == normalized_source_path;
+      });
+  if (entry_it == entries.end()) {
+    return support_.build_json_response(
+        404,
+        json{{"status", "not_found"},
+             {"message", "source GGUF entry not found in model library"}},
+        {});
+  }
+
+  const auto base_stem = StripKnownQuantizationSuffix(source_path.stem().string());
+  const auto retained_output_path =
+      source_path.parent_path() / (base_stem + "-" + normalized_quantizations.front() + ".gguf");
+  const std::string job_id = GenerateJobId();
+  const auto staging_directory =
+      source_path.parent_path() /
+      (std::string(kJobMetadataPrefix) + job_id + "-staging");
+  try {
+    const auto plan = conversion_service_->BuildQuantizationPlan(
+        ModelConversionService::QuantizationRequest{
+            .job_id = job_id,
+            .source_path = source_path,
+            .quantization = normalized_quantizations.front(),
+            .staging_directory = staging_directory,
+            .retained_output_path = retained_output_path,
+            .replace_existing = replace_existing,
+        });
+    ModelLibraryDownloadJob job;
+    job.id = job_id;
+    job.job_kind = "quantization";
+    job.model_id = BuildQuantizedDisplayName(entry_it->name, normalized_quantizations.front());
+    job.target_root = NormalizePathString(source_path.parent_path());
+    job.target_subdir = "";
+    job.detected_source_format = "gguf";
+    job.desired_output_format = "gguf";
+    job.source_urls = {normalized_source_path};
+    job.target_paths = {NormalizePathString(plan.retained_output_path)};
+    job.quantizations = {normalized_quantizations.front()};
+    job.retained_output_paths = {NormalizePathString(plan.retained_output_path)};
+    job.current_item = source_path.filename().string();
+    job.staging_directory = NormalizePathString(plan.staging_directory);
+    job.bytes_total = FileSizeIfExists(source_path);
+    job.bytes_done = 0;
+    job.part_count = 1;
+    job.keep_base_gguf = true;
+    job.created_at = support_.utc_now_sql_timestamp();
+    job.updated_at = job.created_at;
+    comet::ControllerStore store(db_path);
+    store.Initialize();
+    store.UpsertModelLibraryDownloadJob(job);
+    PersistDownloadJobMetadata(job);
+    StartDownloadJob(db_path, job_id);
+    return support_.build_json_response(
+        202,
+        json{{"status", "accepted"}, {"job", BuildJobPayload(job)}},
+        {});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"}, {"message", error.what()}},
+        {});
+  }
 }
 
 HttpResponse ModelLibraryService::StopDownloadJob(
@@ -891,6 +1018,48 @@ bool ModelLibraryService::ParseMultipartGgufFilename(
   return true;
 }
 
+std::string ModelLibraryService::NormalizeJobKind(const std::string& value) {
+  const auto normalized = Lowercase(Trim(value));
+  return normalized == "quantization" ? "quantization" : "download";
+}
+
+bool ModelLibraryService::IsQuantizationJob(const ModelLibraryDownloadJob& job) {
+  return NormalizeJobKind(job.job_kind) == "quantization";
+}
+
+std::string ModelLibraryService::DetectEntryQuantization(const std::string& stem_or_prefix) {
+  for (const auto quantization : kKnownGgufQuantizations) {
+    const std::string suffix = "-" + std::string(quantization);
+    if (stem_or_prefix.size() > suffix.size() &&
+        stem_or_prefix.compare(stem_or_prefix.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      return std::string(quantization);
+    }
+  }
+  return "base";
+}
+
+std::string ModelLibraryService::StripKnownQuantizationSuffix(const std::string& stem) {
+  const auto quantization = DetectEntryQuantization(stem);
+  if (quantization == "base") {
+    return stem;
+  }
+  const std::string suffix = "-" + quantization;
+  return stem.substr(0, stem.size() - suffix.size());
+}
+
+std::string ModelLibraryService::BuildQuantizedDisplayName(
+    const std::string& raw_name,
+    const std::string& quantization) {
+  const std::string normalized =
+      EndsWithIgnoreCase(raw_name, ".gguf")
+          ? raw_name.substr(0, raw_name.size() - 5)
+          : raw_name;
+  if (quantization == "base") {
+    return normalized;
+  }
+  return StripKnownQuantizationSuffix(normalized) + " - " + quantization;
+}
+
 std::vector<std::string> ModelLibraryService::DiscoverRoots(
     const std::string& db_path) const {
   comet::ControllerStore store(db_path);
@@ -999,6 +1168,7 @@ void ModelLibraryService::PersistDownloadJobMetadata(
   }
   json payload{
       {"id", job.id},
+      {"job_kind", NormalizeJobKind(job.job_kind)},
       {"status", job.status},
       {"phase", job.phase},
       {"model_id", job.model_id},
@@ -1102,6 +1272,7 @@ void ModelLibraryService::RecoverPersistentJobsFromMetadata(
       if (job.id.empty() || existing_job_ids.count(job.id) != 0) {
         continue;
       }
+      job.job_kind = NormalizeJobKind(payload.value("job_kind", std::string("download")));
       job.status = payload.value("status", std::string("queued"));
       job.phase = payload.value("phase", job.status);
       job.model_id = payload.value("model_id", std::string{});
@@ -1140,6 +1311,9 @@ void ModelLibraryService::RecoverPersistentJobsFromMetadata(
 
       std::uintmax_t observed_bytes_done = 0;
       bool all_targets_complete = !job.target_paths.empty();
+      if (IsQuantizationJob(job) && job.status != "completed") {
+        all_targets_complete = false;
+      }
       for (const auto& target_path_text : job.target_paths) {
         std::error_code size_error;
         const std::filesystem::path target_path(target_path_text);
@@ -1197,6 +1371,7 @@ json ModelLibraryService::BuildJobPayload(
     const ModelLibraryDownloadJob& job) const {
   return json{
       {"id", job.id},
+      {"job_kind", NormalizeJobKind(job.job_kind)},
       {"status", job.status},
       {"phase", job.phase.empty() ? job.status : job.phase},
       {"model_id", job.model_id},
@@ -1452,6 +1627,16 @@ ModelLibraryService::ScanEntries(const std::string& db_path) const {
       entry.name = current_name;
       entry.kind = "file";
       entry.format = "gguf";
+      entry.quantization = DetectEntryQuantization(current_path.stem().string());
+      if (entry.quantization != "base") {
+        const auto base_path =
+            current_path.parent_path() /
+            (StripKnownQuantizationSuffix(current_path.stem().string()) + ".gguf");
+        std::error_code base_error;
+        if (std::filesystem::exists(base_path, base_error) && !base_error) {
+          entry.quantized_from_path = NormalizePathString(base_path);
+        }
+      }
       entry.root = root_text;
       entry.paths = {entry.path};
       entry.size_bytes = iterator->file_size(error);
@@ -1484,6 +1669,7 @@ ModelLibraryService::ScanEntries(const std::string& db_path) const {
     entry.name = group.name;
     entry.kind = "multipart-gguf";
     entry.format = "gguf";
+    entry.quantization = DetectEntryQuantization(group.name);
     entry.root = group.root;
     entry.paths = group.paths;
     entry.size_bytes = group.size_bytes;
@@ -1716,6 +1902,7 @@ void ModelLibraryService::StartDownloadJob(
       const bool requires_conversion =
           NormalizeModelOutputFormat(snapshot->detected_source_format) == "safetensors" &&
           NormalizeModelOutputFormat(snapshot->desired_output_format) == "gguf";
+      const bool is_quantization_job = IsQuantizationJob(*snapshot);
       service.UpdateJob(
           db_path,
           job_id,
@@ -1723,34 +1910,99 @@ void ModelLibraryService::StartDownloadJob(
             job.status = "running";
             job.phase = "queued";
             job.current_item = "probing";
-            job.bytes_done = ExistingDownloadBytesForJob(job);
+            job.bytes_done = is_quantization_job ? 0 : ExistingDownloadBytesForJob(job);
           });
       std::optional<std::uintmax_t> aggregate_total = std::uintmax_t{0};
-      for (const auto& source_url : snapshot->source_urls) {
-        if (service.IsStopRequested(job_id)) {
-          throw DownloadStoppedError();
+      if (!is_quantization_job) {
+        for (const auto& source_url : snapshot->source_urls) {
+          if (service.IsStopRequested(job_id)) {
+            throw DownloadStoppedError();
+          }
+          const auto content_length = service.ProbeContentLength(source_url);
+          if (!content_length.has_value()) {
+            aggregate_total = std::nullopt;
+            break;
+          }
+          *aggregate_total += *content_length;
         }
-        const auto content_length = service.ProbeContentLength(source_url);
-        if (!content_length.has_value()) {
-          aggregate_total = std::nullopt;
-          break;
-        }
-        *aggregate_total += *content_length;
       }
       service.UpdateJob(
           db_path,
           job_id,
           [&](ModelLibraryDownloadJob& job) {
             job.status = "running";
-            job.phase = "running";
-            job.bytes_total = aggregate_total;
+            job.phase = is_quantization_job ? "quantizing" : "running";
+            if (!is_quantization_job) {
+              job.bytes_total = aggregate_total;
+            }
             if (job.current_item == "probing") {
               job.current_item.clear();
             }
           });
       std::uintmax_t aggregate_prefix = 0;
       std::vector<std::filesystem::path> download_targets;
-      if (requires_conversion) {
+      if (is_quantization_job) {
+        if (snapshot->target_paths.empty() || snapshot->quantizations.empty()) {
+          throw std::runtime_error("quantization job is missing target_paths or quantizations");
+        }
+        const std::filesystem::path source_path =
+            snapshot->source_urls.empty()
+                ? std::filesystem::path(snapshot->target_root) /
+                      (StripKnownQuantizationSuffix(
+                           std::filesystem::path(snapshot->current_item).stem().string()) +
+                       ".gguf")
+                : std::filesystem::path(snapshot->source_urls.front());
+        const auto plan = service.conversion_service_->BuildQuantizationPlan(
+            ModelConversionService::QuantizationRequest{
+                .job_id = snapshot->id,
+                .source_path = source_path,
+                .quantization = snapshot->quantizations.front(),
+                .staging_directory = snapshot->staging_directory.empty()
+                    ? std::filesystem::path(snapshot->target_root) /
+                          (std::string(kJobMetadataPrefix) + snapshot->id + "-staging")
+                    : std::filesystem::path(snapshot->staging_directory),
+                .retained_output_path = std::filesystem::path(snapshot->target_paths.front()),
+                .replace_existing = true,
+            });
+        service.conversion_service_->ExecuteQuantization(
+            ModelConversionService::QuantizationRequest{
+                .job_id = snapshot->id,
+                .source_path = source_path,
+                .quantization = snapshot->quantizations.front(),
+                .staging_directory = plan.staging_directory,
+                .retained_output_path = plan.retained_output_path,
+                .replace_existing = true,
+            },
+            plan,
+            ModelConversionService::JobHooks{
+                .stop_requested =
+                    [&service, &job_id]() { return service.IsStopRequested(job_id); },
+                .register_pid =
+                    [&service, &job_id](int pid) {
+                      service.RegisterActiveJobProcess(job_id, pid);
+                    },
+                .clear_pid =
+                    [&service, &job_id]() { service.ClearActiveJobProcess(job_id); },
+                .update_job =
+                    [&service, &db_path, &job_id](
+                        const std::string& phase,
+                        const std::string& current_item,
+                        const std::optional<std::uintmax_t>& bytes_total,
+                        std::uintmax_t bytes_done) {
+                      service.UpdateJob(
+                          db_path,
+                          job_id,
+                          [&](ModelLibraryDownloadJob& job) {
+                            job.status = "running";
+                            job.phase = phase;
+                            job.current_item = current_item;
+                            job.bytes_total = bytes_total;
+                            job.bytes_done = bytes_done;
+                          });
+                    },
+            });
+        aggregate_prefix = FileSizeIfExists(plan.retained_output_path).value_or(0);
+      } else if (requires_conversion) {
         const std::filesystem::path destination_root =
             snapshot->target_subdir.empty()
                 ? std::filesystem::path(snapshot->target_root)
@@ -1857,7 +2109,8 @@ void ModelLibraryService::StartDownloadJob(
             job.status = "completed";
             job.phase = "completed";
             job.bytes_done = aggregate_prefix;
-            job.bytes_total = requires_conversion ? std::nullopt : aggregate_total;
+            job.bytes_total =
+                (requires_conversion || is_quantization_job) ? std::nullopt : aggregate_total;
             job.current_item.clear();
             job.error_message.clear();
           });

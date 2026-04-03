@@ -24,8 +24,11 @@ import {
   detectModelSourceFormat,
   MODEL_LIBRARY_FORMAT_OPTIONS,
   MODEL_LIBRARY_GGUF_QUANTIZATIONS,
+  MODEL_LIBRARY_QUANTIZATION_FILTERS,
+  formatModelLibraryDisplayName,
   normalizeModelDownloadSourceUrls,
-  shouldShowGgufConversionOptions,
+  normalizeModelLibraryItemQuantization,
+  normalizeModelLibraryJobKind,
 } from "./modelLibrary.js";
 import {
   buildSkillsFactoryGroupTree,
@@ -1791,6 +1794,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState("");
   const [modelLibraryBusy, setModelLibraryBusy] = useState("");
+  const [modelsTab, setModelsTab] = useState("library");
   const [visibleModelCount, setVisibleModelCount] = useState(MODEL_LIBRARY_PAGE_SIZE);
   const [modelJobPage, setModelJobPage] = useState(0);
   const [modelDownloadForm, setModelDownloadForm] = useState({
@@ -1800,8 +1804,13 @@ function App() {
     sourceUrls: "",
     format: "unknown",
     formatLocked: false,
-    quantizations: [],
-    keepBaseGguf: true,
+  });
+  const [quantizationSearch, setQuantizationSearch] = useState("");
+  const [quantizationFilter, setQuantizationFilter] = useState("all");
+  const [quantizationDialog, setQuantizationDialog] = useState({
+    open: false,
+    item: null,
+    quantization: MODEL_LIBRARY_GGUF_QUANTIZATIONS[0],
   });
   const [apiError, setApiError] = useState("");
   const [apiHealthy, setApiHealthy] = useState(false);
@@ -1851,6 +1860,7 @@ function App() {
     setEvents([]);
     setInteractionStatus(null);
     setModelLibrary({ items: [], roots: [], jobs: [] });
+    setModelsTab("library");
     setSkillsFactory({
       items: [],
       busy: false,
@@ -1866,6 +1876,13 @@ function App() {
     setChatError("");
     setApiHealthy(false);
     setStreamHealthy(false);
+    setQuantizationSearch("");
+    setQuantizationFilter("all");
+    setQuantizationDialog({
+      open: false,
+      item: null,
+      quantization: MODEL_LIBRARY_GGUF_QUANTIZATIONS[0],
+    });
     setSkillsDialog({
       open: false,
       planeName: "",
@@ -2362,20 +2379,6 @@ function App() {
           target_subdir: modelDownloadForm.targetSubdir.trim() || undefined,
           source_urls: sourceUrls,
           format: modelDownloadForm.format,
-          quantizations:
-            shouldShowGgufConversionOptions(
-              detectModelSourceFormat(sourceUrls),
-              modelDownloadForm.format,
-            )
-              ? modelDownloadForm.quantizations
-              : [],
-          keep_base_gguf:
-            shouldShowGgufConversionOptions(
-              detectModelSourceFormat(sourceUrls),
-              modelDownloadForm.format,
-            )
-              ? modelDownloadForm.keepBaseGguf
-              : true,
         }),
       });
       setModelDownloadForm((current) => ({
@@ -2383,8 +2386,6 @@ function App() {
         sourceUrls: "",
         format: "unknown",
         formatLocked: false,
-        quantizations: [],
-        keepBaseGguf: true,
       }));
       await refreshModelLibrary();
       await refreshAll(selectedPlane);
@@ -2444,6 +2445,46 @@ function App() {
         },
         body: JSON.stringify({ job_id: job.id }),
       });
+      await refreshModelLibrary();
+    } finally {
+      setModelLibraryBusy("");
+    }
+  }
+
+  function openQuantizationDialog(item) {
+    setQuantizationDialog({
+      open: true,
+      item,
+      quantization: MODEL_LIBRARY_GGUF_QUANTIZATIONS[0],
+    });
+  }
+
+  function closeQuantizationDialog() {
+    setQuantizationDialog({
+      open: false,
+      item: null,
+      quantization: MODEL_LIBRARY_GGUF_QUANTIZATIONS[0],
+    });
+  }
+
+  async function enqueueModelQuantization() {
+    if (!quantizationDialog.item?.path) {
+      return;
+    }
+    setModelLibraryBusy(`quantize:${quantizationDialog.item.path}`);
+    try {
+      await fetchJson(modelLibraryPath("quantize"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          source_path: quantizationDialog.item.path,
+          quantization: quantizationDialog.quantization,
+          replace_existing: true,
+        }),
+      });
+      closeQuantizationDialog();
       await refreshModelLibrary();
     } finally {
       setModelLibraryBusy("");
@@ -3153,12 +3194,18 @@ function App() {
   const visibleModelItems = (modelLibrary.items || []).slice(0, visibleModelCount);
   const hasMoreModelItems = activeModelCount > visibleModelCount;
   const modelLibraryJobs = Array.isArray(modelLibrary.jobs) ? modelLibrary.jobs : [];
+  const downloadModelJobs = modelLibraryJobs.filter(
+    (job) => normalizeModelLibraryJobKind(job?.job_kind) === "download",
+  );
+  const quantizationModelJobs = modelLibraryJobs.filter(
+    (job) => normalizeModelLibraryJobKind(job?.job_kind) === "quantization",
+  );
   const modelJobPageCount = Math.max(
     1,
-    Math.ceil(modelLibraryJobs.length / MODEL_LIBRARY_JOB_PAGE_SIZE),
+    Math.ceil(downloadModelJobs.length / MODEL_LIBRARY_JOB_PAGE_SIZE),
   );
   const currentModelJobPage = Math.min(modelJobPage, modelJobPageCount - 1);
-  const visibleModelJobs = modelLibraryJobs.slice(
+  const visibleModelJobs = downloadModelJobs.slice(
     currentModelJobPage * MODEL_LIBRARY_JOB_PAGE_SIZE,
     (currentModelJobPage + 1) * MODEL_LIBRARY_JOB_PAGE_SIZE,
   );
@@ -3180,6 +3227,30 @@ function App() {
         ? "is-healthy"
         : "is-booting";
   const modelsNavLabel = `${usedModelCount} used`;
+  const quantizationItems = (modelLibrary.items || [])
+    .filter((item) => item?.format === "gguf" && item?.kind === "file")
+    .filter((item) => {
+      if (!quantizationSearch.trim()) {
+        return true;
+      }
+      const haystack = [
+        item?.name,
+        item?.path,
+        item?.quantization,
+        formatModelLibraryDisplayName(item),
+      ]
+        .join("\n")
+        .toLowerCase();
+      return haystack.includes(quantizationSearch.trim().toLowerCase());
+    })
+    .filter((item) => {
+      const normalized = normalizeModelLibraryItemQuantization(item?.quantization);
+      return quantizationFilter === "all" ? true : normalized === quantizationFilter;
+    });
+  const activeQuantizationJobs = quantizationModelJobs.filter((job) => {
+    const status = String(job?.status || "").toLowerCase();
+    return status === "queued" || status === "running" || status === "stopping";
+  });
   const planesNavLabel = `${runningPlaneCount} running`;
   const planesNavMeta = selectedPlane || `${planes.length} registered`;
   const modelsNavMeta = activeModelJobs > 0
@@ -4540,70 +4611,436 @@ function App() {
 
   function renderModelsLibrary() {
     const detectedSourceFormat = detectModelSourceFormat(modelDownloadForm.sourceUrls);
-    const showGgufConversionOptions = shouldShowGgufConversionOptions(
-      detectedSourceFormat,
-      modelDownloadForm.format,
-    );
-    return (
-      <section className="panel page-panel models-page-panel">
-        <div className="panel-header">
+    const renderLibraryCatalog = () => (
+      <div className="subpanel models-catalog-panel">
+        <div className="subpanel-header">
           <div>
-            <div className="section-label">Models</div>
-            <h2>Model Library</h2>
+            <div className="section-label">Catalog</div>
+            <h3>Models</h3>
           </div>
+          <div className={`tag ${modelsNavClass}`}>
+            {statusDot(modelsNavClass)}
+            <span>{modelsNavLabel}</span>
+          </div>
+        </div>
+        <div className="models-catalog-meta">
+          <span>Loaded {visibleModelItems.length} of {activeModelCount}</span>
+          <span>Scroll to load the next page of tracked artifacts.</span>
+        </div>
+        <div
+          className={`list-column model-library-list model-library-list-expanded ${
+            (modelLibrary.items || []).length === 0 ? "model-library-list-empty" : ""
+          }`}
+          ref={modelLibraryListRef}
+          onScroll={handleModelLibraryScroll}
+        >
+          {(modelLibrary.items || []).length === 0 ? (
+            <EmptyState
+              title="No discovered models"
+              detail="Add a model URL below or use local_path to seed the library."
+            />
+          ) : (
+            visibleModelItems.map((item) => (
+              <article className="list-card" key={item.path}>
+                <div className="card-row">
+                  <strong>{item.name}</strong>
+                  <span className="tag">{modelLibraryItemSummary(item)}</span>
+                </div>
+                <div className="list-detail">
+                  <div>{item.path}</div>
+                  <div>root {item.root || "n/a"}</div>
+                  {Array.isArray(item.referenced_by) && item.referenced_by.length > 0 ? (
+                    <div>used by {item.referenced_by.join(", ")}</div>
+                  ) : (
+                    <div>not referenced by any plane</div>
+                  )}
+                </div>
+                <div className="toolbar">
+                  <button
+                    className={`ghost-button compact-button icon-button ${
+                      item.skills_factory_worker ? "warning-button" : ""
+                    }`}
+                    type="button"
+                    disabled={modelLibraryBusy !== ""}
+                    onClick={() => setSkillsFactoryWorker(item)}
+                    title={
+                      item.skills_factory_worker
+                        ? "Current Skills Factory Worker"
+                        : "Set as Skills Factory Worker"
+                    }
+                  >
+                    <ActionIcon kind="worker" />
+                  </button>
+                  <button
+                    className="ghost-button compact-button danger-button"
+                    type="button"
+                    disabled={modelLibraryBusy !== "" || item.deletable === false}
+                    onClick={() => deleteModelLibraryEntry(item)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </article>
+            ))
+          )}
+          {hasMoreModelItems ? (
+            <div
+              ref={modelLibraryLoadMoreRef}
+              className="model-library-scroll-sentinel"
+              aria-hidden="true"
+            />
+          ) : null}
+        </div>
+        {hasMoreModelItems ? (
           <div className="toolbar">
             <button
               className="ghost-button"
               type="button"
-              disabled={modelLibraryBusy !== ""}
-              onClick={() => refreshModelLibrary()}
+              onClick={() =>
+                setVisibleModelCount((current) =>
+                  Math.min(activeModelCount, current + MODEL_LIBRARY_PAGE_SIZE),
+                )
+              }
             >
-              Refresh models
+              Load more
             </button>
           </div>
+        ) : null}
+      </div>
+    );
+
+    const renderDownloadJobs = () => (
+      <div className="subpanel models-jobs-panel">
+        <div className="subpanel-header">
+          <div>
+            <div className="section-label">Queue</div>
+            <h3>Download jobs</h3>
+          </div>
         </div>
-        <div className="page-copy">
-          Manage discovered model artifacts and queue new downloads, including multipart model
-          sources.
+        {downloadModelJobs.length > 0 ? (
+          <>
+            <div className="models-catalog-meta model-job-pagination-meta">
+              <span>
+                Showing {visibleModelJobs.length} of {downloadModelJobs.length}
+              </span>
+              <span>
+                Page {currentModelJobPage + 1} of {modelJobPageCount}
+              </span>
+            </div>
+            <div className="list-column model-library-jobs model-library-jobs-expanded">
+              {visibleModelJobs.map((job) => (
+                <article className="list-card" key={job.id}>
+                  <div className="card-row">
+                    <strong>{job.model_id || job.id}</strong>
+                    <span className={`tag ${modelLibraryJobStatusClass(job.status)}`}>{job.status}</span>
+                  </div>
+                  <div className="list-detail">
+                    <div>{job.target_root}{job.target_subdir ? `/${job.target_subdir}` : ""}</div>
+                    {job.detected_source_format || job.desired_output_format ? (
+                      <div>
+                        {job.detected_source_format || "unknown"} -&gt;{" "}
+                        {job.desired_output_format || "unknown"}
+                      </div>
+                    ) : null}
+                    <div>{modelLibraryJobByteSummary(job)}</div>
+                    {job.phase && job.phase !== job.status ? <div>phase {job.phase}</div> : null}
+                    {job.current_item ? <div>{job.current_item}</div> : null}
+                    {job.error_message ? <div>{job.error_message}</div> : null}
+                  </div>
+                  <div className="model-job-progress">
+                    <div className="model-job-progress-meta">
+                      <span>{modelLibraryJobProgressLabel(job)}</span>
+                      {modelLibraryJobProgress(job) !== null ? (
+                        <span>{Math.round(modelLibraryJobProgress(job))}%</span>
+                      ) : (
+                        <span>{job.status}</span>
+                      )}
+                    </div>
+                    <progress
+                      className="model-job-progress-bar"
+                      value={
+                        modelLibraryJobProgress(job) === null ? undefined : modelLibraryJobProgress(job)
+                      }
+                      max="100"
+                      aria-label={modelLibraryJobProgressLabel(job)}
+                    />
+                  </div>
+                  <div className="toolbar model-job-toolbar">
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      disabled={modelLibraryBusy !== "" || job.can_stop !== true}
+                      onClick={() => stopModelLibraryJob(job)}
+                    >
+                      Stop
+                    </button>
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      disabled={modelLibraryBusy !== "" || job.can_resume !== true}
+                      onClick={() => resumeModelLibraryJob(job)}
+                    >
+                      Resume
+                    </button>
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      disabled={modelLibraryBusy !== "" || job.can_hide !== true}
+                      onClick={() => hideModelLibraryJob(job)}
+                    >
+                      Hide
+                    </button>
+                    <button
+                      className="ghost-button danger-button"
+                      type="button"
+                      disabled={modelLibraryBusy !== "" || job.can_delete !== true}
+                      onClick={() => deleteModelLibraryJob(job)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+            {modelJobPageCount > 1 ? (
+              <div className="toolbar model-job-pagination">
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={currentModelJobPage <= 0}
+                  onClick={() => setModelJobPage((current) => Math.max(0, current - 1))}
+                >
+                  Previous
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={currentModelJobPage >= modelJobPageCount - 1}
+                  onClick={() =>
+                    setModelJobPage((current) =>
+                      Math.min(modelJobPageCount - 1, current + 1),
+                    )
+                  }
+                >
+                  Next
+                </button>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <EmptyState
+            title="No queued downloads"
+            detail="Visible download jobs will appear here while they are running or after they finish."
+          />
+        )}
+      </div>
+    );
+
+    const renderDownloadForm = () => (
+      <div className="subpanel">
+        <div className="subpanel-header">
+          <div>
+            <div className="section-label">Add model</div>
+            <h3>Queue download</h3>
+          </div>
         </div>
-        <div className="models-page-stack">
-          <div className="subpanel models-catalog-panel">
-            <div className="subpanel-header">
-              <div>
-                <div className="section-label">Catalog</div>
-                <h3>Models</h3>
-              </div>
-              <div className={`tag ${modelsNavClass}`}>
-                {statusDot(modelsNavClass)}
-                <span>{modelsNavLabel}</span>
-              </div>
+        <label className="field-label" htmlFor="model-target-root">
+          Target root
+        </label>
+        <input
+          id="model-target-root"
+          className="text-input"
+          type="text"
+          value={modelDownloadForm.targetRoot}
+          onChange={(event) =>
+            setModelDownloadForm((current) => ({ ...current, targetRoot: event.target.value }))
+          }
+          placeholder="/abs/path/to/model/library"
+          spellCheck="false"
+        />
+        <label className="field-label" htmlFor="model-target-subdir">
+          Target subdir
+        </label>
+        <input
+          id="model-target-subdir"
+          className="text-input"
+          type="text"
+          value={modelDownloadForm.targetSubdir}
+          onChange={(event) =>
+            setModelDownloadForm((current) => ({ ...current, targetSubdir: event.target.value }))
+          }
+          placeholder="Qwen/Qwen3.5-122B-A10B-FP8"
+          spellCheck="false"
+        />
+        <label className="field-label" htmlFor="model-id-input">
+          Model id
+        </label>
+        <input
+          id="model-id-input"
+          className="text-input"
+          type="text"
+          value={modelDownloadForm.modelId}
+          onChange={(event) =>
+            setModelDownloadForm((current) => ({ ...current, modelId: event.target.value }))
+          }
+          placeholder="Qwen/Qwen3.5-122B-A10B-FP8"
+          spellCheck="false"
+        />
+        <label className="field-label" htmlFor="model-source-urls">
+          Source URL(s)
+        </label>
+        <textarea
+          id="model-source-urls"
+          className="editor-textarea model-source-textarea"
+          value={modelDownloadForm.sourceUrls}
+          onChange={(event) =>
+            setModelDownloadForm((current) => ({ ...current, sourceUrls: event.target.value }))
+          }
+          placeholder="One URL per line. Multipart models are supported."
+        />
+        <div className="plane-form-section-meta">
+          Detected source format: {detectedSourceFormat}
+        </div>
+        <label className="field-label" htmlFor="model-format-select">
+          Format
+        </label>
+        <select
+          id="model-format-select"
+          className="text-input"
+          value={modelDownloadForm.format}
+          onChange={(event) =>
+            setModelDownloadForm((current) => ({
+              ...current,
+              format: event.target.value,
+              formatLocked: true,
+            }))
+          }
+        >
+          {modelDownloadForm.format === "unknown" ? (
+            <option value="unknown">Auto detect</option>
+          ) : null}
+          {MODEL_LIBRARY_FORMAT_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <div className="plane-form-section-meta">
+          GGUF conversion now retains only the base GGUF. Use the Quantization tab for
+          post-download quantization variants.
+        </div>
+        <div className="toolbar">
+          <button
+            className="ghost-button"
+            type="button"
+            disabled={
+              modelLibraryBusy !== "" ||
+              !modelDownloadForm.targetRoot.trim() ||
+              !modelDownloadForm.sourceUrls.trim()
+            }
+            onClick={enqueueModelLibraryDownload}
+          >
+            Download model
+          </button>
+        </div>
+      </div>
+    );
+
+    const renderQuantizationTab = () => (
+      <div className="models-page-stack">
+        <div className="subpanel">
+          <div className="subpanel-header">
+            <div>
+              <div className="section-label">Quantization</div>
+              <h3>GGUF variants</h3>
             </div>
-            <div className="models-catalog-meta">
-              <span>Loaded {visibleModelItems.length} of {activeModelCount}</span>
-              <span>Scroll to load the next page of tracked artifacts.</span>
+          </div>
+          <div className="models-quantization-toolbar">
+            <input
+              className="text-input"
+              type="text"
+              value={quantizationSearch}
+              onChange={(event) => setQuantizationSearch(event.target.value)}
+              placeholder="Search GGUF models"
+              spellCheck="false"
+            />
+            <div className="models-quantization-filters" role="toolbar" aria-label="Quantization filters">
+              <button
+                className={`ghost-button compact-button ${quantizationFilter === "all" ? "warning-button" : ""}`}
+                type="button"
+                onClick={() => setQuantizationFilter("all")}
+              >
+                All
+              </button>
+              {MODEL_LIBRARY_QUANTIZATION_FILTERS.map((option) => (
+                <button
+                  className={`ghost-button compact-button ${
+                    quantizationFilter === option ? "warning-button" : ""
+                  }`}
+                  type="button"
+                  key={option}
+                  onClick={() => setQuantizationFilter(option)}
+                >
+                  {option}
+                </button>
+              ))}
             </div>
-            <div
-              className={`list-column model-library-list model-library-list-expanded ${
-                (modelLibrary.items || []).length === 0 ? "model-library-list-empty" : ""
-              }`}
-              ref={modelLibraryListRef}
-              onScroll={handleModelLibraryScroll}
-            >
-              {(modelLibrary.items || []).length === 0 ? (
-                <EmptyState
-                  title="No discovered models"
-                  detail="Add a model URL below or use local_path to seed the library."
-                />
-              ) : (
-                visibleModelItems.map((item) => (
+          </div>
+          {activeQuantizationJobs.length > 0 ? (
+            <div className="models-quantization-progress">
+              {activeQuantizationJobs.map((job) => (
+                <article className="list-card" key={job.id}>
+                  <div className="card-row">
+                    <strong>{job.model_id || job.id}</strong>
+                    <span className={`tag ${modelLibraryJobStatusClass(job.status)}`}>{job.phase || job.status}</span>
+                  </div>
+                  <div className="list-detail">
+                    <div>{job.current_item || "quantizing"}</div>
+                    {job.error_message ? <div>{job.error_message}</div> : null}
+                  </div>
+                  <div className="model-job-progress">
+                    <div className="model-job-progress-meta">
+                      <span>{modelLibraryJobProgressLabel(job)}</span>
+                      {modelLibraryJobProgress(job) !== null ? (
+                        <span>{Math.round(modelLibraryJobProgress(job))}%</span>
+                      ) : (
+                        <span>{job.status}</span>
+                      )}
+                    </div>
+                    <progress
+                      className="model-job-progress-bar"
+                      value={modelLibraryJobProgress(job) === null ? undefined : modelLibraryJobProgress(job)}
+                      max="100"
+                      aria-label={modelLibraryJobProgressLabel(job)}
+                    />
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+          <div className={`list-column model-library-list model-library-list-expanded ${
+            quantizationItems.length === 0 ? "model-library-list-empty" : ""
+          }`}>
+            {quantizationItems.length === 0 ? (
+              <EmptyState
+                title="No GGUF models match"
+                detail="Download or convert a base GGUF model first, then launch quantization from this tab."
+              />
+            ) : (
+              quantizationItems.map((item) => {
+                const itemQuantization = normalizeModelLibraryItemQuantization(item.quantization);
+                return (
                   <article className="list-card" key={item.path}>
                     <div className="card-row">
-                      <strong>{item.name}</strong>
-                      <span className="tag">{modelLibraryItemSummary(item)}</span>
+                      <strong>{formatModelLibraryDisplayName(item)}</strong>
+                      <div className="models-quantization-badges">
+                        <span className="tag">{itemQuantization}</span>
+                        <span className="tag">{modelLibraryItemSummary(item)}</span>
+                      </div>
                     </div>
                     <div className="list-detail">
                       <div>{item.path}</div>
-                      <div>root {item.root || "n/a"}</div>
+                      {item.quantized_from_path ? <div>derived from {item.quantized_from_path}</div> : null}
                       {Array.isArray(item.referenced_by) && item.referenced_by.length > 0 ? (
                         <div>used by {item.referenced_by.join(", ")}</div>
                       ) : (
@@ -4612,324 +5049,148 @@ function App() {
                     </div>
                     <div className="toolbar">
                       <button
-                        className={`ghost-button compact-button icon-button ${
-                          item.skills_factory_worker ? "warning-button" : ""
-                        }`}
+                        className="ghost-button"
                         type="button"
                         disabled={modelLibraryBusy !== ""}
-                        onClick={() => setSkillsFactoryWorker(item)}
-                        title={
-                          item.skills_factory_worker
-                            ? "Current Skills Factory Worker"
-                            : "Set as Skills Factory Worker"
-                        }
+                        onClick={() => openQuantizationDialog(item)}
                       >
-                        <ActionIcon kind="worker" />
-                      </button>
-                      <button
-                        className="ghost-button compact-button danger-button"
-                        type="button"
-                        disabled={modelLibraryBusy !== "" || item.deletable === false}
-                        onClick={() => deleteModelLibraryEntry(item)}
-                      >
-                        Delete
+                        Quantize
                       </button>
                     </div>
                   </article>
-                ))
-              )}
-              {hasMoreModelItems ? (
-                <div
-                  ref={modelLibraryLoadMoreRef}
-                  className="model-library-scroll-sentinel"
-                  aria-hidden="true"
-                />
-              ) : null}
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+    );
+
+    return (
+      <>
+        <section className="panel page-panel models-page-panel">
+          <div className="panel-header">
+            <div>
+              <div className="section-label">Models</div>
+              <h2>Model Library</h2>
             </div>
-            {hasMoreModelItems ? (
-              <div className="toolbar">
+            <div className="toolbar">
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={modelLibraryBusy !== ""}
+                onClick={() => refreshModelLibrary()}
+              >
+                Refresh models
+              </button>
+            </div>
+          </div>
+          <div className="page-copy">
+            Manage discovered model artifacts, queue downloads, and create GGUF
+            quantization variants.
+          </div>
+          <div className="tab-strip" role="tablist" aria-label="Models tabs">
+            {[
+              ["library", "Library", "Catalog and model actions"],
+              ["quantization", "Quantization", "GGUF post-processing workflow"],
+              ["downloads", "Downloads", "Queue and Add Model"],
+            ].map(([value, title, meta]) => (
+              <button
+                key={value}
+                className={`tab-button ${modelsTab === value ? "is-active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={modelsTab === value}
+                onClick={() => setModelsTab(value)}
+              >
+                <span className="tab-button-title">{title}</span>
+                <span className="tab-button-meta">{meta}</span>
+              </button>
+            ))}
+          </div>
+          {modelsTab === "library" ? (
+            <div className="models-page-stack">{renderLibraryCatalog()}</div>
+          ) : null}
+          {modelsTab === "downloads" ? (
+            <div className="models-page-grid">
+              {renderDownloadJobs()}
+              {renderDownloadForm()}
+            </div>
+          ) : null}
+          {modelsTab === "quantization" ? renderQuantizationTab() : null}
+        </section>
+        {quantizationDialog.open ? (
+          <div className="modal-backdrop" role="presentation" onClick={closeQuantizationDialog}>
+            <div
+              className="modal-card quantization-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="quantization-dialog-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="panel-header">
+                <div>
+                  <div className="section-label">Quantization</div>
+                  <h2 id="quantization-dialog-title">
+                    {formatModelLibraryDisplayName(quantizationDialog.item)}
+                  </h2>
+                </div>
                 <button
-                  className="ghost-button"
+                  className="ghost-button compact-button icon-button"
                   type="button"
-                  onClick={() =>
-                    setVisibleModelCount((current) =>
-                      Math.min(activeModelCount, current + MODEL_LIBRARY_PAGE_SIZE),
-                    )
-                  }
+                  onClick={closeQuantizationDialog}
+                  title="Close quantization dialog"
+                  aria-label="Close quantization dialog"
                 >
-                  Load more
+                  <ActionIcon kind="close" />
                 </button>
               </div>
-            ) : null}
-          </div>
-          <div className="models-page-grid">
-            <div className="subpanel models-jobs-panel">
-              <div className="subpanel-header">
-                <div>
-                  <div className="section-label">Queue</div>
-                  <h3>Download jobs</h3>
-                </div>
+              <div className="list-detail">
+                <div>{quantizationDialog.item?.path}</div>
+                <div>Select the GGUF quantization type to generate.</div>
               </div>
-              {modelLibraryJobs.length > 0 ? (
-                <>
-                  <div className="models-catalog-meta model-job-pagination-meta">
-                    <span>
-                      Showing {visibleModelJobs.length} of {modelLibraryJobs.length}
-                    </span>
-                    <span>
-                      Page {currentModelJobPage + 1} of {modelJobPageCount}
-                    </span>
-                  </div>
-                  <div className="list-column model-library-jobs model-library-jobs-expanded">
-                  {visibleModelJobs.map((job) => (
-                    <article className="list-card" key={job.id}>
-                      <div className="card-row">
-                        <strong>{job.model_id || job.id}</strong>
-                        <span className={`tag ${modelLibraryJobStatusClass(job.status)}`}>{job.status}</span>
-                      </div>
-                      <div className="list-detail">
-                        <div>{job.target_root}{job.target_subdir ? `/${job.target_subdir}` : ""}</div>
-                        {job.detected_source_format || job.desired_output_format ? (
-                          <div>
-                            {job.detected_source_format || "unknown"} -&gt;{" "}
-                            {job.desired_output_format || "unknown"}
-                          </div>
-                        ) : null}
-                        <div>{modelLibraryJobByteSummary(job)}</div>
-                        {job.phase && job.phase !== job.status ? (
-                          <div>phase {job.phase}</div>
-                        ) : null}
-                        {job.current_item ? <div>{job.current_item}</div> : null}
-                        {job.error_message ? <div>{job.error_message}</div> : null}
-                      </div>
-                      <div className="model-job-progress">
-                        <div className="model-job-progress-meta">
-                          <span>{modelLibraryJobProgressLabel(job)}</span>
-                          {modelLibraryJobProgress(job) !== null ? (
-                            <span>{Math.round(modelLibraryJobProgress(job))}%</span>
-                          ) : (
-                            <span>{job.status}</span>
-                          )}
-                        </div>
-                        <progress
-                          className="model-job-progress-bar"
-                          value={modelLibraryJobProgress(job) === null ? undefined : modelLibraryJobProgress(job)}
-                          max="100"
-                          aria-label={modelLibraryJobProgressLabel(job)}
-                        />
-                      </div>
-                      <div className="toolbar model-job-toolbar">
-                        <button
-                          className="ghost-button"
-                          type="button"
-                          disabled={modelLibraryBusy !== "" || job.can_stop !== true}
-                          onClick={() => stopModelLibraryJob(job)}
-                        >
-                          Stop
-                        </button>
-                        <button
-                          className="ghost-button"
-                          type="button"
-                          disabled={modelLibraryBusy !== "" || job.can_resume !== true}
-                          onClick={() => resumeModelLibraryJob(job)}
-                        >
-                          Resume
-                        </button>
-                        <button
-                          className="ghost-button"
-                          type="button"
-                          disabled={modelLibraryBusy !== "" || job.can_hide !== true}
-                          onClick={() => hideModelLibraryJob(job)}
-                        >
-                          Hide
-                        </button>
-                        <button
-                          className="ghost-button danger-button"
-                          type="button"
-                          disabled={modelLibraryBusy !== "" || job.can_delete !== true}
-                          onClick={() => deleteModelLibraryJob(job)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                  </div>
-                  {modelJobPageCount > 1 ? (
-                    <div className="toolbar model-job-pagination">
-                      <button
-                        className="ghost-button"
-                        type="button"
-                        disabled={currentModelJobPage <= 0}
-                        onClick={() => setModelJobPage((current) => Math.max(0, current - 1))}
-                      >
-                        Previous
-                      </button>
-                      <button
-                        className="ghost-button"
-                        type="button"
-                        disabled={currentModelJobPage >= modelJobPageCount - 1}
-                        onClick={() =>
-                          setModelJobPage((current) =>
-                            Math.min(modelJobPageCount - 1, current + 1),
-                          )
-                        }
-                      >
-                        Next
-                      </button>
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <EmptyState
-                  title="No queued downloads"
-                  detail="Visible download jobs will appear here while they are running or after they finish."
-                />
-              )}
-            </div>
-            <div className="subpanel">
-              <div className="subpanel-header">
-                <div>
-                  <div className="section-label">Add model</div>
-                  <h3>Queue download</h3>
-                </div>
-              </div>
-              <label className="field-label" htmlFor="model-target-root">
-                Target root
-              </label>
-              <input
-                id="model-target-root"
-                className="text-input"
-                type="text"
-                value={modelDownloadForm.targetRoot}
-                onChange={(event) =>
-                  setModelDownloadForm((current) => ({ ...current, targetRoot: event.target.value }))
-                }
-                placeholder="/abs/path/to/model/library"
-                spellCheck="false"
-              />
-              <label className="field-label" htmlFor="model-target-subdir">
-                Target subdir
-              </label>
-              <input
-                id="model-target-subdir"
-                className="text-input"
-                type="text"
-                value={modelDownloadForm.targetSubdir}
-                onChange={(event) =>
-                  setModelDownloadForm((current) => ({ ...current, targetSubdir: event.target.value }))
-                }
-                placeholder="Qwen/Qwen3.5-122B-A10B-FP8"
-                spellCheck="false"
-              />
-              <label className="field-label" htmlFor="model-id-input">
-                Model id
-              </label>
-              <input
-                id="model-id-input"
-                className="text-input"
-                type="text"
-                value={modelDownloadForm.modelId}
-                onChange={(event) =>
-                  setModelDownloadForm((current) => ({ ...current, modelId: event.target.value }))
-                }
-                placeholder="Qwen/Qwen3.5-122B-A10B-FP8"
-                spellCheck="false"
-              />
-              <label className="field-label" htmlFor="model-source-urls">
-                Source URL(s)
-              </label>
-              <textarea
-                id="model-source-urls"
-                className="editor-textarea model-source-textarea"
-                value={modelDownloadForm.sourceUrls}
-                onChange={(event) =>
-                  setModelDownloadForm((current) => ({ ...current, sourceUrls: event.target.value }))
-                }
-                placeholder="One URL per line. Multipart models are supported."
-              />
-              <div className="plane-form-section-meta">
-                Detected source format: {detectedSourceFormat}
-              </div>
-              <label className="field-label" htmlFor="model-format-select">
-                Format
+              <label className="field-label" htmlFor="quantization-type-select">
+                Quantization type
               </label>
               <select
-                id="model-format-select"
+                id="quantization-type-select"
                 className="text-input"
-                value={modelDownloadForm.format}
+                value={quantizationDialog.quantization}
                 onChange={(event) =>
-                  setModelDownloadForm((current) => ({
+                  setQuantizationDialog((current) => ({
                     ...current,
-                    format: event.target.value,
-                    formatLocked: true,
+                    quantization: event.target.value,
                   }))
                 }
               >
-                {modelDownloadForm.format === "unknown" ? (
-                  <option value="unknown">Auto detect</option>
-                ) : null}
-                {MODEL_LIBRARY_FORMAT_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
+                {MODEL_LIBRARY_GGUF_QUANTIZATIONS.map((quantization) => (
+                  <option key={quantization} value={quantization}>
+                    {quantization}
                   </option>
                 ))}
               </select>
-              {showGgufConversionOptions ? (
-                <>
-                  <label className="field-label">Quantizations</label>
-                  <div className="selection-grid">
-                    {MODEL_LIBRARY_GGUF_QUANTIZATIONS.map((quantization) => (
-                      <label className="selection-option" key={quantization}>
-                        <input
-                          type="checkbox"
-                          checked={modelDownloadForm.quantizations.includes(quantization)}
-                          onChange={(event) =>
-                            setModelDownloadForm((current) => ({
-                              ...current,
-                              quantizations: event.target.checked
-                                ? [...current.quantizations, quantization]
-                                : current.quantizations.filter((item) => item !== quantization),
-                            }))
-                          }
-                        />
-                        <span>{quantization}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <label className="selection-option">
-                    <input
-                      type="checkbox"
-                      checked={modelDownloadForm.keepBaseGguf}
-                      onChange={(event) =>
-                        setModelDownloadForm((current) => ({
-                          ...current,
-                          keepBaseGguf: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span>Keep base GGUF</span>
-                  </label>
-                </>
-              ) : null}
               <div className="toolbar">
                 <button
                   className="ghost-button"
                   type="button"
-                  disabled={
-                    modelLibraryBusy !== "" ||
-                    !modelDownloadForm.targetRoot.trim() ||
-                    !modelDownloadForm.sourceUrls.trim()
-                  }
-                  onClick={enqueueModelLibraryDownload}
+                  disabled={modelLibraryBusy !== ""}
+                  onClick={enqueueModelQuantization}
                 >
-                  Download model
+                  Apply
+                </button>
+                <button
+                  className="ghost-button danger-button"
+                  type="button"
+                  disabled={modelLibraryBusy !== ""}
+                  onClick={closeQuantizationDialog}
+                >
+                  Cancel
                 </button>
               </div>
             </div>
           </div>
-        </div>
-      </section>
+        ) : null}
+      </>
     );
   }
 
@@ -5621,10 +5882,6 @@ function App() {
     setModelDownloadForm((current) => ({
       ...current,
       format: detectedSourceFormat,
-      quantizations:
-        detectedSourceFormat === "gguf" ? [] : current.quantizations,
-      keepBaseGguf:
-        detectedSourceFormat === "gguf" ? true : current.keepBaseGguf,
     }));
   }, [modelDownloadForm.sourceUrls, modelDownloadForm.format, modelDownloadForm.formatLocked]);
 

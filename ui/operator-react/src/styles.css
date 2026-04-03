@@ -546,6 +546,31 @@ body {
   margin-top: 12px;
 }
 
+.models-quantization-toolbar {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.models-quantization-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.models-quantization-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.models-quantization-progress {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
 .onboarding-card {
   display: grid;
   gap: 14px;
@@ -1829,6 +1854,12 @@ body {
   width: min(980px, calc(100vw - 48px));
   display: grid;
   gap: 18px;
+}
+
+.quantization-modal {
+  width: min(720px, calc(100vw - 48px));
+  display: grid;
+  gap: 16px;
 }
 
 .telemetry-chart-shell {

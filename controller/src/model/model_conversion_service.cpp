@@ -5,6 +5,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <numeric>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -23,6 +24,12 @@ namespace {
 constexpr std::string_view kFormatGguf = "gguf";
 constexpr std::string_view kFormatSafetensors = "safetensors";
 constexpr std::string_view kFormatUnknown = "unknown";
+constexpr std::array<std::string_view, 4> kKnownQuantizations = {
+    "Q8_0",
+    "Q5_K_M",
+    "Q4_K_M",
+    "IQ4_NL",
+};
 
 bool IsHfAuxiliaryConversionFile(const std::string& lowered_filename) {
   return lowered_filename.ends_with(".json") || lowered_filename.ends_with(".model") ||
@@ -170,6 +177,27 @@ ModelConversionService::Plan ModelConversionService::BuildPlan(
   return plan;
 }
 
+ModelConversionService::QuantizationPlan ModelConversionService::BuildQuantizationPlan(
+    const QuantizationRequest& request) const {
+  const auto trimmed_quantization = Trim(request.quantization);
+  if (trimmed_quantization.empty()) {
+    throw std::runtime_error("quantization type is required");
+  }
+  const auto source_filename = request.source_path.filename().string();
+  if (!Lowercase(source_filename).ends_with(".gguf")) {
+    throw std::runtime_error("quantization source must be a GGUF file");
+  }
+  QuantizationPlan plan;
+  plan.source_path = request.source_path.lexically_normal();
+  plan.staging_directory = request.staging_directory.lexically_normal();
+  plan.quantization = trimmed_quantization;
+  const auto base_stem = StripKnownQuantizationSuffix(request.source_path.stem().string());
+  plan.staged_output_path =
+      JoinNormalized(plan.staging_directory, base_stem + "-" + trimmed_quantization + ".gguf");
+  plan.retained_output_path = request.retained_output_path.lexically_normal();
+  return plan;
+}
+
 void ModelConversionService::Execute(
     const Request& request,
     const Plan& plan,
@@ -217,6 +245,34 @@ void ModelConversionService::Execute(
   if (!request.keep_base_gguf && !plan.quantizations.empty()) {
     RemovePathIfExists(plan.staged_base_output_path);
   }
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(plan.staging_directory, cleanup_error);
+}
+
+void ModelConversionService::ExecuteQuantization(
+    const QuantizationRequest& request,
+    const QuantizationPlan& plan,
+    const JobHooks& hooks) const {
+  EnsureDirectory(plan.staging_directory);
+  GgufQuantizationService(tool_locator_.Resolve()).Quantize(
+      Plan{
+          .destination_root = plan.retained_output_path.parent_path(),
+          .staging_directory = plan.staging_directory,
+          .downloaded_source_paths = {},
+          .staged_base_output_path = plan.source_path,
+          .quantizations = {plan.quantization},
+          .staged_quantized_output_paths = {plan.staged_output_path},
+          .retained_output_paths = {plan.retained_output_path},
+      },
+      hooks);
+  if (hooks.update_job) {
+    hooks.update_job("cleaning", "retaining outputs", std::nullopt, 0);
+  }
+  EnsureDirectory(plan.retained_output_path.parent_path());
+  if (request.replace_existing) {
+    RemovePathIfExists(plan.retained_output_path);
+  }
+  std::filesystem::rename(plan.staged_output_path, plan.retained_output_path);
   std::error_code cleanup_error;
   std::filesystem::remove_all(plan.staging_directory, cleanup_error);
 }
@@ -315,7 +371,15 @@ void ModelConversionService::HfToGgufPythonConverter::Convert(
       plan.staging_directory,
       hooks,
       "converting",
-      plan.staged_base_output_path.filename().string());
+      plan.staged_base_output_path.filename().string(),
+      plan.staged_base_output_path,
+      std::accumulate(
+          plan.downloaded_source_paths.begin(),
+          plan.downloaded_source_paths.end(),
+          std::uintmax_t{0},
+          [](std::uintmax_t total, const std::filesystem::path& path) {
+            return total + FileSizeOrZero(path);
+          }));
 }
 
 ModelConversionService::GgufQuantizationService::GgufQuantizationService(
@@ -344,7 +408,14 @@ void ModelConversionService::GgufQuantizationService::Quantize(
         output_path.string(),
         quantization,
     };
-    RunCommand(argv, plan.staging_directory, hooks, "quantizing", quantization);
+    RunCommand(
+        argv,
+        plan.staging_directory,
+        hooks,
+        "quantizing",
+        quantization,
+        output_path,
+        FileSizeOrZero(plan.staged_base_output_path));
   }
 }
 
@@ -383,6 +454,17 @@ std::string ModelConversionService::Trim(const std::string& value) {
   return value.substr(begin, end - begin + 1);
 }
 
+std::string ModelConversionService::StripKnownQuantizationSuffix(const std::string& stem) {
+  for (const auto quantization : kKnownQuantizations) {
+    const std::string suffix = "-" + std::string(quantization);
+    if (stem.size() > suffix.size() &&
+        stem.compare(stem.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      return stem.substr(0, stem.size() - suffix.size());
+    }
+  }
+  return stem;
+}
+
 std::string ModelConversionService::ShellEscape(const std::string& value) {
   std::string escaped = "'";
   for (const char ch : value) {
@@ -401,6 +483,15 @@ bool ModelConversionService::FileExistsAndNonEmpty(const std::filesystem::path& 
   return std::filesystem::exists(path, error) && !error &&
          std::filesystem::is_regular_file(path, error) && !error &&
          std::filesystem::file_size(path, error) > 0 && !error;
+}
+
+std::uintmax_t ModelConversionService::FileSizeOrZero(const std::filesystem::path& path) {
+  std::error_code error;
+  if (!std::filesystem::exists(path, error) || error ||
+      !std::filesystem::is_regular_file(path, error) || error) {
+    return 0;
+  }
+  return std::filesystem::file_size(path, error);
 }
 
 void ModelConversionService::EnsureDirectory(const std::filesystem::path& path) {
@@ -449,12 +540,14 @@ void ModelConversionService::RunCommand(
     const std::filesystem::path& working_directory,
     const JobHooks& hooks,
     const std::string& phase,
-    const std::string& current_item) {
+    const std::string& current_item,
+    const std::filesystem::path& progress_path,
+    const std::optional<std::uintmax_t>& progress_total) {
   if (argv.empty()) {
     throw std::runtime_error("conversion command is empty");
   }
   if (hooks.update_job) {
-    hooks.update_job(phase, current_item, std::nullopt, 0);
+    hooks.update_job(phase, current_item, progress_total, 0);
   }
 
 #if defined(_WIN32)
@@ -517,6 +610,13 @@ void ModelConversionService::RunCommand(
     }
     if (hooks.stop_requested && hooks.stop_requested()) {
       kill(pid, SIGTERM);
+    }
+    if (hooks.update_job) {
+      hooks.update_job(
+          phase,
+          current_item,
+          progress_total,
+          progress_path.empty() ? 0 : FileSizeOrZero(progress_path));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
   }

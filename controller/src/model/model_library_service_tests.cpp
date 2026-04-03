@@ -544,6 +544,9 @@ int main() {
         nlohmann::json::parse(conversion_response.body).at("job").at("id").get<std::string>();
     const auto completed_conversion_job = WaitForJobStatus(store, conversion_job_id, "completed");
     const fs::path converted_base_path = dst_root / "converted-base" / "gemma-4-E2B.gguf";
+    Expect(
+        completed_conversion_job.job_kind == "download",
+        "base conversion job should persist as a download job");
     Expect(fs::exists(converted_base_path), "converted base GGUF should exist");
     Expect(
         ReadFile(converted_base_path) == "GGUF:safetensors-payload",
@@ -559,7 +562,7 @@ int main() {
         "staging directory should be removed after successful conversion");
 
     setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize.string().c_str(), 1);
-    const auto quantized_response = service.EnqueueDownload(
+    const auto normalized_download_response = service.EnqueueDownload(
         db_path.string(),
         JsonRequest(
             "POST",
@@ -567,31 +570,83 @@ int main() {
             nlohmann::json{
                 {"model_id", "google/gemma-4-E2B"},
                 {"target_root", dst_root.string()},
-                {"target_subdir", "converted-quants"},
+                {"target_subdir", "converted-ignored-quants"},
                 {"source_urls", nlohmann::json::array({FileUrlForPath(safetensors_source)})},
                 {"format", "gguf"},
                 {"quantizations", nlohmann::json::array({"Q4_K_M", "Q8_0"})},
                 {"keep_base_gguf", false},
             }));
     Expect(
+        normalized_download_response.status_code == 202,
+        "download with deprecated quantization options should still be accepted");
+    const auto normalized_download_job_id =
+        nlohmann::json::parse(normalized_download_response.body).at("job").at("id").get<std::string>();
+    const auto normalized_download_job =
+        WaitForJobStatus(store, normalized_download_job_id, "completed");
+    const fs::path quantized_root = dst_root / "converted-ignored-quants";
+    Expect(
+        normalized_download_job.quantizations.empty(),
+        "download jobs should normalize quantizations away from upload flow");
+    Expect(
+        fs::exists(quantized_root / "gemma-4-E2B.gguf"),
+        "upload flow should retain only the base GGUF");
+    Expect(
+        !fs::exists(quantized_root / "gemma-4-E2B-Q4_K_M.gguf"),
+        "upload flow should no longer emit quantized variants");
+
+    const auto quantized_response = service.EnqueueQuantization(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/quantize",
+            nlohmann::json{
+                {"source_path", converted_base_path.string()},
+                {"quantization", "Q4_K_M"},
+                {"replace_existing", true},
+            }));
+    Expect(
         quantized_response.status_code == 202,
-        "safetensors quantization job should be accepted");
+        "dedicated quantization job should be accepted");
     const auto quantized_job_id =
         nlohmann::json::parse(quantized_response.body).at("job").at("id").get<std::string>();
     const auto completed_quantized_job = WaitForJobStatus(store, quantized_job_id, "completed");
-    const fs::path quantized_root = dst_root / "converted-quants";
     Expect(
-        fs::exists(quantized_root / "gemma-4-E2B-Q4_K_M.gguf"),
-        "Q4_K_M output should exist after quantization");
+        completed_quantized_job.job_kind == "quantization",
+        "quantization endpoint should persist job_kind=quantization");
     Expect(
-        fs::exists(quantized_root / "gemma-4-E2B-Q8_0.gguf"),
-        "Q8_0 output should exist after quantization");
+        fs::exists(dst_root / "converted-base" / "gemma-4-E2B-Q4_K_M.gguf"),
+        "Q4_K_M output should exist after dedicated quantization");
     Expect(
-        !fs::exists(quantized_root / "gemma-4-E2B.gguf"),
-        "base GGUF should not be retained when keep_base_gguf is false");
+        completed_quantized_job.retained_output_paths.size() == 1,
+        "quantization job should persist one retained output path");
+    {
+      std::ofstream out(dst_root / "converted-base" / "gemma-4-E2B-Q4_K_M.gguf", std::ios::trunc);
+      out << "stale-quantized-output";
+    }
+    const auto replaced_quantized_response = service.EnqueueQuantization(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/quantize",
+            nlohmann::json{
+                {"source_path", converted_base_path.string()},
+                {"quantization", "Q4_K_M"},
+                {"replace_existing", true},
+            }));
     Expect(
-        completed_quantized_job.retained_output_paths.size() == 2,
-        "quantized job should persist retained output paths");
+        replaced_quantized_response.status_code == 202,
+        "re-quantization should be accepted for the same source/type");
+    const auto replaced_quantized_job_id =
+        nlohmann::json::parse(replaced_quantized_response.body).at("job").at("id").get<std::string>();
+    const auto replaced_quantized_job =
+        WaitForJobStatus(store, replaced_quantized_job_id, "completed");
+    Expect(
+        ReadFile(dst_root / "converted-base" / "gemma-4-E2B-Q4_K_M.gguf") ==
+            "Q4_K_M:GGUF:safetensors-payload",
+        "re-quantization should replace the previous quantized variant contents");
+    Expect(
+        replaced_quantized_job.job_kind == "quantization",
+        "replacement quantization should remain a quantization job");
 
     const fs::path mixed_config_path = src_root / "config.json";
     const fs::path mixed_tokenizer_path = src_root / "tokenizer.json";
@@ -635,19 +690,15 @@ int main() {
         "mixed HF metadata bundle should still produce a GGUF output");
 
     setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize_fail.string().c_str(), 1);
-    const auto failed_quantized_response = service.EnqueueDownload(
+    const auto failed_quantized_response = service.EnqueueQuantization(
         db_path.string(),
         JsonRequest(
             "POST",
-            "/api/v1/model-library/download",
+            "/api/v1/model-library/quantize",
             nlohmann::json{
-                {"model_id", "google/gemma-4-E2B"},
-                {"target_root", dst_root.string()},
-                {"target_subdir", "converted-failed"},
-                {"source_urls", nlohmann::json::array({FileUrlForPath(safetensors_source)})},
-                {"format", "gguf"},
-                {"quantizations", nlohmann::json::array({"Q4_K_M"})},
-                {"keep_base_gguf", true},
+                {"source_path", converted_base_path.string()},
+                {"quantization", "Q5_K_M"},
+                {"replace_existing", true},
             }));
     Expect(
         failed_quantized_response.status_code == 202,
@@ -658,6 +709,9 @@ int main() {
     Expect(
         failed_job.phase == "quantizing",
         "failed quantization job should preserve failing phase");
+    Expect(
+        failed_job.job_kind == "quantization",
+        "failed dedicated quantization job should still persist quantization job kind");
     Expect(
         !failed_job.staging_directory.empty() && fs::exists(failed_job.staging_directory),
         "failed quantization job should retain staging directory for inspection or resume");

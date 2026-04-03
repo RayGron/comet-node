@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS skills_factory_skills (
     description TEXT NOT NULL,
     content TEXT NOT NULL,
     match_terms_json TEXT NOT NULL DEFAULT '[]',
+    internal INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

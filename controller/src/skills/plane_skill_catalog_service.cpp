@@ -126,6 +126,12 @@ PlaneSkillCatalogService::PlaneSkillInput PlaneSkillCatalogService::ParsePlaneSk
     }
     input.enabled = payload.at("enabled").get<bool>();
   }
+  if (payload.contains("internal")) {
+    if (!payload.at("internal").is_boolean()) {
+      throw std::invalid_argument("internal must be a boolean");
+    }
+    input.internal = payload.at("internal").get<bool>();
+  }
   input.session_ids = UniqueNonEmptyStringArray(payload, "session_ids");
   input.comet_links = UniqueNonEmptyStringArray(payload, "comet_links");
   return input;
@@ -150,6 +156,7 @@ nlohmann::json PlaneSkillCatalogService::BuildSkillPayload(
       {"description", canonical->description},
       {"content", canonical->content},
       {"match_terms", canonical->match_terms},
+      {"internal", canonical->internal},
       {"enabled", !binding.has_value() || binding->enabled},
       {"session_ids", binding.has_value() ? json(binding->session_ids) : json::array()},
       {"comet_links", binding.has_value() ? json(binding->comet_links) : json::array()},
@@ -220,6 +227,7 @@ nlohmann::json PlaneSkillCatalogService::CreateSkill(
   canonical.description = input.description;
   canonical.content = input.content;
   canonical.match_terms = input.match_terms;
+  canonical.internal = input.internal;
   canonical.created_at = existing_canonical.has_value() ? existing_canonical->created_at : "";
   canonical.updated_at = "";
   store.UpsertSkillsFactorySkill(canonical);
@@ -297,6 +305,9 @@ nlohmann::json PlaneSkillCatalogService::UpdateSkill(
   }
   if (payload.contains("match_terms")) {
     canonical.match_terms = input.match_terms;
+  }
+  if (payload.contains("internal")) {
+    canonical.internal = input.internal;
   }
   store.UpsertSkillsFactorySkill(canonical);
 

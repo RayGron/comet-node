@@ -354,6 +354,7 @@ function buildEmptySkillForm() {
     description: "",
     content: "",
     matchTermsText: "",
+    internal: false,
     enabled: true,
     sessionIdsText: "",
     cometLinksText: "",
@@ -3488,6 +3489,7 @@ function App() {
         description: skill.description || "",
         content: skill.content || "",
         matchTermsText: renderLineSeparatedValues(skill.match_terms),
+        internal: skill.internal === true,
         enabled: true,
         sessionIdsText: "",
         cometLinksText: "",
@@ -3615,6 +3617,7 @@ function App() {
       description: String(skillsFactory.form?.description || "").trim(),
       content: String(skillsFactory.form?.content || "").trim(),
       match_terms: parseLineSeparatedValues(skillsFactory.form?.matchTermsText),
+      internal: Boolean(skillsFactory.form?.internal),
     };
     if (!payload.name || !payload.description || !payload.content) {
       setSkillsFactory((current) => ({
@@ -5463,7 +5466,10 @@ function App() {
                           {formatSkillGroupPath(item.group_path)}
                         </span>
                       </div>
-                      <span className="tag">{item.plane_count || 0} plane(s)</span>
+                      <div className="toolbar">
+                        {item.internal ? <span className="tag is-warning">Internal</span> : null}
+                        <span className="tag">{item.plane_count || 0} plane(s)</span>
+                      </div>
                     </div>
                     <div className="list-detail">
                       <div className="factory-skill-table-id">{item.id}</div>
@@ -5532,6 +5538,16 @@ function App() {
               Use slash-separated groups. Skill ids stay stable; rename and regroup through this
               form.
             </div>
+            <label className="field-label plane-checkbox">
+              <input
+                type="checkbox"
+                checked={Boolean(form.internal)}
+                onChange={(event) => updateFactorySkillFormField("internal", event.target.checked)}
+              />
+              <span>
+                Mark as internal support-layer skill
+              </span>
+            </label>
             <label className="field-label">
               <span className="field-label-title">Description</span>
               <textarea

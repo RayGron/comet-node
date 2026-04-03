@@ -282,6 +282,7 @@ struct SkillsFactorySkillRecord {
   std::string description;
   std::string content;
   std::vector<std::string> match_terms;
+  bool internal = false;
   std::string created_at;
   std::string updated_at;
 };

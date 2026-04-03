@@ -28,6 +28,7 @@ function buildSkillSearchHaystack(item) {
     normalizeGroupPath(item?.group_path),
     item?.description,
     item?.content,
+    item?.internal ? "internal support layer" : "user facing",
     item?.plane_count,
     ...(Array.isArray(item?.plane_names) ? item.plane_names : []),
   ]

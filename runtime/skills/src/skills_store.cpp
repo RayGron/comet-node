@@ -125,6 +125,7 @@ void SkillsStore::InitializeSchema() {
           description TEXT NOT NULL,
           content TEXT NOT NULL,
           match_terms_json TEXT NOT NULL DEFAULT '[]',
+          internal INTEGER NOT NULL DEFAULT 0,
           enabled INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
@@ -145,6 +146,7 @@ void SkillsStore::InitializeSchema() {
         );
       )SQL");
   EnsureColumn(db_, "skills", "match_terms_json TEXT NOT NULL DEFAULT '[]'");
+  EnsureColumn(db_, "skills", "internal INTEGER NOT NULL DEFAULT 0");
 }
 
 std::string SkillsStore::UtcNow() {
@@ -260,6 +262,15 @@ json SkillsStore::NormalizeSkillPayload(const json& payload, bool partial) {
     normalized["enabled"] = true;
   }
 
+  if (payload.contains("internal")) {
+    if (!payload.at("internal").is_boolean()) {
+      throw ApiError(400, "invalid_request", "internal must be a boolean");
+    }
+    normalized["internal"] = payload.at("internal").get<bool>();
+  } else if (!partial) {
+    normalized["internal"] = false;
+  }
+
   if (payload.contains("session_ids")) {
     normalized["session_ids"] = NormalizeStringList(payload.at("session_ids"), "session_ids");
   } else if (!partial) {
@@ -313,11 +324,12 @@ json SkillsStore::SkillFromStatementLocked(sqlite3_stmt* statement) {
       {"description", ToColumnText(statement, 2)},
       {"content", ToColumnText(statement, 3)},
       {"match_terms", ParseStringArray(ToColumnText(statement, 4))},
-      {"enabled", sqlite3_column_int(statement, 5) != 0},
+      {"internal", sqlite3_column_int(statement, 5) != 0},
+      {"enabled", sqlite3_column_int(statement, 6) != 0},
       {"session_ids", arrays.session_ids},
       {"comet_links", arrays.comet_links},
-      {"created_at", ToColumnText(statement, 6)},
-      {"updated_at", ToColumnText(statement, 7)},
+      {"created_at", ToColumnText(statement, 7)},
+      {"updated_at", ToColumnText(statement, 8)},
   };
 }
 
@@ -350,7 +362,7 @@ void SkillsStore::ReplaceArraysLocked(
 }
 
 std::optional<json> SkillsStore::FindSkillLocked(const std::string& skill_id, bool enabled_only) {
-  std::string sql = "SELECT id, name, description, content, match_terms_json, enabled, created_at, updated_at "
+  std::string sql = "SELECT id, name, description, content, match_terms_json, internal, enabled, created_at, updated_at "
                     "FROM skills WHERE id = ?";
   if (enabled_only) {
     sql += " AND enabled = 1";
@@ -368,7 +380,7 @@ nlohmann::json SkillsStore::ListSkills() {
   json items = json::array();
   SqliteStatement statement(
       db_,
-      "SELECT id, name, description, content, match_terms_json, enabled, created_at, updated_at "
+      "SELECT id, name, description, content, match_terms_json, internal, enabled, created_at, updated_at "
       "FROM skills ORDER BY updated_at DESC, name ASC");
   while (statement.StepRow()) {
     items.push_back(SkillFromStatementLocked(statement.raw()));
@@ -408,16 +420,17 @@ nlohmann::json SkillsStore::CreateSkill(const json& payload) {
     try {
       SqliteStatement insert(
           db_,
-          "INSERT INTO skills(id, name, description, content, match_terms_json, enabled, created_at, updated_at) "
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+          "INSERT INTO skills(id, name, description, content, match_terms_json, internal, enabled, created_at, updated_at) "
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
       insert.BindText(1, skill_id);
       insert.BindText(2, normalized.at("name").get<std::string>());
       insert.BindText(3, normalized.at("description").get<std::string>());
       insert.BindText(4, normalized.at("content").get<std::string>());
       insert.BindText(5, normalized.at("match_terms").dump());
-      insert.BindInt(6, normalized.at("enabled").get<bool>() ? 1 : 0);
-      insert.BindText(7, now);
+      insert.BindInt(6, normalized.at("internal").get<bool>() ? 1 : 0);
+      insert.BindInt(7, normalized.at("enabled").get<bool>() ? 1 : 0);
       insert.BindText(8, now);
+      insert.BindText(9, now);
       insert.StepDone();
       ReplaceArraysLocked(
           skill_id,
@@ -469,15 +482,16 @@ nlohmann::json SkillsStore::ReplaceSkill(
     try {
       SqliteStatement statement(
           db_,
-          "UPDATE skills SET name = ?, description = ?, content = ?, match_terms_json = ?, enabled = ?, updated_at = ? "
+          "UPDATE skills SET name = ?, description = ?, content = ?, match_terms_json = ?, internal = ?, enabled = ?, updated_at = ? "
           "WHERE id = ?");
       statement.BindText(1, merged.at("name").get<std::string>());
       statement.BindText(2, merged.at("description").get<std::string>());
       statement.BindText(3, merged.at("content").get<std::string>());
       statement.BindText(4, merged.at("match_terms").dump());
-      statement.BindInt(5, merged.at("enabled").get<bool>() ? 1 : 0);
-      statement.BindText(6, merged.at("updated_at").get<std::string>());
-      statement.BindText(7, skill_id);
+      statement.BindInt(5, merged.at("internal").get<bool>() ? 1 : 0);
+      statement.BindInt(6, merged.at("enabled").get<bool>() ? 1 : 0);
+      statement.BindText(7, merged.at("updated_at").get<std::string>());
+      statement.BindText(8, skill_id);
       statement.StepDone();
       ReplaceArraysLocked(
           skill_id,
@@ -541,7 +555,7 @@ nlohmann::json SkillsStore::ResolveSkills(const json& payload) {
   if (session_id.has_value()) {
     SqliteStatement statement(
         db_,
-        "SELECT s.id, s.name, s.description, s.content, s.match_terms_json, s.enabled, s.created_at, s.updated_at "
+        "SELECT s.id, s.name, s.description, s.content, s.match_terms_json, s.internal, s.enabled, s.created_at, s.updated_at "
         "FROM skills s "
         "JOIN skill_session_bindings ss ON ss.skill_id = s.id "
         "WHERE ss.session_id = ? AND s.enabled = 1 "

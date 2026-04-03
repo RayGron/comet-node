@@ -199,6 +199,12 @@ SkillsFactoryService::CanonicalSkillInput SkillsFactoryService::ParseCanonicalSk
     input.content = payload.at("content").get<std::string>();
   }
   input.match_terms = UniqueNonEmptyStringArray(payload, "match_terms");
+  if (payload.contains("internal")) {
+    if (!payload.at("internal").is_boolean()) {
+      throw std::invalid_argument("internal must be a boolean");
+    }
+    input.internal = payload.at("internal").get<bool>();
+  }
   return input;
 }
 
@@ -237,6 +243,7 @@ nlohmann::json SkillsFactoryService::BuildSkillPayload(
       {"description", skill.description},
       {"content", skill.content},
       {"match_terms", skill.match_terms},
+      {"internal", skill.internal},
       {"created_at", skill.created_at},
       {"updated_at", skill.updated_at},
       {"plane_names", plane_names},
@@ -286,6 +293,7 @@ nlohmann::json SkillsFactoryService::CreateSkill(
   skill.description = input.description;
   skill.content = input.content;
   skill.match_terms = input.match_terms;
+  skill.internal = input.internal;
   store.UpsertSkillsFactorySkill(skill);
   if (!skill.group_path.empty()) {
     store.UpsertSkillsFactoryGroup(comet::SkillsFactoryGroupRecord{
@@ -434,6 +442,9 @@ nlohmann::json SkillsFactoryService::UpdateSkill(
   }
   if (payload.contains("match_terms")) {
     current->match_terms = input.match_terms;
+  }
+  if (payload.contains("internal")) {
+    current->internal = input.internal;
   }
   store.UpsertSkillsFactorySkill(*current);
   if (!current->group_path.empty()) {

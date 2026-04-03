@@ -141,6 +141,11 @@ void InitializeSchema(
       "skills_factory_skills",
       "match_terms_json",
       "match_terms_json TEXT NOT NULL DEFAULT '[]'");
+  EnsureColumn(
+      db,
+      "skills_factory_skills",
+      "internal",
+      "internal INTEGER NOT NULL DEFAULT 0");
   Exec(
       db,
       "CREATE TABLE IF NOT EXISTS skills_factory_groups("

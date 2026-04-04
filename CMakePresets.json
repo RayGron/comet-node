@@ -21,6 +21,11 @@
       }
     },
     {
+      "name": "linux-x64-debug",
+      "displayName": "Linux x64 Debug",
+      "inherits": "linux-x64"
+    },
+    {
       "name": "linux-arm64",
       "displayName": "Linux arm64",
       "generator": "Ninja",
@@ -91,6 +96,10 @@
     {
       "name": "linux-x64",
       "configurePreset": "linux-x64"
+    },
+    {
+      "name": "linux-x64-debug",
+      "configurePreset": "linux-x64-debug"
     },
     {
       "name": "linux-arm64",

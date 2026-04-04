@@ -119,15 +119,17 @@ brew install pkg-config autoconf automake libtool libomp
 
 ## Build
 
-Configure and build with the host scripts:
+Configure and build with the host-aware scripts:
 
 ```bash
-./scripts/configure-host-build.sh Debug
-cmake --build "$(./scripts/print-host-build-dir.sh)"
+./scripts/build-host.sh Debug
 ```
 
-Build output paths are grouped by platform and architecture. By default they live under `build/`,
-but you can relocate the build root with `COMET_BUILD_ROOT`.
+`comet-node` resolves the host OS and architecture automatically, and it can use `cmake`
+downloaded by `vcpkg` when `cmake` is not in `PATH`.
+
+Build output paths are grouped by platform and architecture. By default they live under
+`build/`, but you can relocate the build root with `COMET_BUILD_ROOT`.
 
 Examples:
 
@@ -145,9 +147,19 @@ You can also resolve a target build directory directly:
 Manual configure/build is still supported:
 
 ```bash
-cmake -S . -B build/linux/x64
-cmake --build build/linux/x64
+"$(./scripts/find-cmake.sh)" -S . -B "$(./scripts/print-host-build-dir.sh)"
+"$(./scripts/find-cmake.sh)" --build "$(./scripts/print-host-build-dir.sh)"
 ```
+
+Explicit non-host targets still go through the same script family:
+
+```bash
+./scripts/build-target.sh linux x64 Debug
+./scripts/build-target.sh macos arm64 Release
+```
+
+For the current multi-repo workspace and VS Code user-settings split, see
+[`../comet-docs/process/build-vscode-setup.md`](../comet-docs/process/build-vscode-setup.md).
 
 ## Windows Builds
 

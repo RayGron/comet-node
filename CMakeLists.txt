@@ -95,6 +95,55 @@ set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
 set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_RPC ON CACHE BOOL "" FORCE)
+
+if(NOT DEFINED CUDAToolkit_ROOT OR "${CUDAToolkit_ROOT}" STREQUAL "")
+  set(_comet_cuda_root_candidates
+      "$ENV{CUDA_TOOLKIT_ROOT_DIR}"
+      "$ENV{CUDA_HOME}"
+      "$ENV{CUDA_PATH}"
+      "/usr/local/cuda"
+      "/usr/local/cuda-13.2"
+      "/usr/local/cuda-13.1"
+      "/usr/local/cuda-13.0"
+      "/usr/local/cuda-12.9"
+      "/usr/local/cuda-12.8"
+      "/usr/local/cuda-12.7"
+      "/usr/local/cuda-12.6"
+      "/usr/local/cuda-12.5"
+      "/usr/local/cuda-12.4"
+      "/usr/local/cuda-12.3"
+      "/usr/local/cuda-12.2"
+      "/usr/local/cuda-12.1"
+      "/usr/local/cuda-12.0"
+      "/usr/lib/nvidia-cuda-toolkit")
+
+  find_program(_comet_nvcc_executable NAMES nvcc)
+  if(_comet_nvcc_executable)
+    get_filename_component(_comet_nvcc_bin_dir "${_comet_nvcc_executable}" DIRECTORY)
+    get_filename_component(_comet_nvcc_root_from_path "${_comet_nvcc_bin_dir}" DIRECTORY)
+    list(PREPEND _comet_cuda_root_candidates "${_comet_nvcc_root_from_path}")
+  endif()
+
+  foreach(_comet_cuda_root IN LISTS _comet_cuda_root_candidates)
+    if(_comet_cuda_root AND EXISTS "${_comet_cuda_root}/include/cuda_runtime.h")
+      set(CUDAToolkit_ROOT "${_comet_cuda_root}" CACHE PATH "Detected CUDA toolkit root")
+      if(NOT DEFINED CMAKE_CUDA_COMPILER AND EXISTS "${_comet_cuda_root}/bin/nvcc")
+        set(CMAKE_CUDA_COMPILER
+            "${_comet_cuda_root}/bin/nvcc"
+            CACHE FILEPATH "Detected CUDA compiler")
+      endif()
+      message(STATUS "Using detected CUDA toolkit: ${CUDAToolkit_ROOT}")
+      break()
+    endif()
+  endforeach()
+
+  unset(_comet_cuda_root_candidates)
+  unset(_comet_nvcc_executable CACHE)
+  unset(_comet_nvcc_bin_dir)
+  unset(_comet_nvcc_root_from_path)
+  unset(_comet_cuda_root)
+endif()
+
 set(_comet_cuda_available OFF)
 if(DEFINED CUDAToolkit_ROOT AND EXISTS "${CUDAToolkit_ROOT}/include/cuda_runtime.h")
   set(_comet_cuda_available ON)

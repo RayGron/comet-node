@@ -62,6 +62,30 @@ std::string SanitizeLogLabel(std::string value) {
   return value.empty() ? std::string("command") : value;
 }
 
+std::filesystem::path FindBuildArtifact(
+    const std::filesystem::path& build_root,
+    const std::filesystem::path& relative_path) {
+  if (!std::filesystem::exists(build_root) || !std::filesystem::is_directory(build_root)) {
+    return {};
+  }
+
+  for (const auto& os_entry : std::filesystem::directory_iterator(build_root)) {
+    if (!os_entry.is_directory()) {
+      continue;
+    }
+    for (const auto& arch_entry : std::filesystem::directory_iterator(os_entry.path())) {
+      if (!arch_entry.is_directory()) {
+        continue;
+      }
+      const auto candidate = arch_entry.path() / relative_path;
+      if (std::filesystem::exists(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return {};
+}
+
 }  // namespace
 
 ModelConversionService::ModelConversionService(std::filesystem::path repo_root)
@@ -310,9 +334,9 @@ ModelConversionService::LlamaCppToolLocator::Resolve() const {
     }
 #endif
     if (paths.convert_script_path.empty()) {
-      const auto candidate =
-          repo_root_ / "build/linux/x64/_deps/llama_cpp-src/convert_hf_to_gguf.py";
-      if (std::filesystem::exists(candidate)) {
+      const auto candidate = FindBuildArtifact(
+          repo_root_ / "build", "_deps/llama_cpp-src/convert_hf_to_gguf.py");
+      if (!candidate.empty()) {
         paths.convert_script_path = candidate;
       }
     }
@@ -332,8 +356,15 @@ ModelConversionService::LlamaCppToolLocator::Resolve() const {
     }
 #endif
     if (paths.quantize_executable_path.empty()) {
-      const auto candidate = repo_root_ / "build/linux/x64/llama-quantize";
-      if (std::filesystem::exists(candidate)) {
+      const auto candidate = FindBuildArtifact(
+          repo_root_ / "build",
+#if defined(_WIN32)
+          "llama-quantize.exe"
+#else
+          "llama-quantize"
+#endif
+      );
+      if (!candidate.empty()) {
         paths.quantize_executable_path = candidate;
       }
     }

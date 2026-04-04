@@ -62,15 +62,47 @@ function Resolve-CMakeGenerator {
   return 'Visual Studio 17 2022'
 }
 
+function Resolve-CMakeExe {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RepoRoot,
+
+    [Parameter(Mandatory = $true)]
+    [string]$VcpkgExe
+  )
+
+  if ($env:COMET_WINDOWS_CMAKE) {
+    return $env:COMET_WINDOWS_CMAKE
+  }
+
+  $command = Get-Command cmake.exe -ErrorAction SilentlyContinue
+  if ($command) {
+    return $command.Source
+  }
+
+  $vcpkgRoot = Split-Path -Parent $VcpkgExe
+  $toolsRoot = Join-Path $vcpkgRoot 'downloads\tools'
+  if (Test-Path $toolsRoot) {
+    $candidate = Get-ChildItem -Path $toolsRoot -Recurse -File -Filter cmake.exe -ErrorAction SilentlyContinue |
+      Sort-Object FullName -Descending |
+      Select-Object -First 1
+    if ($candidate) {
+      return $candidate.FullName
+    }
+  }
+
+  throw "Unable to find cmake.exe. Install CMake, set COMET_WINDOWS_CMAKE, or let vcpkg download CMake first."
+}
+
 $scriptDir = Split-Path -Parent $PSCommandPath
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..\..')).Path
 $triplet = "$TargetArch-windows"
 $buildDir = Join-Path $repoRoot "build\windows\$TargetArch"
 $installRoot = Join-Path $repoRoot "vcpkg_installed\$triplet-root"
 $prefixPath = Join-Path $installRoot $triplet
-$cmakeExe = if ($env:COMET_WINDOWS_CMAKE) { $env:COMET_WINDOWS_CMAKE } else { 'cmake.exe' }
-$generator = Resolve-CMakeGenerator -CmakeExe $cmakeExe
 $vcpkgExe = Resolve-VcpkgExe -RepoRoot $repoRoot
+$cmakeExe = Resolve-CMakeExe -RepoRoot $repoRoot -VcpkgExe $vcpkgExe
+$generator = Resolve-CMakeGenerator -CmakeExe $cmakeExe
 
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 Remove-Item (Join-Path $buildDir 'CMakeCache.txt') -Force -ErrorAction SilentlyContinue

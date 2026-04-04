@@ -134,6 +134,7 @@ build_dir="$("${script_dir}/print-build-dir.sh" "${target_os}" "${target_arch}")
 "${script_dir}/ensure-vcpkg-deps.sh" "${VCPKG_TRIPLET}"
 vcpkg_installed_dir="${repo_dir}/vcpkg_installed/${VCPKG_TRIPLET}-root"
 ninja_exe="$("${script_dir}/find-ninja.sh")"
+cmake_exe="$("${script_dir}/find-cmake.sh")"
 cmake_prefix_path="${vcpkg_installed_dir}/${VCPKG_TRIPLET}"
 
 mkdir -p "${build_dir}"
@@ -216,8 +217,8 @@ fi
 
 if [[ "${needs_clean_reconfigure}" == "1" ]]; then
   echo "[cmake] cache settings changed; recreating ${build_dir}" >&2
-  cmake -E rm -f "${cache_path}"
-  cmake -E remove_directory "${build_dir}/CMakeFiles"
+  "${cmake_exe}" -E rm -f "${cache_path}"
+  "${cmake_exe}" -E remove_directory "${build_dir}/CMakeFiles"
 fi
 
 cmake_args=(
@@ -243,6 +244,6 @@ if [[ -n "${openmp_root}" ]]; then
   )
 fi
 
-cmake "${cmake_args[@]}"
+"${cmake_exe}" "${cmake_args[@]}"
 
 echo "${build_dir}"

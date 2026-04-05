@@ -2,6 +2,7 @@
 #include <iostream>
 #include <sstream>
 #include <atomic>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -300,7 +301,15 @@ class BrowsingRuntimeTestServer {
 
 class InteractionBrowsingRuntimeTestServer {
  public:
-  InteractionBrowsingRuntimeTestServer() {
+  explicit InteractionBrowsingRuntimeTestServer(
+      json search_results = json::array({json{{"url", "https://example.com/article"},
+                                              {"domain", "example.com"},
+                                              {"title", "Example Article"},
+                                              {"snippet", "Example snippet"},
+                                              {"score", 0.9}}}),
+      std::set<std::string> fetch_fail_urls = {})
+      : search_results_(std::move(search_results)),
+        fetch_fail_urls_(std::move(fetch_fail_urls)) {
     comet::platform::EnsureSocketsInitialized();
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (!comet::platform::IsSocketValid(listen_fd_)) {
@@ -447,17 +456,24 @@ class InteractionBrowsingRuntimeTestServer {
             client_fd,
             200,
             json{{"query", search_payload.value("query", std::string{})},
-                 {"results",
-                  json::array({json{{"url", "https://example.com/article"},
-                                    {"domain", "example.com"},
-                                    {"title", "Example Article"},
-                                    {"snippet", "Example snippet"},
-                                    {"score", 0.9}}})}});
+                 {"results", search_results_}});
       } else if (request.rfind("POST /v1/browsing/fetch ", 0) == 0) {
         ++fetch_count_;
         const json fetch_payload =
             body.empty() ? json::object() : json::parse(body, nullptr, false);
         const std::string requested_url = fetch_payload.value("url", std::string{});
+        if (fetch_fail_urls_.count(requested_url) > 0) {
+          WriteJsonResponse(
+              client_fd,
+              502,
+              json{{"status", "error"},
+                   {"error",
+                    {{"code", "fetch_failed"},
+                     {"message", "simulated fetch failure"},
+                     {"url", requested_url}}}});
+          comet::platform::CloseSocket(client_fd);
+          continue;
+        }
         WriteJsonResponse(
             client_fd,
             200,
@@ -482,6 +498,8 @@ class InteractionBrowsingRuntimeTestServer {
   std::atomic<bool> stop_requested_{false};
   std::atomic<int> search_count_{0};
   std::atomic<int> fetch_count_{0};
+  json search_results_;
+  std::set<std::string> fetch_fail_urls_;
   comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
   int port_ = 0;
   std::thread thread_;
@@ -1684,6 +1702,95 @@ int main() {
           summary.at("sources").is_array() && !summary.at("sources").empty(),
           "search-and-fetch should expose fetched sources");
       std::cout << "ok: interaction-browsing-search-and-fetch" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeTestServer runtime(
+          json::array({json{{"url", "https://example.com/fail"},
+                            {"domain", "example.com"},
+                            {"title", "Unreachable Result"},
+                            {"snippet", "This page will fail to fetch."},
+                            {"score", 0.95}},
+                       json{{"url", "https://example.com/article"},
+                            {"domain", "example.com"},
+                            {"title", "Reachable Result"},
+                            {"snippet", "This page is reachable."},
+                            {"score", 0.85}}}),
+          {"https://example.com/fail"});
+      comet::controller::InteractionBrowsingService browsing_service;
+      comet::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"messages",
+           json::array(
+               {json{{"role", "user"}, {"content", "Enable web for this chat."}},
+                json{{"role", "user"},
+                     {"content", "Find the latest safe example result online."}}})},
+      };
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state =
+          BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "search fallback after failed fetch should succeed");
+      const auto summary =
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      Expect(runtime.search_count() == 1, "search fallback should still search once");
+      Expect(runtime.fetch_count() >= 2,
+             "search fallback should continue to later results after a failed fetch");
+      Expect(
+          summary.at("sources").is_array() && !summary.at("sources").empty(),
+          "search fallback should expose a later fetched source");
+      Expect(
+          summary.at("sources").at(0).at("url").get<std::string>() ==
+              "https://example.com/article",
+          "search fallback should preserve the first successfully fetched source");
+      std::cout << "ok: interaction-browsing-search-fetch-fallback" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeTestServer runtime(
+          json::array({json{{"url", "https://example.com/fail-1"},
+                            {"domain", "example.com"},
+                            {"title", "Snippet Result One"},
+                            {"snippet", "Summary from the first safe result."},
+                            {"score", 0.95}},
+                       json{{"url", "https://example.com/fail-2"},
+                            {"domain", "example.com"},
+                            {"title", "Snippet Result Two"},
+                            {"snippet", "Summary from the second safe result."},
+                            {"score", 0.90}}}),
+          {"https://example.com/fail-1", "https://example.com/fail-2"});
+      comet::controller::InteractionBrowsingService browsing_service;
+      comet::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"messages",
+           json::array(
+               {json{{"role", "user"}, {"content", "Enable web for this chat."}},
+                json{{"role", "user"},
+                     {"content", "Search online for a safe example summary."}}})},
+      };
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state =
+          BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "snippet fallback should not fail the interaction");
+      const auto summary =
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      Expect(runtime.search_count() == 1, "snippet fallback should search once");
+      Expect(runtime.fetch_count() >= 2, "snippet fallback should try the fetches before degrading");
+      Expect(
+          summary.at("decision").get<std::string>() == "search_and_fetch",
+          "snippet fallback should keep the request in search-and-fetch mode");
+      Expect(
+          summary.at("sources").is_array() && !summary.at("sources").empty(),
+          "snippet fallback should still provide controller browsing evidence");
+      Expect(
+          summary.at("sources").at(0).at("snippet_only").get<bool>(),
+          "snippet fallback should mark evidence that came only from search results");
+      std::cout << "ok: interaction-browsing-search-snippet-fallback" << '\n';
     }
 
     {

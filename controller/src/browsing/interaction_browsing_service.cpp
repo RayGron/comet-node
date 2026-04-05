@@ -39,6 +39,12 @@ struct BrowsingContextDecision {
   std::vector<std::string> urls;
 };
 
+struct SearchCandidate {
+  std::string url;
+  std::string title;
+  std::string snippet;
+};
+
 std::string TrimCopy(const std::string& value) {
   std::size_t start = 0;
   while (start < value.size() &&
@@ -464,6 +470,18 @@ json BuildBrowsingSummary(
   };
 }
 
+json BuildSnippetOnlySource(const SearchCandidate& candidate) {
+  return json{
+      {"url", candidate.url},
+      {"title", candidate.title},
+      {"content_type", "search-result"},
+      {"excerpt", TruncateForInstruction(candidate.snippet, 1200)},
+      {"citations", json::array({candidate.url})},
+      {"injection_flags", json::array()},
+      {"snippet_only", true},
+  };
+}
+
 std::string BuildBrowsingInstruction(const json& summary) {
   const std::string mode = summary.value("mode", std::string{"disabled"});
   const std::string decision = summary.value("decision", std::string{"disabled"});
@@ -523,9 +541,13 @@ std::string BuildBrowsingInstruction(const json& summary) {
     instruction << "\n\nBrowsing evidence:";
     int source_index = 1;
     for (const auto& source : summary.at("sources")) {
+      const bool snippet_only = source.value("snippet_only", false);
       instruction << "\n- Source " << source_index++ << ": "
                   << source.value("title", std::string{"Untitled"}) << " | "
                   << source.value("url", std::string{});
+      if (snippet_only) {
+        instruction << "\n  Note: this evidence comes from the search result summary because page fetch was unavailable.";
+      }
       const std::string excerpt =
           TruncateForInstruction(source.value("excerpt", std::string{}), 900);
       if (!excerpt.empty()) {
@@ -606,10 +628,11 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
   }
 
   std::set<std::string> fetched_urls;
+  std::vector<SearchCandidate> search_candidates;
   if (decision.search_required) {
     json search_payload{
         {"query", TruncateForInstruction(SanitizeForSearchQuery(LowercaseCopy(decision.latest_user_message)), 220)},
-        {"limit", 3},
+        {"limit", 5},
     };
     if (search_payload.at("query").get<std::string>().empty()) {
       search_payload["query"] = LowercaseCopy(decision.latest_user_message);
@@ -632,15 +655,18 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
           json{{"query", search_result.value("query", search_payload.value("query", std::string{}))},
                {"result_count", results.is_array() ? static_cast<int>(results.size()) : 0}});
       if (results.is_array()) {
-        int fetched_count = 0;
         for (const auto& item : results) {
           const std::string url = item.value("url", std::string{});
           if (url.empty() || fetched_urls.count(url) > 0) {
             continue;
           }
           fetched_urls.insert(url);
-          ++fetched_count;
-          if (fetched_count >= 2) {
+          search_candidates.push_back(SearchCandidate{
+              url,
+              item.value("title", std::string{}),
+              item.value("snippet", std::string{}),
+          });
+          if (search_candidates.size() >= 5) {
             break;
           }
         }
@@ -657,7 +683,11 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
     }
   }
 
+  int fetched_source_count = 0;
   for (const auto& url : fetched_urls) {
+    if (fetched_source_count >= 2) {
+      break;
+    }
     const auto fetch_response = service.ProxyPlaneBrowsingRequest(
         resolution.desired_state,
         "POST",
@@ -680,7 +710,21 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
              {"excerpt",
               TruncateForInstruction(fetch_result.value("visible_text", std::string{}), 1200)},
              {"citations", fetch_result.value("citations", json::array())},
-             {"injection_flags", fetch_result.value("injection_flags", json::array())}});
+             {"injection_flags", fetch_result.value("injection_flags", json::array())},
+             {"snippet_only", false}});
+    ++fetched_source_count;
+  }
+
+  if (sources.empty() && !search_candidates.empty()) {
+    for (const auto& candidate : search_candidates) {
+      if (!candidate.url.empty() &&
+          (!candidate.title.empty() || !candidate.snippet.empty())) {
+        sources.push_back(BuildSnippetOnlySource(candidate));
+      }
+      if (sources.size() >= 2) {
+        break;
+      }
+    }
   }
 
   BrowsingContextDecision final_decision = decision;

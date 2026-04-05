@@ -26,6 +26,7 @@ class ControllerCommandLine {
   std::optional<std::string> ui_root() const;
   std::optional<std::string> web_ui_root() const;
   std::optional<std::string> controller_upstream() const;
+  std::optional<std::string> skills_factory_upstream() const;
   std::optional<std::string> compose_mode() const;
   std::optional<std::string> controller() const;
   std::optional<int> id() const;

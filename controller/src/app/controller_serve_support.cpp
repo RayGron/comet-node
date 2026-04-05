@@ -2,6 +2,7 @@
 
 #include "app/controller_composition_support.h"
 #include "app/controller_request_context.h"
+#include "infra/controller_network_manager.h"
 
 namespace comet::controller::serve_support {
 
@@ -103,6 +104,47 @@ int ServeControllerHttp(
       listen_port,
       ui_root,
       "/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/model-library,/api/v1/model-library/download,/api/v1/model-library/jobs/stop,/api/v1/model-library/jobs/resume,/api/v1/model-library/jobs/hide,/api/v1/model-library/jobs[DELETE],/api/v1/model-library/skills-factory-worker,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/planes/<plane>/interaction/status,/api/v1/planes/<plane>/interaction/models,/api/v1/planes/<plane>/interaction/chat/completions,/api/v1/planes/<plane>/interaction/chat/completions/stream,/api/v1/skills-factory,/api/v1/skills-factory/<skill>,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key",
+  });
+}
+
+int ServeSkillsFactoryHttp(
+    const std::string& db_path,
+    const std::string& artifacts_root,
+    const std::string& listen_host,
+    int listen_port,
+    SkillsFactoryHttpService& skills_factory_http_service) {
+  ControllerHttpServer server({
+      [&](const HttpRequest& request) {
+        const ControllerRequestContext::Scope scoped_request(request);
+        if (request.path == "/health" || request.path == "/api/v1/health") {
+          return composition_support::BuildJsonResponse(
+              200,
+              json{{"service", "comet-skills-factory"}, {"status", "ok"}},
+              {});
+        }
+        if (const auto response =
+                skills_factory_http_service.HandleRequest(db_path, artifacts_root, request);
+            response.has_value()) {
+          return *response;
+        }
+        return composition_support::BuildJsonResponse(404, json{{"status", "not_found"}}, {});
+      },
+      [](SocketHandle client_fd, const std::string&, const HttpRequest&) {
+        ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+      },
+      [](const std::string&, const std::string&) -> std::optional<std::string> {
+        return std::nullopt;
+      },
+      [](const comet::EventRecord&) { return json::object(); },
+  });
+
+  return server.Serve({
+      db_path,
+      artifacts_root,
+      listen_host,
+      listen_port,
+      std::nullopt,
+      "/health,/api/v1/health,/api/v1/skills-factory,/api/v1/skills-factory/<skill>",
   });
 }
 

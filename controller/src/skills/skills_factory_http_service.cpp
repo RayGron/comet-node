@@ -24,10 +24,81 @@ HttpResponse BuildJsonResponse(
 
 SkillsFactoryHttpService::SkillsFactoryHttpService(
     const ControllerRequestSupport& request_support,
-    SkillsFactoryService service)
-    : request_support_(request_support), service_(std::move(service)) {}
+    SkillsFactoryService service,
+    std::optional<std::string> upstream_target)
+    : request_support_(request_support),
+      service_(std::move(service)),
+      upstream_target_(std::move(upstream_target)) {}
+
+bool SkillsFactoryHttpService::ShouldHandlePath(const std::string& path) {
+  return path == "/api/v1/skills-factory" ||
+         path == "/api/v1/skills-factory/groups" ||
+         path == "/api/v1/skills-factory/groups/rename" ||
+         path == "/api/v1/skills-factory/groups/delete" ||
+         path.starts_with("/api/v1/skills-factory/");
+}
+
+std::string SkillsFactoryHttpService::BuildPathAndQuery(const HttpRequest& request) {
+  if (request.query_params.empty()) {
+    return request.path;
+  }
+  std::string path = request.path + "?";
+  bool first = true;
+  for (const auto& [key, value] : request.query_params) {
+    if (!first) {
+      path += "&";
+    }
+    first = false;
+    path += key + "=" + value;
+  }
+  return path;
+}
+
+std::vector<std::pair<std::string, std::string>> SkillsFactoryHttpService::BuildProxyHeaders(
+    const HttpRequest& request) {
+  std::vector<std::pair<std::string, std::string>> headers;
+  const auto content_type = request.headers.find("content-type");
+  if (content_type != request.headers.end() && !content_type->second.empty()) {
+    headers.emplace_back("Content-Type", content_type->second);
+  }
+  const auto accept = request.headers.find("accept");
+  if (accept != request.headers.end() && !accept->second.empty()) {
+    headers.emplace_back("Accept", accept->second);
+  }
+  return headers;
+}
+
+HttpResponse SkillsFactoryHttpService::ProxyRequest(const HttpRequest& request) const {
+  if (!upstream_target_.has_value()) {
+    throw std::runtime_error("skills factory upstream is not configured");
+  }
+  return SendControllerHttpRequest(
+      ParseControllerEndpointTarget(*upstream_target_),
+      request.method,
+      BuildPathAndQuery(request),
+      request.body,
+      BuildProxyHeaders(request));
+}
 
 std::optional<HttpResponse> SkillsFactoryHttpService::HandleRequest(
+    const std::string& db_path,
+    const std::string& default_artifacts_root,
+    const HttpRequest& request) const {
+  if (!ShouldHandlePath(request.path)) {
+    return std::nullopt;
+  }
+
+  if (upstream_target_.has_value()) {
+    try {
+      return ProxyRequest(request);
+    } catch (const std::exception&) {
+    }
+  }
+
+  return HandleRequestLocal(db_path, default_artifacts_root, request);
+}
+
+std::optional<HttpResponse> SkillsFactoryHttpService::HandleRequestLocal(
     const std::string& db_path,
     const std::string& default_artifacts_root,
     const HttpRequest& request) const {

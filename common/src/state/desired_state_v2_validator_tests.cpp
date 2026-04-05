@@ -959,9 +959,8 @@ int main() {
           });
       Expect(service_it != compose_plans.front().services.end(),
              "llm-with-skills: skills service missing from compose plan");
-      Expect(service_it->healthcheck.find("COMET_SKILLS_PORT") != std::string::npos &&
-                 service_it->healthcheck.find("/health") != std::string::npos,
-             "llm-with-skills: compose healthcheck should target skills health endpoint");
+      Expect(service_it->healthcheck == "CMD-SHELL test -f /tmp/comet-ready",
+             "llm-with-skills: compose healthcheck should use readiness file");
       std::cout << "ok: llm-with-skills" << '\n';
     }
 

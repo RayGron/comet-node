@@ -389,7 +389,8 @@ ModelLibraryHttpService MakeModelLibraryHttpService(
       model_library_service);
 }
 
-SkillsFactoryHttpService MakeSkillsFactoryHttpService() {
+SkillsFactoryHttpService MakeSkillsFactoryHttpService(
+    const std::optional<std::string>& upstream_target) {
   static const comet::controller::ControllerRequestSupport request_support;
   static const comet::controller::PlaneMutationService plane_mutation_service =
       MakePlaneMutationService();
@@ -402,7 +403,7 @@ SkillsFactoryHttpService MakeSkillsFactoryHttpService() {
          const std::string& fallback_artifacts_root) {
         return ResolvePlaneArtifactsRoot(db_path, plane_name, fallback_artifacts_root);
       });
-  return SkillsFactoryHttpService(request_support, skills_factory_service);
+  return SkillsFactoryHttpService(request_support, skills_factory_service, upstream_target);
 }
 
 ReadModelService MakeReadModelService() {
@@ -599,8 +600,9 @@ PlaneHttpService CreatePlaneHttpService() {
   return MakePlaneHttpService();
 }
 
-SkillsFactoryHttpService CreateSkillsFactoryHttpService() {
-  return MakeSkillsFactoryHttpService();
+SkillsFactoryHttpService CreateSkillsFactoryHttpService(
+    const std::optional<std::string>& upstream_target) {
+  return MakeSkillsFactoryHttpService(upstream_target);
 }
 
 ReadModelService CreateReadModelService() {

@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
@@ -14,7 +15,8 @@ class SkillsFactoryHttpService final {
  public:
   SkillsFactoryHttpService(
       const ControllerRequestSupport& request_support,
-      SkillsFactoryService service);
+      SkillsFactoryService service,
+      std::optional<std::string> upstream_target = std::nullopt);
 
   std::optional<HttpResponse> HandleRequest(
       const std::string& db_path,
@@ -22,8 +24,19 @@ class SkillsFactoryHttpService final {
       const HttpRequest& request) const;
 
  private:
+  std::optional<HttpResponse> HandleRequestLocal(
+      const std::string& db_path,
+      const std::string& default_artifacts_root,
+      const HttpRequest& request) const;
+  HttpResponse ProxyRequest(const HttpRequest& request) const;
+  static bool ShouldHandlePath(const std::string& path);
+  static std::string BuildPathAndQuery(const HttpRequest& request);
+  static std::vector<std::pair<std::string, std::string>> BuildProxyHeaders(
+      const HttpRequest& request);
+
   const ControllerRequestSupport& request_support_;
   SkillsFactoryService service_;
+  std::optional<std::string> upstream_target_;
 };
 
 }  // namespace comet::controller

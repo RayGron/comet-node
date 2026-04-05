@@ -23,4 +23,11 @@ int ServeControllerHttp(
     SchedulerHttpService& scheduler_http_service,
     IAssignmentOrchestrationService& assignment_orchestration_service);
 
+int ServeSkillsFactoryHttp(
+    const std::string& db_path,
+    const std::string& artifacts_root,
+    const std::string& listen_host,
+    int listen_port,
+    SkillsFactoryHttpService& skills_factory_http_service);
+
 }  // namespace comet::controller::serve_support

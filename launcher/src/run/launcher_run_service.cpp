@@ -375,6 +375,9 @@ int LauncherRunService::RunControllerSupervisor(
   PrepareControllerRuntime(self_path, options);
   const std::string local_controller_url =
       "http://127.0.0.1:" + std::to_string(options.listen_port);
+  const std::string local_skills_factory_url =
+      "http://" + options.skills_factory_listen_host + ":" +
+      std::to_string(options.skills_factory_listen_port);
   const std::string web_ui_controller_upstream =
       options.controller_upstream.empty()
           ? DefaultWebUiControllerUpstream(options.listen_port)
@@ -399,10 +402,19 @@ int LauncherRunService::RunControllerSupervisor(
     }
   }
 
+  const pid_t skills_factory_pid = static_cast<pid_t>(process_runner_.SpawnCommand({
+      controller_binary.string(), "serve-skills-factory", "--db", options.db_path.string(),
+      "--artifacts-root", options.artifacts_root.string(), "--listen-host",
+      options.skills_factory_listen_host, "--listen-port",
+      std::to_string(options.skills_factory_listen_port),
+  }));
+  signal_manager.TrackChild(static_cast<int>(skills_factory_pid));
+
   const pid_t controller_pid = static_cast<pid_t>(process_runner_.SpawnCommand({
       controller_binary.string(), "serve", "--db", options.db_path.string(),
       "--artifacts-root", options.artifacts_root.string(), "--listen-host",
       options.listen_host, "--listen-port", std::to_string(options.listen_port),
+      "--skills-factory-upstream", local_skills_factory_url,
   }));
   signal_manager.TrackChild(static_cast<int>(controller_pid));
 
@@ -439,6 +451,7 @@ int LauncherRunService::RunControllerSupervisor(
   }
 
   std::cout << "controller_api_url=" << local_controller_url << "\n";
+  std::cout << "skills_factory_url=" << local_skills_factory_url << "\n";
   if (options.with_web_ui) {
     std::cout << "web_ui_url=http://127.0.0.1:18081\n";
     std::cout << "next_step=open the Web UI and load a plane\n";
@@ -454,6 +467,7 @@ int LauncherRunService::RunControllerSupervisor(
     }
     signal_manager.RemoveChild(*exited);
     if (*exited == static_cast<int>(controller_pid) ||
+        *exited == static_cast<int>(skills_factory_pid) ||
         *exited == static_cast<int>(hostd_pid)) {
       signal_manager.RequestStop();
       break;
@@ -462,6 +476,9 @@ int LauncherRunService::RunControllerSupervisor(
 
   if (controller_pid > 0) {
     signal_manager.TerminateChildProcess(static_cast<int>(controller_pid));
+  }
+  if (skills_factory_pid > 0) {
+    signal_manager.TerminateChildProcess(static_cast<int>(skills_factory_pid));
   }
   if (hostd_pid > 0) {
     signal_manager.TerminateChildProcess(static_cast<int>(hostd_pid));

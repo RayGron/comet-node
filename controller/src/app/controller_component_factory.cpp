@@ -65,8 +65,9 @@ PlaneHttpService ControllerComponentFactory::CreatePlaneHttpService() const {
   return component_factory_support::CreatePlaneHttpService();
 }
 
-SkillsFactoryHttpService ControllerComponentFactory::CreateSkillsFactoryHttpService() const {
-  return component_factory_support::CreateSkillsFactoryHttpService();
+SkillsFactoryHttpService ControllerComponentFactory::CreateSkillsFactoryHttpService(
+    const std::optional<std::string>& upstream_target) const {
+  return component_factory_support::CreateSkillsFactoryHttpService(upstream_target);
 }
 
 ReadModelService ControllerComponentFactory::CreateReadModelService() const {

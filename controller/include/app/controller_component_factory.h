@@ -24,7 +24,8 @@ class ControllerComponentFactory final {
   ModelLibraryHttpService CreateModelLibraryHttpService(
       const ModelLibraryService& model_library_service) const;
   PlaneHttpService CreatePlaneHttpService() const;
-  SkillsFactoryHttpService CreateSkillsFactoryHttpService() const;
+  SkillsFactoryHttpService CreateSkillsFactoryHttpService(
+      const std::optional<std::string>& upstream_target = std::nullopt) const;
   ReadModelService CreateReadModelService() const;
   ReadModelHttpService CreateReadModelHttpService(
       const ReadModelService& read_model_service) const;

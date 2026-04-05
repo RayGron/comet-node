@@ -24,7 +24,11 @@ class ControllerCompositionRoot final : public IControllerServeService {
   int Serve(
       const std::string& listen_host,
       int listen_port,
-      const std::optional<std::string>& requested_ui_root) override;
+      const std::optional<std::string>& requested_ui_root,
+      const std::optional<std::string>& skills_factory_upstream) override;
+  int ServeSkillsFactory(
+      const std::string& listen_host,
+      int listen_port) override;
 
  ControllerCli BuildCli(const ControllerCommandLine& cli);
 

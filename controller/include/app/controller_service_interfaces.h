@@ -205,7 +205,11 @@ class IControllerServeService {
   virtual int Serve(
       const std::string& listen_host,
       int listen_port,
-      const std::optional<std::string>& requested_ui_root) = 0;
+      const std::optional<std::string>& requested_ui_root,
+      const std::optional<std::string>& skills_factory_upstream) = 0;
+  virtual int ServeSkillsFactory(
+      const std::string& listen_host,
+      int listen_port) = 0;
 };
 
 }  // namespace comet::controller

@@ -225,7 +225,7 @@ ComposeService BuildComposeService(
                             : (instance.role == InstanceRole::App
                                    ? "CMD-SHELL curl -fsS http://127.0.0.1:$${PORT:-8080}/health >/dev/null"
                                    : (instance.role == InstanceRole::Skills
-                                          ? "CMD-SHELL curl -fsS http://127.0.0.1:$${COMET_SKILLS_PORT:-18120}/health >/dev/null"
+                                          ? "CMD-SHELL test -f /tmp/comet-ready"
                                           : "CMD-SHELL test -f /tmp/comet-ready"));
   if (instance.role == InstanceRole::Infer) {
     const int infer_api_port = InferApiPort(state, instance);

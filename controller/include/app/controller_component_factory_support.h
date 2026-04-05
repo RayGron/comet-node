@@ -21,7 +21,8 @@ ModelLibraryService CreateModelLibraryService();
 ModelLibraryHttpService CreateModelLibraryHttpService(
     const ModelLibraryService& model_library_service);
 PlaneHttpService CreatePlaneHttpService();
-SkillsFactoryHttpService CreateSkillsFactoryHttpService();
+SkillsFactoryHttpService CreateSkillsFactoryHttpService(
+    const std::optional<std::string>& upstream_target = std::nullopt);
 ReadModelService CreateReadModelService();
 ReadModelHttpService CreateReadModelHttpService(
     const ReadModelService& read_model_service);

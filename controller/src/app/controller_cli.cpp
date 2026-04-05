@@ -297,7 +297,14 @@ std::optional<int> ControllerCli::TryRun() const {
     return serve_service_.Serve(
         command_line_.listen_host().value_or("127.0.0.1"),
         command_line_.listen_port().value_or(18080),
-        command_line_.ui_root());
+        command_line_.ui_root(),
+        command_line_.skills_factory_upstream());
+  }
+
+  if (command == "serve-skills-factory") {
+    return serve_service_.ServeSkillsFactory(
+        command_line_.listen_host().value_or("127.0.0.1"),
+        command_line_.listen_port().value_or(18082));
   }
 
   if (command == "revoke-hostd") {

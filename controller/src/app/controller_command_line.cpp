@@ -77,7 +77,8 @@ void ControllerCommandLine::PrintUsage(std::ostream& output) const {
       << "  comet-controller show-state [--db <path>]\n"
       << "  comet-controller render-infer-runtime [--db <path>]\n"
       << "  comet-controller render-compose [--db <path>] [--node <node-name>]\n"
-      << "  comet-controller serve [--db <path>] [--listen-host <host>] [--listen-port <port>] [--ui-root <path>]\n"
+      << "  comet-controller serve [--db <path>] [--listen-host <host>] [--listen-port <port>] [--ui-root <path>] [--skills-factory-upstream <http://host:port>]\n"
+      << "  comet-controller serve-skills-factory [--db <path>] [--artifacts-root <path>] [--listen-host <host>] [--listen-port <port>]\n"
       << "\n"
       << "Remote operator CLI:\n"
       << "  most inspection and mutation commands also accept --controller <http://host:port>\n"
@@ -123,6 +124,10 @@ std::optional<std::string> ControllerCommandLine::web_ui_root() const {
 
 std::optional<std::string> ControllerCommandLine::controller_upstream() const {
   return FindOptionValue("--controller-upstream");
+}
+
+std::optional<std::string> ControllerCommandLine::skills_factory_upstream() const {
+  return FindOptionValue("--skills-factory-upstream");
 }
 
 std::optional<std::string> ControllerCommandLine::compose_mode() const {

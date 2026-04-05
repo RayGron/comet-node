@@ -28,7 +28,8 @@ ControllerCompositionRoot::~ControllerCompositionRoot() = default;
 int ControllerCompositionRoot::Serve(
     const std::string& listen_host,
     int listen_port,
-    const std::optional<std::string>& requested_ui_root) {
+    const std::optional<std::string>& requested_ui_root,
+    const std::optional<std::string>& skills_factory_upstream) {
   std::optional<std::filesystem::path> ui_root;
   if (requested_ui_root.has_value()) {
     ui_root = std::filesystem::path(*requested_ui_root);
@@ -49,7 +50,8 @@ int ControllerCompositionRoot::Serve(
   auto model_library_http_service =
       factory_->CreateModelLibraryHttpService(model_library_service);
   auto plane_http_service = factory_->CreatePlaneHttpService();
-  auto skills_factory_http_service = factory_->CreateSkillsFactoryHttpService();
+  auto skills_factory_http_service =
+      factory_->CreateSkillsFactoryHttpService(skills_factory_upstream);
   auto read_model_service = factory_->CreateReadModelService();
   auto read_model_http_service =
       factory_->CreateReadModelHttpService(read_model_service);
@@ -74,6 +76,18 @@ int ControllerCompositionRoot::Serve(
       read_model_http_service,
       scheduler_http_service,
       *assignment_orchestration_service_);
+}
+
+int ControllerCompositionRoot::ServeSkillsFactory(
+    const std::string& listen_host,
+    int listen_port) {
+  auto skills_factory_http_service = factory_->CreateSkillsFactoryHttpService(std::nullopt);
+  return serve_support::ServeSkillsFactoryHttp(
+      db_path_,
+      artifacts_root_,
+      listen_host,
+      listen_port,
+      skills_factory_http_service);
 }
 
 ControllerCli ControllerCompositionRoot::BuildCli(const ControllerCommandLine& cli) {

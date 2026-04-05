@@ -1,5 +1,6 @@
 #include "auth/auth_http_service.h"
 
+#include <stdexcept>
 #include <utility>
 
 #include "comet/security/crypto_utils.h"
@@ -13,6 +14,19 @@ json ParseJsonBody(const HttpRequest& request) {
     return json::object();
   }
   return json::parse(request.body);
+}
+
+bool ParseOptionalBooleanField(
+    const json& body,
+    const char* key,
+    bool default_value) {
+  if (!body.contains(key) || body.at(key).is_null()) {
+    return default_value;
+  }
+  if (!body.at(key).is_boolean()) {
+    throw std::invalid_argument(std::string(key) + " must be a boolean");
+  }
+  return body.at(key).get<bool>();
 }
 
 bool StartsWithPathPrefix(const std::string& path, const std::string& prefix) {
@@ -899,6 +913,10 @@ HttpResponse AuthHttpService::HandleSshVerify(
     const json body = ParseJsonBody(request);
     const std::string challenge_id = body.value("challenge_id", std::string{});
     const std::string signature = body.value("signature", std::string{});
+    const bool issue_cookie =
+        ParseOptionalBooleanField(body, "issue_cookie", false);
+    const bool include_token =
+        ParseOptionalBooleanField(body, "include_token", !issue_cookie);
     if (challenge_id.empty() || signature.empty()) {
       return support_.build_json_response(
           400,
@@ -937,12 +955,33 @@ HttpResponse AuthHttpService::HandleSshVerify(
     const std::string session_token = support_.create_controller_session(
         store, challenge->user_id, "ssh", challenge->plane_name);
     support_.erase_pending_ssh_challenge(challenge_id);
+    json payload{
+        {"plane_name", challenge->plane_name},
+        {"expires_at",
+         support_.sql_timestamp_after_seconds(SshSessionLifetimeSeconds())},
+        {"session_kind", "ssh"},
+    };
+    if (issue_cookie) {
+      payload["issued_cookie"] = true;
+    }
+    if (include_token) {
+      payload["token"] = session_token;
+    }
+    std::map<std::string, std::string> headers;
+    if (issue_cookie) {
+      headers["Set-Cookie"] =
+          support_.session_cookie_header(session_token, request);
+    }
     return support_.build_json_response(
         200,
-        json{{"token", session_token},
-             {"plane_name", challenge->plane_name},
-             {"expires_at",
-              support_.sql_timestamp_after_seconds(SshSessionLifetimeSeconds())}},
+        payload,
+        headers);
+  } catch (const std::invalid_argument& error) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"},
+             {"message", error.what()},
+             {"path", request.path}},
         {});
   } catch (const std::exception& error) {
     return support_.build_json_response(

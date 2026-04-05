@@ -373,6 +373,24 @@ target_link_libraries(comet-skills-factory-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-skills-factory-tests)
 
 add_executable(
+  comet-auth-http-tests
+  controller/src/auth/auth_http_service.cpp
+  controller/src/auth/auth_http_service_tests.cpp
+  controller/src/auth/auth_http_support.cpp
+  controller/src/auth/auth_payload_service.cpp
+  controller/src/auth/auth_support_service.cpp
+  controller/src/app/controller_composition_support.cpp
+  controller/src/app/controller_request_context.cpp
+  controller/src/app/controller_time_support.cpp
+  controller/src/infra/controller_network_manager.cpp
+)
+target_include_directories(
+  comet-auth-http-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-auth-http-tests PRIVATE comet-common Threads::Threads)
+comet_enable_strict_warnings(comet-auth-http-tests)
+
+add_executable(
   comet-hostd-local-state-tests
   hostd/src/app/hostd_local_state_support.cpp
   hostd/src/app/hostd_local_state_support_tests.cpp

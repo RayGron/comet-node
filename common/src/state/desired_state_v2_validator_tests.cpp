@@ -928,7 +928,7 @@ int main() {
              "llm-with-skills: state.skills.enabled should be true");
       Expect(state.instances.size() == 4,
              "llm-with-skills: expected aggregator + leaf infer + worker + skills");
-      const auto& skills = FindInstance(state, "skills-llm-with-skills");
+      const auto skills = FindInstance(state, "skills-llm-with-skills");
       Expect(skills.role == comet::InstanceRole::Skills,
              "llm-with-skills: skills instance role mismatch");
       Expect(skills.image == "example/skills:dev",
@@ -940,7 +940,7 @@ int main() {
                  skills.published_ports.front().host_port == 19120 &&
                  skills.published_ports.front().container_port == 18120,
              "llm-with-skills: published port mismatch");
-      const auto& skills_disk = FindDisk(state, "skills-llm-with-skills-private");
+      const auto skills_disk = FindDisk(state, "skills-llm-with-skills-private");
       Expect(skills_disk.kind == comet::DiskKind::SkillsPrivate,
              "llm-with-skills: skills disk kind mismatch");
       Expect(skills_disk.container_path == "/srv/skills",
@@ -962,6 +962,103 @@ int main() {
       Expect(service_it->healthcheck == "CMD-SHELL test -f /tmp/comet-ready",
              "llm-with-skills: compose healthcheck should use readiness file");
       std::cout << "ok: llm-with-skills" << '\n';
+    }
+
+    {
+      const json llm_with_browsing{
+          {"version", 2},
+          {"plane_name", "llm-with-browsing"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-browsing"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"browsing",
+           {
+               {"enabled", true},
+               {"node", "browse-hostd"},
+               {"image", "example/browsing:dev"},
+               {"env", {{"COMET_BROWSING_DEBUG", "1"}}},
+               {"policy",
+                {{"browser_session_enabled", true},
+                 {"allowed_domains", json::array({"example.com", "openai.com"})},
+                 {"blocked_domains", json::array({"localhost", "internal"})},
+                 {"max_search_results", 5},
+                 {"max_fetch_bytes", 16384}}},
+               {"publish",
+                json::array(
+                    {{{"host_ip", "127.0.0.1"}, {"host_port", 19130}, {"container_port", 18130}}})},
+               {"storage", {{"size_gb", 7}, {"mount_path", "/srv/browsing"}}},
+           }},
+          {"topology",
+           {{"nodes",
+             json::array(
+                 {{{"name", "infer-hostd"},
+                   {"execution_mode", "mixed"},
+                   {"gpu_memory_mb", {{"0", 24576}}}},
+                  {{"name", "browse-hostd"},
+                   {"execution_mode", "mixed"},
+                   {"gpu_memory_mb", {{"1", 24576}}}}})}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(llm_with_browsing, "llm-with-browsing");
+      Expect(state.browsing.has_value() && state.browsing->enabled,
+             "llm-with-browsing: state.browsing.enabled should be true");
+      Expect(state.instances.size() == 4,
+             "llm-with-browsing: expected aggregator + leaf infer + worker + browsing");
+      const auto browsing = FindInstance(state, "browsing-llm-with-browsing");
+      Expect(browsing.role == comet::InstanceRole::Browsing,
+             "llm-with-browsing: browsing instance role mismatch");
+      Expect(browsing.image == "example/browsing:dev",
+             "llm-with-browsing: custom browsing image mismatch");
+      Expect(browsing.environment.count("COMET_BROWSING_DEBUG") == 1 &&
+                 browsing.environment.at("COMET_BROWSING_DEBUG") == "1",
+             "llm-with-browsing: custom browsing env mismatch");
+      Expect(browsing.environment.count("COMET_BROWSING_POLICY_JSON") == 1,
+             "llm-with-browsing: browsing policy env should be rendered");
+      Expect(!browsing.published_ports.empty() &&
+                 browsing.published_ports.front().host_port == 19130 &&
+                 browsing.published_ports.front().container_port == 18130,
+             "llm-with-browsing: published port mismatch");
+      const auto browsing_disk = FindDisk(state, "browsing-llm-with-browsing-private");
+      Expect(browsing_disk.kind == comet::DiskKind::BrowsingPrivate,
+             "llm-with-browsing: browsing disk kind mismatch");
+      Expect(browsing_disk.container_path == "/srv/browsing",
+             "llm-with-browsing: browsing disk mount path mismatch");
+      Expect(browsing_disk.size_gb == 7,
+             "llm-with-browsing: browsing disk size mismatch");
+
+      const auto compose_plans = comet::BuildNodeComposePlans(state);
+      Expect(compose_plans.size() == 2,
+             "llm-with-browsing: expected separate compose plans for infer and browsing nodes");
+      const auto browse_plan_it = std::find_if(
+          compose_plans.begin(),
+          compose_plans.end(),
+          [](const comet::NodeComposePlan& plan) { return plan.node_name == "browse-hostd"; });
+      Expect(browse_plan_it != compose_plans.end(),
+             "llm-with-browsing: browsing node compose plan missing");
+      const auto service_it = std::find_if(
+          browse_plan_it->services.begin(),
+          browse_plan_it->services.end(),
+          [](const comet::ComposeService& service) {
+            return service.name == "browsing-llm-with-browsing";
+          });
+      Expect(service_it != browse_plan_it->services.end(),
+             "llm-with-browsing: browsing service missing from compose plan");
+      Expect(service_it->healthcheck == "CMD-SHELL test -f /tmp/comet-ready",
+             "llm-with-browsing: compose healthcheck should use readiness file");
+      Expect(
+          std::find(
+              service_it->security_opts.begin(),
+              service_it->security_opts.end(),
+              "no-new-privileges:true") != service_it->security_opts.end(),
+          "llm-with-browsing: compose service should enable no-new-privileges");
+      std::cout << "ok: llm-with-browsing" << '\n';
     }
 
     ExpectInvalid(
@@ -1023,6 +1120,83 @@ int main() {
              }},
         },
         "llama-rpc-with-data-parallel-mode");
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "compute-with-browsing"},
+            {"plane_mode", "compute"},
+            {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+            {"browsing", {{"enabled", true}}},
+            {"app", {{"enabled", false}}},
+        },
+        "compute-plane-with-browsing");
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "browsing-dup-domain"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-browsing-dup-domain"},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"browsing",
+             {{"enabled", true},
+              {"policy", {{"allowed_domains", json::array({"example.com", "example.com"})}}}}},
+            {"app", {{"enabled", false}}},
+        },
+        "browsing-duplicate-allowed-domain");
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "browsing-bad-search-limit"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-browsing-bad-search-limit"},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"browsing",
+             {{"enabled", true}, {"policy", {{"max_search_results", 0}}}}},
+            {"app", {{"enabled", false}}},
+        },
+        "browsing-invalid-max-search-results");
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "browsing-worker-node"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-browsing-worker-node"},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"topology",
+             {{"nodes",
+               json::array(
+                   {{{"name", "worker-hostd"},
+                     {"execution_mode", "worker-only"},
+                     {"gpu_memory_mb", {{"0", 24576}}}}})}}},
+            {"browsing", {{"enabled", true}, {"node", "worker-hostd"}}},
+            {"app", {{"enabled", false}}},
+        },
+        "browsing-rejects-worker-only-node");
 
     ExpectInvalid(
         json{

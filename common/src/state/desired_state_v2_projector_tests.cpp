@@ -53,6 +53,35 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
     Expect(rerendered.skills->factory_skill_ids == rendered.skills->factory_skill_ids,
            name + ": skills.factory_skill_ids mismatch");
   }
+  if (rendered.browsing.has_value()) {
+    Expect(rerendered.browsing.has_value(), name + ": browsing missing after rerender");
+    Expect(rerendered.browsing->enabled == rendered.browsing->enabled,
+           name + ": browsing.enabled mismatch");
+    Expect(rerendered.browsing->policy.has_value() == rendered.browsing->policy.has_value(),
+           name + ": browsing.policy presence mismatch");
+    if (rendered.browsing->policy.has_value()) {
+      Expect(
+          rerendered.browsing->policy->browser_session_enabled ==
+              rendered.browsing->policy->browser_session_enabled,
+          name + ": browsing.policy.browser_session_enabled mismatch");
+      Expect(
+          rerendered.browsing->policy->allowed_domains ==
+              rendered.browsing->policy->allowed_domains,
+          name + ": browsing.policy.allowed_domains mismatch");
+      Expect(
+          rerendered.browsing->policy->blocked_domains ==
+              rendered.browsing->policy->blocked_domains,
+          name + ": browsing.policy.blocked_domains mismatch");
+      Expect(
+          rerendered.browsing->policy->max_search_results ==
+              rendered.browsing->policy->max_search_results,
+          name + ": browsing.policy.max_search_results mismatch");
+      Expect(
+          rerendered.browsing->policy->max_fetch_bytes ==
+              rendered.browsing->policy->max_fetch_bytes,
+          name + ": browsing.policy.max_fetch_bytes mismatch");
+    }
+  }
   if (source.contains("skills")) {
     Expect(projected.contains("skills"), name + ": skills block missing after projection");
     Expect(projected.at("skills").value("enabled", false) ==
@@ -79,6 +108,36 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
           projected.at("skills").at("factory_skill_ids") ==
               source.at("skills").at("factory_skill_ids"),
           name + ": skills.factory_skill_ids mismatch");
+    }
+  }
+  if (source.contains("browsing")) {
+    Expect(projected.contains("browsing"), name + ": browsing block missing after projection");
+    Expect(projected.at("browsing").value("enabled", false) ==
+               source.at("browsing").value("enabled", false),
+           name + ": browsing.enabled projection mismatch");
+    if (source.at("browsing").contains("node")) {
+      Expect(projected.at("browsing").at("node") == source.at("browsing").at("node"),
+             name + ": browsing.node mismatch");
+    }
+    if (source.at("browsing").contains("image")) {
+      Expect(projected.at("browsing").at("image") == source.at("browsing").at("image"),
+             name + ": browsing.image mismatch");
+    }
+    if (source.at("browsing").contains("env") && projected.at("browsing").contains("env")) {
+      Expect(projected.at("browsing").at("env") == source.at("browsing").at("env"),
+             name + ": browsing.env mismatch");
+    }
+    if (source.at("browsing").contains("publish")) {
+      Expect(projected.at("browsing").at("publish") == source.at("browsing").at("publish"),
+             name + ": browsing.publish mismatch");
+    }
+    if (source.at("browsing").contains("storage")) {
+      Expect(projected.at("browsing").at("storage") == source.at("browsing").at("storage"),
+             name + ": browsing.storage mismatch");
+    }
+    if (source.at("browsing").contains("policy")) {
+      Expect(projected.at("browsing").at("policy") == source.at("browsing").at("policy"),
+             name + ": browsing.policy mismatch");
     }
   }
   std::cout << "ok-roundtrip: " << name << '\n';
@@ -275,6 +334,50 @@ int main() {
             {"app", {{"enabled", false}}},
         },
         "llm-with-skills");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "llm-with-browsing"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-browsing"},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"browsing",
+             {
+                 {"enabled", true},
+                 {"node", "browse-hostd"},
+                 {"image", "example/browsing:dev"},
+                 {"env", {{"COMET_BROWSING_DEBUG", "1"}}},
+                 {"policy",
+                  {{"browser_session_enabled", true},
+                   {"allowed_domains", json::array({"example.com", "openai.com"})},
+                   {"blocked_domains", json::array({"localhost", "internal"})},
+                   {"max_search_results", 5},
+                   {"max_fetch_bytes", 16384}}},
+                 {"publish",
+                  json::array(
+                      {{{"host_ip", "127.0.0.1"}, {"host_port", 19130}, {"container_port", 18130}}})},
+                 {"storage", {{"size_gb", 7}, {"mount_path", "/srv/browsing"}}},
+             }},
+            {"topology",
+             {{"nodes",
+               json::array(
+                   {{{"name", "infer-hostd"},
+                     {"execution_mode", "mixed"},
+                     {"gpu_memory_mb", {{"0", 24576}}}},
+                    {{"name", "browse-hostd"},
+                     {"execution_mode", "mixed"},
+                     {"gpu_memory_mb", {{"1", 24576}}}}})}}},
+            {"app", {{"enabled", false}}},
+        },
+        "llm-with-browsing");
 
     return 0;
   } catch (const std::exception& ex) {

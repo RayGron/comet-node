@@ -4,6 +4,7 @@
 #include <string>
 #include <utility>
 
+#include "browsing/plane_browsing_service.h"
 #include "comet/state/sqlite_store.h"
 #include "skills/plane_skill_catalog_service.h"
 #include "skills/plane_skills_service.h"
@@ -298,6 +299,71 @@ HttpResponse PlaneHttpService::HandlePlanePath(
                  {"message", message},
                  {"path", request.path}},
             {});
+      } catch (const std::exception& error) {
+        return support_.build_json_response(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
+            {});
+      }
+    }
+  }
+
+  const auto browsing_pos = remainder.find("/browsing");
+  if (browsing_pos != std::string::npos) {
+    const bool browsing_suffix_valid =
+        browsing_pos + std::string("/browsing").size() == remainder.size() ||
+        remainder.at(browsing_pos + std::string("/browsing").size()) == '/';
+    if (browsing_suffix_valid) {
+      const std::string plane_name = remainder.substr(0, browsing_pos);
+      const std::string path_suffix =
+          remainder.substr(browsing_pos + std::string("/browsing").size());
+      try {
+        comet::ControllerStore store(db_path);
+        store.Initialize();
+        const auto desired_state = store.LoadDesiredState(plane_name);
+        if (!desired_state.has_value()) {
+          return support_.build_json_response(
+              404,
+              json{{"status", "not_found"},
+                   {"message", "plane '" + plane_name + "' not found"},
+                   {"path", request.path}},
+              {});
+        }
+        const auto plane = store.LoadPlane(plane_name);
+        const std::optional<std::string> plane_state =
+            plane.has_value() ? std::optional<std::string>(plane->state) : std::nullopt;
+        const comet::controller::PlaneBrowsingService browsing_service;
+        if (path_suffix.empty() || path_suffix == "/" || path_suffix == "/status") {
+          if (request.method != "GET") {
+            return support_.build_json_response(
+                405, json{{"status", "method_not_allowed"}}, {});
+          }
+          return support_.build_json_response(
+              200,
+              browsing_service.BuildStatusPayload(*desired_state, plane_state),
+              {});
+        }
+
+        std::string error_code;
+        std::string error_message;
+        const auto proxied = browsing_service.ProxyPlaneBrowsingRequest(
+            *desired_state,
+            request.method,
+            path_suffix,
+            request.body,
+            &error_code,
+            &error_message);
+        if (!proxied.has_value()) {
+          const int status_code = error_code == "browsing_disabled" ? 409 : 503;
+          return support_.build_json_response(
+              status_code,
+              json{{"status", "error"},
+                   {"message", error_message},
+                   {"error", {{"code", error_code}, {"message", error_message}}},
+                   {"path", request.path}},
+              {});
+        }
+        return *proxied;
       } catch (const std::exception& error) {
         return support_.build_json_response(
             500,

@@ -20,9 +20,13 @@ constexpr int kDefaultInferPrivateDiskSizeGb = 12;
 constexpr int kDefaultWorkerPrivateDiskSizeGb = 12;
 constexpr int kDefaultAppPrivateDiskSizeGb = 8;
 constexpr int kDefaultSkillsPrivateDiskSizeGb = 4;
+constexpr int kDefaultBrowsingPrivateDiskSizeGb = 4;
 constexpr int kSkillsContainerPort = 18120;
 constexpr int kSkillsPublishedPortBase = 24000;
 constexpr int kSkillsPublishedPortSpan = 10000;
+constexpr int kBrowsingContainerPort = 18130;
+constexpr int kBrowsingPublishedPortBase = 34000;
+constexpr int kBrowsingPublishedPortSpan = 10000;
 
 }  // namespace
 
@@ -52,7 +56,10 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
                                                                 : nlohmann::json::object()),
       skills_json_(
           value.contains("skills") && value.at("skills").is_object() ? value.at("skills")
-                                                                      : nlohmann::json::object()) {}
+                                                                      : nlohmann::json::object()),
+      browsing_json_(
+          value.contains("browsing") && value.at("browsing").is_object() ? value.at("browsing")
+                                                                         : nlohmann::json::object()) {}
 
 DesiredState DesiredStateV2Renderer::RenderState() {
   RenderIdentity();
@@ -67,6 +74,7 @@ DesiredState DesiredStateV2Renderer::RenderState() {
   RenderWorkerInstances();
   RenderAppInstance();
   RenderSkillsInstance();
+  RenderBrowsingInstance();
   return state_;
 }
 
@@ -88,6 +96,36 @@ void DesiredStateV2Renderer::RenderIdentity() {
       }
     }
     state_.skills = std::move(skills_settings);
+  }
+  if (browsing_json_.value("enabled", false)) {
+    BrowsingSettings browsing_settings;
+    browsing_settings.enabled = true;
+    if (browsing_json_.contains("policy") && browsing_json_.at("policy").is_object()) {
+      BrowsingPolicySettings policy;
+      const auto& policy_json = browsing_json_.at("policy");
+      policy.browser_session_enabled =
+          policy_json.value("browser_session_enabled", policy.browser_session_enabled);
+      policy.max_search_results =
+          policy_json.value("max_search_results", policy.max_search_results);
+      policy.max_fetch_bytes =
+          policy_json.value("max_fetch_bytes", policy.max_fetch_bytes);
+      if (policy_json.contains("allowed_domains") && policy_json.at("allowed_domains").is_array()) {
+        for (const auto& item : policy_json.at("allowed_domains")) {
+          if (item.is_string()) {
+            policy.allowed_domains.push_back(item.get<std::string>());
+          }
+        }
+      }
+      if (policy_json.contains("blocked_domains") && policy_json.at("blocked_domains").is_array()) {
+        for (const auto& item : policy_json.at("blocked_domains")) {
+          if (item.is_string()) {
+            policy.blocked_domains.push_back(item.get<std::string>());
+          }
+        }
+      }
+      browsing_settings.policy = std::move(policy);
+    }
+    state_.browsing = std::move(browsing_settings);
   }
 }
 
@@ -632,6 +670,87 @@ void DesiredStateV2Renderer::RenderSkillsInstance() {
   state_.disks.push_back(std::move(skills_private_disk));
 }
 
+void DesiredStateV2Renderer::RenderBrowsingInstance() {
+  if (!browsing_json_.value("enabled", false)) {
+    return;
+  }
+
+  InstanceSpec browsing;
+  browsing.name = BuildBrowsingInstanceName();
+  browsing.role = InstanceRole::Browsing;
+  browsing.plane_name = state_.plane_name;
+  if (browsing_json_.contains("node") && browsing_json_.at("node").is_string()) {
+    browsing.node_name =
+        RequireNode(browsing_json_.at("node").get<std::string>(), "browsing").name;
+  } else {
+    browsing.node_name = ResolveAppNodeName();
+  }
+  browsing.image = browsing_json_.value("image", std::string("comet/browsing-runtime:dev"));
+  browsing.command =
+      BuildCommandFromStartSpec(browsing_json_.value("start", nlohmann::json::object()),
+                                "/runtime/bin/comet-browsingd");
+  browsing.private_disk_name = browsing.name + "-private";
+  browsing.private_disk_size_gb =
+      ExtractPrivateDiskSizeGb(browsing_json_, kDefaultBrowsingPrivateDiskSizeGb, "storage");
+  browsing.environment = {
+      {"COMET_PLANE_NAME", state_.plane_name},
+      {"COMET_INSTANCE_NAME", browsing.name},
+      {"COMET_INSTANCE_ROLE", "browsing"},
+      {"COMET_NODE_NAME", browsing.node_name},
+      {"COMET_SHARED_DISK_PATH", "/comet/shared"},
+      {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
+      {"COMET_BROWSING_PORT", std::to_string(kBrowsingContainerPort)},
+      {"COMET_BROWSING_RUNTIME_STATUS_PATH", "/comet/private/browsing-runtime-status.json"},
+      {"COMET_BROWSING_STATE_ROOT", "/comet/private/sessions"},
+      {"COMET_BROWSING_POLICY_JSON",
+       browsing_json_.contains("policy") && browsing_json_.at("policy").is_object()
+           ? browsing_json_.at("policy").dump()
+           : nlohmann::json::object().dump()},
+      {"COMET_CONTROLLER_URL", "http://controller.internal:18080"},
+      {"COMET_CONTROL_ROOT", state_.control_root},
+  };
+  if (browsing_json_.contains("env") && browsing_json_.at("env").is_object()) {
+    const auto custom_env = browsing_json_.at("env").get<std::map<std::string, std::string>>();
+    for (const auto& [key, value] : custom_env) {
+      browsing.environment[key] = value;
+    }
+  }
+  browsing.labels = {
+      {"comet.plane", state_.plane_name},
+      {"comet.role", "browsing"},
+      {"comet.node", browsing.node_name},
+  };
+  if (browsing_json_.contains("publish") && browsing_json_.at("publish").is_array()) {
+    for (const auto& port_json : browsing_json_.at("publish")) {
+      browsing.published_ports.push_back(PublishedPort{
+          port_json.value("host_ip", std::string("127.0.0.1")),
+          port_json.value("host_port", 0),
+          port_json.value("container_port", 0),
+      });
+    }
+  }
+  if (browsing.published_ports.empty()) {
+    browsing.published_ports.push_back(PublishedPort{
+        "127.0.0.1",
+        BuildBrowsingHostPort(),
+        kBrowsingContainerPort,
+    });
+  }
+  state_.instances.push_back(browsing);
+
+  DiskSpec browsing_private_disk;
+  browsing_private_disk.name = browsing.private_disk_name;
+  browsing_private_disk.kind = DiskKind::BrowsingPrivate;
+  browsing_private_disk.plane_name = state_.plane_name;
+  browsing_private_disk.owner_name = browsing.name;
+  browsing_private_disk.node_name = browsing.node_name;
+  browsing_private_disk.host_path = BuildInstancePrivateHostPath(browsing.name);
+  browsing_private_disk.container_path =
+      ExtractPrivateMountPath(browsing_json_, "/comet/private", "storage");
+  browsing_private_disk.size_gb = browsing.private_disk_size_gb;
+  state_.disks.push_back(std::move(browsing_private_disk));
+}
+
 bool DesiredStateV2Renderer::InferEnabled() const {
   return infer_json_.value(
       "enabled",
@@ -820,6 +939,10 @@ std::string DesiredStateV2Renderer::BuildSkillsInstanceName() const {
   return "skills-" + state_.plane_name;
 }
 
+std::string DesiredStateV2Renderer::BuildBrowsingInstanceName() const {
+  return "browsing-" + state_.plane_name;
+}
+
 std::string DesiredStateV2Renderer::BuildPlaneSharedHostPath() const {
   return "/var/lib/comet/disks/planes/" + state_.plane_name + "/shared";
 }
@@ -862,6 +985,12 @@ int DesiredStateV2Renderer::BuildSkillsHostPort() const {
   const uint32_t offset =
       StablePortHash(state_.plane_name + ":" + BuildSkillsInstanceName()) % kSkillsPublishedPortSpan;
   return kSkillsPublishedPortBase + static_cast<int>(offset);
+}
+
+int DesiredStateV2Renderer::BuildBrowsingHostPort() const {
+  const uint32_t offset = StablePortHash(state_.plane_name + ":" + BuildBrowsingInstanceName()) %
+                          kBrowsingPublishedPortSpan;
+  return kBrowsingPublishedPortBase + static_cast<int>(offset);
 }
 
 std::string DesiredStateV2Renderer::DefaultInferRuntimeBackend() const {

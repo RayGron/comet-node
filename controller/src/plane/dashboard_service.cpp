@@ -1,5 +1,6 @@
 #include "plane/dashboard_service.h"
 
+#include "browsing/plane_browsing_service.h"
 #include "http/controller_http_transport.h"
 #include "infra/controller_runtime_support_service.h"
 #include "plane/plane_dashboard_skills_summary_service.h"
@@ -743,6 +744,9 @@ nlohmann::json DashboardService::BuildPayload(
   payload["skills"] = PlaneDashboardSkillsSummaryService::BuildPayload(
       *view.desired_state,
       store.LoadPlaneSkillBindings(view.desired_state->plane_name, std::nullopt));
+  payload["browsing"] = PlaneBrowsingService().BuildStatusPayload(
+      *view.desired_state,
+      selected_plane_state);
 
   const auto latest_assignments_by_node =
       BuildLatestPlaneAssignmentsByNode(

@@ -21,6 +21,7 @@ class DesiredStateV2Validator final {
   void ValidateWorkerResources() const;
   void ValidateApp() const;
   void ValidateSkills() const;
+  void ValidateBrowsing() const;
   void ValidateHooks() const;
 
   void RequireObject(const char* field_name) const;

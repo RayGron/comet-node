@@ -17,8 +17,11 @@ bool UsesLlamaRpcRuntime(const DesiredState& state) {
          state.inference.distributed_backend == "llama_rpc";
 }
 
-std::optional<ComposeVolume> BuildDirectModelCacheVolume(const DesiredState& state) {
+std::optional<ComposeVolume> BuildDirectModelCacheVolume(
+    const DesiredState& state,
+    const InstanceSpec& instance) {
   if (!UsesLlamaRpcRuntime(state) ||
+      instance.role == InstanceRole::Browsing ||
       !state.bootstrap_model.has_value() || !state.bootstrap_model->local_path.has_value() ||
       state.bootstrap_model->materialization_mode != "reference") {
     return std::nullopt;
@@ -188,6 +191,9 @@ ComposeService BuildComposeService(
         &service.published_ports,
         PublishedPort{"0.0.0.0", rpc_port, rpc_port});
   }
+  if (instance.role == InstanceRole::Browsing) {
+    service.security_opts.push_back("no-new-privileges:true");
+  }
   service.labels = instance.labels;
   const auto* worker_group_member =
       instance.role == InstanceRole::Worker ? FindWorkerGroupMember(state, instance.name) : nullptr;
@@ -244,16 +250,19 @@ ComposeService BuildComposeService(
         PublishedPort{"127.0.0.1", infer_gateway_port, infer_gateway_port});
   }
 
-  const auto& shared_disk =
-      FindDiskByName(disks, instance.node_name, instance.shared_disk_name);
   const auto& private_disk =
       FindDiskByName(disks, instance.node_name, instance.private_disk_name);
 
-  service.volumes.push_back(
-      ComposeVolume{shared_disk.host_path, shared_disk.container_path, false});
+  if (!instance.shared_disk_name.empty()) {
+    const auto& shared_disk =
+        FindDiskByName(disks, instance.node_name, instance.shared_disk_name);
+    service.volumes.push_back(
+        ComposeVolume{shared_disk.host_path, shared_disk.container_path, false});
+  }
   service.volumes.push_back(
       ComposeVolume{private_disk.host_path, private_disk.container_path, false});
-  if (const auto direct_model_cache = BuildDirectModelCacheVolume(state); direct_model_cache.has_value()) {
+  if (const auto direct_model_cache = BuildDirectModelCacheVolume(state, instance);
+      direct_model_cache.has_value()) {
     service.volumes.push_back(*direct_model_cache);
   }
 
@@ -318,6 +327,8 @@ std::string ToString(InstanceRole role) {
       return "app";
     case InstanceRole::Skills:
       return "skills";
+    case InstanceRole::Browsing:
+      return "browsing";
   }
   return "unknown";
 }
@@ -334,6 +345,8 @@ std::string ToString(DiskKind kind) {
       return "app-private";
     case DiskKind::SkillsPrivate:
       return "skills-private";
+    case DiskKind::BrowsingPrivate:
+      return "browsing-private";
   }
   return "unknown";
 }

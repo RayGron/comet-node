@@ -335,6 +335,7 @@ comet_enable_strict_warnings(comet-controller-plane-deletion-tests)
 
 add_executable(
   comet-plane-skills-tests
+  controller/src/browsing/plane_browsing_service.cpp
   controller/src/infra/controller_network_manager.cpp
   controller/src/http/controller_http_transport.cpp
   controller/src/interaction/interaction_service.cpp
@@ -374,6 +375,7 @@ comet_enable_strict_warnings(comet-skills-factory-tests)
 
 add_executable(
   comet-dashboard-service-tests
+  controller/src/browsing/plane_browsing_service.cpp
   controller/src/http/controller_http_transport.cpp
   controller/src/infra/controller_network_manager.cpp
   controller/src/infra/controller_runtime_support_service.cpp
@@ -409,6 +411,20 @@ target_include_directories(
 target_link_libraries(
   comet-auth-http-tests PRIVATE comet-common Threads::Threads)
 comet_enable_strict_warnings(comet-auth-http-tests)
+
+add_executable(
+  comet-browsing-tests
+  controller/src/http/controller_http_server_support.cpp
+  controller/src/infra/controller_network_manager.cpp
+  runtime/browsing/src/browsing_server.cpp
+  runtime/browsing/src/browsing_server_tests.cpp
+  common/src/runtime/runtime_status.cpp
+)
+target_include_directories(
+  comet-browsing-tests PRIVATE common/include controller/include runtime/browsing/include)
+target_link_libraries(
+  comet-browsing-tests PRIVATE comet-common Threads::Threads)
+comet_enable_strict_warnings(comet-browsing-tests)
 
 add_executable(
   comet-hostd-local-state-tests
@@ -467,6 +483,7 @@ add_executable(
   controller/src/http/controller_http_transport.cpp
   controller/src/infra/controller_remote_client.cpp
   controller/src/plane/desired_state_policy_service.cpp
+  controller/src/browsing/plane_browsing_service.cpp
   controller/src/plane/dashboard_service.cpp
   controller/src/plane/plane_desired_state_request_parser.cpp
   controller/src/infra/controller_ui_service.cpp
@@ -596,6 +613,24 @@ if(NOT WIN32)
       Threads::Threads
   )
   comet_enable_strict_warnings(comet-devtool)
+
+  add_executable(
+    comet-browsingd
+    controller/src/http/controller_http_server_support.cpp
+    controller/src/infra/controller_network_manager.cpp
+    runtime/browsing/src/browsing_server.cpp
+    runtime/browsing/src/main.cpp
+    common/src/runtime/runtime_status.cpp
+  )
+  target_include_directories(
+    comet-browsingd PRIVATE common/include controller/include runtime/browsing/include)
+  target_link_libraries(
+    comet-browsingd
+    PRIVATE
+      comet-common
+      Threads::Threads
+  )
+  comet_enable_strict_warnings(comet-browsingd)
 
   add_executable(
     comet-skillsd

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import {
   buildSkillsFactoryGroupTree,
   collectSkillsFactoryTreePaths,
@@ -12,6 +12,8 @@ const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
 const FIELD_INFO = {
   planeName: "Unique plane identifier used by the controller, runtime artifacts, and API paths.",
   skillsEnabled: "Enable a dedicated plane-scoped Skills service for storing and resolving reusable skills.",
+  browsingEnabled: "Enable a dedicated plane-scoped Isolated Browsing service for brokered web search, fetch, and approval-gated browser sessions.",
+  browserSessionEnabled: "Allow approval-gated browser session APIs for this plane. Search and sanitized fetch stay enabled when Isolated Browsing is on.",
   planeMode: "Choose llm for model serving planes or compute for custom GPU workloads without chat interaction.",
   protectedPlane: "Protected planes require an explicit confirmation before destructive actions such as delete.",
   factorySkillIds: "Select global Skills Factory records that should be copied into this plane when the rollout is applied.",
@@ -181,6 +183,8 @@ export function buildNewPlaneFormState() {
   return {
     planeName: "new-plane",
     skillsEnabled: false,
+    browsingEnabled: false,
+    browserSessionEnabled: false,
     planeMode: "llm",
     protectedPlane: false,
     factorySkillIds: [],
@@ -275,6 +279,8 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     ...defaults,
     planeName: value?.plane_name || defaults.planeName,
     skillsEnabled: Boolean(value?.skills?.enabled),
+    browsingEnabled: Boolean(value?.browsing?.enabled),
+    browserSessionEnabled: Boolean(value?.browsing?.policy?.browser_session_enabled),
     planeMode: value?.plane_mode || defaults.planeMode,
     protectedPlane: Boolean(value?.protected),
     factorySkillIds: Array.isArray(value?.skills?.factory_skill_ids)
@@ -477,6 +483,14 @@ export function buildDesiredStateV2FromForm(form) {
         ...(Array.isArray(form.factorySkillIds) && form.factorySkillIds.length > 0
           ? { factory_skill_ids: [...new Set(form.factorySkillIds.filter(Boolean))] }
           : {}),
+      };
+    }
+    if (form.browsingEnabled) {
+      desiredState.browsing = {
+        enabled: true,
+        policy: {
+          browser_session_enabled: Boolean(form.browserSessionEnabled),
+        },
       };
     }
   }
@@ -726,6 +740,9 @@ export function validatePlaneV2Form(form) {
   }
   if (!form?.skillsEnabled && Array.isArray(form?.factorySkillIds) && form.factorySkillIds.length > 0) {
     warnings.push("Selected Skills Factory records are ignored until Skills is enabled.");
+  }
+  if (!form?.browsingEnabled && form?.browserSessionEnabled) {
+    warnings.push("Browser sessions are ignored until Isolated Browsing is enabled.");
   }
   if (form?.appEnabled && !String(form?.appStartValue || "").trim()) {
     warnings.push("App start is empty. The app container will rely on its image default command.");
@@ -1306,12 +1323,44 @@ export function PlaneV2FormBuilder({
           onToggle={toggleFeature("skillsEnabled")}
         />
         <FeatureToggle
+          title="Isolated Browsing"
+          info={FIELD_INFO.browsingEnabled}
+          active={form.planeMode === "llm" && form.browsingEnabled}
+          disabled={form.planeMode !== "llm"}
+          disabledLabel="LLM only"
+          onToggle={toggleFeature("browsingEnabled")}
+        />
+        <FeatureToggle
           title="Protected Plane"
           info={FIELD_INFO.protectedPlane}
           active={form.protectedPlane}
           onToggle={toggleFeature("protectedPlane")}
         />
       </div>
+      {form.planeMode === "llm" && form.browsingEnabled ? (
+        <div className="plane-form-toggle">
+          <div className="plane-form-section-header">
+            <InfoLabel info={FIELD_INFO.browsingEnabled}>Isolated Browsing</InfoLabel>
+            <p className="plane-form-section-copy">
+              Brokered web search and sanitized fetch are enabled. Browser sessions stay approval-gated and disabled unless explicitly allowed below.
+            </p>
+          </div>
+          <label className="field-label plane-checkbox">
+            <input
+              type="checkbox"
+              checked={form.browserSessionEnabled}
+              onChange={bindCheck("browserSessionEnabled")}
+            />
+            <InfoLabel info={FIELD_INFO.browserSessionEnabled} className="field-label-inline">
+              Enable browser sessions
+            </InfoLabel>
+          </label>
+          <FieldHint
+            message={fieldWarning("Browser sessions are ignored until Isolated Browsing is enabled.")}
+            severity="warning"
+          />
+        </div>
+      ) : null}
       {form.planeMode === "llm" && form.skillsEnabled ? (
         <div className="plane-form-toggle">
           <div className="plane-form-section-header">

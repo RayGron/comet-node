@@ -87,6 +87,9 @@ DiskKind ParseDiskKind(const std::string& value) {
   if (value == "skills-private") {
     return DiskKind::SkillsPrivate;
   }
+  if (value == "browsing-private") {
+    return DiskKind::BrowsingPrivate;
+  }
   throw std::runtime_error("unknown disk kind '" + value + "'");
 }
 
@@ -102,6 +105,9 @@ InstanceRole ParseInstanceRole(const std::string& value) {
   }
   if (value == "skills") {
     return InstanceRole::Skills;
+  }
+  if (value == "browsing") {
+    return InstanceRole::Browsing;
   }
   throw std::runtime_error("unknown instance role '" + value + "'");
 }
@@ -323,6 +329,31 @@ json ToJson(const SkillsSettings& skills) {
   };
   if (!skills.factory_skill_ids.empty()) {
     result["factory_skill_ids"] = skills.factory_skill_ids;
+  }
+  return result;
+}
+
+json ToJson(const BrowsingPolicySettings& policy) {
+  json result = {
+      {"browser_session_enabled", policy.browser_session_enabled},
+      {"max_search_results", policy.max_search_results},
+      {"max_fetch_bytes", policy.max_fetch_bytes},
+  };
+  if (!policy.allowed_domains.empty()) {
+    result["allowed_domains"] = policy.allowed_domains;
+  }
+  if (!policy.blocked_domains.empty()) {
+    result["blocked_domains"] = policy.blocked_domains;
+  }
+  return result;
+}
+
+json ToJson(const BrowsingSettings& browsing) {
+  json result = {
+      {"enabled", browsing.enabled},
+  };
+  if (browsing.policy.has_value()) {
+    result["policy"] = ToJson(*browsing.policy);
   }
   return result;
 }
@@ -800,6 +831,9 @@ json DesiredStateToJson(const DesiredState& state) {
   if (state.skills.has_value()) {
     result["skills"] = ToJson(*state.skills);
   }
+  if (state.browsing.has_value()) {
+    result["browsing"] = ToJson(*state.browsing);
+  }
 
   for (const auto& gpu_node : state.runtime_gpu_nodes) {
     result["runtime_gpu_nodes"].push_back(ToJson(gpu_node));
@@ -852,6 +886,39 @@ DesiredState DesiredStateFromJson(const json& value) {
       }
     }
     state.skills = std::move(skills);
+  }
+  if (value.contains("browsing") && value.at("browsing").is_object()) {
+    BrowsingSettings browsing;
+    browsing.enabled = value.at("browsing").value("enabled", browsing.enabled);
+    if (value.at("browsing").contains("policy") &&
+        value.at("browsing").at("policy").is_object()) {
+      BrowsingPolicySettings policy;
+      const auto& policy_json = value.at("browsing").at("policy");
+      policy.browser_session_enabled =
+          policy_json.value("browser_session_enabled", policy.browser_session_enabled);
+      policy.max_search_results =
+          policy_json.value("max_search_results", policy.max_search_results);
+      policy.max_fetch_bytes =
+          policy_json.value("max_fetch_bytes", policy.max_fetch_bytes);
+      if (policy_json.contains("allowed_domains") &&
+          policy_json.at("allowed_domains").is_array()) {
+        for (const auto& item : policy_json.at("allowed_domains")) {
+          if (item.is_string()) {
+            policy.allowed_domains.push_back(item.get<std::string>());
+          }
+        }
+      }
+      if (policy_json.contains("blocked_domains") &&
+          policy_json.at("blocked_domains").is_array()) {
+        for (const auto& item : policy_json.at("blocked_domains")) {
+          if (item.is_string()) {
+            policy.blocked_domains.push_back(item.get<std::string>());
+          }
+        }
+      }
+      browsing.policy = std::move(policy);
+    }
+    state.browsing = std::move(browsing);
   }
 
   if (value.contains("inference") && value.at("inference").is_object()) {
@@ -1059,6 +1126,7 @@ DesiredState SliceDesiredStateForNode(
   result.bootstrap_model = state.bootstrap_model;
   result.interaction = state.interaction;
   result.skills = state.skills;
+  result.browsing = state.browsing;
   result.inference = state.inference;
   result.worker_group = state.worker_group;
   result.gateway = state.gateway;

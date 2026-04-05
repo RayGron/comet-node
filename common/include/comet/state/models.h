@@ -13,6 +13,7 @@ enum class InstanceRole {
   Worker,
   App,
   Skills,
+  Browsing,
 };
 
 enum class DiskKind {
@@ -21,6 +22,7 @@ enum class DiskKind {
   WorkerPrivate,
   AppPrivate,
   SkillsPrivate,
+  BrowsingPrivate,
 };
 
 struct PublishedPort {
@@ -244,6 +246,19 @@ struct SkillsSettings {
   std::vector<std::string> factory_skill_ids;
 };
 
+struct BrowsingPolicySettings {
+  bool browser_session_enabled = false;
+  std::vector<std::string> allowed_domains;
+  std::vector<std::string> blocked_domains;
+  int max_search_results = 8;
+  int max_fetch_bytes = 262144;
+};
+
+struct BrowsingSettings {
+  bool enabled = false;
+  std::optional<BrowsingPolicySettings> policy;
+};
+
 struct DesiredState {
   std::string plane_name;
   std::string plane_shared_disk_name;
@@ -255,6 +270,7 @@ struct DesiredState {
   std::optional<BootstrapModelSpec> bootstrap_model;
   std::optional<InteractionSettings> interaction;
   std::optional<SkillsSettings> skills;
+  std::optional<BrowsingSettings> browsing;
   InferenceRuntimeSettings inference;
   WorkerGroupSpec worker_group;
   GatewaySettings gateway;

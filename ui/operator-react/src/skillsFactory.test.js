@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   buildDesiredStateV2FromForm,
@@ -6,6 +8,7 @@ import {
   buildPlaneFormStateFromDesiredStateV2,
   validatePlaneV2Form,
 } from "./planeV2Form.jsx";
+import { PlaneEditorDialog } from "./App.jsx";
 import {
   buildSkillsFactoryGroupTree,
   collectGroupSkillIds,
@@ -138,6 +141,66 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(validation.warnings).toContain(
       "Selected Skills Factory records are ignored until Skills is enabled.",
     );
+  });
+
+  it("round-trips browsing capability through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "browsing-plane";
+    form.modelPath = "/models/qwen";
+    form.servedModelName = "browsing-plane-model";
+    form.browsingEnabled = true;
+    form.browserSessionEnabled = true;
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.browsing).toEqual({
+      enabled: true,
+      policy: {
+        browser_session_enabled: true,
+      },
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.browsingEnabled).toBe(true);
+    expect(reparsed.browserSessionEnabled).toBe(true);
+  });
+
+  it("warns when browser sessions are enabled without browsing", () => {
+    const form = buildNewPlaneFormState();
+    form.modelPath = "/models/qwen";
+    form.browserSessionEnabled = true;
+    const validation = validatePlaneV2Form(form);
+    expect(validation.warnings).toContain(
+      "Browser sessions are ignored until Isolated Browsing is enabled.",
+    );
+  });
+});
+
+describe("PlaneEditorDialog", () => {
+  it("renders with explicit skillsFactoryGroups prop", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(PlaneEditorDialog, {
+        dialog: {
+          open: true,
+          mode: "new",
+          planeName: "",
+          planeState: "",
+          text: "{}",
+          form: buildNewPlaneFormState(),
+          originalSkillsEnabled: false,
+          busy: false,
+          error: "",
+        },
+        setDialog: () => {},
+        onClose: () => {},
+        onSave: () => {},
+        modelLibraryItems: [],
+        skillsFactoryItems: [],
+        skillsFactoryGroups: [],
+      }),
+    );
+
+    expect(html).toContain("New plane");
+    expect(html).toContain("Isolated Browsing");
   });
 });
 

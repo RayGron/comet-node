@@ -17,12 +17,15 @@ constexpr int kDefaultInferPrivateDiskSizeGb = 12;
 constexpr int kDefaultWorkerPrivateDiskSizeGb = 12;
 constexpr int kDefaultAppPrivateDiskSizeGb = 8;
 constexpr int kDefaultSkillsPrivateDiskSizeGb = 4;
+constexpr int kDefaultBrowsingPrivateDiskSizeGb = 4;
 constexpr std::string_view kDefaultInferImage = "comet/infer-runtime:dev";
 constexpr std::string_view kDefaultWorkerImage = "comet/worker-runtime:dev";
 constexpr std::string_view kDefaultSkillsImage = "comet/skills-runtime:dev";
+constexpr std::string_view kDefaultBrowsingImage = "comet/browsing-runtime:dev";
 constexpr std::string_view kDefaultInferCommand = "/runtime/bin/comet-inferctl container-boot";
 constexpr std::string_view kDefaultWorkerCommand = "/runtime/bin/comet-workerd";
 constexpr std::string_view kDefaultSkillsCommand = "/runtime/bin/comet-skillsd";
+constexpr std::string_view kDefaultBrowsingCommand = "/runtime/bin/comet-browsingd";
 
 }  // namespace
 
@@ -47,6 +50,7 @@ nlohmann::json DesiredStateV2Projector::ProjectJson() {
   ProjectWorker();
   ProjectApp();
   ProjectSkills();
+  ProjectBrowsing();
   ProjectResources();
   return value_;
 }
@@ -55,6 +59,7 @@ void DesiredStateV2Projector::CollectInstancesAndDisks() {
   infer_instance_ = FindInstance(InstanceRole::Infer);
   app_instance_ = FindInstance(InstanceRole::App);
   skills_instance_ = FindInstance(InstanceRole::Skills);
+  browsing_instance_ = FindInstance(InstanceRole::Browsing);
   worker_instances_ = FindWorkerInstances();
   shared_disk_ = FindSharedDisk();
 }
@@ -368,6 +373,61 @@ void DesiredStateV2Projector::ProjectSkills() {
   value_["skills"] = std::move(skills);
 }
 
+void DesiredStateV2Projector::ProjectBrowsing() {
+  if (!state_.browsing.has_value() && browsing_instance_ == nullptr) {
+    return;
+  }
+
+  if (browsing_instance_ == nullptr) {
+    value_["browsing"] = {{"enabled", false}};
+    return;
+  }
+
+  nlohmann::json browsing = {
+      {"enabled", state_.browsing.value_or(BrowsingSettings{}).enabled},
+  };
+  if (state_.browsing.has_value() && state_.browsing->policy.has_value()) {
+    const auto& policy = *state_.browsing->policy;
+    nlohmann::json policy_json = {
+        {"browser_session_enabled", policy.browser_session_enabled},
+        {"max_search_results", policy.max_search_results},
+        {"max_fetch_bytes", policy.max_fetch_bytes},
+    };
+    if (!policy.allowed_domains.empty()) {
+      policy_json["allowed_domains"] = policy.allowed_domains;
+    }
+    if (!policy.blocked_domains.empty()) {
+      policy_json["blocked_domains"] = policy.blocked_domains;
+    }
+    browsing["policy"] = std::move(policy_json);
+  }
+  if (browsing_instance_->image != kDefaultBrowsingImage) {
+    browsing["image"] = browsing_instance_->image;
+  }
+  const auto start =
+      ProjectServiceStart(*browsing_instance_, std::string(kDefaultBrowsingCommand));
+  if (!start.is_null()) {
+    browsing["start"] = start;
+  }
+  const auto env = ProjectCustomEnv(*browsing_instance_, true);
+  if (!env.empty()) {
+    browsing["env"] = env;
+  }
+  const auto publish = ProjectPublishedPorts(*browsing_instance_);
+  if (!publish.empty()) {
+    browsing["publish"] = publish;
+  }
+  if (browsing_instance_->node_name != DefaultNodeName()) {
+    browsing["node"] = browsing_instance_->node_name;
+  }
+  const auto storage =
+      ProjectServiceStorage(FindDiskByName(browsing_instance_->private_disk_name));
+  if (!storage.is_null()) {
+    browsing["storage"] = storage;
+  }
+  value_["browsing"] = std::move(browsing);
+}
+
 void DesiredStateV2Projector::ProjectResources() {
   nlohmann::json resources = nlohmann::json::object();
   if (!worker_instances_.empty()) {
@@ -524,6 +584,8 @@ nlohmann::json DesiredStateV2Projector::ProjectServiceStorage(const DiskSpec* di
               ? disk->size_gb == kDefaultWorkerPrivateDiskSizeGb
               : disk->kind == DiskKind::SkillsPrivate
                   ? disk->size_gb == kDefaultSkillsPrivateDiskSizeGb
+                  : disk->kind == DiskKind::BrowsingPrivate
+                      ? disk->size_gb == kDefaultBrowsingPrivateDiskSizeGb
                   : disk->size_gb == kDefaultAppPrivateDiskSizeGb;
   const bool default_mount = disk->container_path == "/comet/private";
   if (default_size && default_mount) {

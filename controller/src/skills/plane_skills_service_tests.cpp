@@ -11,6 +11,7 @@
 #include "comet/core/platform_compat.h"
 #include "comet/state/sqlite_store.h"
 #include "interaction/interaction_service.h"
+#include "browsing/plane_browsing_service.h"
 #include "plane/plane_dashboard_skills_summary_service.h"
 #include "skills/plane_skill_contextual_resolver_service.h"
 #include "skills/plane_skills_service.h"
@@ -147,6 +148,155 @@ class SkillRuntimeTestServer {
   std::thread thread_;
 };
 
+class BrowsingRuntimeTestServer {
+ public:
+  BrowsingRuntimeTestServer() {
+    comet::platform::EnsureSocketsInitialized();
+    listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (!comet::platform::IsSocketValid(listen_fd_)) {
+      throw std::runtime_error("failed to create browsing test runtime socket");
+    }
+
+    int yes = 1;
+#if defined(_WIN32)
+    setsockopt(
+        listen_fd_,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        reinterpret_cast<const char*>(&yes),
+        sizeof(yes));
+#else
+    setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+#endif
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(0);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+      const auto error = comet::platform::LastSocketErrorMessage();
+      comet::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to bind browsing test runtime socket: " + error);
+    }
+    if (listen(listen_fd_, 8) != 0) {
+      const auto error = comet::platform::LastSocketErrorMessage();
+      comet::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to listen on browsing test runtime socket: " + error);
+    }
+
+    sockaddr_in bound_addr{};
+    socklen_t bound_size = sizeof(bound_addr);
+    if (getsockname(
+            listen_fd_,
+            reinterpret_cast<sockaddr*>(&bound_addr),
+            &bound_size) != 0) {
+      const auto error = comet::platform::LastSocketErrorMessage();
+      comet::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to inspect browsing test runtime socket: " + error);
+    }
+    port_ = ntohs(bound_addr.sin_port);
+    thread_ = std::thread([this]() { Serve(); });
+  }
+
+  ~BrowsingRuntimeTestServer() {
+    stop_requested_.store(true);
+    if (port_ > 0) {
+      const auto wake_fd = socket(AF_INET, SOCK_STREAM, 0);
+      if (comet::platform::IsSocketValid(wake_fd)) {
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(static_cast<uint16_t>(port_));
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        (void)connect(wake_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        comet::platform::CloseSocket(wake_fd);
+      }
+    }
+    if (comet::platform::IsSocketValid(listen_fd_)) {
+      comet::platform::CloseSocket(listen_fd_);
+    }
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  int port() const { return port_; }
+
+ private:
+  void WriteJsonResponse(
+      comet::platform::SocketHandle client_fd,
+      int status_code,
+      const json& payload) {
+    const std::string body = payload.dump();
+    std::ostringstream response;
+    response << "HTTP/1.1 " << status_code
+             << (status_code >= 200 && status_code < 300 ? " OK" : " ERROR") << "\r\n";
+    response << "Content-Type: application/json\r\n";
+    response << "Content-Length: " << body.size() << "\r\n";
+    response << "Connection: close\r\n\r\n";
+    response << body;
+    const auto serialized = response.str();
+    const char* data = serialized.c_str();
+    std::size_t remaining = serialized.size();
+    while (remaining > 0) {
+      const auto written = send(client_fd, data, remaining, 0);
+      if (written <= 0) {
+        break;
+      }
+      data += written;
+      remaining -= static_cast<std::size_t>(written);
+    }
+  }
+
+  void Serve() {
+    while (true) {
+      sockaddr_in client_addr{};
+      socklen_t client_size = sizeof(client_addr);
+      const auto client_fd = accept(
+          listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_size);
+      if (!comet::platform::IsSocketValid(client_fd)) {
+        return;
+      }
+      if (stop_requested_.load()) {
+        comet::platform::CloseSocket(client_fd);
+        return;
+      }
+
+      char buffer[4096];
+      const auto read_count = recv(client_fd, buffer, sizeof(buffer), 0);
+      const std::string request =
+          read_count > 0 ? std::string(buffer, static_cast<std::size_t>(read_count)) : "";
+
+      if (request.rfind("GET /health ", 0) == 0) {
+        WriteJsonResponse(client_fd, 200, json{{"status", "ok"}});
+      } else if (request.rfind("GET /v1/browsing/status ", 0) == 0) {
+        WriteJsonResponse(
+            client_fd,
+            200,
+            json{{"status", "ok"},
+                 {"service", "comet-browsing"},
+                 {"ready", true},
+                 {"active_session_count", 0}});
+      } else if (request.rfind("POST /v1/browsing/search ", 0) == 0) {
+        WriteJsonResponse(
+            client_fd,
+            200,
+            json{{"query", "example"}, {"results", json::array()}});
+      } else {
+        WriteJsonResponse(
+            client_fd,
+            404,
+            json{{"status", "error"}, {"error", {{"code", "not_found"}}}});
+      }
+      comet::platform::CloseSocket(client_fd);
+    }
+  }
+
+  std::atomic<bool> stop_requested_{false};
+  comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  int port_ = 0;
+  std::thread thread_;
+};
+
 comet::DesiredState BuildDesiredStateWithSkillsPort(
     const std::string& host_ip,
     const int host_port) {
@@ -168,6 +318,33 @@ comet::DesiredState BuildDesiredStateWithSkillsPort(
   published_port.container_port = 18120;
   skills.published_ports.push_back(published_port);
   desired_state.instances.push_back(skills);
+  return desired_state;
+}
+
+comet::DesiredState BuildDesiredStateWithBrowsingPort(
+    const std::string& host_ip,
+    const int host_port) {
+  comet::DesiredState desired_state;
+  desired_state.plane_name = "maglev";
+  desired_state.plane_mode = comet::PlaneMode::Llm;
+  comet::BrowsingSettings settings;
+  settings.enabled = true;
+  comet::BrowsingPolicySettings policy;
+  policy.browser_session_enabled = true;
+  settings.policy = policy;
+  desired_state.browsing = settings;
+
+  comet::InstanceSpec browsing;
+  browsing.name = "browsing-maglev";
+  browsing.plane_name = "maglev";
+  browsing.node_name = "local-hostd";
+  browsing.role = comet::InstanceRole::Browsing;
+  comet::PublishedPort published_port;
+  published_port.host_ip = host_ip;
+  published_port.host_port = host_port;
+  published_port.container_port = 18130;
+  browsing.published_ports.push_back(published_port);
+  desired_state.instances.push_back(browsing);
   return desired_state;
 }
 
@@ -223,6 +400,72 @@ int main() {
           target->raw == "http://127.0.0.1:27978",
           "skills target raw URL should normalize wildcard host_ip");
       std::cout << "ok: wildcard-host-ip-normalization" << '\n';
+    }
+
+    {
+      comet::controller::PlaneBrowsingService browsing_service;
+      const auto target =
+          browsing_service.ResolveTarget(BuildDesiredStateWithBrowsingPort("127.0.0.1", 28130));
+      Expect(target.has_value(), "browsing target should resolve when a published port exists");
+      Expect(target->host == "127.0.0.1", "browsing target host should use published host_ip");
+      Expect(target->port == 28130, "browsing target port should use published host_port");
+      Expect(
+          target->raw == "http://127.0.0.1:28130",
+          "browsing target raw URL should use normalized published endpoint");
+      std::cout << "ok: browsing-published-host-ip-target" << '\n';
+    }
+
+    {
+      comet::controller::PlaneBrowsingService browsing_service;
+      const auto target =
+          browsing_service.ResolveTarget(BuildDesiredStateWithBrowsingPort("0.0.0.0", 28130));
+      Expect(target.has_value(), "browsing target should resolve for wildcard host_ip");
+      Expect(
+          target->host == "127.0.0.1",
+          "browsing target host should normalize wildcard host_ip to loopback");
+      std::cout << "ok: browsing-wildcard-host-ip-normalization" << '\n';
+    }
+
+    {
+      BrowsingRuntimeTestServer runtime;
+      comet::controller::PlaneBrowsingService browsing_service;
+      const auto desired_state =
+          BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
+      const auto payload =
+          browsing_service.BuildStatusPayload(desired_state, std::optional<std::string>("running"));
+      Expect(payload.value("browsing_enabled", false),
+             "browsing status should mark browsing as enabled");
+      Expect(payload.value("browsing_ready", false),
+             "browsing status should probe runtime readiness");
+      Expect(payload.value("service", std::string{}) == "comet-browsing",
+             "browsing status should merge runtime payload");
+      Expect(payload.value("active_session_count", -1) == 0,
+             "browsing status should expose runtime active_session_count");
+      std::cout << "ok: browsing-status-merges-runtime-payload" << '\n';
+    }
+
+    {
+      BrowsingRuntimeTestServer runtime;
+      comet::controller::PlaneBrowsingService browsing_service;
+      const auto desired_state =
+          BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
+      std::string error_code;
+      std::string error_message;
+      const auto response = browsing_service.ProxyPlaneBrowsingRequest(
+          desired_state,
+          "POST",
+          "/search",
+          R"({"query":"example"})",
+          &error_code,
+          &error_message);
+      Expect(response.has_value(), "browsing proxy should return upstream response");
+      Expect(response->status_code == 200, "browsing proxy should preserve upstream status");
+      const auto payload = json::parse(response->body);
+      Expect(payload.at("query").get<std::string>() == "example",
+             "browsing proxy should return upstream payload body");
+      Expect(payload.at("results").is_array(),
+             "browsing proxy should return upstream result list");
+      std::cout << "ok: browsing-proxy-search" << '\n';
     }
 
     {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, startTransition } from "react";
+import React, { useEffect, useRef, useState, startTransition } from "react";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import {
   Area,
@@ -1066,13 +1066,14 @@ function OnboardingCard({ onCreatePlane }) {
   );
 }
 
-function PlaneEditorDialog({
+export function PlaneEditorDialog({
   dialog,
   setDialog,
   onClose,
   onSave,
   modelLibraryItems,
   skillsFactoryItems,
+  skillsFactoryGroups = [],
 }) {
   if (!dialog.open) {
     return null;
@@ -1153,7 +1154,7 @@ function PlaneEditorDialog({
             languageOptions={CHAT_LANGUAGE_OPTIONS}
             modelLibraryItems={modelLibraryItems || []}
             skillsFactoryItems={skillsFactoryItems || []}
-            skillsFactoryGroups={skillsFactory.groups || []}
+            skillsFactoryGroups={skillsFactoryGroups || []}
           />
         ) : null}
         <label className="field-label" htmlFor="plane-editor-json">
@@ -3100,13 +3101,31 @@ function App() {
   const llmPlane = planeMode === "llm";
   const skillsEnabled =
     Boolean(desiredStateV2?.skills?.enabled) || Boolean(desiredState?.skills?.enabled);
+  const browsingEnabled =
+    Boolean(desiredStateV2?.browsing?.enabled) || Boolean(desiredState?.browsing?.enabled);
   const dashboardSkillsSummary = dashboard?.skills || {
     enabled: skillsEnabled,
     enabled_count: 0,
     total_count: 0,
   };
+  const dashboardBrowsingSummary = dashboard?.browsing || {
+    browsing_enabled: browsingEnabled,
+    browsing_ready: false,
+    browser_session_enabled: false,
+    reason: browsingEnabled ? "pending" : "browsing_disabled",
+  };
   const formattedSkillsSummary =
     formatPlaneDashboardSkillsSummary(dashboardSkillsSummary);
+  const browsingSummaryValue = dashboardBrowsingSummary?.browsing_ready
+    ? "ready"
+    : browsingEnabled
+      ? "enabled"
+      : "disabled";
+  const browsingSummaryMeta = browsingEnabled
+    ? `${dashboardBrowsingSummary?.browser_session_enabled ? "browser on" : "browser off"} / ${
+        dashboardBrowsingSummary?.reason || "pending"
+      }`
+    : "disabled";
   const chatLanguageOptions = supportedChatLanguageOptions(desiredState, interactionStatus);
   const interactionReady = interactionStatus?.ready === true;
   const nodeItems = dashboard?.nodes || [];
@@ -4169,6 +4188,11 @@ function App() {
                   meta={formattedSkillsSummary.meta}
                 />
                 <SummaryCard
+                  label="Browsing"
+                  value={browsingSummaryValue}
+                  meta={browsingSummaryMeta}
+                />
+                <SummaryCard
                   label="Rollout actions"
                   value={dashboard.rollout?.total_actions ?? 0}
                   meta={`${dashboard.rollout?.loop_status ?? "n/a"} / ${dashboard.rollout?.loop_reason ?? "n/a"}`}
@@ -4302,6 +4326,23 @@ function App() {
                         );
                       })
                     )}
+                  </div>
+                </section>
+
+                <section className="subpanel">
+                  <div className="subpanel-header">
+                    <h3>Isolated browsing</h3>
+                    <span className="subpanel-meta">Plane-scoped broker status and browser-session posture</span>
+                  </div>
+                  <div className="list-card">
+                    <div className="metric-grid compact-metric-grid">
+                      <div className="metric-row"><span>Enabled</span><strong>{yesNo(dashboardBrowsingSummary?.browsing_enabled)}</strong></div>
+                      <div className="metric-row"><span>Ready</span><strong>{yesNo(dashboardBrowsingSummary?.browsing_ready)}</strong></div>
+                      <div className="metric-row"><span>Browser sessions</span><strong>{yesNo(dashboardBrowsingSummary?.browser_session_enabled)}</strong></div>
+                      <div className="metric-row"><span>Container</span><strong>{dashboardBrowsingSummary?.browsing_container_name || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Reason</span><strong>{dashboardBrowsingSummary?.reason || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Target</span><strong>{dashboardBrowsingSummary?.browsing_target || "n/a"}</strong></div>
+                    </div>
                   </div>
                 </section>
 

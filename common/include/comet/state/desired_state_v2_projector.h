@@ -27,6 +27,7 @@ class DesiredStateV2Projector final {
   void ProjectWorker();
   void ProjectApp();
   void ProjectSkills();
+  void ProjectBrowsing();
   void ProjectResources();
 
   bool ShouldEmitTopology() const;
@@ -59,6 +60,7 @@ class DesiredStateV2Projector final {
   const InstanceSpec* infer_instance_ = nullptr;
   const InstanceSpec* app_instance_ = nullptr;
   const InstanceSpec* skills_instance_ = nullptr;
+  const InstanceSpec* browsing_instance_ = nullptr;
   std::vector<const InstanceSpec*> worker_instances_;
   const DiskSpec* shared_disk_ = nullptr;
 };

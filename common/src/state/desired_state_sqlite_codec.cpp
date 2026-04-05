@@ -419,6 +419,9 @@ DiskKind DesiredStateSqliteCodec::ParseDiskKind(const std::string& value) {
   if (value == "skills-private") {
     return DiskKind::SkillsPrivate;
   }
+  if (value == "browsing-private") {
+    return DiskKind::BrowsingPrivate;
+  }
   throw std::runtime_error("unknown disk kind '" + value + "'");
 }
 
@@ -434,6 +437,9 @@ InstanceRole DesiredStateSqliteCodec::ParseInstanceRole(const std::string& value
   }
   if (value == "skills") {
     return InstanceRole::Skills;
+  }
+  if (value == "browsing") {
+    return InstanceRole::Browsing;
   }
   throw std::runtime_error("unknown instance role '" + value + "'");
 }

@@ -65,6 +65,10 @@ bool IsPlaneSkillsRequest(const std::string& path) {
   return ExtractPlaneFeatureRequestName(path, "/skills").has_value();
 }
 
+bool IsPlaneBrowsingRequest(const std::string& path) {
+  return ExtractPlaneFeatureRequestName(path, "/browsing").has_value();
+}
+
 }  // namespace
 
 ControllerHttpRouter::ControllerHttpRouter(
@@ -439,7 +443,8 @@ HttpResponse ControllerHttpRouter::HandleRequest(
           "/api/v1/hostd/")) {
     const bool interaction_request = IsPlaneInteractionRequest(request.path);
     const bool skills_request = IsPlaneSkillsRequest(request.path);
-    if (!interaction_request && !skills_request) {
+    const bool browsing_request = IsPlaneBrowsingRequest(request.path);
+    if (!interaction_request && !skills_request && !browsing_request) {
       try {
         comet::ControllerStore store(db_path_);
         store.Initialize();
@@ -461,12 +466,13 @@ HttpResponse ControllerHttpRouter::HandleRequest(
                  {"path", request.path}},
             {});
       }
-    } else if (skills_request) {
+    } else if (skills_request || browsing_request) {
       try {
         comet::ControllerStore store(db_path_);
         store.Initialize();
-        const auto plane_name =
-            ExtractPlaneFeatureRequestName(request.path, "/skills");
+        const auto plane_name = skills_request
+                                    ? ExtractPlaneFeatureRequestName(request.path, "/skills")
+                                    : ExtractPlaneFeatureRequestName(request.path, "/browsing");
         if (plane_name.has_value()) {
           const auto desired_state = store.LoadDesiredState(*plane_name);
           if (desired_state.has_value() && desired_state->protected_plane &&

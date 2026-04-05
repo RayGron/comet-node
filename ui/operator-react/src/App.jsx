@@ -1171,22 +1171,48 @@ export function PlaneEditorDialog({
             skillsFactoryGroups={skillsFactoryGroups || []}
           />
         ) : null}
-        <label className="field-label" htmlFor="plane-editor-json">
-          {desiredStateLabel}
-        </label>
-        <textarea
-          id="plane-editor-json"
-          className="editor-textarea"
-          value={dialog.text}
-          onChange={(event) =>
-            setDialog((current) => ({
-              ...current,
-              text: event.target.value,
-            }))
-          }
-          readOnly={readOnly || showFormBuilder}
-          spellCheck="false"
-        />
+        {showFormBuilder ? (
+          <details className="plane-advanced-section">
+            <summary className="plane-advanced-summary">Generated JSON</summary>
+            <div className="plane-advanced-body">
+              <label className="field-label" htmlFor="plane-editor-json">
+                {desiredStateLabel}
+              </label>
+              <textarea
+                id="plane-editor-json"
+                className="editor-textarea"
+                value={dialog.text}
+                onChange={(event) =>
+                  setDialog((current) => ({
+                    ...current,
+                    text: event.target.value,
+                  }))
+                }
+                readOnly
+                spellCheck="false"
+              />
+            </div>
+          </details>
+        ) : (
+          <>
+            <label className="field-label" htmlFor="plane-editor-json">
+              {desiredStateLabel}
+            </label>
+            <textarea
+              id="plane-editor-json"
+              className="editor-textarea"
+              value={dialog.text}
+              onChange={(event) =>
+                setDialog((current) => ({
+                  ...current,
+                  text: event.target.value,
+                }))
+              }
+              readOnly={readOnly || showFormBuilder}
+              spellCheck="false"
+            />
+          </>
+        )}
         <div className="toolbar">
           {readOnly ? (
             <button

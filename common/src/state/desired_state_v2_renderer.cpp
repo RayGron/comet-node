@@ -17,16 +17,24 @@ namespace {
 constexpr std::string_view kDesiredStateV2BundlePrefix = "bundle://";
 constexpr int kDefaultSharedDiskSizeGb = 40;
 constexpr int kDefaultInferPrivateDiskSizeGb = 12;
-constexpr int kDefaultWorkerPrivateDiskSizeGb = 12;
+constexpr int kDefaultWorkerPrivateDiskSizeGb = 2;
 constexpr int kDefaultAppPrivateDiskSizeGb = 8;
-constexpr int kDefaultSkillsPrivateDiskSizeGb = 4;
-constexpr int kDefaultBrowsingPrivateDiskSizeGb = 4;
+constexpr int kDefaultSkillsPrivateDiskSizeGb = 1;
+constexpr int kDefaultBrowsingPrivateDiskSizeGb = 1;
 constexpr int kSkillsContainerPort = 18120;
 constexpr int kSkillsPublishedPortBase = 24000;
 constexpr int kSkillsPublishedPortSpan = 10000;
 constexpr int kBrowsingContainerPort = 18130;
 constexpr int kBrowsingPublishedPortBase = 34000;
 constexpr int kBrowsingPublishedPortSpan = 10000;
+
+bool HasExplicitPrivateStorage(
+    const nlohmann::json& service_json,
+    const std::string& legacy_volume_key) {
+  return (service_json.contains("storage") && service_json.at("storage").is_object()) ||
+         (service_json.contains(legacy_volume_key) && service_json.at(legacy_volume_key).is_array() &&
+          !service_json.at(legacy_volume_key).empty());
+}
 
 }  // namespace
 
@@ -337,6 +345,7 @@ void DesiredStateV2Renderer::RenderInferInstance() {
 
   for (int infer_index = 0; infer_index < infer_count; ++infer_index) {
     InstanceSpec infer;
+    const bool has_private_storage = HasExplicitPrivateStorage(infer_json_, "volumes");
     infer.name = BuildInferInstanceName(infer_index);
     infer.role = InstanceRole::Infer;
     infer.plane_name = state_.plane_name;
@@ -345,10 +354,16 @@ void DesiredStateV2Renderer::RenderInferInstance() {
     infer.command =
         BuildCommandFromStartSpec(infer_json_.value("start", nlohmann::json::object()),
                                   "/runtime/bin/comet-inferctl container-boot");
-    infer.private_disk_name = infer.name + "-private";
-    infer.shared_disk_name = state_.plane_shared_disk_name;
-    infer.private_disk_size_gb =
-        ExtractPrivateDiskSizeGb(infer_json_, kDefaultInferPrivateDiskSizeGb, "volumes");
+    infer.private_disk_name =
+        has_private_storage && InstanceNeedsPrivateDisk(infer.role) ? infer.name + "-private" : "";
+    infer.shared_disk_name =
+        InstanceNeedsSharedDiskMount(infer.role) ? state_.plane_shared_disk_name : "";
+    infer.private_disk_size_gb = has_private_storage
+                                     ? ExtractPrivateDiskSizeGb(
+                                           infer_json_,
+                                           kDefaultInferPrivateDiskSizeGb,
+                                           "volumes")
+                                     : 0;
     infer.environment = {
         {"COMET_PLANE_NAME", state_.plane_name},
         {"COMET_INSTANCE_NAME", infer.name},
@@ -365,8 +380,10 @@ void DesiredStateV2Renderer::RenderInferInstance() {
         {"COMET_GATEWAY_PORT", std::to_string(BuildInferGatewayPort(infer_index))},
         {"COMET_LLAMA_PORT", std::to_string(BuildInferLlamaPort(infer_index))},
         {"COMET_SHARED_DISK_PATH", "/comet/shared"},
-        {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
     };
+    if (!infer.private_disk_name.empty()) {
+      infer.environment["COMET_PRIVATE_DISK_PATH"] = "/comet/private";
+    }
     if (infer_json_.contains("env") && infer_json_.at("env").is_object()) {
       const auto custom_env = infer_json_.at("env").get<std::map<std::string, std::string>>();
       for (const auto& [key, value] : custom_env) {
@@ -401,17 +418,19 @@ void DesiredStateV2Renderer::RenderInferInstance() {
   for (const auto& infer : rendered_infers) {
     state_.instances.push_back(infer);
 
-    DiskSpec infer_private_disk;
-    infer_private_disk.name = infer.private_disk_name;
-    infer_private_disk.kind = DiskKind::InferPrivate;
-    infer_private_disk.plane_name = state_.plane_name;
-    infer_private_disk.owner_name = infer.name;
-    infer_private_disk.node_name = infer.node_name;
-    infer_private_disk.host_path = BuildInstancePrivateHostPath(infer.name);
-    infer_private_disk.container_path =
-        ExtractPrivateMountPath(infer_json_, "/comet/private", "volumes");
-    infer_private_disk.size_gb = infer.private_disk_size_gb;
-    state_.disks.push_back(std::move(infer_private_disk));
+    if (!infer.private_disk_name.empty()) {
+      DiskSpec infer_private_disk;
+      infer_private_disk.name = infer.private_disk_name;
+      infer_private_disk.kind = DiskKind::InferPrivate;
+      infer_private_disk.plane_name = state_.plane_name;
+      infer_private_disk.owner_name = infer.name;
+      infer_private_disk.node_name = infer.node_name;
+      infer_private_disk.host_path = BuildInstancePrivateHostPath(infer.name);
+      infer_private_disk.container_path =
+          ExtractPrivateMountPath(infer_json_, "/comet/private", "volumes");
+      infer_private_disk.size_gb = infer.private_disk_size_gb;
+      state_.disks.push_back(std::move(infer_private_disk));
+    }
   }
 }
 
@@ -612,7 +631,8 @@ void DesiredStateV2Renderer::RenderSkillsInstance() {
       BuildCommandFromStartSpec(skills_json_.value("start", nlohmann::json::object()),
                                 "/runtime/bin/comet-skillsd");
   skills.private_disk_name = skills.name + "-private";
-  skills.shared_disk_name = state_.plane_shared_disk_name;
+  skills.shared_disk_name =
+      InstanceNeedsSharedDiskMount(skills.role) ? state_.plane_shared_disk_name : "";
   skills.private_disk_size_gb =
       ExtractPrivateDiskSizeGb(skills_json_, kDefaultSkillsPrivateDiskSizeGb, "volumes");
   skills.environment = {
@@ -620,7 +640,6 @@ void DesiredStateV2Renderer::RenderSkillsInstance() {
       {"COMET_INSTANCE_NAME", skills.name},
       {"COMET_INSTANCE_ROLE", "skills"},
       {"COMET_NODE_NAME", skills.node_name},
-      {"COMET_SHARED_DISK_PATH", "/comet/shared"},
       {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
       {"COMET_SKILLS_PORT", std::to_string(kSkillsContainerPort)},
       {"COMET_SKILLS_DB_PATH", "/comet/private/skills.sqlite"},
@@ -690,6 +709,8 @@ void DesiredStateV2Renderer::RenderBrowsingInstance() {
       BuildCommandFromStartSpec(browsing_json_.value("start", nlohmann::json::object()),
                                 "/runtime/bin/comet-browsingd");
   browsing.private_disk_name = browsing.name + "-private";
+  browsing.shared_disk_name =
+      InstanceNeedsSharedDiskMount(browsing.role) ? state_.plane_shared_disk_name : "";
   browsing.private_disk_size_gb =
       ExtractPrivateDiskSizeGb(browsing_json_, kDefaultBrowsingPrivateDiskSizeGb, "storage");
   browsing.environment = {
@@ -697,7 +718,6 @@ void DesiredStateV2Renderer::RenderBrowsingInstance() {
       {"COMET_INSTANCE_NAME", browsing.name},
       {"COMET_INSTANCE_ROLE", "browsing"},
       {"COMET_NODE_NAME", browsing.node_name},
-      {"COMET_SHARED_DISK_PATH", "/comet/shared"},
       {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
       {"COMET_BROWSING_PORT", std::to_string(kBrowsingContainerPort)},
       {"COMET_BROWSING_RUNTIME_STATUS_PATH", "/comet/private/browsing-runtime-status.json"},

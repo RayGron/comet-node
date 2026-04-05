@@ -683,6 +683,37 @@ body {
   gap: 10px;
 }
 
+.plane-advanced-section {
+  border-radius: 14px;
+  border: 1px solid rgba(120, 190, 255, 0.14);
+  background: rgba(6, 18, 37, 0.44);
+  overflow: hidden;
+}
+
+.plane-advanced-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 14px 16px;
+  color: var(--text);
+  font-weight: 600;
+  user-select: none;
+}
+
+.plane-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.plane-advanced-section[open] .plane-advanced-summary {
+  border-bottom: 1px solid rgba(120, 190, 255, 0.12);
+  background: rgba(10, 28, 56, 0.52);
+}
+
+.plane-advanced-body {
+  display: grid;
+  gap: 14px;
+  padding: 14px 16px 16px;
+}
+
 .plane-form-toggle {
   display: grid;
   gap: 8px;
@@ -937,7 +968,7 @@ body {
 .plane-features-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .plane-form-builder .field-label {
@@ -1016,6 +1047,15 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   opacity: 0.86;
+}
+
+@media (max-width: 1080px) {
+  .plane-form-grid,
+  .plane-form-grid-wide,
+  .plane-features-grid,
+  .skills-factory-selector-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .field-info {

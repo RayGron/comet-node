@@ -115,11 +115,19 @@ describe("skillsFactory utils", () => {
 });
 
 describe("planeV2Form SkillsFactory mapping", () => {
+  it("derives served model and server names from plane name by default", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "Maglev Web";
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.model.served_model_name).toBe("maglev-web");
+    expect(desiredState.network.server_name).toBe("maglev-web.local");
+  });
+
   it("round-trips factory skill ids through desired state v2", () => {
     const form = buildNewPlaneFormState();
     form.planeName = "skills-plane";
     form.modelPath = "/models/qwen";
-    form.servedModelName = "skills-plane-model";
     form.skillsEnabled = true;
     form.factorySkillIds = ["skill-alpha", "skill-beta"];
 
@@ -147,7 +155,6 @@ describe("planeV2Form SkillsFactory mapping", () => {
     const form = buildNewPlaneFormState();
     form.planeName = "browsing-plane";
     form.modelPath = "/models/qwen";
-    form.servedModelName = "browsing-plane-model";
     form.browsingEnabled = true;
     form.browserSessionEnabled = true;
 
@@ -172,6 +179,14 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(validation.warnings).toContain(
       "Browser sessions are ignored until Isolated Browsing is enabled.",
     );
+  });
+
+  it("requires worker image and start for compute planes", () => {
+    const form = buildNewPlaneFormState();
+    form.planeMode = "compute";
+    const validation = validatePlaneV2Form(form);
+    expect(validation.errors).toContain("Worker image is required for compute planes.");
+    expect(validation.errors).toContain("Worker start is required for compute planes.");
   });
 });
 
@@ -201,6 +216,8 @@ describe("PlaneEditorDialog", () => {
 
     expect(html).toContain("New plane");
     expect(html).toContain("Isolated Browsing");
+    expect(html).toContain("Generated JSON");
+    expect(html).not.toContain("Runtime engine");
   });
 });
 

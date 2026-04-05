@@ -117,6 +117,34 @@ function parseNumber(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function slugifyPlaneName(value, fallback = "plane") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+}
+
+function deriveServedModelName(planeName) {
+  return slugifyPlaneName(planeName, "model");
+}
+
+function deriveServerName(planeName) {
+  return `${slugifyPlaneName(planeName, "plane")}.local`;
+}
+
+function syncDerivedPlaneFields(form) {
+  const next = { ...form };
+  if (!next.servedModelNameManual) {
+    next.servedModelName = deriveServedModelName(next.planeName);
+  }
+  if (!next.serverNameManual) {
+    next.serverName = deriveServerName(next.planeName);
+  }
+  return next;
+}
+
 function normalizeShareModeGpuFraction(shareMode, gpuFraction) {
   if (shareMode === "exclusive") {
     return 1;
@@ -180,7 +208,7 @@ export function isDesiredStateV2(value) {
 }
 
 export function buildNewPlaneFormState() {
-  return {
+  return syncDerivedPlaneFields({
     planeName: "new-plane",
     skillsEnabled: false,
     browsingEnabled: false,
@@ -195,7 +223,8 @@ export function buildNewPlaneFormState() {
     modelUrls: "",
     materializationMode: "reference",
     materializationLocalPath: "",
-    servedModelName: "new-plane-model",
+    servedModelName: "",
+    servedModelNameManual: false,
     modelTargetFilename: "",
     modelSha256: "",
     systemPrompt:
@@ -211,7 +240,8 @@ export function buildNewPlaneFormState() {
     gpuMemoryUtilization: 0.85,
     gatewayPort: 18084,
     inferencePort: 18094,
-    serverName: "new-plane.local",
+    serverName: "",
+    serverNameManual: false,
     topologyEnabled: false,
     topologyNodes: [],
     inferImage: "",
@@ -221,7 +251,7 @@ export function buildNewPlaneFormState() {
     inferEnvText: "",
     inferNode: "",
     inferStorageEnabled: false,
-    inferStorageSizeGb: 8,
+    inferStorageSizeGb: 12,
     inferStorageMountPath: "/comet/private",
     workerImage: "",
     workerStartType: "command",
@@ -232,7 +262,7 @@ export function buildNewPlaneFormState() {
     workerAssignmentsEnabled: false,
     workerAssignments: [],
     workerStorageEnabled: false,
-    workerStorageSizeGb: 24,
+    workerStorageSizeGb: 2,
     workerStorageMountPath: "/comet/private",
     appEnabled: false,
     appImage: "",
@@ -254,7 +284,7 @@ export function buildNewPlaneFormState() {
     memoryCapMb: 24576,
     sharedDiskGb: 40,
     postDeployScript: "bundle://deploy/scripts/post-deploy.sh",
-  };
+  });
 }
 
 export function buildPlaneFormStateFromDesiredStateV2(value) {
@@ -275,9 +305,12 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     Array.isArray(app?.volumes) && app.volumes.length > 0 ? app.volumes[0] : {};
   const inferStorage = infer?.storage || {};
   const workerStorage = worker?.storage || {};
+  const planeName = value?.plane_name || defaults.planeName;
+  const servedModelName = value?.model?.served_model_name || deriveServedModelName(planeName);
+  const serverName = network.server_name || deriveServerName(planeName);
   return {
     ...defaults,
-    planeName: value?.plane_name || defaults.planeName,
+    planeName,
     skillsEnabled: Boolean(value?.skills?.enabled),
     browsingEnabled: Boolean(value?.browsing?.enabled),
     browserSessionEnabled: Boolean(value?.browsing?.policy?.browser_session_enabled),
@@ -293,7 +326,8 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     modelUrls: Array.isArray(source.urls) ? source.urls.join("\n") : "",
     materializationMode: materialization.mode || defaults.materializationMode,
     materializationLocalPath: materialization.local_path || "",
-    servedModelName: value?.model?.served_model_name || defaults.servedModelName,
+    servedModelName,
+    servedModelNameManual: servedModelName !== deriveServedModelName(planeName),
     modelTargetFilename: value?.model?.target_filename || "",
     modelSha256: value?.model?.sha256 || "",
     systemPrompt: value?.interaction?.system_prompt || defaults.systemPrompt,
@@ -313,7 +347,8 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     ),
     gatewayPort: Number(network.gateway_port ?? defaults.gatewayPort),
     inferencePort: Number(network.inference_port ?? defaults.inferencePort),
-    serverName: network.server_name || defaults.serverName,
+    serverName,
+    serverNameManual: serverName !== deriveServerName(planeName),
     topologyEnabled: Boolean(value?.topology?.nodes?.length),
     topologyNodes: normalizeTopologyNodes(value?.topology?.nodes),
     inferImage: infer.image || "",
@@ -369,6 +404,15 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
 }
 
 export function buildDesiredStateV2FromForm(form) {
+  const planeName = String(form.planeName || "").trim();
+  const servedModelName =
+    form.servedModelNameManual && String(form.servedModelName || "").trim()
+      ? String(form.servedModelName || "").trim()
+      : deriveServedModelName(planeName);
+  const serverName =
+    form.serverNameManual && String(form.serverName || "").trim()
+      ? String(form.serverName || "").trim()
+      : deriveServerName(planeName);
   const source = { type: form.modelSourceType };
   if (form.modelSourceType === "local") {
     if (form.modelPath.trim()) {
@@ -397,7 +441,7 @@ export function buildDesiredStateV2FromForm(form) {
 
   const desiredState = {
     version: 2,
-    plane_name: form.planeName.trim(),
+    plane_name: planeName,
     plane_mode: form.planeMode,
     protected: Boolean(form.protectedPlane),
     runtime: {
@@ -411,7 +455,7 @@ export function buildDesiredStateV2FromForm(form) {
     network: {
       gateway_port: parseNumber(form.gatewayPort, 18084),
       inference_port: parseNumber(form.inferencePort, 18094),
-      server_name: form.serverName.trim() || "new-plane.local",
+      server_name: serverName,
     },
     app: {
       enabled: Boolean(form.appEnabled),
@@ -450,13 +494,13 @@ export function buildDesiredStateV2FromForm(form) {
     }
   }
 
-  if (form.planeMode === "llm") {
-    desiredState.model = {
+    if (form.planeMode === "llm") {
+      desiredState.model = {
       source,
       materialization: {
         mode: form.materializationMode,
       },
-      served_model_name: form.servedModelName.trim() || form.planeName.trim(),
+      served_model_name: servedModelName,
     };
     if (form.materializationLocalPath.trim()) {
       desiredState.model.materialization.local_path = form.materializationLocalPath.trim();
@@ -656,9 +700,6 @@ export function validatePlaneV2Form(form) {
     errors.push("Plane name is required.");
   }
   if (form?.planeMode === "llm") {
-    if (!String(form?.servedModelName || "").trim()) {
-      errors.push("Served model name is required for llm planes.");
-    }
     if (form?.modelSourceType === "local" && !String(form?.modelPath || "").trim()) {
       errors.push("Local model path is required when model source type is local.");
     }
@@ -692,6 +733,14 @@ export function validatePlaneV2Form(form) {
   }
   if (form?.appEnabled && !String(form?.appImage || "").trim()) {
     errors.push("App image is required when app is enabled.");
+  }
+  if (form?.planeMode === "compute") {
+    if (!String(form?.workerImage || "").trim()) {
+      errors.push("Worker image is required for compute planes.");
+    }
+    if (!String(form?.workerStartValue || "").trim()) {
+      errors.push("Worker start is required for compute planes.");
+    }
   }
   if (form?.topologyEnabled) {
     if (enabledTopologyNodes.length === 0) {
@@ -769,6 +818,20 @@ function SectionHeader({ title, description }) {
       <div className="section-label">{title}</div>
       {description ? <p className="plane-form-section-copy">{description}</p> : null}
     </div>
+  );
+}
+
+function AdvancedSection({ title, description, defaultOpen = false, children }) {
+  return (
+    <details className="plane-advanced-section" open={defaultOpen}>
+      <summary className="plane-advanced-summary">
+        <span>{title}</span>
+      </summary>
+      <div className="plane-advanced-body">
+        {description ? <p className="plane-form-section-copy">{description}</p> : null}
+        {children}
+      </div>
+    </details>
   );
 }
 
@@ -1029,10 +1092,22 @@ export function PlaneV2FormBuilder({
 
   function bindText(key) {
     return (event) =>
-      updatePlaneDialogForm(setDialog, (current) => ({
-        ...current,
-        [key]: event.target.value,
-      }));
+      updatePlaneDialogForm(setDialog, (current) => {
+        const next = {
+          ...current,
+          [key]: event.target.value,
+        };
+        if (key === "planeName") {
+          return syncDerivedPlaneFields(next);
+        }
+        if (key === "servedModelName") {
+          next.servedModelNameManual = true;
+        }
+        if (key === "serverName") {
+          next.serverNameManual = true;
+        }
+        return next;
+      });
   }
 
   function bindNumber(key) {
@@ -1057,30 +1132,64 @@ export function PlaneV2FormBuilder({
 
   function bindCheck(key) {
     return (event) =>
-      updatePlaneDialogForm(setDialog, (current) => ({
-        ...current,
-        [key]: event.target.checked,
-      }));
+      updatePlaneDialogForm(setDialog, (current) => {
+        const next = {
+          ...current,
+          [key]: event.target.checked,
+        };
+        if (key === "appEnabled" && event.target.checked && !next.appNode && next.topologyEnabled) {
+          next.appNode = next.inferNode || next.workerNode || "";
+        }
+        return next;
+      });
   }
 
   function bindPlaneMode() {
     return (event) =>
       updatePlaneDialogForm(setDialog, (current) => {
         const nextPlaneMode = event.target.value;
-        return {
+        return syncDerivedPlaneFields({
           ...current,
           planeMode: nextPlaneMode,
           skillsEnabled: nextPlaneMode === "llm" ? current.skillsEnabled : false,
-        };
+          browsingEnabled: nextPlaneMode === "llm" ? current.browsingEnabled : false,
+          browserSessionEnabled:
+            nextPlaneMode === "llm" ? current.browserSessionEnabled : false,
+        });
       });
   }
 
   function toggleFeature(key) {
     return () =>
-      updatePlaneDialogForm(setDialog, (current) => ({
-        ...current,
-        [key]: !current[key],
-      }));
+      updatePlaneDialogForm(setDialog, (current) => {
+        const nextValue = !current[key];
+        const next = {
+          ...current,
+          [key]: nextValue,
+        };
+        if (key === "browsingEnabled" && !nextValue) {
+          next.browserSessionEnabled = false;
+        }
+        return next;
+      });
+  }
+
+  function resetDerivedField(key) {
+    updatePlaneDialogForm(setDialog, (current) => {
+      if (key === "servedModelName") {
+        return syncDerivedPlaneFields({
+          ...current,
+          servedModelNameManual: false,
+        });
+      }
+      if (key === "serverName") {
+        return syncDerivedPlaneFields({
+          ...current,
+          serverNameManual: false,
+        });
+      }
+      return current;
+    });
   }
 
   function selectLocalModel(item) {
@@ -1093,10 +1202,9 @@ export function PlaneV2FormBuilder({
         modelRef: item?.model_id || item?.name || item?.path || "",
         materializationMode: "reference",
         materializationLocalPath: item?.path || "",
-        servedModelName:
-          String(current.servedModelName || "").trim() && current.servedModelName !== "new-plane-model"
-            ? current.servedModelName
-            : fallbackName.replace(/\s+/g, "-").toLowerCase(),
+        servedModelName: current.servedModelNameManual
+          ? current.servedModelName
+          : fallbackName.replace(/\s+/g, "-").toLowerCase(),
       };
     });
   }
@@ -1331,18 +1439,26 @@ export function PlaneV2FormBuilder({
           onToggle={toggleFeature("browsingEnabled")}
         />
         <FeatureToggle
+          title="App"
+          info={FIELD_INFO.appEnabled}
+          active={form.appEnabled}
+          onToggle={toggleFeature("appEnabled")}
+        />
+        <FeatureToggle
           title="Protected Plane"
           info={FIELD_INFO.protectedPlane}
           active={form.protectedPlane}
           onToggle={toggleFeature("protectedPlane")}
         />
       </div>
+
       {form.planeMode === "llm" && form.browsingEnabled ? (
         <div className="plane-form-toggle">
           <div className="plane-form-section-header">
             <InfoLabel info={FIELD_INFO.browsingEnabled}>Isolated Browsing</InfoLabel>
             <p className="plane-form-section-copy">
-              Brokered web search and sanitized fetch are enabled. Browser sessions stay approval-gated and disabled unless explicitly allowed below.
+              Search and sanitized fetch are enabled. Browser sessions stay approval-gated until
+              explicitly allowed below.
             </p>
           </div>
           <label className="field-label plane-checkbox">
@@ -1361,14 +1477,159 @@ export function PlaneV2FormBuilder({
           />
         </div>
       ) : null}
-      {form.planeMode === "llm" && form.skillsEnabled ? (
-        <div className="plane-form-toggle">
-          <div className="plane-form-section-header">
-            <InfoLabel info={FIELD_INFO.factorySkillIds}>Skills Factory</InfoLabel>
-            <p className="plane-form-section-copy">
-              Select canonical skills that should be mirrored into this plane on rollout.
-            </p>
+
+      <SectionHeader
+        title="Runtime"
+        description={
+          form.planeMode === "compute"
+            ? "Custom worker runtime plane with explicit worker container startup."
+            : "Replica-parallel llama.cpp serving layout with infer and worker services."
+        }
+      />
+      <div className="plane-form-grid">
+        <label className="field-label">
+          <InfoLabel info={FIELD_INFO.workers}>Workers</InfoLabel>
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.workers}
+            onChange={bindNumber("workers")}
+          />
+        </label>
+        {form.planeMode === "compute" ? (
+          <>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.workerImage}>Worker image</InfoLabel>
+              <input
+                className={inputClassName(Boolean(fieldError("Worker image is required for compute planes.")))}
+                value={form.workerImage}
+                onChange={bindText("workerImage")}
+              />
+              <FieldHint message={fieldError("Worker image is required for compute planes.")} />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.workerStartType}>Worker start type</InfoLabel>
+              <select
+                className="text-input"
+                value={form.workerStartType}
+                onChange={bindText("workerStartType")}
+              >
+                <option value="script">script</option>
+                <option value="command">command</option>
+              </select>
+            </label>
+          </>
+        ) : null}
+      </div>
+      {form.planeMode === "compute" ? (
+        <div className="plane-form-grid">
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.workerStartValue}>
+              {form.workerStartType === "script" ? "Worker script ref" : "Worker command"}
+            </InfoLabel>
+            <input
+              className={inputClassName(Boolean(fieldError("Worker start is required for compute planes.")))}
+              value={form.workerStartValue}
+              onChange={bindText("workerStartValue")}
+            />
+            <FieldHint message={fieldError("Worker start is required for compute planes.")} />
+          </label>
+        </div>
+      ) : null}
+
+      {form.planeMode === "llm" ? (
+        <>
+          <SectionHeader
+            title="Model"
+            description="Choose a local model or point the plane at a remote model source."
+          />
+          <div className="plane-form-grid">
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.modelSourceType}>Model source type</InfoLabel>
+              <select
+                className="text-input"
+                value={form.modelSourceType}
+                onChange={bindText("modelSourceType")}
+              >
+                <option value="local">local</option>
+                <option value="huggingface">huggingface</option>
+                <option value="catalog">catalog</option>
+                <option value="url">url</option>
+              </select>
+            </label>
           </div>
+
+          {form.modelSourceType === "local" ? (
+            <div className="field-label">
+              <InfoLabel
+                info="Choose one locally available model from Model Library. The selected row becomes the plane model source."
+                className="field-label-title"
+              >
+                Model Library
+              </InfoLabel>
+              <ModelLibraryPicker
+                items={modelLibraryItems}
+                selectedPath={form.modelPath}
+                onSelect={selectLocalModel}
+              />
+              <FieldHint
+                message={fieldError("Local model path is required when model source type is local")}
+              />
+            </div>
+          ) : null}
+
+          {form.modelSourceType !== "local" ? (
+            <div className="plane-form-grid">
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.modelRef}>Model ref</InfoLabel>
+                <input
+                  className={inputClassName(
+                    Boolean(fieldError("Model ref is required for catalog or huggingface sources")),
+                  )}
+                  value={form.modelRef}
+                  onChange={bindText("modelRef")}
+                />
+                <FieldHint
+                  message={fieldError("Model ref is required for catalog or huggingface sources")}
+                />
+              </label>
+            </div>
+          ) : null}
+
+          {form.modelSourceType === "url" ? (
+            <div className="plane-form-grid plane-form-grid-wide">
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.modelUrl}>Primary model URL</InfoLabel>
+                <input
+                  className={inputClassName(
+                    Boolean(fieldError("At least one model URL is required for url sources")),
+                  )}
+                  value={form.modelUrl}
+                  onChange={bindText("modelUrl")}
+                />
+                <FieldHint
+                  message={fieldError("At least one model URL is required for url sources")}
+                />
+              </label>
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.modelUrls}>Additional model URLs</InfoLabel>
+                <textarea
+                  className="editor-textarea plane-form-textarea"
+                  value={form.modelUrls}
+                  onChange={bindText("modelUrls")}
+                />
+              </label>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+
+      {form.planeMode === "llm" && form.skillsEnabled ? (
+        <AdvancedSection
+          title="Skills sources"
+          description="Attach canonical Skills Factory records only when this plane actually needs them."
+        >
           <label className="field-label">
             <span className="field-label-title">Filter factory skills</span>
             <input
@@ -1411,313 +1672,120 @@ export function PlaneV2FormBuilder({
                 {renderFactoryGroupNode(factoryGroupTree)}
               </div>
             </div>
-          <div className="factory-skill-table-shell">
-            <table className="factory-skill-table">
-              <thead>
-                <tr>
-                  <th>Select</th>
-                  <th>Group</th>
-                  <th>Name</th>
-                  <th>Id</th>
-                  <th>Planes</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredFactorySkills.length === 0 ? (
+            <div className="factory-skill-table-shell">
+              <table className="factory-skill-table">
+                <thead>
                   <tr>
-                    <td colSpan="6" className="factory-skill-table-empty">
-                      No Skills Factory records match the current filter.
-                    </td>
+                    <th>Select</th>
+                    <th>Group</th>
+                    <th>Name</th>
+                    <th>Id</th>
+                    <th>Planes</th>
+                    <th>Description</th>
                   </tr>
-                ) : (
-                  filteredFactorySkills.map((item) => {
-                    const selected = Array.isArray(form.factorySkillIds)
-                      ? form.factorySkillIds.includes(item.id)
-                      : false;
-                    return (
-                      <tr key={item.id}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            onChange={() => toggleFactorySkill(item.id)}
-                          />
-                        </td>
-                        <td>{formatSkillGroupPath(item.group_path)}</td>
-                        <td>{item.name || "unnamed-skill"}</td>
-                        <td className="factory-skill-table-id">{item.id}</td>
-                        <td>{Array.isArray(item.plane_names) ? item.plane_names.length : item.plane_count || 0}</td>
-                        <td>{item.description || "No description"}</td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {filteredFactorySkills.length === 0 ? (
+                    <tr>
+                      <td colSpan="6" className="factory-skill-table-empty">
+                        No Skills Factory records match the current filter.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredFactorySkills.map((item) => {
+                      const selected = Array.isArray(form.factorySkillIds)
+                        ? form.factorySkillIds.includes(item.id)
+                        : false;
+                      return (
+                        <tr key={item.id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={() => toggleFactorySkill(item.id)}
+                            />
+                          </td>
+                          <td>{formatSkillGroupPath(item.group_path)}</td>
+                          <td>{item.name || "unnamed-skill"}</td>
+                          <td className="factory-skill-table-id">{item.id}</td>
+                          <td>
+                            {Array.isArray(item.plane_names)
+                              ? item.plane_names.length
+                              : item.plane_count || 0}
+                          </td>
+                          <td>{item.description || "No description"}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-          </div>
-        </div>
-      ) : null}
-
-      <SectionHeader
-        title="Runtime"
-        description="Replica-parallel llama.cpp layout with one aggregator head and leaf infer replicas."
-      />
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.runtimeEngine}>Runtime engine</InfoLabel>
-          <input
-            className="text-input"
-            value={form.planeMode === "compute" ? "custom worker runtime" : "llama.cpp + llama_rpc"}
-            disabled
-            readOnly
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.workers}>Workers</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.workers}
-            onChange={bindNumber("workers")}
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.inferReplicas}>Infer replicas</InfoLabel>
-          <input
-            className={inputClassName(
-              Boolean(
-                fieldError("Infer replicas must be a positive integer") ||
-                  fieldError("Workers must be divisible by infer replicas"),
-              ),
-            )}
-            type="number"
-            min="1"
-            value={form.inferReplicas}
-            onChange={bindNumber("inferReplicas")}
-            disabled={form.planeMode === "compute"}
-          />
-          <FieldHint message={fieldError("Infer replicas must be a positive integer")} />
-          <FieldHint message={fieldError("Workers must be divisible by infer replicas")} />
-        </label>
-      </div>
-
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.maxModelLen}>Max model len</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.maxModelLen}
-            onChange={bindNumber("maxModelLen")}
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.maxNumSeqs}>Max num seqs</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.maxNumSeqs}
-            onChange={bindNumber("maxNumSeqs")}
-          />
-        </label>
-      </div>
-
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.gpuMemoryUtilization}>GPU memory utilization</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            step="0.05"
-            min="0.05"
-            max="1"
-            value={form.gpuMemoryUtilization}
-            onChange={bindNumber("gpuMemoryUtilization")}
-          />
-        </label>
-      </div>
-
-      {form.planeMode === "llm" ? (
-        <div className="plane-form-grid">
-          <label className="field-label">
-            <InfoLabel info={FIELD_INFO.servedModelName}>Served model name</InfoLabel>
-            <input
-              className={inputClassName(
-                Boolean(fieldError("Served model name is required for llm planes")),
-              )}
-              value={form.servedModelName}
-              onChange={bindText("servedModelName")}
-            />
-            <FieldHint message={fieldError("Served model name is required for llm planes")} />
-          </label>
-          <label className="field-label">
-            <InfoLabel info={FIELD_INFO.defaultResponseLanguage}>Default response language</InfoLabel>
-            <select
-              className="text-input"
-              value={form.defaultResponseLanguage}
-              onChange={bindText("defaultResponseLanguage")}
-            >
-              {languageOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.value}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field-label plane-checkbox">
-            <input
-              type="checkbox"
-              checked={form.followUserLanguage}
-              onChange={bindCheck("followUserLanguage")}
-            />
-            <InfoLabel info={FIELD_INFO.followUserLanguage} className="field-label-inline">Follow user language</InfoLabel>
-          </label>
-          <label className="field-label plane-checkbox">
-            <input
-              type="checkbox"
-              checked={form.thinkingEnabled}
-              onChange={bindCheck("thinkingEnabled")}
-            />
-            <InfoLabel info={FIELD_INFO.thinkingEnabled} className="field-label-inline">Enable thinking</InfoLabel>
-          </label>
-        </div>
+        </AdvancedSection>
       ) : null}
 
       {form.planeMode === "llm" ? (
-        <>
-          <SectionHeader
-            title="Model"
-            description="Choose a known model, a local path, or a download source."
-          />
+        <AdvancedSection
+          title="Interaction defaults"
+          description="Override the plane identity exposed to clients and default assistant interaction behavior."
+        >
           <div className="plane-form-grid">
             <label className="field-label">
-              <InfoLabel info={FIELD_INFO.modelSourceType}>Model source type</InfoLabel>
+              <InfoLabel info={FIELD_INFO.servedModelName}>Served model name</InfoLabel>
+              <input className="text-input" value={form.servedModelName} onChange={bindText("servedModelName")} />
+              <FieldHint
+                message={!form.servedModelNameManual ? `Derived from plane name: ${deriveServedModelName(form.planeName)}` : ""}
+                severity="warning"
+              />
+            </label>
+            <div className="plane-form-section-actions">
+              <button
+                className="ghost-button compact-button"
+                type="button"
+                disabled={!form.servedModelNameManual}
+                onClick={() => resetDerivedField("servedModelName")}
+              >
+                Use derived value
+              </button>
+            </div>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.defaultResponseLanguage}>Default response language</InfoLabel>
               <select
                 className="text-input"
-                value={form.modelSourceType}
-                onChange={bindText("modelSourceType")}
+                value={form.defaultResponseLanguage}
+                onChange={bindText("defaultResponseLanguage")}
               >
-                <option value="local">local</option>
-                <option value="huggingface">huggingface</option>
-                <option value="catalog">catalog</option>
-                <option value="url">url</option>
+                {languageOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.value}
+                  </option>
+                ))}
               </select>
             </label>
           </div>
-
-          {form.modelSourceType === "local" ? (
-            <div className="field-label">
-              <InfoLabel info="Choose one locally available model from Model Library. The selected row becomes the plane model source." className="field-label-title">
-                Model Library
-              </InfoLabel>
-              <ModelLibraryPicker
-                items={modelLibraryItems}
-                selectedPath={form.modelPath}
-                onSelect={selectLocalModel}
-              />
-              <FieldHint
-                message={fieldError("Local model path is required when model source type is local")}
-              />
-            </div>
-          ) : null}
-
-          {form.modelSourceType !== "local" ? (
-            <div className="plane-form-grid">
-              <label className="field-label">
-                <InfoLabel info={FIELD_INFO.modelRef}>Model ref</InfoLabel>
-                <input
-                  className={inputClassName(
-                    Boolean(
-                      fieldError("Model ref is required for catalog or huggingface sources"),
-                    ),
-                  )}
-                  value={form.modelRef}
-                  onChange={bindText("modelRef")}
-                />
-                <FieldHint
-                  message={fieldError("Model ref is required for catalog or huggingface sources")}
-                />
-              </label>
-            </div>
-          ) : null}
-
-          {form.modelSourceType === "url" ? (
-            <div className="plane-form-grid plane-form-grid-wide">
-              <label className="field-label">
-                <InfoLabel info={FIELD_INFO.modelUrl}>Primary model URL</InfoLabel>
-                <input
-                  className={inputClassName(
-                    Boolean(fieldError("At least one model URL is required for url sources")),
-                  )}
-                  value={form.modelUrl}
-                  onChange={bindText("modelUrl")}
-                />
-                <FieldHint
-                  message={fieldError("At least one model URL is required for url sources")}
-                />
-              </label>
-              <label className="field-label">
-                <InfoLabel info={FIELD_INFO.modelUrls}>Additional model URLs</InfoLabel>
-                <textarea
-                  className="editor-textarea plane-form-textarea"
-                  value={form.modelUrls}
-                  onChange={bindText("modelUrls")}
-                />
-              </label>
-            </div>
-          ) : null}
-
-          {form.modelSourceType !== "local" ? (
-            <div className="plane-form-grid">
-              <label className="field-label">
-                <InfoLabel info={FIELD_INFO.materializationMode}>Materialization mode</InfoLabel>
-                <select
-                  className="text-input"
-                  value={form.materializationMode}
-                  onChange={bindText("materializationMode")}
-                >
-                  <option value="download">download</option>
-                  <option value="reference">reference</option>
-                  <option value="copy">copy</option>
-                </select>
-              </label>
-              <label className="field-label">
-                <InfoLabel info={FIELD_INFO.materializationLocalPath}>Materialization local path</InfoLabel>
-                <input
-                  className="text-input"
-                  value={form.materializationLocalPath}
-                  onChange={bindText("materializationLocalPath")}
-                />
-              </label>
-            </div>
-          ) : null}
-
-          {form.modelSourceType !== "local" ? (
           <div className="plane-form-grid">
-            <label className="field-label">
-              <InfoLabel info={FIELD_INFO.targetFilename}>Target filename</InfoLabel>
+            <label className="field-label plane-checkbox">
               <input
-                className="text-input"
-                value={form.modelTargetFilename}
-                onChange={bindText("modelTargetFilename")}
+                type="checkbox"
+                checked={form.followUserLanguage}
+                onChange={bindCheck("followUserLanguage")}
               />
+              <InfoLabel info={FIELD_INFO.followUserLanguage} className="field-label-inline">
+                Follow user language
+              </InfoLabel>
             </label>
-            <label className="field-label">
-              <InfoLabel info={FIELD_INFO.sha256}>SHA256</InfoLabel>
+            <label className="field-label plane-checkbox">
               <input
-                className="text-input"
-                value={form.modelSha256}
-                onChange={bindText("modelSha256")}
+                type="checkbox"
+                checked={form.thinkingEnabled}
+                onChange={bindCheck("thinkingEnabled")}
               />
+              <InfoLabel info={FIELD_INFO.thinkingEnabled} className="field-label-inline">
+                Enable thinking
+              </InfoLabel>
             </label>
           </div>
-          ) : null}
-
           <label className="field-label">
             <InfoLabel info={FIELD_INFO.systemPrompt}>System prompt</InfoLabel>
             <textarea
@@ -1726,530 +1794,674 @@ export function PlaneV2FormBuilder({
               onChange={bindText("systemPrompt")}
             />
           </label>
-        </>
+        </AdvancedSection>
       ) : null}
 
-      <SectionHeader
-        title="Network"
-        description="Ports and server name exposed by the plane."
-      />
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.gatewayPort}>Gateway port</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.gatewayPort}
-            onChange={bindNumber("gatewayPort")}
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.inferencePort}>Inference port</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.inferencePort}
-            onChange={bindNumber("inferencePort")}
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.serverName}>Server name</InfoLabel>
-          <input className="text-input" value={form.serverName} onChange={bindText("serverName")} />
-        </label>
-      </div>
+      <AdvancedSection
+        title="Runtime tuning"
+        description="Override performance and model materialization settings when the defaults are not enough."
+      >
+        {form.planeMode === "llm" ? (
+          <>
+            <div className="plane-form-grid">
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.inferReplicas}>Infer replicas</InfoLabel>
+                <input
+                  className={inputClassName(
+                    Boolean(
+                      fieldError("Infer replicas must be a positive integer") ||
+                        fieldError("Workers must be divisible by infer replicas"),
+                    ),
+                  )}
+                  type="number"
+                  min="1"
+                  value={form.inferReplicas}
+                  onChange={bindNumber("inferReplicas")}
+                />
+                <FieldHint message={fieldError("Infer replicas must be a positive integer")} />
+                <FieldHint message={fieldError("Workers must be divisible by infer replicas")} />
+              </label>
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.maxModelLen}>Max model len</InfoLabel>
+                <input
+                  className="text-input"
+                  type="number"
+                  min="1"
+                  value={form.maxModelLen}
+                  onChange={bindNumber("maxModelLen")}
+                />
+              </label>
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.maxNumSeqs}>Max num seqs</InfoLabel>
+                <input
+                  className="text-input"
+                  type="number"
+                  min="1"
+                  value={form.maxNumSeqs}
+                  onChange={bindNumber("maxNumSeqs")}
+                />
+              </label>
+            </div>
+            <div className="plane-form-grid">
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.gpuMemoryUtilization}>GPU memory utilization</InfoLabel>
+                <input
+                  className="text-input"
+                  type="number"
+                  step="0.05"
+                  min="0.05"
+                  max="1"
+                  value={form.gpuMemoryUtilization}
+                  onChange={bindNumber("gpuMemoryUtilization")}
+                />
+              </label>
+            </div>
+            {form.modelSourceType !== "local" ? (
+              <>
+                <div className="plane-form-grid">
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.materializationMode}>Materialization mode</InfoLabel>
+                    <select
+                      className="text-input"
+                      value={form.materializationMode}
+                      onChange={bindText("materializationMode")}
+                    >
+                      <option value="download">download</option>
+                      <option value="reference">reference</option>
+                      <option value="copy">copy</option>
+                    </select>
+                  </label>
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.materializationLocalPath}>Materialization local path</InfoLabel>
+                    <input
+                      className="text-input"
+                      value={form.materializationLocalPath}
+                      onChange={bindText("materializationLocalPath")}
+                    />
+                  </label>
+                </div>
+                <div className="plane-form-grid">
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.targetFilename}>Target filename</InfoLabel>
+                    <input
+                      className="text-input"
+                      value={form.modelTargetFilename}
+                      onChange={bindText("modelTargetFilename")}
+                    />
+                  </label>
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.sha256}>SHA256</InfoLabel>
+                    <input
+                      className="text-input"
+                      value={form.modelSha256}
+                      onChange={bindText("modelSha256")}
+                    />
+                  </label>
+                </div>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <div className="plane-form-section-copy">
+            Compute planes use the explicit worker image and start command as the primary runtime contract.
+          </div>
+        )}
+      </AdvancedSection>
 
-      <SectionHeader
-        title="Topology"
-        description="Optional advanced node layout for single-host or split-host placement."
-      />
-      <SectionMeta>{topologySummary}</SectionMeta>
-      <SectionActions>
-        <button className="ghost-button" type="button" onClick={enableSingleHostLayout}>
-          Use single-host layout
-        </button>
-        <button className="ghost-button" type="button" onClick={generateSplitHostLayout}>
-          Generate split-host layout
-        </button>
-      </SectionActions>
-      <div className="plane-form-grid">
-        <label className="field-label plane-checkbox">
-          <input
-            type="checkbox"
-            checked={form.topologyEnabled}
-            onChange={bindCheck("topologyEnabled")}
-          />
-          <InfoLabel info={FIELD_INFO.topologyEnabled} className="field-label-inline">Custom topology</InfoLabel>
-        </label>
-      </div>
-
-      <label className="field-label">
-        <InfoLabel info={FIELD_INFO.topologyNodes}>Topology nodes</InfoLabel>
-        <TopologyNodeRows
-          nodes={form.topologyNodes}
-          disabled={!form.topologyEnabled}
-          onChange={updateTopologyNodes}
-        />
-        <FieldHint
-          message={firstMatching(validation.errors, [
-            "At least one topology node is required",
-            "Each topology node row must have a node name",
-            "Topology node names must be unique",
-            "Referenced nodes are missing from topology",
-          ])}
-        />
-      </label>
-
-      <SectionHeader
-        title="Worker"
-        description="Resource policy plus optional custom worker container for compute or advanced runtimes."
-      />
-      <SectionMeta>{assignmentSummary}</SectionMeta>
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.placementMode}>Placement mode</InfoLabel>
-          <select className="text-input" value={form.placementMode} onChange={bindText("placementMode")}>
-            <option value="auto">auto</option>
-            <option value="manual">manual</option>
-            <option value="movable">movable</option>
-          </select>
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.shareMode}>Share mode</InfoLabel>
-          <select className="text-input" value={form.shareMode} onChange={bindShareMode()}>
-            <option value="exclusive">exclusive</option>
-            <option value="shared">shared</option>
-            <option value="best-effort">best-effort</option>
-          </select>
-          <FieldHint
-            message={
-              form.shareMode === "exclusive"
-                ? "Exclusive workers always reserve the whole GPU, so GPU fraction is fixed at 1.0."
-                : fieldError("Exclusive share mode requires GPU fraction equal to 1.0")
-            }
-            severity={form.shareMode === "exclusive" ? "warning" : "error"}
-          />
-        </label>
-        {form.shareMode !== "exclusive" ? (
-          <label className="field-label">
-            <InfoLabel info={FIELD_INFO.gpuFraction}>GPU fraction</InfoLabel>
-            <input
-              className={inputClassName(
-                Boolean(fieldError("Exclusive share mode requires GPU fraction equal to 1.0")),
-              )}
-              type="number"
-              step="0.05"
-              min="0"
-              max="1"
-              value={form.gpuFraction}
-              onChange={bindNumber("gpuFraction")}
-            />
-          </label>
-        ) : null}
-      </div>
-
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.memoryCapMb}>Worker memory cap MB</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.memoryCapMb}
-            onChange={bindNumber("memoryCapMb")}
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.workerImage}>Worker image</InfoLabel>
-          <input className="text-input" value={form.workerImage} onChange={bindText("workerImage")} />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.workerStartType}>Worker start type</InfoLabel>
-          <select
-            className="text-input"
-            value={form.workerStartType}
-            onChange={bindText("workerStartType")}
-          >
-            <option value="script">script</option>
-            <option value="command">command</option>
-          </select>
-        </label>
-      </div>
-
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.workerStartValue}>{form.workerStartType === "script" ? "Worker script ref" : "Worker command"}</InfoLabel>
-          <input
-            className="text-input"
-            value={form.workerStartValue}
-            onChange={bindText("workerStartValue")}
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.workerNode}>Worker node</InfoLabel>
-          <input className="text-input" value={form.workerNode} onChange={bindText("workerNode")} />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.workerGpuDevice}>Worker GPU device</InfoLabel>
-          <input
-            className="text-input"
-            value={form.workerGpuDevice}
-            onChange={bindText("workerGpuDevice")}
-          />
-        </label>
-      </div>
-
-      <div className="plane-form-grid">
-        <label className="field-label plane-checkbox">
-          <input
-            type="checkbox"
-            checked={form.workerAssignmentsEnabled}
-            onChange={bindCheck("workerAssignmentsEnabled")}
-          />
-          <InfoLabel info={FIELD_INFO.workerAssignmentsEnabled} className="field-label-inline">Per-worker assignments</InfoLabel>
-        </label>
-      </div>
-
-      <SectionActions>
-        <button className="ghost-button" type="button" onClick={matchAssignmentsToWorkers}>
-          Match assignments to worker count
-        </button>
-      </SectionActions>
-
-      <label className="field-label">
-        <InfoLabel info={FIELD_INFO.workerAssignments}>Worker assignments</InfoLabel>
-        <WorkerAssignmentRows
-          assignments={form.workerAssignments}
-          disabled={!form.workerAssignmentsEnabled}
-          onChange={updateWorkerAssignments}
-        />
-        <FieldHint
-          message={firstMatching(validation.errors, [
-            "Worker assignments count must match the number of workers",
-            "Each worker assignment must include a node name",
-          ])}
-        />
-        <FieldHint
-          message={fieldWarning("Per-worker assignments are easier to reason about")}
-          severity="warning"
-        />
-      </label>
-
-      <label className="field-label">
-        <InfoLabel info={FIELD_INFO.workerEnv}>Worker env</InfoLabel>
-        <textarea
-          className="editor-textarea plane-form-textarea"
-          value={form.workerEnvText}
-          onChange={bindText("workerEnvText")}
-        />
-      </label>
-
-      <div className="plane-form-grid">
-        <label className="field-label plane-checkbox">
-          <input
-            type="checkbox"
-            checked={form.workerStorageEnabled}
-            onChange={bindCheck("workerStorageEnabled")}
-          />
-          <InfoLabel info={FIELD_INFO.workerStorageEnabled} className="field-label-inline">Set worker storage size and location</InfoLabel>
-        </label>
-      </div>
-      {form.workerStorageEnabled ? (
+      <AdvancedSection
+        title="Networking"
+        description="Override ports and the advertised server name only when defaults are unsuitable."
+      >
         <div className="plane-form-grid">
           <label className="field-label">
-            <InfoLabel info={FIELD_INFO.workerStorageSizeGb}>Worker storage GB</InfoLabel>
+            <InfoLabel info={FIELD_INFO.gatewayPort}>Gateway port</InfoLabel>
             <input
               className="text-input"
               type="number"
               min="1"
-              value={form.workerStorageSizeGb}
-              onChange={bindNumber("workerStorageSizeGb")}
+              value={form.gatewayPort}
+              onChange={bindNumber("gatewayPort")}
             />
           </label>
           <label className="field-label">
-            <InfoLabel info={FIELD_INFO.workerStorageMountPath}>Worker storage mount path</InfoLabel>
+            <InfoLabel info={FIELD_INFO.inferencePort}>Inference port</InfoLabel>
             <input
               className="text-input"
-              value={form.workerStorageMountPath}
-              onChange={bindText("workerStorageMountPath")}
+              type="number"
+              min="1"
+              value={form.inferencePort}
+              onChange={bindNumber("inferencePort")}
+            />
+          </label>
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.serverName}>Server name</InfoLabel>
+            <input className="text-input" value={form.serverName} onChange={bindText("serverName")} />
+            <FieldHint
+              message={!form.serverNameManual ? `Derived from plane name: ${deriveServerName(form.planeName)}` : ""}
+              severity="warning"
             />
           </label>
         </div>
-      ) : null}
-
-      <div className="plane-form-toggle">
-        <label className="field-label plane-checkbox">
-          <input
-            type="checkbox"
-            checked={form.inferOverridesEnabled}
-            onChange={bindCheck("inferOverridesEnabled")}
-          />
-          <InfoLabel info="Enable this only if you want to override the default infer container wiring." className="field-label-inline">Configure Infer Overrides</InfoLabel>
-        </label>
-        <div className="plane-form-toggle-copy">
-          Leave this off to let the platform render the infer container automatically.
-        </div>
-      </div>
-      {form.inferOverridesEnabled ? (
-        <>
-      <SectionHeader
-        title="Infer Overrides"
-        description="Optional container overrides for the infer service."
-      />
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.inferImage}>Infer image</InfoLabel>
-          <input className="text-input" value={form.inferImage} onChange={bindText("inferImage")} />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.inferStartType}>Infer start type</InfoLabel>
-          <select
-            className="text-input"
-            value={form.inferStartType}
-            onChange={bindText("inferStartType")}
+        <div className="plane-form-section-actions">
+          <button
+            className="ghost-button compact-button"
+            type="button"
+            disabled={!form.serverNameManual}
+            onClick={() => resetDerivedField("serverName")}
           >
-            <option value="script">script</option>
-            <option value="command">command</option>
-          </select>
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.inferStartValue}>{form.inferStartType === "script" ? "Infer script ref" : "Infer command"}</InfoLabel>
-          <input
-            className="text-input"
-            value={form.inferStartValue}
-            onChange={bindText("inferStartValue")}
-          />
-        </label>
-      </div>
-
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
-          <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
-        </label>
-        <label className="field-label plane-checkbox">
-          <input
-            type="checkbox"
-            checked={form.inferStorageEnabled}
-            onChange={bindCheck("inferStorageEnabled")}
-          />
-          <InfoLabel info={FIELD_INFO.inferStorageEnabled} className="field-label-inline">Infer storage</InfoLabel>
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.inferStorageSizeGb}>Infer storage GB</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.inferStorageSizeGb}
-            onChange={bindNumber("inferStorageSizeGb")}
-            disabled={!form.inferStorageEnabled}
-          />
-        </label>
-      </div>
-
-      <div className="plane-form-grid plane-form-grid-wide">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.inferStorageMountPath}>Infer storage mount path</InfoLabel>
-          <input
-            className="text-input"
-            value={form.inferStorageMountPath}
-            onChange={bindText("inferStorageMountPath")}
-            disabled={!form.inferStorageEnabled}
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.inferEnv}>Infer env</InfoLabel>
-          <textarea
-            className="editor-textarea plane-form-textarea"
-            value={form.inferEnvText}
-            onChange={bindText("inferEnvText")}
-          />
-        </label>
-      </div>
-        </>
-      ) : null}
-
-      <div className="plane-form-toggle">
-        <label className="field-label plane-checkbox">
-          <input type="checkbox" checked={form.appEnabled} onChange={bindCheck("appEnabled")} />
-          <InfoLabel info={FIELD_INFO.appEnabled} className="field-label-inline">Enable App</InfoLabel>
-        </label>
-        <div className="plane-form-toggle-copy">
-          Leave this off for backend-only planes without an app container.
+            Use derived server name
+          </button>
         </div>
-      </div>
-      {form.appEnabled ? (
-        <>
-      <SectionHeader
-        title="App"
-        description="Optional app container and its exposed port and writable volume."
-      />
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.appImage}>App image</InfoLabel>
-          <input
-            className={inputClassName(Boolean(fieldError("App image is required when app is enabled")))}
-            value={form.appImage}
-            onChange={bindText("appImage")}
-          />
-          <FieldHint message={fieldError("App image is required when app is enabled")} />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.appStartType}>App start type</InfoLabel>
-          <select
-            className="text-input"
-            value={form.appStartType}
-            onChange={bindText("appStartType")}
-          >
-            <option value="script">script</option>
-            <option value="command">command</option>
-          </select>
-        </label>
-      </div>
+      </AdvancedSection>
 
-      <div className="plane-form-grid">
+      <AdvancedSection
+        title="Placement and topology"
+        description="Use only for split-host, manual GPU placement, or per-worker assignment layouts."
+      >
+        <SectionMeta>{topologySummary}</SectionMeta>
+        <SectionActions>
+          <button className="ghost-button" type="button" onClick={enableSingleHostLayout}>
+            Use single-host layout
+          </button>
+          <button className="ghost-button" type="button" onClick={generateSplitHostLayout}>
+            Generate split-host layout
+          </button>
+        </SectionActions>
+        <div className="plane-form-grid">
+          <label className="field-label plane-checkbox">
+            <input
+              type="checkbox"
+              checked={form.topologyEnabled}
+              onChange={bindCheck("topologyEnabled")}
+            />
+            <InfoLabel info={FIELD_INFO.topologyEnabled} className="field-label-inline">
+              Custom topology
+            </InfoLabel>
+          </label>
+        </div>
         <label className="field-label">
-          <InfoLabel info={FIELD_INFO.appStartValue}>{form.appStartType === "script" ? "App script ref" : "App command"}</InfoLabel>
-          <input
-            className="text-input"
-            value={form.appStartValue}
-            onChange={bindText("appStartValue")}
+          <InfoLabel info={FIELD_INFO.topologyNodes}>Topology nodes</InfoLabel>
+          <TopologyNodeRows
+            nodes={form.topologyNodes}
+            disabled={!form.topologyEnabled}
+            onChange={updateTopologyNodes}
           />
           <FieldHint
-            message={fieldWarning("App start is empty. The app container will rely on its image default command.")}
+            message={firstMatching(validation.errors, [
+              "At least one topology node is required",
+              "Each topology node row must have a node name",
+              "Topology node names must be unique",
+              "Referenced nodes are missing from topology",
+            ])}
+          />
+        </label>
+        <SectionMeta>{assignmentSummary}</SectionMeta>
+        <div className="plane-form-grid">
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.placementMode}>Placement mode</InfoLabel>
+            <select className="text-input" value={form.placementMode} onChange={bindText("placementMode")}>
+              <option value="auto">auto</option>
+              <option value="manual">manual</option>
+              <option value="movable">movable</option>
+            </select>
+          </label>
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.shareMode}>Share mode</InfoLabel>
+            <select className="text-input" value={form.shareMode} onChange={bindShareMode()}>
+              <option value="exclusive">exclusive</option>
+              <option value="shared">shared</option>
+              <option value="best-effort">best-effort</option>
+            </select>
+            <FieldHint
+              message={
+                form.shareMode === "exclusive"
+                  ? "Exclusive workers always reserve the whole GPU, so GPU fraction is fixed at 1.0."
+                  : fieldError("Exclusive share mode requires GPU fraction equal to 1.0")
+              }
+              severity={form.shareMode === "exclusive" ? "warning" : "error"}
+            />
+          </label>
+          {form.shareMode !== "exclusive" ? (
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.gpuFraction}>GPU fraction</InfoLabel>
+              <input
+                className={inputClassName(
+                  Boolean(fieldError("Exclusive share mode requires GPU fraction equal to 1.0")),
+                )}
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                value={form.gpuFraction}
+                onChange={bindNumber("gpuFraction")}
+              />
+            </label>
+          ) : null}
+        </div>
+        <div className="plane-form-grid">
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.workerNode}>Worker node</InfoLabel>
+            <input className="text-input" value={form.workerNode} onChange={bindText("workerNode")} />
+          </label>
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.workerGpuDevice}>Worker GPU device</InfoLabel>
+            <input
+              className="text-input"
+              value={form.workerGpuDevice}
+              onChange={bindText("workerGpuDevice")}
+            />
+          </label>
+          {form.planeMode === "llm" ? (
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
+              <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
+            </label>
+          ) : null}
+        </div>
+        <div className="plane-form-grid">
+          <label className="field-label plane-checkbox">
+            <input
+              type="checkbox"
+              checked={form.workerAssignmentsEnabled}
+              onChange={bindCheck("workerAssignmentsEnabled")}
+            />
+            <InfoLabel info={FIELD_INFO.workerAssignmentsEnabled} className="field-label-inline">
+              Per-worker assignments
+            </InfoLabel>
+          </label>
+        </div>
+        <SectionActions>
+          <button className="ghost-button" type="button" onClick={matchAssignmentsToWorkers}>
+            Match assignments to worker count
+          </button>
+        </SectionActions>
+        <label className="field-label">
+          <InfoLabel info={FIELD_INFO.workerAssignments}>Worker assignments</InfoLabel>
+          <WorkerAssignmentRows
+            assignments={form.workerAssignments}
+            disabled={!form.workerAssignmentsEnabled}
+            onChange={updateWorkerAssignments}
+          />
+          <FieldHint
+            message={firstMatching(validation.errors, [
+              "Worker assignments count must match the number of workers",
+              "Each worker assignment must include a node name",
+            ])}
+          />
+          <FieldHint
+            message={fieldWarning("Per-worker assignments are easier to reason about")}
             severity="warning"
           />
         </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.appHostPort}>App host port</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.appHostPort}
-            onChange={bindNumber("appHostPort")}
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.appContainerPort}>App container port</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.appContainerPort}
-            onChange={bindNumber("appContainerPort")}
-          />
-        </label>
-      </div>
+      </AdvancedSection>
 
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.appNode}>App node</InfoLabel>
-          <input
-            className="text-input"
-            value={form.appNode}
-            onChange={bindText("appNode")}
-          />
-        </label>
-        <label className="field-label plane-checkbox">
-          <input
-            type="checkbox"
-            checked={form.appVolumeEnabled}
-            onChange={bindCheck("appVolumeEnabled")}
-          />
-          <InfoLabel info={FIELD_INFO.appVolumeEnabled} className="field-label-inline">App volume</InfoLabel>
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.sharedDiskGb}>Shared disk GB</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.sharedDiskGb}
-            onChange={bindNumber("sharedDiskGb")}
-          />
-        </label>
-      </div>
-
-      <label className="field-label">
-        <InfoLabel info={FIELD_INFO.appEnv}>App env</InfoLabel>
-        <textarea
-          className="editor-textarea plane-form-textarea"
-          value={form.appEnvText}
-          onChange={bindText("appEnvText")}
-        />
-      </label>
-
-      {form.appVolumeEnabled ? (
-        <>
+      <AdvancedSection
+        title="Worker overrides"
+        description="Override worker container wiring only when the default worker runtime is not enough."
+      >
+        <div className="plane-form-grid">
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.memoryCapMb}>Worker memory cap MB</InfoLabel>
+            <input
+              className="text-input"
+              type="number"
+              min="1"
+              value={form.memoryCapMb}
+              onChange={bindNumber("memoryCapMb")}
+            />
+          </label>
+          {form.planeMode !== "compute" ? (
+            <>
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.workerImage}>Worker image</InfoLabel>
+                <input className="text-input" value={form.workerImage} onChange={bindText("workerImage")} />
+              </label>
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.workerStartType}>Worker start type</InfoLabel>
+                <select
+                  className="text-input"
+                  value={form.workerStartType}
+                  onChange={bindText("workerStartType")}
+                >
+                  <option value="script">script</option>
+                  <option value="command">command</option>
+                </select>
+              </label>
+            </>
+          ) : null}
+        </div>
+        {form.planeMode !== "compute" ? (
           <div className="plane-form-grid">
             <label className="field-label">
-              <InfoLabel info={FIELD_INFO.appVolumeName}>App volume name</InfoLabel>
+              <InfoLabel info={FIELD_INFO.workerStartValue}>
+                {form.workerStartType === "script" ? "Worker script ref" : "Worker command"}
+              </InfoLabel>
               <input
                 className="text-input"
-                value={form.appVolumeName}
-                onChange={bindText("appVolumeName")}
+                value={form.workerStartValue}
+                onChange={bindText("workerStartValue")}
               />
             </label>
-            <label className="field-label">
-              <InfoLabel info={FIELD_INFO.appVolumeType}>App volume type</InfoLabel>
-              <select
-                className="text-input"
-                value={form.appVolumeType}
-                onChange={bindText("appVolumeType")}
+          </div>
+        ) : null}
+        <label className="field-label">
+          <InfoLabel info={FIELD_INFO.workerEnv}>Worker env</InfoLabel>
+          <textarea
+            className="editor-textarea plane-form-textarea"
+            value={form.workerEnvText}
+            onChange={bindText("workerEnvText")}
+          />
+        </label>
+      </AdvancedSection>
+
+      {form.planeMode === "llm" ? (
+        <AdvancedSection
+          title="Infer overrides"
+          description="Leave this collapsed unless you need a custom infer container, node pinning, or explicit infer storage."
+        >
+          <div className="plane-form-toggle">
+            <label className="field-label plane-checkbox">
+              <input
+                type="checkbox"
+                checked={form.inferOverridesEnabled}
+                onChange={bindCheck("inferOverridesEnabled")}
+              />
+              <InfoLabel
+                info="Enable this only if you want to override the default infer container wiring."
+                className="field-label-inline"
               >
-                <option value="persistent">persistent</option>
-                <option value="ephemeral">ephemeral</option>
-              </select>
+                Configure Infer Overrides
+              </InfoLabel>
             </label>
+            <div className="plane-form-toggle-copy">
+              By default infer runs without a private disk. Enable infer storage only when the service truly needs writable local state.
+            </div>
+          </div>
+          {form.inferOverridesEnabled ? (
+            <>
+              <div className="plane-form-grid">
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.inferImage}>Infer image</InfoLabel>
+                  <input className="text-input" value={form.inferImage} onChange={bindText("inferImage")} />
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.inferStartType}>Infer start type</InfoLabel>
+                  <select
+                    className="text-input"
+                    value={form.inferStartType}
+                    onChange={bindText("inferStartType")}
+                  >
+                    <option value="script">script</option>
+                    <option value="command">command</option>
+                  </select>
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.inferStartValue}>
+                    {form.inferStartType === "script" ? "Infer script ref" : "Infer command"}
+                  </InfoLabel>
+                  <input
+                    className="text-input"
+                    value={form.inferStartValue}
+                    onChange={bindText("inferStartValue")}
+                  />
+                </label>
+              </div>
+              <div className="plane-form-grid">
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
+                  <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
+                </label>
+                <label className="field-label plane-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={form.inferStorageEnabled}
+                    onChange={bindCheck("inferStorageEnabled")}
+                  />
+                  <InfoLabel info={FIELD_INFO.inferStorageEnabled} className="field-label-inline">
+                    Infer storage
+                  </InfoLabel>
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.inferStorageSizeGb}>Infer storage GB</InfoLabel>
+                  <input
+                    className="text-input"
+                    type="number"
+                    min="1"
+                    value={form.inferStorageSizeGb}
+                    onChange={bindNumber("inferStorageSizeGb")}
+                    disabled={!form.inferStorageEnabled}
+                  />
+                </label>
+              </div>
+              <div className="plane-form-grid plane-form-grid-wide">
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.inferStorageMountPath}>Infer storage mount path</InfoLabel>
+                  <input
+                    className="text-input"
+                    value={form.inferStorageMountPath}
+                    onChange={bindText("inferStorageMountPath")}
+                    disabled={!form.inferStorageEnabled}
+                  />
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.inferEnv}>Infer env</InfoLabel>
+                  <textarea
+                    className="editor-textarea plane-form-textarea"
+                    value={form.inferEnvText}
+                    onChange={bindText("inferEnvText")}
+                  />
+                </label>
+              </div>
+            </>
+          ) : null}
+        </AdvancedSection>
+      ) : null}
+
+      <AdvancedSection
+        title="Storage and resources"
+        description="Control shared-disk size and opt into explicit writable storage only where it is justified."
+      >
+        <div className="plane-form-grid">
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.sharedDiskGb}>Shared disk GB</InfoLabel>
+            <input
+              className="text-input"
+              type="number"
+              min="1"
+              value={form.sharedDiskGb}
+              onChange={bindNumber("sharedDiskGb")}
+            />
+          </label>
+          <label className="field-label plane-checkbox">
+            <input
+              type="checkbox"
+              checked={form.workerStorageEnabled}
+              onChange={bindCheck("workerStorageEnabled")}
+            />
+            <InfoLabel info={FIELD_INFO.workerStorageEnabled} className="field-label-inline">
+              Worker storage
+            </InfoLabel>
+          </label>
+        </div>
+        {form.workerStorageEnabled ? (
+          <div className="plane-form-grid">
             <label className="field-label">
-              <InfoLabel info={FIELD_INFO.appVolumeSizeGb}>App volume size GB</InfoLabel>
+              <InfoLabel info={FIELD_INFO.workerStorageSizeGb}>Worker storage GB</InfoLabel>
               <input
                 className="text-input"
                 type="number"
                 min="1"
-                value={form.appVolumeSizeGb}
-                onChange={bindNumber("appVolumeSizeGb")}
+                value={form.workerStorageSizeGb}
+                onChange={bindNumber("workerStorageSizeGb")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.workerStorageMountPath}>Worker storage mount path</InfoLabel>
+              <input
+                className="text-input"
+                value={form.workerStorageMountPath}
+                onChange={bindText("workerStorageMountPath")}
               />
             </label>
           </div>
+        ) : null}
+      </AdvancedSection>
 
+      {form.appEnabled ? (
+        <AdvancedSection
+          title="App advanced"
+          description="Keep app storage and wiring explicit because app containers are treated as opaque user workloads."
+        >
           <div className="plane-form-grid">
             <label className="field-label">
-              <InfoLabel info={FIELD_INFO.appVolumeMountPath}>App volume mount path</InfoLabel>
+              <InfoLabel info={FIELD_INFO.appImage}>App image</InfoLabel>
               <input
-                className="text-input"
-                value={form.appVolumeMountPath}
-                onChange={bindText("appVolumeMountPath")}
+                className={inputClassName(Boolean(fieldError("App image is required when app is enabled")))}
+                value={form.appImage}
+                onChange={bindText("appImage")}
               />
+              <FieldHint message={fieldError("App image is required when app is enabled")} />
             </label>
             <label className="field-label">
-              <InfoLabel info={FIELD_INFO.appVolumeAccess}>App volume access</InfoLabel>
+              <InfoLabel info={FIELD_INFO.appStartType}>App start type</InfoLabel>
               <select
                 className="text-input"
-                value={form.appVolumeAccess}
-                onChange={bindText("appVolumeAccess")}
+                value={form.appStartType}
+                onChange={bindText("appStartType")}
               >
-                <option value="rw">rw</option>
-                <option value="ro">ro</option>
+                <option value="script">script</option>
+                <option value="command">command</option>
               </select>
             </label>
           </div>
-        </>
-      ) : null}
-        </>
+          <div className="plane-form-grid">
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.appStartValue}>
+                {form.appStartType === "script" ? "App script ref" : "App command"}
+              </InfoLabel>
+              <input
+                className="text-input"
+                value={form.appStartValue}
+                onChange={bindText("appStartValue")}
+              />
+              <FieldHint
+                message={fieldWarning("App start is empty. The app container will rely on its image default command.")}
+                severity="warning"
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.appHostPort}>App host port</InfoLabel>
+              <input
+                className="text-input"
+                type="number"
+                min="1"
+                value={form.appHostPort}
+                onChange={bindNumber("appHostPort")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.appContainerPort}>App container port</InfoLabel>
+              <input
+                className="text-input"
+                type="number"
+                min="1"
+                value={form.appContainerPort}
+                onChange={bindNumber("appContainerPort")}
+              />
+            </label>
+          </div>
+          <div className="plane-form-grid">
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.appNode}>App node</InfoLabel>
+              <input className="text-input" value={form.appNode} onChange={bindText("appNode")} />
+            </label>
+            <label className="field-label plane-checkbox">
+              <input
+                type="checkbox"
+                checked={form.appVolumeEnabled}
+                onChange={bindCheck("appVolumeEnabled")}
+              />
+              <InfoLabel info={FIELD_INFO.appVolumeEnabled} className="field-label-inline">
+                App volume
+              </InfoLabel>
+            </label>
+          </div>
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.appEnv}>App env</InfoLabel>
+            <textarea
+              className="editor-textarea plane-form-textarea"
+              value={form.appEnvText}
+              onChange={bindText("appEnvText")}
+            />
+          </label>
+          {form.appVolumeEnabled ? (
+            <>
+              <div className="plane-form-grid">
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appVolumeName}>App volume name</InfoLabel>
+                  <input
+                    className="text-input"
+                    value={form.appVolumeName}
+                    onChange={bindText("appVolumeName")}
+                  />
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appVolumeType}>App volume type</InfoLabel>
+                  <select
+                    className="text-input"
+                    value={form.appVolumeType}
+                    onChange={bindText("appVolumeType")}
+                  >
+                    <option value="persistent">persistent</option>
+                    <option value="ephemeral">ephemeral</option>
+                  </select>
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appVolumeSizeGb}>App volume size GB</InfoLabel>
+                  <input
+                    className="text-input"
+                    type="number"
+                    min="1"
+                    value={form.appVolumeSizeGb}
+                    onChange={bindNumber("appVolumeSizeGb")}
+                  />
+                </label>
+              </div>
+              <div className="plane-form-grid">
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appVolumeMountPath}>App volume mount path</InfoLabel>
+                  <input
+                    className="text-input"
+                    value={form.appVolumeMountPath}
+                    onChange={bindText("appVolumeMountPath")}
+                  />
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appVolumeAccess}>App volume access</InfoLabel>
+                  <select
+                    className="text-input"
+                    value={form.appVolumeAccess}
+                    onChange={bindText("appVolumeAccess")}
+                  >
+                    <option value="rw">rw</option>
+                    <option value="ro">ro</option>
+                  </select>
+                </label>
+              </div>
+            </>
+          ) : null}
+        </AdvancedSection>
       ) : null}
 
-      <SectionHeader
+      <AdvancedSection
         title="Hooks"
-        description="Optional post-deploy script run after the plane is materialized."
-      />
-      <label className="field-label">
-        <InfoLabel info={FIELD_INFO.postDeployScript}>Post-deploy script</InfoLabel>
-        <input className="text-input" value={form.postDeployScript} onChange={bindText("postDeployScript")} />
-      </label>
+        description="Run an optional post-deploy script after the plane has been materialized."
+      >
+        <label className="field-label">
+          <InfoLabel info={FIELD_INFO.postDeployScript}>Post-deploy script</InfoLabel>
+          <input className="text-input" value={form.postDeployScript} onChange={bindText("postDeployScript")} />
+        </label>
+      </AdvancedSection>
     </div>
   );
 }

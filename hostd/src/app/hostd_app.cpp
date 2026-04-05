@@ -146,16 +146,12 @@ comet::DesiredState RebaseStateForRuntimeRoot(
   }
 
   for (auto& disk : state.disks) {
-    const bool node_local_disk =
-        disk.kind == comet::DiskKind::InferPrivate ||
-        disk.kind == comet::DiskKind::WorkerPrivate ||
-        disk.kind == comet::DiskKind::AppPrivate ||
-        disk.kind == comet::DiskKind::SkillsPrivate;
     disk.host_path = RebaseManagedPath(
         disk.host_path,
         storage_root,
         runtime_root,
-        node_local_disk ? std::optional<std::string>(disk.node_name) : std::nullopt);
+        comet::IsNodeLocalDiskKind(disk.kind) ? std::optional<std::string>(disk.node_name)
+                                              : std::nullopt);
   }
   return state;
 }
@@ -384,17 +380,13 @@ std::string ManagedDiskImagePath(
         .string();
   }
 
-  const bool node_local_disk =
-      disk.kind == comet::DiskKind::InferPrivate ||
-      disk.kind == comet::DiskKind::WorkerPrivate ||
-      disk.kind == comet::DiskKind::AppPrivate ||
-      disk.kind == comet::DiskKind::SkillsPrivate;
   const std::filesystem::path base(
       RebaseManagedPath(
           std::string(kDefaultManagedStorageRoot) + "/disk-images",
           storage_root,
           runtime_root,
-          node_local_disk ? std::optional<std::string>(disk.node_name) : std::nullopt));
+          comet::IsNodeLocalDiskKind(disk.kind) ? std::optional<std::string>(disk.node_name)
+                                                : std::nullopt));
   return (
       base /
       SanitizeDiskPathComponent(disk.plane_name) /

@@ -898,6 +898,60 @@ int main() {
     }
 
     {
+      const json llm_without_infer_storage{
+          {"version", 2},
+          {"plane_name", "llm-no-infer-private"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-no-private"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(llm_without_infer_storage, "llm-no-infer-private");
+      Expect(
+          std::none_of(
+              state.disks.begin(),
+              state.disks.end(),
+              [](const comet::DiskSpec& disk) { return disk.kind == comet::DiskKind::InferPrivate; }),
+          "llm-no-infer-private: infer private disk should be absent by default");
+      const auto worker_disk_it = std::find_if(
+          state.disks.begin(),
+          state.disks.end(),
+          [](const comet::DiskSpec& disk) { return disk.kind == comet::DiskKind::WorkerPrivate; });
+      Expect(worker_disk_it != state.disks.end(),
+             "llm-no-infer-private: worker private disk should still exist");
+      Expect(worker_disk_it->size_gb == 2,
+             "llm-no-infer-private: worker private disk default size should be 2 GB");
+
+      const auto compose_plans = comet::BuildNodeComposePlans(state);
+      const auto infer_it = std::find_if(
+          state.instances.begin(),
+          state.instances.end(),
+          [](const comet::InstanceSpec& instance) { return instance.role == comet::InstanceRole::Infer; });
+      Expect(infer_it != state.instances.end(),
+             "llm-no-infer-private: infer instance should exist");
+      const auto service_it = std::find_if(
+          compose_plans.front().services.begin(),
+          compose_plans.front().services.end(),
+          [&](const comet::ComposeService& service) { return service.name == infer_it->name; });
+      Expect(service_it != compose_plans.front().services.end(),
+             "llm-no-infer-private: infer service missing from compose plan");
+      Expect(
+          std::none_of(
+              service_it->volumes.begin(),
+              service_it->volumes.end(),
+              [](const comet::ComposeVolume& volume) { return volume.target == "/comet/private"; }),
+          "llm-no-infer-private: infer compose service should not mount /comet/private by default");
+      std::cout << "ok: llm-no-infer-private" << '\n';
+    }
+
+    {
       const json llm_with_skills{
           {"version", 2},
           {"plane_name", "llm-with-skills"},
@@ -961,6 +1015,12 @@ int main() {
              "llm-with-skills: skills service missing from compose plan");
       Expect(service_it->healthcheck == "CMD-SHELL test -f /tmp/comet-ready",
              "llm-with-skills: compose healthcheck should use readiness file");
+      Expect(
+          std::none_of(
+              service_it->volumes.begin(),
+              service_it->volumes.end(),
+              [](const comet::ComposeVolume& volume) { return volume.target == "/comet/shared"; }),
+          "llm-with-skills: skills service should not mount shared disk by default");
       std::cout << "ok: llm-with-skills" << '\n';
     }
 
@@ -1058,6 +1118,12 @@ int main() {
               service_it->security_opts.end(),
               "no-new-privileges:true") != service_it->security_opts.end(),
           "llm-with-browsing: compose service should enable no-new-privileges");
+      Expect(
+          std::none_of(
+              service_it->volumes.begin(),
+              service_it->volumes.end(),
+              [](const comet::ComposeVolume& volume) { return volume.target == "/comet/shared"; }),
+          "llm-with-browsing: browsing service should not mount shared disk by default");
       std::cout << "ok: llm-with-browsing" << '\n';
     }
 

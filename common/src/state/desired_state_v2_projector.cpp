@@ -14,10 +14,10 @@ namespace {
 
 constexpr int kDefaultSharedDiskSizeGb = 40;
 constexpr int kDefaultInferPrivateDiskSizeGb = 12;
-constexpr int kDefaultWorkerPrivateDiskSizeGb = 12;
+constexpr int kDefaultWorkerPrivateDiskSizeGb = 2;
 constexpr int kDefaultAppPrivateDiskSizeGb = 8;
-constexpr int kDefaultSkillsPrivateDiskSizeGb = 4;
-constexpr int kDefaultBrowsingPrivateDiskSizeGb = 4;
+constexpr int kDefaultSkillsPrivateDiskSizeGb = 1;
+constexpr int kDefaultBrowsingPrivateDiskSizeGb = 1;
 constexpr std::string_view kDefaultInferImage = "comet/infer-runtime:dev";
 constexpr std::string_view kDefaultWorkerImage = "comet/worker-runtime:dev";
 constexpr std::string_view kDefaultSkillsImage = "comet/skills-runtime:dev";

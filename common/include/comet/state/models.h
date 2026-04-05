@@ -25,6 +25,31 @@ enum class DiskKind {
   BrowsingPrivate,
 };
 
+inline bool IsPrivateDiskKind(DiskKind kind) {
+  return kind == DiskKind::InferPrivate ||
+         kind == DiskKind::WorkerPrivate ||
+         kind == DiskKind::AppPrivate ||
+         kind == DiskKind::SkillsPrivate ||
+         kind == DiskKind::BrowsingPrivate;
+}
+
+inline bool IsNodeLocalDiskKind(DiskKind kind) {
+  return IsPrivateDiskKind(kind);
+}
+
+inline bool InstanceNeedsSharedDiskMount(InstanceRole role) {
+  return role == InstanceRole::Infer ||
+         role == InstanceRole::Worker ||
+         role == InstanceRole::App;
+}
+
+inline bool InstanceNeedsPrivateDisk(InstanceRole role) {
+  return role == InstanceRole::Worker ||
+         role == InstanceRole::App ||
+         role == InstanceRole::Skills ||
+         role == InstanceRole::Browsing;
+}
+
 struct PublishedPort {
   std::string host_ip = "127.0.0.1";
   int host_port = 0;

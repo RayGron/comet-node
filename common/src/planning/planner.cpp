@@ -250,17 +250,18 @@ ComposeService BuildComposeService(
         PublishedPort{"127.0.0.1", infer_gateway_port, infer_gateway_port});
   }
 
-  const auto& private_disk =
-      FindDiskByName(disks, instance.node_name, instance.private_disk_name);
-
   if (!instance.shared_disk_name.empty()) {
     const auto& shared_disk =
         FindDiskByName(disks, instance.node_name, instance.shared_disk_name);
     service.volumes.push_back(
         ComposeVolume{shared_disk.host_path, shared_disk.container_path, false});
   }
-  service.volumes.push_back(
-      ComposeVolume{private_disk.host_path, private_disk.container_path, false});
+  if (!instance.private_disk_name.empty()) {
+    const auto& private_disk =
+        FindDiskByName(disks, instance.node_name, instance.private_disk_name);
+    service.volumes.push_back(
+        ComposeVolume{private_disk.host_path, private_disk.container_path, false});
+  }
   if (const auto direct_model_cache = BuildDirectModelCacheVolume(state, instance);
       direct_model_cache.has_value()) {
     service.volumes.push_back(*direct_model_cache);

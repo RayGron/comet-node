@@ -274,9 +274,31 @@ nlohmann::json RequestBrowsingSummary(
       {"toggle_only", false},
       {"decision", "disabled"},
       {"reason", "web_mode_disabled"},
+      {"lookup_state", "disabled"},
+      {"lookup_attempted", false},
+      {"lookup_required", false},
+      {"evidence_attached", false},
       {"searches", nlohmann::json::array()},
       {"sources", nlohmann::json::array()},
       {"errors", nlohmann::json::array()},
+      {"indicator",
+       nlohmann::json{
+           {"compact", "web:off"},
+           {"label", "Web disabled"},
+           {"active", false},
+           {"ready", false},
+           {"lookup_state", "disabled"},
+           {"lookup_attempted", false},
+           {"search_count", 0},
+           {"source_count", 0},
+           {"error_count", 0},
+       }},
+      {"trace",
+       nlohmann::json::array(
+           {nlohmann::json{{"stage", "mode"}, {"status", "off"}, {"compact", "web:off"}},
+            nlohmann::json{{"stage", "decision"},
+                           {"status", "disabled"},
+                           {"compact", "decide:disabled"}}})},
   };
 }
 

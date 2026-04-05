@@ -1665,6 +1665,13 @@ int main() {
           summary.at("lookup_state").get<std::string>() == "enabled_toggle_only",
           "toggle-only requests should expose a dedicated enabled-toggle-only state");
       Expect(
+          summary.at("indicator").at("compact").get<std::string>() == "web:on",
+          "toggle-only requests should expose a compact web:on indicator");
+      Expect(
+          summary.at("trace").is_array() &&
+              summary.at("trace").at(0).at("compact").get<std::string>() == "web:on",
+          "toggle-only requests should expose a compact trace");
+      Expect(
           request_context.payload.at(
               comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
                   .get<std::string>()
@@ -1696,6 +1703,9 @@ int main() {
       Expect(
           summary.at("lookup_state").get<std::string>() == "enabled_not_needed",
           "enabled offline prompts should expose enabled_not_needed state");
+      Expect(
+          summary.at("indicator").at("compact").get<std::string>() == "web:on idle",
+          "enabled offline prompts should expose a compact idle indicator");
       Expect(
           !summary.at("lookup_attempted").get<bool>(),
           "enabled offline prompts should not mark lookup_attempted");
@@ -1738,6 +1748,9 @@ int main() {
       Expect(
           summary.at("lookup_state").get<std::string>() == "evidence_attached",
           "successful web enrichment should expose evidence_attached state");
+      Expect(
+          summary.at("indicator").at("compact").get<std::string>() == "web:search ok",
+          "successful search enrichment should expose a compact search-ok indicator");
       Expect(summary.at("lookup_attempted").get<bool>(),
              "successful web enrichment should mark lookup_attempted");
       Expect(summary.at("evidence_attached").get<bool>(),
@@ -1839,6 +1852,10 @@ int main() {
       Expect(
           summary.at("lookup_state").get<std::string>() == "evidence_attached",
           "snippet fallback should still count as evidence_attached");
+      Expect(
+          summary.at("trace").is_array() &&
+              summary.at("trace").back().at("compact").get<std::string>() == "evidence:yes",
+          "snippet fallback should end with an evidence:yes trace step");
       std::cout << "ok: interaction-browsing-search-snippet-fallback" << '\n';
     }
 
@@ -1871,6 +1888,9 @@ int main() {
       Expect(
           summary.at("lookup_state").get<std::string>() == "attempted_no_evidence",
           "empty search results should expose attempted_no_evidence state");
+      Expect(
+          summary.at("indicator").at("compact").get<std::string>() == "web:search none",
+          "empty search results should expose a compact no-evidence indicator");
       Expect(summary.at("lookup_attempted").get<bool>(),
              "empty search results should still mark lookup_attempted");
       Expect(!summary.at("evidence_attached").get<bool>(),
@@ -1907,6 +1927,9 @@ int main() {
       Expect(
           summary.at("lookup_state").get<std::string>() == "evidence_attached",
           "direct fetch with a usable page should expose evidence_attached state");
+      Expect(
+          summary.at("indicator").at("compact").get<std::string>() == "web:fetch ok",
+          "direct fetch should expose a compact fetch-ok indicator");
       Expect(runtime.search_count() == 0, "direct fetch should not call search");
       Expect(runtime.fetch_count() == 1, "direct fetch should fetch the referenced URL");
       std::cout << "ok: interaction-browsing-direct-fetch" << '\n';
@@ -1939,6 +1962,9 @@ int main() {
       Expect(
           summary.at("lookup_state").get<std::string>() == "disabled_by_user",
           "later disable directive should expose disabled_by_user state");
+      Expect(
+          summary.at("indicator").at("compact").get<std::string>() == "web:off user",
+          "later disable directive should expose a compact user-disabled indicator");
       Expect(runtime.search_count() == 0, "disabled web mode should prevent search");
       Expect(runtime.fetch_count() == 0, "disabled web mode should prevent fetch");
 

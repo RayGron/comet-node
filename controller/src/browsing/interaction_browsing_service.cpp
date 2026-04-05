@@ -496,12 +496,143 @@ json BuildBrowsingFlags(
   };
 }
 
+json BuildBrowsingIndicator(
+    const BrowsingContextDecision& context,
+    bool ready,
+    const json& searches,
+    const json& sources,
+    const json& errors,
+    const json& flags) {
+  const std::string lookup_state = flags.value("lookup_state", std::string{"disabled"});
+  const bool lookup_attempted = flags.value("lookup_attempted", false);
+  const bool evidence_attached = flags.value("evidence_attached", false);
+  const int search_count = searches.is_array() ? static_cast<int>(searches.size()) : 0;
+  const int source_count = sources.is_array() ? static_cast<int>(sources.size()) : 0;
+  const int error_count = errors.is_array() ? static_cast<int>(errors.size()) : 0;
+
+  std::string compact = "web:off";
+  std::string label = "Web disabled";
+  if (!context.mode_enabled) {
+    if (context.reason == "user_disabled_web_mode") {
+      compact = "web:off user";
+      label = "Web disabled by user";
+    }
+  } else if (lookup_state == "enabled_toggle_only") {
+    compact = "web:on";
+    label = "Web enabled";
+  } else if (lookup_state == "enabled_not_needed") {
+    compact = "web:on idle";
+    label = "Web enabled, lookup skipped";
+  } else if (!ready) {
+    compact = "web:wait";
+    label = "Web lookup required, browsing unavailable";
+  } else if (lookup_attempted && evidence_attached) {
+    compact = search_count > 0 ? "web:search ok" : "web:fetch ok";
+    label = search_count > 0 ? "Web search evidence attached" : "Web fetch evidence attached";
+  } else if (lookup_attempted) {
+    compact = "web:search none";
+    label = "Web lookup attempted, no evidence";
+  } else {
+    compact = "web:on";
+    label = "Web enabled";
+  }
+
+  return json{
+      {"compact", compact},
+      {"label", label},
+      {"active", context.mode_enabled},
+      {"ready", ready},
+      {"lookup_state", lookup_state},
+      {"lookup_attempted", lookup_attempted},
+      {"search_count", search_count},
+      {"source_count", source_count},
+      {"error_count", error_count},
+  };
+}
+
+json BuildBrowsingTrace(
+    const BrowsingContextDecision& context,
+    bool ready,
+    const json& searches,
+    const json& sources,
+    const json& errors,
+    const json& flags) {
+  const bool evidence_attached = flags.value("evidence_attached", false);
+  json trace = json::array();
+  trace.push_back(json{
+      {"stage", "mode"},
+      {"status", context.mode_enabled ? "on" : "off"},
+      {"compact", context.mode_enabled ? "web:on" : "web:off"},
+  });
+  trace.push_back(json{
+      {"stage", "decision"},
+      {"status", context.decision},
+      {"compact", "decide:" + context.decision},
+  });
+  if (!context.mode_enabled) {
+    return trace;
+  }
+  if (context.toggle_only) {
+    trace.push_back(json{
+        {"stage", "toggle"},
+        {"status", "applied"},
+        {"compact", "toggle:applied"},
+    });
+    return trace;
+  }
+  if (context.decision == "not_needed") {
+    trace.push_back(json{
+        {"stage", "lookup"},
+        {"status", "skipped"},
+        {"compact", "lookup:skip"},
+    });
+    return trace;
+  }
+  trace.push_back(json{
+      {"stage", "browsing_status"},
+      {"status", ready ? "ready" : "unavailable"},
+      {"compact", ready ? "browse:ready" : "browse:wait"},
+  });
+  if (!ready) {
+    return trace;
+  }
+  if (searches.is_array() && !searches.empty()) {
+    int total_results = 0;
+    for (const auto& search : searches) {
+      total_results += search.value("result_count", 0);
+    }
+    trace.push_back(json{
+        {"stage", "search"},
+        {"status", total_results > 0 ? "done" : "empty"},
+        {"compact", "search:" + std::to_string(total_results)},
+    });
+  }
+  if (context.decision == "direct_fetch" ||
+      context.decision == "search_and_fetch" ||
+      (errors.is_array() && !errors.empty()) ||
+      (sources.is_array() && !sources.empty())) {
+    trace.push_back(json{
+        {"stage", "fetch"},
+        {"status", evidence_attached ? "attached" : "none"},
+        {"compact",
+         std::string("fetch:") + (evidence_attached ? std::to_string(sources.size()) : "0")},
+    });
+  }
+  trace.push_back(json{
+      {"stage", "evidence"},
+      {"status", evidence_attached ? "attached" : "none"},
+      {"compact", evidence_attached ? "evidence:yes" : "evidence:none"},
+  });
+  return trace;
+}
+
 json BuildBrowsingSummary(
     const BrowsingContextDecision& context,
     bool ready,
     const json& searches,
     const json& sources,
     const json& errors) {
+  const json flags = BuildBrowsingFlags(context, searches, sources);
   json summary = json{
       {"mode", context.mode_enabled ? "enabled" : "disabled"},
       {"mode_source", context.mode_source},
@@ -513,8 +644,10 @@ json BuildBrowsingSummary(
       {"searches", searches},
       {"sources", sources},
       {"errors", errors},
+      {"indicator", BuildBrowsingIndicator(context, ready, searches, sources, errors, flags)},
+      {"trace", BuildBrowsingTrace(context, ready, searches, sources, errors, flags)},
   };
-  summary.update(BuildBrowsingFlags(context, searches, sources));
+  summary.update(flags);
   return summary;
 }
 

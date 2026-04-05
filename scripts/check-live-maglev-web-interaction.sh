@@ -502,6 +502,8 @@ if mode == "toggle_enable":
     ensure(browsing.get("mode") == "enabled", "toggle_enable: mode should be enabled")
     ensure(browsing.get("decision") == "not_needed", "toggle_enable: decision should be not_needed")
     ensure(browsing.get("lookup_state") == "enabled_toggle_only", "toggle_enable: lookup_state should be enabled_toggle_only")
+    ensure(browsing.get("indicator", {}).get("compact") == "web:on", "toggle_enable: compact indicator should be web:on")
+    ensure(browsing.get("trace", [{}])[0].get("compact") == "web:on", "toggle_enable: trace should start with web:on")
     ensure("Controller browsing state: enabled_toggle_only." in content, "toggle_enable: assistant should receive toggle-only browsing state")
     ensure("Web browsing is enabled for this request." in content, "toggle_enable: assistant should receive browsing instruction")
 elif mode == "search_intent":
@@ -516,6 +518,10 @@ elif mode == "search_intent":
             "search_intent: lookup_state should expose attempted_no_evidence when no sources were attached",
         )
         ensure(
+            browsing.get("indicator", {}).get("compact") == "web:search none",
+            "search_intent: compact indicator should show search none when no evidence was attached",
+        )
+        ensure(
             browsing.get("reason") == "search_returned_no_sources",
             "search_intent: empty evidence must explain that search found no usable sources",
         )
@@ -528,10 +534,15 @@ elif mode == "search_intent":
             browsing.get("lookup_state") == "evidence_attached",
             "search_intent: lookup_state should be evidence_attached when sources were attached",
         )
+        ensure(
+            browsing.get("indicator", {}).get("compact") == "web:search ok",
+            "search_intent: compact indicator should show search ok when evidence was attached",
+        )
     ensure("Web search summary:" in content, "search_intent: system prompt should include search summary")
 elif mode == "direct_fetch":
     ensure(browsing.get("decision") == "direct_fetch", "direct_fetch: decision should be direct_fetch")
     ensure(browsing.get("lookup_state") == "evidence_attached", "direct_fetch: lookup_state should be evidence_attached")
+    ensure(browsing.get("indicator", {}).get("compact") == "web:fetch ok", "direct_fetch: compact indicator should be web:fetch ok")
     sources = browsing.get("sources", [])
     ensure(sources and "example.com" in sources[0].get("url", ""), "direct_fetch: expected example.com source")
     ensure("https://example.com" in content, "direct_fetch: assistant should receive fetched source URL")
@@ -539,11 +550,13 @@ elif mode == "disable_override":
     ensure(browsing.get("mode") == "disabled", "disable_override: mode should be disabled")
     ensure(browsing.get("decision") == "disabled", "disable_override: decision should be disabled")
     ensure(browsing.get("lookup_state") == "disabled_by_user", "disable_override: lookup_state should be disabled_by_user")
+    ensure(browsing.get("indicator", {}).get("compact") == "web:off user", "disable_override: compact indicator should be web:off user")
     ensure("Web browsing is disabled because the user explicitly turned it off." in content, "disable_override: assistant should receive disable instruction")
 elif mode == "enabled_not_needed":
     ensure(browsing.get("mode") == "enabled", "enabled_not_needed: mode should stay enabled")
     ensure(browsing.get("decision") == "not_needed", "enabled_not_needed: decision should be not_needed")
     ensure(browsing.get("lookup_state") == "enabled_not_needed", "enabled_not_needed: lookup_state should be enabled_not_needed")
+    ensure(browsing.get("indicator", {}).get("compact") == "web:on idle", "enabled_not_needed: compact indicator should be web:on idle")
     ensure("web access may remain available, but no web lookup was needed" in content, "enabled_not_needed: assistant should receive no-lookup-needed instruction")
 else:
     raise SystemExit(f"unknown mode: {mode}")

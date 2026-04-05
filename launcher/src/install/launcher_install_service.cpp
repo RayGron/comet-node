@@ -1,18 +1,64 @@
 #include "install/launcher_install_service.h"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <iostream>
 #include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 #include "comet/core/platform_compat.h"
 #include "comet/security/crypto_utils.h"
 #include "comet/state/sqlite_store.h"
 
 namespace comet::launcher {
+
+namespace {
+
+bool IsIpv4Address(const std::string& candidate) {
+  int octet_count = 0;
+  std::string octet;
+  std::istringstream input(candidate);
+  while (std::getline(input, octet, '.')) {
+    if (octet.empty() || octet.size() > 3) {
+      return false;
+    }
+    for (const char ch : octet) {
+      if (!std::isdigit(static_cast<unsigned char>(ch))) {
+        return false;
+      }
+    }
+    const int value = std::stoi(octet);
+    if (value < 0 || value > 255) {
+      return false;
+    }
+    ++octet_count;
+  }
+  return octet_count == 4;
+}
+
+bool IsPrivateIpv4Address(const std::string& candidate) {
+  if (!IsIpv4Address(candidate)) {
+    return false;
+  }
+  std::istringstream input(candidate);
+  std::string octet_text;
+  std::vector<int> octets;
+  while (std::getline(input, octet_text, '.')) {
+    octets.push_back(std::stoi(octet_text));
+  }
+  if (octets.size() != 4) {
+    return false;
+  }
+  return octets[0] == 10 ||
+         (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) ||
+         (octets[0] == 192 && octets[1] == 168);
+}
+
+}  // namespace
 
 LauncherInstallService::LauncherInstallService(
     const InstallLayoutResolver& install_layout_resolver,
@@ -48,6 +94,8 @@ void LauncherInstallService::InstallController(
       command_line.FindFlagValue("--listen-host").value_or(options.listen_host);
   options.listen_port = LauncherCommandLine::ParseIntValue(
       command_line.FindFlagValue("--listen-port"), options.listen_port);
+  options.internal_listen_host =
+      command_line.FindFlagValue("--internal-listen-host").value_or(DefaultInternalListenHost());
   options.compose_mode =
       command_line.FindFlagValue("--compose-mode").value_or(options.compose_mode);
   options.node_name = command_line.FindFlagValue("--node").value_or(options.node_name);
@@ -146,6 +194,8 @@ void LauncherInstallService::InstallController(
 
   std::cout << "installed controller\n";
   std::cout << "controller_api_url=http://127.0.0.1:" << options.listen_port << "\n";
+  std::cout << "controller_internal_url=http://" << options.internal_listen_host << ":"
+            << options.listen_port << "\n";
   if (options.with_web_ui) {
     std::cout << "web_ui_url=http://127.0.0.1:18081\n";
   }
@@ -306,6 +356,7 @@ std::string LauncherInstallService::RenderConfigToml(
     out << "[controller]\n";
     out << "listen_host = \"" << controller->listen_host << "\"\n";
     out << "listen_port = " << controller->listen_port << "\n";
+    out << "internal_listen_host = \"" << controller->internal_listen_host << "\"\n";
     out << "db_path = \"" << (controller->layout.state_root / "controller.sqlite").string()
         << "\"\n";
     out << "artifacts_root = \"" << (controller->layout.state_root / "artifacts").string()
@@ -357,6 +408,7 @@ std::string LauncherInstallService::RenderControllerUnit(
       << " --artifacts-root " << (options.layout.state_root / "artifacts").string()
       << " --listen-host " << options.listen_host
       << " --listen-port " << options.listen_port
+      << " --internal-listen-host " << options.internal_listen_host
       << " --web-ui-root " << (options.layout.state_root / "web-ui").string()
       << " --runtime-root " << (options.layout.state_root / "runtime").string()
       << " --state-root " << (options.layout.state_root / "hostd-state").string()
@@ -369,7 +421,10 @@ std::string LauncherInstallService::RenderControllerUnit(
   out << "Restart=always\n";
   out << "RestartSec=2\n";
   out << "Environment=COMET_CONFIG=" << config_path.string() << "\n";
-  out << "Environment=COMET_SERVICE_MODE=1\n\n";
+  out << "Environment=COMET_SERVICE_MODE=1\n";
+  out << "Environment=COMET_CONTROLLER_INTERNAL_HOST=" << options.internal_listen_host << "\n";
+  out << "Environment=COMET_CONTROLLER_INTERNAL_UPSTREAM=http://"
+      << options.internal_listen_host << ":" << options.listen_port << "\n\n";
   out << "[Install]\n";
   out << "WantedBy=" << (user_service ? "default.target" : "multi-user.target") << "\n";
   return out.str();
@@ -413,6 +468,33 @@ std::string LauncherInstallService::RenderHostdUnit(
   out << "[Install]\n";
   out << "WantedBy=" << (user_service ? "default.target" : "multi-user.target") << "\n";
   return out.str();
+}
+
+std::string LauncherInstallService::DefaultInternalListenHost() const {
+  const std::string route_probe = Trim(process_runner_.CaptureShellOutput(
+      "sh -c \"ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \\([0-9.]*\\).*/\\1/p'\""));
+  if (IsPrivateIpv4Address(route_probe)) {
+    return route_probe;
+  }
+
+  const std::string host_ips = Trim(process_runner_.CaptureShellOutput("hostname -I 2>/dev/null"));
+  if (!host_ips.empty()) {
+    std::istringstream input(host_ips);
+    std::string host_ip;
+    while (input >> host_ip) {
+      if (IsPrivateIpv4Address(host_ip)) {
+        return host_ip;
+      }
+    }
+    input.clear();
+    input.str(host_ips);
+    while (input >> host_ip) {
+      if (IsIpv4Address(host_ip) && host_ip != "127.0.0.1") {
+        return host_ip;
+      }
+    }
+  }
+  return "127.0.0.1";
 }
 
 std::vector<std::string> LauncherInstallService::ParseRoleTargets(

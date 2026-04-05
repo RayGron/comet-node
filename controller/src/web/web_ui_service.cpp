@@ -163,6 +163,10 @@ std::string WebUiService::DefaultWebUiImage() {
 }
 
 std::string WebUiService::DefaultControllerUpstream() {
+  if (const char* upstream = std::getenv("COMET_CONTROLLER_INTERNAL_UPSTREAM");
+      upstream != nullptr && *upstream != '\0') {
+    return upstream;
+  }
   return "http://host.docker.internal:18080";
 }
 

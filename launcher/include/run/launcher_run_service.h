@@ -56,7 +56,10 @@ class LauncherRunService {
       const std::filesystem::path& path,
       unsigned int group_id) const;
   std::string DefaultNodeName() const;
-  std::string DefaultWebUiControllerUpstream(int listen_port) const;
+  std::string DefaultInternalListenHost() const;
+  std::string DefaultWebUiControllerUpstream(
+      const std::string& internal_listen_host,
+      int listen_port) const;
   std::string Trim(const std::string& value) const;
   std::string ReadTextFile(const std::filesystem::path& path) const;
   std::string ComputePublicKeyFingerprint(const std::filesystem::path& public_key_path) const;

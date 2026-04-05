@@ -54,6 +54,7 @@ class LauncherInstallService {
   void WriteTextFile(const std::filesystem::path& path, const std::string& content) const;
   std::string Trim(const std::string& value) const;
   std::string ShellEscape(const std::string& value) const;
+  std::string DefaultInternalListenHost() const;
 
   const InstallLayoutResolver& install_layout_resolver_;
   const ProcessRunner& process_runner_;

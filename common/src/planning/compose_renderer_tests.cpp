@@ -1,8 +1,12 @@
+#include <algorithm>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 
+#include "comet/planning/planner.h"
 #include "comet/planning/compose_renderer.h"
+#include "comet/state/demo_state.h"
 
 namespace {
 
@@ -36,6 +40,25 @@ int main() {
     Expect(
         yaml.find("device_ids: [\"0\", \"2\", \"3\", \"0\"]") == std::string::npos,
         "compose renderer should not emit duplicate gpu device ids");
+
+#if defined(_WIN32)
+    _putenv_s("COMET_CONTROLLER_INTERNAL_HOST", "192.168.88.13");
+#else
+    setenv("COMET_CONTROLLER_INTERNAL_HOST", "192.168.88.13", 1);
+#endif
+    const auto plans = comet::BuildNodeComposePlans(comet::BuildDemoState());
+    Expect(!plans.empty(), "planner should render at least one compose plan");
+    Expect(!plans.front().services.empty(), "planner should render at least one service");
+    const auto& extra_hosts = plans.front().services.front().extra_hosts;
+    Expect(
+        std::find(extra_hosts.begin(), extra_hosts.end(), "controller.internal:192.168.88.13") !=
+            extra_hosts.end(),
+        "planner should map controller.internal to the configured internal host");
+#if defined(_WIN32)
+    _putenv_s("COMET_CONTROLLER_INTERNAL_HOST", "");
+#else
+    unsetenv("COMET_CONTROLLER_INTERNAL_HOST");
+#endif
 
     std::cout << "compose renderer tests passed\n";
     return 0;

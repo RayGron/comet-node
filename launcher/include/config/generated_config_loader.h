@@ -13,6 +13,7 @@ namespace fs = std::filesystem;
 struct GeneratedControllerConfig {
   std::optional<std::string> listen_host;
   std::optional<int> listen_port;
+  std::optional<std::string> internal_listen_host;
   std::optional<fs::path> db_path;
   std::optional<fs::path> artifacts_root;
   std::optional<bool> web_ui_enabled;

@@ -89,6 +89,8 @@ GeneratedConfig GeneratedConfigLoader::Load(const fs::path& path) const {
         config.controller.listen_host = UnquoteTomlValue(raw_value);
       } else if (key == "listen_port") {
         config.controller.listen_port = std::stoi(raw_value);
+      } else if (key == "internal_listen_host") {
+        config.controller.internal_listen_host = UnquoteTomlValue(raw_value);
       } else if (key == "db_path") {
         config.controller.db_path = fs::path(UnquoteTomlValue(raw_value));
       } else if (key == "artifacts_root") {

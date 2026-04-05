@@ -12,8 +12,9 @@ namespace fs = std::filesystem;
 struct ControllerInstallOptions {
   InstallLayout layout;
   fs::path binary_path;
-  std::string listen_host = "0.0.0.0";
+  std::string listen_host = "127.0.0.1";
   int listen_port = 18080;
+  std::string internal_listen_host;
   bool with_hostd = false;
   bool with_web_ui = false;
   std::string compose_mode = "exec";
@@ -36,8 +37,9 @@ struct ControllerRunOptions {
   fs::path db_path;
   fs::path artifacts_root;
   fs::path web_ui_root;
-  std::string listen_host = "0.0.0.0";
+  std::string listen_host = "127.0.0.1";
   int listen_port = 18080;
+  std::string internal_listen_host;
   std::string skills_factory_listen_host = "127.0.0.1";
   int skills_factory_listen_port = 18082;
   bool with_hostd = false;

@@ -1,6 +1,7 @@
 #include "comet/planning/planner.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <sstream>
 #include <stdexcept>
@@ -30,9 +31,14 @@ std::optional<ComposeVolume> BuildDirectModelCacheVolume(const DesiredState& sta
 }
 
 std::vector<std::string> DefaultComposeExtraHosts() {
+  const char* internal_host = std::getenv("COMET_CONTROLLER_INTERNAL_HOST");
+  const std::string controller_alias =
+      internal_host != nullptr && *internal_host != '\0'
+          ? "controller.internal:" + std::string(internal_host)
+          : "controller.internal:host-gateway";
   return {
       "host.docker.internal:host-gateway",
-      "controller.internal:host-gateway",
+      controller_alias,
   };
 }
 

@@ -1,12 +1,14 @@
 #include "run/launcher_run_service.h"
 
 #include <chrono>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 #if !defined(_WIN32)
 #include <sys/stat.h>
@@ -19,6 +21,58 @@
 #include "comet/state/sqlite_store.h"
 
 namespace comet::launcher {
+
+namespace {
+
+bool IsIpv4Address(const std::string& candidate) {
+  int octet_count = 0;
+  std::string octet;
+  std::istringstream input(candidate);
+  while (std::getline(input, octet, '.')) {
+    if (octet.empty() || octet.size() > 3) {
+      return false;
+    }
+    for (const char ch : octet) {
+      if (!std::isdigit(static_cast<unsigned char>(ch))) {
+        return false;
+      }
+    }
+    const int value = std::stoi(octet);
+    if (value < 0 || value > 255) {
+      return false;
+    }
+    ++octet_count;
+  }
+  return octet_count == 4;
+}
+
+bool IsPrivateIpv4Address(const std::string& candidate) {
+  if (!IsIpv4Address(candidate)) {
+    return false;
+  }
+  std::istringstream input(candidate);
+  std::string octet_text;
+  std::vector<int> octets;
+  while (std::getline(input, octet_text, '.')) {
+    octets.push_back(std::stoi(octet_text));
+  }
+  if (octets.size() != 4) {
+    return false;
+  }
+  return octets[0] == 10 ||
+         (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) ||
+         (octets[0] == 192 && octets[1] == 168);
+}
+
+bool SetEnvVar(const std::string& key, const std::string& value) {
+#if defined(_WIN32)
+  return _putenv_s(key.c_str(), value.c_str()) == 0;
+#else
+  return ::setenv(key.c_str(), value.c_str(), 1) == 0;
+#endif
+}
+
+}  // namespace
 
 LauncherRunService::LauncherRunService(
     const InstallLayoutResolver& install_layout_resolver,
@@ -65,6 +119,11 @@ int LauncherRunService::RunController(
       loaded_config && loaded_config->controller.listen_port.has_value()
           ? *loaded_config->controller.listen_port
           : options.listen_port);
+  options.internal_listen_host =
+      command_line.FindFlagValue("--internal-listen-host")
+          .value_or(loaded_config && loaded_config->controller.internal_listen_host.has_value()
+                        ? *loaded_config->controller.internal_listen_host
+                        : DefaultInternalListenHost());
   options.controller_upstream =
       command_line.FindFlagValue("--controller-upstream").value_or("");
   options.compose_mode =
@@ -135,6 +194,8 @@ int LauncherRunService::RunController(
       install_args.insert(install_args.end(), {"--listen-host", options.listen_host});
       install_args.insert(
           install_args.end(), {"--listen-port", std::to_string(options.listen_port)});
+      install_args.insert(
+          install_args.end(), {"--internal-listen-host", options.internal_listen_host});
       install_args.insert(
           install_args.end(), {"--compose-mode", options.hostd_compose_mode});
       install_args.insert(install_args.end(), {"--node", options.node_name});
@@ -373,14 +434,20 @@ int LauncherRunService::RunControllerSupervisor(
     const std::filesystem::path& controller_binary,
     const ControllerRunOptions& options) const {
   PrepareControllerRuntime(self_path, options);
+  const std::string admin_dial_host =
+      options.listen_host.empty() || options.listen_host == "0.0.0.0"
+          ? "127.0.0.1"
+          : options.listen_host;
   const std::string local_controller_url =
-      "http://127.0.0.1:" + std::to_string(options.listen_port);
+      "http://" + admin_dial_host + ":" + std::to_string(options.listen_port);
+  const std::string internal_controller_url =
+      "http://" + options.internal_listen_host + ":" + std::to_string(options.listen_port);
   const std::string local_skills_factory_url =
       "http://" + options.skills_factory_listen_host + ":" +
       std::to_string(options.skills_factory_listen_port);
   const std::string web_ui_controller_upstream =
       options.controller_upstream.empty()
-          ? DefaultWebUiControllerUpstream(options.listen_port)
+          ? DefaultWebUiControllerUpstream(options.internal_listen_host, options.listen_port)
           : options.controller_upstream;
   const auto controller_public_key_path =
       options.state_root.parent_path() / "keys" / "controller.pub.b64";
@@ -388,6 +455,11 @@ int LauncherRunService::RunControllerSupervisor(
       std::filesystem::exists(controller_public_key_path)
           ? ComputePublicKeyFingerprint(controller_public_key_path)
           : "";
+
+  if (!SetEnvVar("COMET_CONTROLLER_INTERNAL_HOST", options.internal_listen_host) ||
+      !SetEnvVar("COMET_CONTROLLER_INTERNAL_UPSTREAM", internal_controller_url)) {
+    throw std::runtime_error("failed to export controller internal routing environment");
+  }
 
   if (options.with_web_ui) {
     std::vector<std::string> ensure_args = {
@@ -410,13 +482,24 @@ int LauncherRunService::RunControllerSupervisor(
   }));
   signal_manager.TrackChild(static_cast<int>(skills_factory_pid));
 
-  const pid_t controller_pid = static_cast<pid_t>(process_runner_.SpawnCommand({
+  const pid_t internal_controller_pid = static_cast<pid_t>(process_runner_.SpawnCommand({
       controller_binary.string(), "serve", "--db", options.db_path.string(),
       "--artifacts-root", options.artifacts_root.string(), "--listen-host",
-      options.listen_host, "--listen-port", std::to_string(options.listen_port),
+      options.internal_listen_host, "--listen-port", std::to_string(options.listen_port),
       "--skills-factory-upstream", local_skills_factory_url,
   }));
-  signal_manager.TrackChild(static_cast<int>(controller_pid));
+  signal_manager.TrackChild(static_cast<int>(internal_controller_pid));
+
+  pid_t controller_pid = internal_controller_pid;
+  if (options.internal_listen_host != options.listen_host) {
+    controller_pid = static_cast<pid_t>(process_runner_.SpawnCommand({
+        controller_binary.string(), "serve", "--db", options.db_path.string(),
+        "--artifacts-root", options.artifacts_root.string(), "--listen-host",
+        options.listen_host, "--listen-port", std::to_string(options.listen_port),
+        "--skills-factory-upstream", local_skills_factory_url,
+    }));
+    signal_manager.TrackChild(static_cast<int>(controller_pid));
+  }
 
   pid_t hostd_pid = -1;
   if (options.with_hostd) {
@@ -451,6 +534,7 @@ int LauncherRunService::RunControllerSupervisor(
   }
 
   std::cout << "controller_api_url=" << local_controller_url << "\n";
+  std::cout << "controller_internal_url=" << internal_controller_url << "\n";
   std::cout << "skills_factory_url=" << local_skills_factory_url << "\n";
   if (options.with_web_ui) {
     std::cout << "web_ui_url=http://127.0.0.1:18081\n";
@@ -467,6 +551,7 @@ int LauncherRunService::RunControllerSupervisor(
     }
     signal_manager.RemoveChild(*exited);
     if (*exited == static_cast<int>(controller_pid) ||
+        *exited == static_cast<int>(internal_controller_pid) ||
         *exited == static_cast<int>(skills_factory_pid) ||
         *exited == static_cast<int>(hostd_pid)) {
       signal_manager.RequestStop();
@@ -476,6 +561,10 @@ int LauncherRunService::RunControllerSupervisor(
 
   if (controller_pid > 0) {
     signal_manager.TerminateChildProcess(static_cast<int>(controller_pid));
+  }
+  if (internal_controller_pid > 0 &&
+      internal_controller_pid != controller_pid) {
+    signal_manager.TerminateChildProcess(static_cast<int>(internal_controller_pid));
   }
   if (skills_factory_pid > 0) {
     signal_manager.TerminateChildProcess(static_cast<int>(skills_factory_pid));
@@ -585,16 +674,40 @@ std::string LauncherRunService::DefaultNodeName() const {
   return "local-hostd";
 }
 
-std::string LauncherRunService::DefaultWebUiControllerUpstream(int listen_port) const {
+std::string LauncherRunService::DefaultInternalListenHost() const {
+  const std::string route_probe =
+      Trim(process_runner_.CaptureShellOutput(
+          "sh -c \"ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \\([0-9.]*\\).*/\\1/p'\""));
+  if (IsPrivateIpv4Address(route_probe)) {
+    return route_probe;
+  }
+
   const std::string host_ips =
       Trim(process_runner_.CaptureShellOutput("hostname -I 2>/dev/null"));
   if (!host_ips.empty()) {
-    const std::size_t first_space = host_ips.find_first_of(" \t\r\n");
-    const std::string host_ip =
-        first_space == std::string::npos ? host_ips : host_ips.substr(0, first_space);
-    if (!host_ip.empty()) {
-      return "http://" + host_ip + ":" + std::to_string(listen_port);
+    std::istringstream input(host_ips);
+    std::string host_ip;
+    while (input >> host_ip) {
+      if (IsPrivateIpv4Address(host_ip)) {
+        return host_ip;
+      }
     }
+    input.clear();
+    input.str(host_ips);
+    while (input >> host_ip) {
+      if (IsIpv4Address(host_ip) && host_ip != "127.0.0.1") {
+        return host_ip;
+      }
+    }
+  }
+  return "127.0.0.1";
+}
+
+std::string LauncherRunService::DefaultWebUiControllerUpstream(
+    const std::string& internal_listen_host,
+    int listen_port) const {
+  if (!internal_listen_host.empty()) {
+    return "http://" + internal_listen_host + ":" + std::to_string(listen_port);
   }
   return "http://host.docker.internal:" + std::to_string(listen_port);
 }

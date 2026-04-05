@@ -45,9 +45,9 @@ void LauncherCommandLine::PrintUsage(std::ostream& out) const {
       << "    comet-node run hostd\n"
       << "  comet-node version\n"
       << "  comet-node doctor [controller|hostd]\n"
-      << "  comet-node run controller [--db <path>] [--artifacts-root <path>] [--listen-host <host>] [--listen-port <port>] [--with-hostd] [--with-web-ui] [--hostd-compose-mode exec|skip]\n"
+      << "  comet-node run controller [--db <path>] [--artifacts-root <path>] [--listen-host <host>] [--listen-port <port>] [--internal-listen-host <host>] [--with-hostd] [--with-web-ui] [--hostd-compose-mode exec|skip]\n"
       << "  comet-node run hostd [--node <name>] [--db <path>] [--controller <url>] [--controller-fingerprint <sha256>] [--runtime-root <path>] [--state-root <path>] [--compose-mode exec|skip]\n"
-      << "  comet-node install controller [--with-hostd] [--with-web-ui] [--config <path>] [--state-root <path>] [--log-root <path>] [--systemd-dir <path>] [--skip-systemctl]\n"
+      << "  comet-node install controller [--with-hostd] [--with-web-ui] [--listen-host <host>] [--listen-port <port>] [--internal-listen-host <host>] [--config <path>] [--state-root <path>] [--log-root <path>] [--systemd-dir <path>] [--skip-systemctl]\n"
       << "  comet-node install hostd [--node <name>] [--controller <url>] [--controller-fingerprint <sha256>] [--transport out|in|hybrid] [--listen <addr>] [--config <path>] [--state-root <path>] [--log-root <path>] [--systemd-dir <path>] [--skip-systemctl]\n"
       << "  comet-node service status|start|stop|restart|uninstall|verify <controller|hostd|controller-hostd> [--systemd-dir <path>] [--skip-systemctl]\n"
       << "  comet-node connect-hostd --db <path> --node <name> --public-key <base64-or-file> [--address <hostd-url>] [--transport out|in|hybrid] [--controller-fingerprint <sha256>]\n";

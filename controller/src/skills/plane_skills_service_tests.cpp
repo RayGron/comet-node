@@ -1662,12 +1662,51 @@ int main() {
           summary.at("decision").get<std::string>() == "not_needed",
           "toggle-only requests should not trigger a web lookup");
       Expect(
+          summary.at("lookup_state").get<std::string>() == "enabled_toggle_only",
+          "toggle-only requests should expose a dedicated enabled-toggle-only state");
+      Expect(
           request_context.payload.at(
               comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
                   .get<std::string>()
-                  .find("enabled") != std::string::npos,
+                  .find("Controller browsing state: enabled_toggle_only.") != std::string::npos,
           "toggle-only requests should inject an enable acknowledgement instruction");
       std::cout << "ok: interaction-browsing-toggle-only-enable" << '\n';
+    }
+
+    {
+      comet::controller::InteractionBrowsingService browsing_service;
+      comet::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"messages",
+           json::array(
+               {json{{"role", "user"}, {"content", "Enable web for this chat."}},
+                json{{"role", "user"}, {"content", "Explain TCP handshakes."}}})},
+      };
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = BuildDesiredStateWithBrowsingPort("127.0.0.1", 18130);
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "enabled web mode should allow no-lookup offline answers");
+      const auto summary =
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      Expect(
+          summary.at("decision").get<std::string>() == "not_needed",
+          "offline prompts should still avoid lookup when web context is unnecessary");
+      Expect(
+          summary.at("lookup_state").get<std::string>() == "enabled_not_needed",
+          "enabled offline prompts should expose enabled_not_needed state");
+      Expect(
+          !summary.at("lookup_attempted").get<bool>(),
+          "enabled offline prompts should not mark lookup_attempted");
+      Expect(
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
+                  .get<std::string>()
+                  .find("web access may remain available, but no web lookup was needed") !=
+              std::string::npos,
+          "enabled offline prompts should tell the model that web stayed available but unused");
+      std::cout << "ok: interaction-browsing-enabled-not-needed" << '\n';
     }
 
     {
@@ -1696,6 +1735,13 @@ int main() {
       Expect(
           summary.at("decision").get<std::string>() == "search_and_fetch",
           "latest info prompts should trigger search-and-fetch browsing");
+      Expect(
+          summary.at("lookup_state").get<std::string>() == "evidence_attached",
+          "successful web enrichment should expose evidence_attached state");
+      Expect(summary.at("lookup_attempted").get<bool>(),
+             "successful web enrichment should mark lookup_attempted");
+      Expect(summary.at("evidence_attached").get<bool>(),
+             "successful web enrichment should mark evidence_attached");
       Expect(runtime.search_count() == 1, "search-and-fetch should call search once");
       Expect(runtime.fetch_count() >= 1, "search-and-fetch should fetch at least one result");
       Expect(
@@ -1790,6 +1836,9 @@ int main() {
       Expect(
           summary.at("sources").at(0).at("snippet_only").get<bool>(),
           "snippet fallback should mark evidence that came only from search results");
+      Expect(
+          summary.at("lookup_state").get<std::string>() == "evidence_attached",
+          "snippet fallback should still count as evidence_attached");
       std::cout << "ok: interaction-browsing-search-snippet-fallback" << '\n';
     }
 
@@ -1820,6 +1869,13 @@ int main() {
           summary.at("reason").get<std::string>() == "search_returned_no_sources",
           "empty search results should explain why no evidence was attached");
       Expect(
+          summary.at("lookup_state").get<std::string>() == "attempted_no_evidence",
+          "empty search results should expose attempted_no_evidence state");
+      Expect(summary.at("lookup_attempted").get<bool>(),
+             "empty search results should still mark lookup_attempted");
+      Expect(!summary.at("evidence_attached").get<bool>(),
+             "empty search results should not mark evidence_attached");
+      Expect(
           summary.at("searches").is_array() && !summary.at("searches").empty() &&
               summary.at("searches").at(0).at("result_count").get<int>() == 0,
           "empty search results should still expose the attempted search summary");
@@ -1848,6 +1904,9 @@ int main() {
       Expect(
           summary.at("decision").get<std::string>() == "direct_fetch",
           "explicit URL requests should skip search and fetch directly");
+      Expect(
+          summary.at("lookup_state").get<std::string>() == "evidence_attached",
+          "direct fetch with a usable page should expose evidence_attached state");
       Expect(runtime.search_count() == 0, "direct fetch should not call search");
       Expect(runtime.fetch_count() == 1, "direct fetch should fetch the referenced URL");
       std::cout << "ok: interaction-browsing-direct-fetch" << '\n';
@@ -1877,6 +1936,9 @@ int main() {
       Expect(
           summary.at("mode").get<std::string>() == "disabled",
           "later disable directive should override earlier enable directive");
+      Expect(
+          summary.at("lookup_state").get<std::string>() == "disabled_by_user",
+          "later disable directive should expose disabled_by_user state");
       Expect(runtime.search_count() == 0, "disabled web mode should prevent search");
       Expect(runtime.fetch_count() == 0, "disabled web mode should prevent fetch");
 

@@ -325,12 +325,15 @@ int CountWords(const std::string& text) {
   int words = 0;
   bool in_word = false;
   for (unsigned char ch : text) {
-    const bool word_char =
-        std::isalnum(ch) != 0 || ch == '_' || ch >= 0xC0;
-    if (word_char && !in_word) {
+    const bool separator =
+        std::isspace(ch) != 0 || ch == '.' || ch == ',' || ch == ';' ||
+        ch == ':' || ch == '!' || ch == '?' || ch == '(' || ch == ')' ||
+        ch == '[' || ch == ']' || ch == '{' || ch == '}' || ch == '"' ||
+        ch == '\'';
+    if (!separator && !in_word) {
       ++words;
     }
-    in_word = word_char;
+    in_word = !separator;
   }
   return words;
 }
@@ -364,17 +367,16 @@ BrowsingContextDecision AnalyzeBrowsingRequest(
   }
 
   WebDirective persisted_directive = WebDirective::None;
-  WebDirective latest_directive = WebDirective::None;
   for (const auto& message : messages) {
     const std::string lowered = LowercaseCopy(message.content);
     const WebDirective directive = DetectDirective(lowered);
     if (directive != WebDirective::None) {
       persisted_directive = directive;
-      latest_directive = directive;
     }
   }
 
   const std::string lowered_latest = LowercaseCopy(decision.latest_user_message);
+  const WebDirective latest_message_directive = DetectDirective(lowered_latest);
   if (persisted_directive == WebDirective::Enable) {
     decision.mode_enabled = true;
     decision.mode_source = "toggle";
@@ -392,7 +394,7 @@ BrowsingContextDecision AnalyzeBrowsingRequest(
 
   decision.urls = ExtractUrls(decision.latest_user_message);
   decision.toggle_only =
-      LooksLikeToggleOnlyMessage(lowered_latest, latest_directive);
+      LooksLikeToggleOnlyMessage(lowered_latest, latest_message_directive);
   decision.needs_web =
       !decision.toggle_only &&
       (decision.mode_source == "one_off_request" ||
@@ -450,13 +452,57 @@ json ParseJsonBodyOrObject(const std::string& body) {
   return parsed.is_discarded() ? json::object() : parsed;
 }
 
+json BuildBrowsingFlags(
+    const BrowsingContextDecision& context,
+    const json& searches,
+    const json& sources) {
+  const bool lookup_attempted =
+      context.decision == "search_and_fetch" ||
+      context.decision == "direct_fetch" ||
+      context.decision == "error" ||
+      (searches.is_array() && !searches.empty()) ||
+      (context.reason == "search_returned_no_sources");
+  const bool evidence_attached = sources.is_array() && !sources.empty();
+  const bool lookup_required =
+      context.decision == "search_and_fetch" ||
+      context.decision == "direct_fetch" ||
+      context.decision == "unavailable" ||
+      context.decision == "error" ||
+      context.reason == "search_returned_no_sources";
+
+  std::string lookup_state = "disabled";
+  if (!context.mode_enabled) {
+    lookup_state =
+        context.reason == "user_disabled_web_mode" ? "disabled_by_user" : "disabled";
+  } else if (context.toggle_only || context.reason == "toggle_only") {
+    lookup_state = "enabled_toggle_only";
+  } else if (context.decision == "not_needed" || context.reason == "context_not_needed") {
+    lookup_state = "enabled_not_needed";
+  } else if (evidence_attached) {
+    lookup_state = "evidence_attached";
+  } else if (context.reason == "search_returned_no_sources") {
+    lookup_state = "attempted_no_evidence";
+  } else if (context.decision == "unavailable" || context.decision == "error") {
+    lookup_state = "required_but_unavailable";
+  } else if (lookup_attempted) {
+    lookup_state = "attempted_no_evidence";
+  }
+
+  return json{
+      {"lookup_state", lookup_state},
+      {"lookup_attempted", lookup_attempted},
+      {"lookup_required", lookup_required},
+      {"evidence_attached", evidence_attached},
+  };
+}
+
 json BuildBrowsingSummary(
     const BrowsingContextDecision& context,
     bool ready,
     const json& searches,
     const json& sources,
     const json& errors) {
-  return json{
+  json summary = json{
       {"mode", context.mode_enabled ? "enabled" : "disabled"},
       {"mode_source", context.mode_source},
       {"plane_enabled", context.plane_enabled},
@@ -468,6 +514,8 @@ json BuildBrowsingSummary(
       {"sources", sources},
       {"errors", errors},
   };
+  summary.update(BuildBrowsingFlags(context, searches, sources));
+  return summary;
 }
 
 json BuildSnippetOnlySource(const SearchCandidate& candidate) {
@@ -487,10 +535,13 @@ std::string BuildBrowsingInstruction(const json& summary) {
   const std::string decision = summary.value("decision", std::string{"disabled"});
   const std::string reason = summary.value("reason", std::string{});
   const bool toggle_only = summary.value("toggle_only", false);
+  const std::string lookup_state =
+      summary.value("lookup_state", std::string{"disabled"});
 
   if (mode != "enabled") {
     if (reason == "user_disabled_web_mode") {
-      return "Web browsing is disabled because the user explicitly turned it off. "
+      return "Controller browsing state: disabled_by_user. "
+             "Web browsing is disabled because the user explicitly turned it off. "
              "Do not claim to have searched the web or used online sources unless "
              "the user turns web access back on.";
     }
@@ -499,6 +550,7 @@ std::string BuildBrowsingInstruction(const json& summary) {
 
   std::ostringstream instruction;
   instruction
+      << "Controller browsing state: " << lookup_state << ". "
       << "Web browsing is enabled for this request. "
       << "Use only the controller-provided browsing evidence below. "
       << "Do not claim extra online verification beyond that evidence.";
@@ -513,8 +565,9 @@ std::string BuildBrowsingInstruction(const json& summary) {
 
   if (decision == "not_needed") {
     instruction
-        << "\n\nController analysis decided that no web lookup was needed for this "
-        << "request. Answer directly without pretending that this answer was web-verified.";
+        << "\n\nController analysis decided that web access may remain available, "
+        << "but no web lookup was needed for this request. "
+        << "Answer directly without pretending that this answer was web-verified.";
     return instruction.str();
   }
 

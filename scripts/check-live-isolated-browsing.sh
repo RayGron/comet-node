@@ -58,6 +58,7 @@ controller_log="${work_root}/controller.log"
 browsing_log="${work_root}/browsing.log"
 browsing_status_path="${work_root}/browsing-runtime-status.json"
 browsing_state_root="${work_root}/browsing-state"
+artifacts_root="${work_root}/artifacts"
 desired_state_path="${work_root}/maglev.desired-state.v2.json"
 request_body_path="${work_root}/maglev-upsert.json"
 controller_port="$(next_port)"
@@ -80,7 +81,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "${browsing_state_root}"
+mkdir -p "${browsing_state_root}" "${artifacts_root}"
 
 cat >"${desired_state_path}" <<EOF
 {
@@ -153,16 +154,17 @@ cat >"${desired_state_path}" <<EOF
 }
 EOF
 
-python3 - "${desired_state_path}" "${request_body_path}" <<'PY'
+python3 - "${desired_state_path}" "${request_body_path}" "${artifacts_root}" <<'PY'
 import json
 import sys
 
 desired_state_path = sys.argv[1]
 request_body_path = sys.argv[2]
+artifacts_root = sys.argv[3]
 with open(desired_state_path, "r", encoding="utf-8") as source:
     desired_state = json.load(source)
 with open(request_body_path, "w", encoding="utf-8") as output:
-    json.dump({"desired_state_v2": desired_state}, output)
+    json.dump({"desired_state_v2": desired_state, "artifacts_root": artifacts_root}, output)
 PY
 
 echo "isolated-browsing-live: init controller db"
@@ -194,6 +196,7 @@ PY
 echo "isolated-browsing-live: start controller"
 "${build_dir}/comet-controller" serve \
   --db "${db_path}" \
+  --artifacts-root "${artifacts_root}" \
   --listen-host 127.0.0.1 \
   --listen-port "${controller_port}" >"${controller_log}" 2>&1 &
 controller_pid="$!"

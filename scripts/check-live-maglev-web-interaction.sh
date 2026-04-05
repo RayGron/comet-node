@@ -565,4 +565,6 @@ EOF
 disable_response="$(invoke_interaction "disable-override" "${disable_request}")"
 assert_json "${disable_response}" "disable_override"
 
+trap - EXIT
+cleanup
 echo "maglev-web-live: OK"

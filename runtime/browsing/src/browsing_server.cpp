@@ -622,6 +622,7 @@ std::vector<SearchResult> BrowsingServer::ParseBingHtmlResults(
     const std::vector<std::string>& requested_domains,
     int limit) {
   std::vector<SearchResult> results;
+  std::unordered_set<std::string> seen_urls;
   std::regex item_pattern(
       R"(<li[^>]*class\s*=\s*["'][^"']*\bb_algo\b[^"']*["'][^>]*>([\s\S]*?)</li>)",
       std::regex::icase);
@@ -657,7 +658,47 @@ std::vector<SearchResult> BrowsingServer::ParseBingHtmlResults(
     item.backend = "browser_render";
     item.rendered = true;
     item.score = std::max(0.0, 1.0 - static_cast<double>(index) * 0.05);
-    if (!item.title.empty()) {
+    if (!item.title.empty() && seen_urls.insert(item.url).second) {
+      results.push_back(std::move(item));
+      ++index;
+    }
+  }
+
+  if (!results.empty()) {
+    return results;
+  }
+
+  std::regex anchor_pattern(
+      R"(<a[^>]+href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)</a>)",
+      std::regex::icase);
+  begin = std::sregex_iterator(html.begin(), html.end(), anchor_pattern);
+  end = std::sregex_iterator();
+  index = 0;
+  for (auto it = begin; it != end && static_cast<int>(results.size()) < limit; ++it) {
+    const std::string href = TrimCopy(HtmlEntityDecode((*it)[1].str()));
+    std::string host;
+    std::string reason;
+    if (!IsSafeBrowsingUrl(href, policy, &reason, &host) ||
+        !DomainAllowed(host, policy, requested_domains)) {
+      continue;
+    }
+
+    SearchResult item;
+    item.url = href;
+    item.domain = host;
+    item.title = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags((*it)[2].str())));
+    const std::size_t match_offset = static_cast<std::size_t>((*it).position());
+    const std::size_t context_start = match_offset > 240 ? match_offset - 240 : 0;
+    const std::size_t context_size = std::min<std::size_t>(html.size() - context_start, 480);
+    item.snippet = NormalizeWhitespace(
+        HtmlEntityDecode(StripHtmlTags(html.substr(context_start, context_size))));
+    if (item.snippet.empty()) {
+      item.snippet = item.title;
+    }
+    item.backend = "browser_render";
+    item.rendered = true;
+    item.score = std::max(0.0, 1.0 - static_cast<double>(index) * 0.05);
+    if (!item.title.empty() && seen_urls.insert(item.url).second) {
       results.push_back(std::move(item));
       ++index;
     }

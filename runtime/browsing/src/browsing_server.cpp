@@ -195,20 +195,32 @@ std::string DecodeBase64ToString(const std::string& text) {
   if (text.empty()) {
     return {};
   }
-  std::vector<unsigned char> output(text.size(), 0);
-  std::size_t actual_size = 0;
-  if (sodium_base642bin(
-          output.data(),
-          output.size(),
-          text.c_str(),
-          text.size(),
-          nullptr,
-          &actual_size,
-          nullptr,
-          sodium_base64_VARIANT_ORIGINAL) != 0) {
-    throw std::runtime_error("failed to decode base64 bing redirect url");
+  const auto try_decode = [&text](int variant) -> std::optional<std::string> {
+    std::vector<unsigned char> output(text.size(), 0);
+    std::size_t actual_size = 0;
+    if (sodium_base642bin(
+            output.data(),
+            output.size(),
+            text.c_str(),
+            text.size(),
+            nullptr,
+            &actual_size,
+            nullptr,
+            variant) != 0) {
+      return std::nullopt;
+    }
+    return std::string(output.begin(), output.begin() + static_cast<std::ptrdiff_t>(actual_size));
+  };
+
+  if (const auto decoded = try_decode(sodium_base64_VARIANT_ORIGINAL_NO_PADDING);
+      decoded.has_value()) {
+    return *decoded;
   }
-  return std::string(output.begin(), output.begin() + static_cast<std::ptrdiff_t>(actual_size));
+  if (const auto decoded = try_decode(sodium_base64_VARIANT_ORIGINAL);
+      decoded.has_value()) {
+    return *decoded;
+  }
+  throw std::runtime_error("failed to decode base64 bing redirect url");
 }
 
 std::string StripHtmlTags(const std::string& html) {

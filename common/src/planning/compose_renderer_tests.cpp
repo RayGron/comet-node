@@ -31,6 +31,8 @@ int main() {
     service.use_nvidia_runtime = true;
     service.gpu_devices = {"0", "2", "3", "0"};
     service.healthcheck = "CMD-SHELL test -f /tmp/comet-ready";
+    service.environment["COMET_BROWSING_POLICY_JSON"] =
+        R"({"blocked_domains":["localhost","127.0.0.1","internal"],"browser_session_enabled":true})";
     plan.services.push_back(std::move(service));
 
     const std::string yaml = comet::RenderComposeYaml(plan);
@@ -40,6 +42,11 @@ int main() {
     Expect(
         yaml.find("device_ids: [\"0\", \"2\", \"3\", \"0\"]") == std::string::npos,
         "compose renderer should not emit duplicate gpu device ids");
+    Expect(
+        yaml.find(
+            R"(COMET_BROWSING_POLICY_JSON: "{\"blocked_domains\":[\"localhost\",\"127.0.0.1\",\"internal\"],\"browser_session_enabled\":true}")") !=
+            std::string::npos,
+        "compose renderer should escape JSON-valued env vars");
 
 #if defined(_WIN32)
     _putenv_s("COMET_CONTROLLER_INTERNAL_HOST", "192.168.88.13");

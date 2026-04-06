@@ -8,12 +8,40 @@ namespace comet {
 
 namespace {
 
+std::string EscapeYamlDoubleQuoted(const std::string& value) {
+  std::string escaped;
+  escaped.reserve(value.size());
+  for (const char ch : value) {
+    switch (ch) {
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        escaped.push_back(ch);
+        break;
+    }
+  }
+  return escaped;
+}
+
 void RenderKeyValueMap(
     std::ostringstream& out,
     const std::string& indent,
     const std::map<std::string, std::string>& values) {
   for (const auto& [key, value] : values) {
-    out << indent << key << ": \"" << value << "\"\n";
+    out << indent << key << ": \"" << EscapeYamlDoubleQuoted(value) << "\"\n";
   }
 }
 
@@ -32,17 +60,17 @@ void RenderHealthcheckTest(
 
   if (healthcheck.rfind(std::string(kCmdShellPrefix), 0) == 0) {
     out << indent << "test: [\"CMD-SHELL\", \""
-        << healthcheck.substr(kCmdShellPrefix.size()) << "\"]\n";
+        << EscapeYamlDoubleQuoted(healthcheck.substr(kCmdShellPrefix.size())) << "\"]\n";
     return;
   }
 
   if (healthcheck.rfind(std::string(kCmdPrefix), 0) == 0) {
-    out << indent << "test: [\"CMD\", \"" << healthcheck.substr(kCmdPrefix.size())
+    out << indent << "test: [\"CMD\", \"" << EscapeYamlDoubleQuoted(healthcheck.substr(kCmdPrefix.size()))
         << "\"]\n";
     return;
   }
 
-  out << indent << "test: [\"CMD-SHELL\", \"" << healthcheck << "\"]\n";
+  out << indent << "test: [\"CMD-SHELL\", \"" << EscapeYamlDoubleQuoted(healthcheck) << "\"]\n";
 }
 
 std::vector<std::string> UniqueGpuDevices(

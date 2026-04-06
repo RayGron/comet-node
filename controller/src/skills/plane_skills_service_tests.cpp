@@ -2267,6 +2267,32 @@ int main() {
     }
 
     {
+      InteractionBrowsingRuntimeTestServer runtime;
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context = BuildBrowsingRequestContext(
+          {"Enable web for this chat.",
+           "Reply to the user in chat mode.\nUser message: Используй веб. Посмотри поведение Bitcoin за последние 7 дней и дай короткий вывод по импульсу рынка."});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "maglev wrapper query sanitization should not fail");
+      const auto queries = runtime.search_queries();
+      Expect(queries.size() == 1,
+             "maglev wrapper sanitization test should issue exactly one search query");
+      Expect(queries.front().find("reply to the user in chat mode") == std::string::npos,
+             "sanitized query should strip maglev wrapper prefix");
+      Expect(queries.front().find("user message") == std::string::npos,
+             "sanitized query should strip user message label");
+      Expect(queries.front().find("используй веб") == std::string::npos,
+             "sanitized query should remove explicit web toggle marker");
+      Expect(queries.front().find("bitcoin за последние 7 дней") != std::string::npos,
+             "sanitized query should preserve the substantive market prompt");
+      Expect(!queries.front().empty() && queries.front().front() != '.',
+             "sanitized query should not keep leading punctuation");
+      std::cout << "ok: interaction-browsing-maglev-wrapper-query-sanitization" << '\n';
+    }
+
+    {
       InteractionBrowsingRuntimeServerConfig config;
       config.search_results = json::array(
           {json{{"url", "https://example.com/shared"},

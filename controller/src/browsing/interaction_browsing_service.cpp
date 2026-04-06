@@ -193,7 +193,26 @@ std::vector<std::string> ExtractUrls(const std::string& text) {
 }
 
 std::string SanitizeForSearchQuery(std::string text) {
+  static const std::vector<std::string> prompt_wrappers = {
+      "user message:",
+      "message:",
+      "сообщение пользователя:",
+      "запрос пользователя:",
+  };
+  for (const auto& wrapper : prompt_wrappers) {
+    const std::size_t pos = text.rfind(wrapper);
+    if (pos != std::string::npos) {
+      text = text.substr(pos + wrapper.size());
+      break;
+    }
+  }
+
   static const std::vector<std::string> removable_phrases = {
+      "reply to the user in chat mode.",
+      "reply directly to the user message.",
+      "respond directly to the user message.",
+      "answer the user in chat mode.",
+      "reply in chat mode.",
       "enable web",
       "turn on web",
       "turn web on",
@@ -234,7 +253,38 @@ std::string SanitizeForSearchQuery(std::string text) {
       ch = ' ';
     }
   }
-  return TrimCopy(text);
+  std::string normalized;
+  normalized.reserve(text.size());
+  bool previous_space = false;
+  for (unsigned char ch : text) {
+    const bool is_space = std::isspace(ch) != 0;
+    if (is_space) {
+      if (!previous_space) {
+        normalized.push_back(' ');
+      }
+      previous_space = true;
+      continue;
+    }
+    normalized.push_back(static_cast<char>(ch));
+    previous_space = false;
+  }
+
+  normalized = TrimCopy(normalized);
+  while (!normalized.empty()) {
+    const unsigned char ch = static_cast<unsigned char>(normalized.front());
+    if (std::isalnum(ch) != 0 || ch >= 0x80) {
+      break;
+    }
+    normalized.erase(normalized.begin());
+  }
+  while (!normalized.empty()) {
+    const unsigned char ch = static_cast<unsigned char>(normalized.back());
+    if (std::isalnum(ch) != 0 || ch >= 0x80) {
+      break;
+    }
+    normalized.pop_back();
+  }
+  return TrimCopy(normalized);
 }
 
 WebDirective DetectDirective(const std::string& lowered_text) {

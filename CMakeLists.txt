@@ -356,6 +356,7 @@ comet_enable_strict_warnings(comet-controller-plane-deletion-tests)
 
 add_executable(
   comet-plane-skills-tests
+  controller/src/app/controller_language_support.cpp
   controller/src/browsing/interaction_browsing_service.cpp
   controller/src/browsing/plane_browsing_service.cpp
   controller/src/infra/controller_network_manager.cpp

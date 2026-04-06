@@ -360,6 +360,7 @@ add_executable(
   controller/src/browsing/plane_browsing_service.cpp
   controller/src/infra/controller_network_manager.cpp
   controller/src/http/controller_http_transport.cpp
+  controller/src/interaction/interaction_payload_builder.cpp
   controller/src/interaction/interaction_service.cpp
   controller/src/plane/plane_dashboard_skills_summary_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp

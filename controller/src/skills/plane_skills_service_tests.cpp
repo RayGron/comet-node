@@ -14,6 +14,7 @@
 #include "comet/core/platform_compat.h"
 #include "comet/state/sqlite_store.h"
 #include "browsing/interaction_browsing_service.h"
+#include "interaction/interaction_payload_builder.h"
 #include "interaction/interaction_service.h"
 #include "browsing/plane_browsing_service.h"
 #include "plane/plane_dashboard_skills_summary_service.h"
@@ -704,6 +705,10 @@ std::string MakeTempDbPath() {
       fs::temp_directory_path() / "comet-plane-skills-service-tests";
   fs::create_directories(root);
   return (root / "controller.sqlite").string();
+}
+
+std::string MakeInvalidUtf8Text() {
+  return std::string("broken-\xC3\x28-value", 15);
 }
 
 }  // namespace
@@ -2466,6 +2471,48 @@ int main() {
       Expect(summary.at("sources").size() == 2,
              "search-and-fetch should expose at most two fetched sources");
       std::cout << "ok: interaction-browsing-source-cap" << '\n';
+    }
+
+    {
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = BuildDesiredStateWithBrowsingPort("127.0.0.1", 28130);
+      resolution.desired_state.interaction = comet::InteractionSettings{};
+      resolution.desired_state.interaction->system_prompt = MakeInvalidUtf8Text();
+      resolution.status_payload =
+          json{{"active_model_id", MakeInvalidUtf8Text()},
+               {"served_model_name", "test-model"}};
+
+      const auto resolved_policy = comet::controller::ResolveInteractionCompletionPolicy(
+          resolution.desired_state,
+          json{{"messages",
+                json::array(
+                    {json{{"role", "user"}, {"content", std::string("hello")}}})}});
+
+      json payload{
+          {"messages",
+           json::array(
+               {json{{"role", "user"}, {"content", MakeInvalidUtf8Text()}}})},
+          {comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey,
+           MakeInvalidUtf8Text()},
+          {comet::controller::InteractionBrowsingService::kSummaryPayloadKey,
+           json{{"sources",
+                 json::array({json{{"url", "https://example.com"},
+                                   {"title", MakeInvalidUtf8Text()},
+                                   {"snippet", MakeInvalidUtf8Text()}}})}}},
+      };
+
+      const std::string body = comet::controller::BuildInteractionUpstreamBodyPayload(
+          resolution,
+          payload,
+          false,
+          resolved_policy,
+          false);
+      const json parsed = json::parse(body);
+      Expect(parsed.at("messages").is_array(),
+             "utf8 sanitization should still produce valid upstream payload");
+      Expect(parsed.dump().find("broken-?(-value") != std::string::npos,
+             "utf8 sanitization should replace invalid bytes before dump");
+      std::cout << "ok: interaction-payload-builder-sanitizes-invalid-utf8" << '\n';
     }
 
     return 0;

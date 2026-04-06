@@ -36,6 +36,8 @@ struct SearchResult {
   std::string title;
   std::string snippet;
   std::optional<std::string> published_at;
+  std::string backend = "broker_search";
+  bool rendered = false;
   double score = 0.0;
 };
 
@@ -88,6 +90,11 @@ class BrowsingServer final {
       std::string* normalized_host = nullptr);
   static std::vector<SearchResult> ParseBingRssResults(
       const std::string& rss_xml,
+      const BrowsingPolicy& policy,
+      const std::vector<std::string>& requested_domains,
+      int limit);
+  static std::vector<SearchResult> ParseBingHtmlResults(
+      const std::string& html,
       const BrowsingPolicy& policy,
       const std::vector<std::string>& requested_domains,
       int limit);

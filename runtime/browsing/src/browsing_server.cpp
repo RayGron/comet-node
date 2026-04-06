@@ -18,6 +18,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -262,6 +263,31 @@ bool IsJsHeavyDomain(const std::string& host) {
          EndsWithDomain(host, "old.reddit.com");
 }
 
+std::vector<std::string> ExpandDiscoveryDomains(const std::vector<std::string>& requested_domains) {
+  std::vector<std::string> expanded;
+  std::unordered_set<std::string> seen;
+  const auto append_domain = [&expanded, &seen](const std::string& domain) {
+    if (!domain.empty() && seen.insert(domain).second) {
+      expanded.push_back(domain);
+    }
+  };
+
+  for (const auto& domain : requested_domains) {
+    const std::string normalized = LowercaseCopy(TrimCopy(domain));
+    append_domain(normalized);
+    if (EndsWithDomain(normalized, "x.com") || EndsWithDomain(normalized, "twitter.com")) {
+      append_domain("x.com");
+      append_domain("twitter.com");
+    }
+    if (EndsWithDomain(normalized, "reddit.com") || EndsWithDomain(normalized, "old.reddit.com")) {
+      append_domain("reddit.com");
+      append_domain("old.reddit.com");
+    }
+  }
+
+  return expanded;
+}
+
 std::optional<std::string> ExtractXmlElement(
     const std::string& xml,
     const std::string& tag) {
@@ -327,6 +353,67 @@ std::vector<std::string> RequestedDomainsFromPayload(const nlohmann::json& paylo
     }
   }
   return domains;
+}
+
+std::string ComposeSearchQuery(
+    const std::string& query,
+    const std::vector<std::string>& requested_domains) {
+  const std::string trimmed_query = TrimCopy(query);
+  if (requested_domains.empty()) {
+    return trimmed_query;
+  }
+
+  std::ostringstream out;
+  if (requested_domains.size() > 1) {
+    out << "(";
+  }
+  for (std::size_t index = 0; index < requested_domains.size(); ++index) {
+    if (index > 0) {
+      out << " OR ";
+    }
+    out << "site:" << requested_domains[index];
+  }
+  if (requested_domains.size() > 1) {
+    out << ")";
+  }
+  if (!trimmed_query.empty()) {
+    out << " " << trimmed_query;
+  }
+  return out.str();
+}
+
+std::string SearchSnippetFromHtml(const std::string& item_html) {
+  static const std::regex kSnippetPattern(
+      R"(<(p|div)[^>]*(class\s*=\s*["'][^"']*(b_caption|snippet|content)[^"']*["'])?[^>]*>([\s\S]*?)</\1>)",
+      std::regex::icase);
+  auto begin = std::sregex_iterator(item_html.begin(), item_html.end(), kSnippetPattern);
+  auto end = std::sregex_iterator();
+  for (auto it = begin; it != end; ++it) {
+    const std::string snippet = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags((*it)[3].str())));
+    if (!snippet.empty()) {
+      return snippet;
+    }
+  }
+  return {};
+}
+
+bool SearchResultsLookThin(
+    const std::vector<SearchResult>& results,
+    int limit) {
+  if (results.empty()) {
+    return true;
+  }
+  const int minimum_expected = std::min(2, limit);
+  if (static_cast<int>(results.size()) < minimum_expected) {
+    return true;
+  }
+  int low_signal_results = 0;
+  for (const auto& result : results) {
+    if (TrimCopy(result.snippet).empty() || TrimCopy(result.snippet) == TrimCopy(result.title)) {
+      ++low_signal_results;
+    }
+  }
+  return low_signal_results == static_cast<int>(results.size());
 }
 
 std::string TruncateText(const std::string& value, std::size_t limit) {
@@ -517,6 +604,55 @@ std::vector<SearchResult> BrowsingServer::ParseBingRssResults(
     if (item.snippet.empty()) {
       item.snippet = item.title;
     }
+    item.score = std::max(0.0, 1.0 - static_cast<double>(index) * 0.05);
+    if (!item.title.empty()) {
+      results.push_back(std::move(item));
+      ++index;
+    }
+  }
+  return results;
+}
+
+std::vector<SearchResult> BrowsingServer::ParseBingHtmlResults(
+    const std::string& html,
+    const BrowsingPolicy& policy,
+    const std::vector<std::string>& requested_domains,
+    int limit) {
+  std::vector<SearchResult> results;
+  std::regex item_pattern(
+      R"(<li[^>]*class\s*=\s*["'][^"']*\bb_algo\b[^"']*["'][^>]*>([\s\S]*?)</li>)",
+      std::regex::icase);
+  std::regex link_pattern(
+      R"(<h2[^>]*>[\s\S]*?<a[^>]+href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)</a>)",
+      std::regex::icase);
+  auto begin = std::sregex_iterator(html.begin(), html.end(), item_pattern);
+  auto end = std::sregex_iterator();
+  int index = 0;
+  for (auto it = begin; it != end && static_cast<int>(results.size()) < limit; ++it) {
+    const std::string item_html = (*it)[1].str();
+    std::smatch link_match;
+    if (!std::regex_search(item_html, link_match, link_pattern)) {
+      continue;
+    }
+
+    const std::string href = TrimCopy(HtmlEntityDecode(link_match[1].str()));
+    std::string host;
+    std::string reason;
+    if (!IsSafeBrowsingUrl(href, policy, &reason, &host) ||
+        !DomainAllowed(host, policy, requested_domains)) {
+      continue;
+    }
+
+    SearchResult item;
+    item.url = href;
+    item.domain = host;
+    item.title = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags(link_match[2].str())));
+    item.snippet = SearchSnippetFromHtml(item_html);
+    if (item.snippet.empty()) {
+      item.snippet = item.title;
+    }
+    item.backend = "browser_render";
+    item.rendered = true;
     item.score = std::max(0.0, 1.0 - static_cast<double>(index) * 0.05);
     if (!item.title.empty()) {
       results.push_back(std::move(item));
@@ -861,10 +997,11 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
   }
   const int requested_limit = payload.value("limit", config_.policy.max_search_results);
   const int limit = std::max(1, std::min(config_.policy.max_search_results, requested_limit));
-  const auto requested_domains = RequestedDomainsFromPayload(payload);
+  const auto requested_domains = ExpandDiscoveryDomains(RequestedDomainsFromPayload(payload));
+  const std::string effective_query = ComposeSearchQuery(query, requested_domains);
 
   const std::string search_url =
-      "https://www.bing.com/search?format=rss&q=" + UrlEncode(query);
+      "https://www.bing.com/search?format=rss&q=" + UrlEncode(effective_query);
   const auto command = RunCommandCapture(CommandRequest{
       .args =
           {"/usr/bin/curl",
@@ -889,11 +1026,42 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
     throw ApiError(502, "search_upstream_failed", TrimCopy(command.output));
   }
 
-  const auto results = ParseBingRssResults(command.output, config_.policy, requested_domains, limit);
+  std::vector<SearchResult> results =
+      ParseBingRssResults(command.output, config_.policy, requested_domains, limit);
+  bool rendered_discovery_used = false;
+  if (!requested_domains.empty() &&
+      SearchResultsLookThin(results, limit) &&
+      cef_backend_ != nullptr &&
+      cef_backend_->IsAvailable()) {
+    std::string rendered_error;
+    const std::string rendered_search_url =
+        "https://www.bing.com/search?q=" + UrlEncode(effective_query);
+    const auto rendered = cef_backend_->FetchPage(
+        rendered_search_url,
+        config_.state_root / ("rendered-search-" + ShellSafeToken(comet::RandomTokenBase64(8))),
+        &rendered_error);
+    if (rendered.has_value() && !rendered->html_source.empty()) {
+      auto rendered_results =
+          ParseBingHtmlResults(rendered->html_source, config_.policy, requested_domains, limit);
+      if (!rendered_results.empty()) {
+        results = std::move(rendered_results);
+        rendered_discovery_used = true;
+      }
+    } else if (!rendered_error.empty()) {
+      AppendAuditLog(
+          nlohmann::json{{"ts", UtcNow()},
+                         {"kind", "search_discovery_fallback_failed"},
+                         {"query", query},
+                         {"requested_domains", requested_domains},
+                         {"message", rendered_error}});
+    }
+  }
   AppendAuditLog(
       nlohmann::json{{"ts", UtcNow()},
                      {"kind", "search"},
                      {"query", query},
+                     {"requested_domains", requested_domains},
+                     {"backend", rendered_discovery_used ? "browser_render" : "broker_search"},
                      {"result_count", results.size()}});
 
   nlohmann::json items = nlohmann::json::array();
@@ -906,9 +1074,14 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
                        {"published_at", result.published_at.has_value()
                                             ? nlohmann::json(*result.published_at)
                                             : nlohmann::json(nullptr)},
+                       {"backend", result.backend},
+                       {"rendered", result.rendered},
                        {"score", result.score}});
   }
-  return nlohmann::json{{"query", query}, {"results", std::move(items)}};
+  return nlohmann::json{
+      {"query", query},
+      {"backend", rendered_discovery_used ? "browser_render" : "broker_search"},
+      {"results", std::move(items)}};
 }
 
 nlohmann::json BrowsingServer::HandleFetchPayload(const nlohmann::json& payload) {

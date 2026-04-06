@@ -57,6 +57,35 @@ void TestSearchParsing() {
   Expect(results[0].domain == "openai.com", "first result domain mismatch");
   Expect(results[0].published_at.has_value(), "search parser should preserve pubDate");
   Expect(results[1].url == "https://developers.openai.com/api/", "second result URL mismatch");
+  Expect(results[0].backend == "broker_search", "rss parser should mark broker backend");
+  Expect(!results[0].rendered, "rss parser should not mark rendered discovery");
+}
+
+void TestRenderedSearchParsing() {
+  comet::browsing::BrowsingPolicy policy;
+  const std::string html =
+      R"(<html><body><ol id="b_results">
+      <li class="b_algo">
+        <h2><a href="https://old.reddit.com/r/example/comments/1">Old Reddit Result</a></h2>
+        <div class="b_caption"><p>Public discussion that should be discoverable.</p></div>
+      </li>
+      <li class="b_algo">
+        <h2><a href="https://evil.com/post">Blocked Result</a></h2>
+        <div class="b_caption"><p>Should be filtered by requested domain.</p></div>
+      </li>
+      </ol></body></html>)";
+  const auto results = comet::browsing::BrowsingServer::ParseBingHtmlResults(
+      html,
+      policy,
+      {"reddit.com", "old.reddit.com"},
+      5);
+  Expect(results.size() == 1, "html parser should keep one domain-matching result");
+  Expect(results[0].url == "https://old.reddit.com/r/example/comments/1", "html parser URL mismatch");
+  Expect(results[0].backend == "browser_render", "html parser should mark rendered backend");
+  Expect(results[0].rendered, "html parser should mark rendered discovery");
+  Expect(
+      results[0].snippet.find("discoverable") != std::string::npos,
+      "html parser should extract snippet text");
 }
 
 void TestFetchSanitization() {
@@ -86,6 +115,7 @@ int main() {
     TestPolicyParsing();
     TestSafeUrlValidation();
     TestSearchParsing();
+    TestRenderedSearchParsing();
     TestFetchSanitization();
     std::cout << "browsing server tests passed\n";
     return 0;

@@ -915,79 +915,6 @@ void ReRankSearchResultsByQuery(
   *results = std::move(ranked);
 }
 
-std::vector<SearchResult> BrowsingServer::BuildCanonicalSearchResults(
-    const std::string& query,
-    const std::vector<std::string>& requested_domains,
-    int limit) {
-  std::vector<SearchResult> results;
-  if (limit <= 0) {
-    return results;
-  }
-
-  const std::string lowered = LowercaseCopy(query);
-  auto asset = DetectCanonicalCryptoAsset(lowered);
-  const bool market_query = IsCryptoMarketDiscoveryQuery(lowered);
-  const bool fear_greed_query =
-      ContainsAnySubstring(lowered, {"fear", "greed", "страх", "жадн"});
-  if (!market_query && !fear_greed_query) {
-    return results;
-  }
-
-  std::unordered_set<std::string> seen_urls;
-  int index = 0;
-  for (const auto& domain : requested_domains) {
-    SearchResult item;
-    bool matched = false;
-    if (EndsWithDomain(domain, "alternative.me") && fear_greed_query) {
-      item.url = "https://alternative.me/crypto/fear-and-greed-index/";
-      item.domain = "alternative.me";
-      item.title = "Crypto Fear & Greed Index - Bitcoin Sentiment - Alternative.me";
-      item.snippet =
-          "Current crypto market sentiment index published by Alternative.me with fear/greed score history.";
-      matched = true;
-    } else if (asset.has_value()) {
-      if (EndsWithDomain(domain, "coingecko.com")) {
-        item.url = "https://www.coingecko.com/en/coins/" + asset->coingecko_slug;
-        item.domain = "www.coingecko.com";
-        item.title = asset->name + " price, market cap and chart - CoinGecko";
-        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
-        matched = true;
-      } else if (EndsWithDomain(domain, "coinmarketcap.com")) {
-        item.url = "https://coinmarketcap.com/currencies/" + asset->coinmarketcap_slug + "/";
-        item.domain = "coinmarketcap.com";
-        item.title = asset->name + " price today, chart and market cap - CoinMarketCap";
-        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
-        matched = true;
-      } else if (EndsWithDomain(domain, "finance.yahoo.com")) {
-        item.url = "https://finance.yahoo.com/quote/" + asset->yahoo_symbol + "/history/";
-        item.domain = "finance.yahoo.com";
-        item.title = asset->name + " historical data - " + asset->yahoo_symbol + " - Yahoo Finance";
-        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
-        matched = true;
-      } else if (EndsWithDomain(domain, "tradingview.com")) {
-        item.url = "https://www.tradingview.com/symbols/" + asset->tradingview_symbol + "/";
-        item.domain = "www.tradingview.com";
-        item.title = asset->name + " chart and price action - TradingView";
-        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
-        matched = true;
-      }
-    }
-
-    if (!matched || !seen_urls.insert(item.url).second) {
-      continue;
-    }
-    item.backend = "broker_search";
-    item.rendered = false;
-    item.score = std::max(0.0, 0.97 - static_cast<double>(index) * 0.04);
-    results.push_back(std::move(item));
-    ++index;
-    if (static_cast<int>(results.size()) >= limit) {
-      break;
-    }
-  }
-  return results;
-}
-
 std::string TruncateText(const std::string& value, std::size_t limit) {
   if (value.size() <= limit) {
     return value;
@@ -1065,6 +992,79 @@ FetchResult BuildRenderedFetchResult(
 }
 
 }  // namespace
+
+std::vector<SearchResult> BrowsingServer::BuildCanonicalSearchResults(
+    const std::string& query,
+    const std::vector<std::string>& requested_domains,
+    int limit) {
+  std::vector<SearchResult> results;
+  if (limit <= 0) {
+    return results;
+  }
+
+  const std::string lowered = LowercaseCopy(query);
+  auto asset = DetectCanonicalCryptoAsset(lowered);
+  const bool market_query = IsCryptoMarketDiscoveryQuery(lowered);
+  const bool fear_greed_query =
+      ContainsAnySubstring(lowered, {"fear", "greed", "страх", "жадн"});
+  if (!market_query && !fear_greed_query) {
+    return results;
+  }
+
+  std::unordered_set<std::string> seen_urls;
+  int index = 0;
+  for (const auto& domain : requested_domains) {
+    SearchResult item;
+    bool matched = false;
+    if (EndsWithDomain(domain, "alternative.me") && fear_greed_query) {
+      item.url = "https://alternative.me/crypto/fear-and-greed-index/";
+      item.domain = "alternative.me";
+      item.title = "Crypto Fear & Greed Index - Bitcoin Sentiment - Alternative.me";
+      item.snippet =
+          "Current crypto market sentiment index published by Alternative.me with fear/greed score history.";
+      matched = true;
+    } else if (asset.has_value()) {
+      if (EndsWithDomain(domain, "coingecko.com")) {
+        item.url = "https://www.coingecko.com/en/coins/" + asset->coingecko_slug;
+        item.domain = "www.coingecko.com";
+        item.title = asset->name + " price, market cap and chart - CoinGecko";
+        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
+        matched = true;
+      } else if (EndsWithDomain(domain, "coinmarketcap.com")) {
+        item.url = "https://coinmarketcap.com/currencies/" + asset->coinmarketcap_slug + "/";
+        item.domain = "coinmarketcap.com";
+        item.title = asset->name + " price today, chart and market cap - CoinMarketCap";
+        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
+        matched = true;
+      } else if (EndsWithDomain(domain, "finance.yahoo.com")) {
+        item.url = "https://finance.yahoo.com/quote/" + asset->yahoo_symbol + "/history/";
+        item.domain = "finance.yahoo.com";
+        item.title = asset->name + " historical data - " + asset->yahoo_symbol + " - Yahoo Finance";
+        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
+        matched = true;
+      } else if (EndsWithDomain(domain, "tradingview.com")) {
+        item.url = "https://www.tradingview.com/symbols/" + asset->tradingview_symbol + "/";
+        item.domain = "www.tradingview.com";
+        item.title = asset->name + " chart and price action - TradingView";
+        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
+        matched = true;
+      }
+    }
+
+    if (!matched || !seen_urls.insert(item.url).second) {
+      continue;
+    }
+    item.backend = "broker_search";
+    item.rendered = false;
+    item.score = std::max(0.0, 0.97 - static_cast<double>(index) * 0.04);
+    results.push_back(std::move(item));
+    ++index;
+    if (static_cast<int>(results.size()) >= limit) {
+      break;
+    }
+  }
+  return results;
+}
 
 BrowsingServer::BrowsingServer(BrowsingRuntimeConfig config) : config_(std::move(config)) {
   if (CefRuntimeEnabled()) {

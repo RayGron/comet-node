@@ -53,6 +53,7 @@ wait_for_http() {
   return 1
 }
 
+mkdir -p "${repo_root}/var"
 work_root="$(mktemp -d "${repo_root}/var/live-maglev-web.XXXXXX")"
 db_path="${work_root}/controller.sqlite"
 controller_log="${work_root}/controller.log"

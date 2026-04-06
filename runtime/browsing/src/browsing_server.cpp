@@ -1103,6 +1103,63 @@ std::vector<SearchResult> ParseDuckDuckGoHtmlResults(
       ++index;
     }
   }
+
+  if (results.empty()) {
+    std::regex global_link_pattern(
+        R"(<a[^>]*class\s*=\s*["'][^"']*\bresult__a\b[^"']*["'][^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)</a>)",
+        std::regex::icase);
+    begin = std::sregex_iterator(html.begin(), html.end(), global_link_pattern);
+    end = std::sregex_iterator();
+    index = 0;
+    for (auto it = begin; it != end && static_cast<int>(results.size()) < limit; ++it) {
+      std::string href = TrimCopy(HtmlEntityDecode((*it)[1].str()));
+      const auto uddg_pos = href.find("uddg=");
+      if (uddg_pos != std::string::npos) {
+        href = UrlDecode(href.substr(uddg_pos + 5));
+        const auto amp_pos = href.find('&');
+        if (amp_pos != std::string::npos) {
+          href.resize(amp_pos);
+        }
+      }
+
+      std::string host;
+      std::string reason;
+      if (!BrowsingServer::IsSafeBrowsingUrl(href, policy, &reason, &host) ||
+          !DomainAllowed(host, policy, requested_domains)) {
+        continue;
+      }
+
+      SearchResult item;
+      item.url = href;
+      item.domain = host;
+      item.title = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags((*it)[2].str())));
+
+      const std::size_t match_offset = static_cast<std::size_t>((*it).position());
+      const std::size_t context_start = match_offset > 512 ? match_offset - 512 : 0;
+      const std::size_t context_size = std::min<std::size_t>(html.size() - context_start, 2048);
+      const std::string context = html.substr(context_start, context_size);
+      std::smatch snippet_match;
+      static const std::regex kContextSnippetPattern(
+          R"(<a[^>]*class\s*=\s*["'][^"']*\bresult__snippet\b[^"']*["'][^>]*>([\s\S]*?)</a>)",
+          std::regex::icase);
+      if (std::regex_search(context, snippet_match, kContextSnippetPattern)) {
+        item.snippet = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags(snippet_match[1].str())));
+      }
+      if (item.snippet.empty()) {
+        item.snippet = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags(context)));
+      }
+      if (item.snippet.empty()) {
+        item.snippet = item.title;
+      }
+      item.backend = "broker_search";
+      item.rendered = false;
+      item.score = std::max(0.0, 1.0 - static_cast<double>(index) * 0.05);
+      if (!item.title.empty() && seen_urls.insert(item.url).second) {
+        results.push_back(std::move(item));
+        ++index;
+      }
+    }
+  }
   ReRankSearchResultsByQuery(query, limit, &results);
   return results;
 }

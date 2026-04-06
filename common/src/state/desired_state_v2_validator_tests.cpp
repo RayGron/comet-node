@@ -1141,6 +1141,42 @@ int main() {
       std::cout << "ok: llm-with-browsing" << '\n';
     }
 
+    {
+      const json llm_with_webgateway_public_publish{
+          {"version", 2},
+          {"plane_name", "webgateway-public-publish"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-webgateway-public"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"webgateway",
+           {
+               {"enabled", true},
+               {"publish",
+                json::array(
+                    {{{"host_ip", "0.0.0.0"}, {"host_port", 19130}, {"container_port", 18130}}})},
+           }},
+          {"topology",
+           {{"nodes",
+             json::array(
+                 {{{"name", "infer-hostd"},
+                   {"execution_mode", "mixed"},
+                   {"gpu_memory_mb", {{"0", 24576}}}}})}}},
+          {"app", {{"enabled", false}}},
+      };
+      ExpectInvalid(
+          llm_with_webgateway_public_publish,
+          "desired-state v2 webgateway.publish.host_ip must stay on loopback",
+          "webgateway-public-publish");
+      std::cout << "ok-invalid: webgateway-public-publish" << '\n';
+    }
+
     ExpectInvalid(
         json{
             {"version", 2},

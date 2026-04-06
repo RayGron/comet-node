@@ -385,6 +385,27 @@ void DesiredStateV2Validator::ValidateBrowsing() const {
         "webgateway",
         "webgateway");
   }
+  if (browsing->contains("publish")) {
+    if (!browsing->at("publish").is_array()) {
+      throw std::runtime_error("desired-state v2 webgateway.publish must be an array");
+    }
+    for (const auto& entry : browsing->at("publish")) {
+      if (!entry.is_object()) {
+        throw std::runtime_error("desired-state v2 webgateway.publish entries must be objects");
+      }
+      if (entry.contains("host_ip")) {
+        if (!entry.at("host_ip").is_string()) {
+          throw std::runtime_error(
+              "desired-state v2 webgateway.publish.host_ip must be a string");
+        }
+        const std::string host_ip = entry.at("host_ip").get<std::string>();
+        if (!host_ip.empty() && host_ip != "127.0.0.1" && host_ip != "::1") {
+          throw std::runtime_error(
+              "desired-state v2 webgateway.publish.host_ip must stay on loopback");
+        }
+      }
+    }
+  }
   if (browsing->contains("policy")) {
     if (!browsing->at("policy").is_object()) {
       throw std::runtime_error("desired-state v2 webgateway.policy must be an object");

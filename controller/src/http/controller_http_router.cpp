@@ -75,6 +75,7 @@ ControllerHttpRouter::ControllerHttpRouter(
     std::string db_path,
     std::string default_artifacts_root,
     std::optional<std::filesystem::path> ui_root,
+    bool webgateway_routes_enabled,
     AuthSupportService& auth_support,
     InteractionHttpService& interaction_service,
     ControllerHealthService& health_service,
@@ -84,6 +85,7 @@ ControllerHttpRouter::ControllerHttpRouter(
     : db_path_(std::move(db_path)),
       default_artifacts_root_(std::move(default_artifacts_root)),
       ui_root_(std::move(ui_root)),
+      webgateway_routes_enabled_(webgateway_routes_enabled),
       auth_support_(auth_support),
       interaction_service_(interaction_service),
       health_service_(health_service),
@@ -444,6 +446,14 @@ HttpResponse ControllerHttpRouter::HandleRequest(
     const bool interaction_request = IsPlaneInteractionRequest(request.path);
     const bool skills_request = IsPlaneSkillsRequest(request.path);
     const bool browsing_request = IsPlaneBrowsingRequest(request.path);
+    if (browsing_request && !webgateway_routes_enabled_) {
+      return deps_.build_json_response(
+          404,
+          json{{"status", "not_found"},
+               {"path", request.path},
+               {"method", request.method}},
+          {});
+    }
     if (!interaction_request && !skills_request && !browsing_request) {
       try {
         comet::ControllerStore store(db_path_);

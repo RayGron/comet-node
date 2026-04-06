@@ -1395,6 +1395,52 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
   std::vector<SearchResult> results =
       ParseBingRssResults(command.output, query_with_hints, config_.policy, requested_domains, limit);
   bool rendered_discovery_used = false;
+  const std::string broker_html_search_url =
+      "https://www.bing.com/search?q=" + UrlEncode(effective_query);
+  if (SearchResultsLookThin(results, limit) && rendered_browser_ready) {
+    const auto broker_html_command = RunCommandCapture(CommandRequest{
+        .args =
+            {"/usr/bin/curl",
+             "-A",
+             "Mozilla/5.0",
+             "-fsSL",
+             "--proto",
+             "=https,http",
+             "--connect-timeout",
+             "5",
+             "--max-time",
+             "20",
+             "--max-redirs",
+             "5",
+             broker_html_search_url},
+        .environment = {},
+        .working_directory = std::nullopt,
+        .clear_environment = false,
+        .merge_stderr_into_stdout = true,
+    });
+    if (broker_html_command.exit_code == 0) {
+      auto broker_html_results = ParseBingHtmlResults(
+          broker_html_command.output,
+          query_with_hints,
+          config_.policy,
+          requested_domains,
+          limit);
+      if (!broker_html_results.empty()) {
+        for (auto& result : broker_html_results) {
+          result.backend = "broker_search";
+          result.rendered = false;
+        }
+        results = std::move(broker_html_results);
+      }
+    } else {
+      AppendAuditLog(
+          nlohmann::json{{"ts", UtcNow()},
+                         {"kind", "search_broker_html_failed"},
+                         {"query", query},
+                         {"requested_domains", requested_domains},
+                         {"message", TrimCopy(broker_html_command.output)}});
+    }
+  }
   if (SearchResultsLookThin(results, limit) && rendered_browser_ready) {
     std::unordered_set<std::string> seen_urls;
     std::vector<SearchResult> rendered_results;
@@ -1451,10 +1497,8 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
 
     if (!rendered_discovery_used) {
       std::string rendered_error;
-      const std::string rendered_search_url =
-          "https://www.bing.com/search?q=" + UrlEncode(effective_query);
       const auto rendered = cef_backend_->FetchPage(
-          rendered_search_url,
+          broker_html_search_url,
           config_.state_root / ("rendered-search-" + ShellSafeToken(comet::RandomTokenBase64(8))),
           &rendered_error,
           true);

@@ -5,6 +5,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <vector>
 
 #include "browsing/plane_browsing_service.h"
@@ -14,6 +15,28 @@ namespace comet::controller {
 namespace {
 
 using nlohmann::json;
+
+std::string ReadJsonStringOrDefault(
+    const json& payload,
+    std::string_view key,
+    std::string default_value = {}) {
+  const auto found = payload.find(std::string(key));
+  if (found == payload.end() || found->is_null() || !found->is_string()) {
+    return default_value;
+  }
+  return found->get<std::string>();
+}
+
+json ReadJsonArrayOrDefault(
+    const json& payload,
+    std::string_view key,
+    json default_value = json::array()) {
+  const auto found = payload.find(std::string(key));
+  if (found == payload.end() || found->is_null() || !found->is_array()) {
+    return default_value;
+  }
+  return *found;
+}
 
 struct UserMessageView {
   std::string content;
@@ -511,7 +534,8 @@ json BuildBrowsingIndicator(
     const json& sources,
     const json& errors,
     const json& flags) {
-  const std::string lookup_state = flags.value("lookup_state", std::string{"disabled"});
+  const std::string lookup_state =
+      ReadJsonStringOrDefault(flags, "lookup_state", "disabled");
   const bool lookup_attempted = flags.value("lookup_attempted", false);
   const bool evidence_attached = flags.value("evidence_attached", false);
   const int search_count = searches.is_array() ? static_cast<int>(searches.size()) : 0;
@@ -608,7 +632,7 @@ json BuildBrowsingTrace(
     return trace;
   }
   const auto result_uses_rendered_backend = [](const json& item) {
-    const std::string backend = item.value("backend", std::string{});
+    const std::string backend = ReadJsonStringOrDefault(item, "backend");
     return item.value("rendered", false) || backend == "browser_render";
   };
   const bool rendered_lookup_used =
@@ -720,12 +744,13 @@ json BuildSnippetOnlySource(const SearchCandidate& candidate) {
 }
 
 std::string BuildBrowsingInstruction(const json& summary) {
-  const std::string mode = summary.value("mode", std::string{"disabled"});
-  const std::string decision = summary.value("decision", std::string{"disabled"});
-  const std::string reason = summary.value("reason", std::string{});
+  const std::string mode = ReadJsonStringOrDefault(summary, "mode", "disabled");
+  const std::string decision =
+      ReadJsonStringOrDefault(summary, "decision", "disabled");
+  const std::string reason = ReadJsonStringOrDefault(summary, "reason");
   const bool toggle_only = summary.value("toggle_only", false);
   const std::string lookup_state =
-      summary.value("lookup_state", std::string{"disabled"});
+      ReadJsonStringOrDefault(summary, "lookup_state", "disabled");
 
   if (mode != "enabled") {
     if (reason == "user_disabled_web_mode") {
@@ -780,7 +805,7 @@ std::string BuildBrowsingInstruction(const json& summary) {
       !summary.at("searches").empty()) {
     instruction << "\n\nWeb search summary:";
     for (const auto& search : summary.at("searches")) {
-      instruction << "\n- Query: " << search.value("query", std::string{});
+      instruction << "\n- Query: " << ReadJsonStringOrDefault(search, "query");
       instruction << " | results: " << search.value("result_count", 0);
     }
   }
@@ -792,13 +817,13 @@ std::string BuildBrowsingInstruction(const json& summary) {
     for (const auto& source : summary.at("sources")) {
       const bool snippet_only = source.value("snippet_only", false);
       instruction << "\n- Source " << source_index++ << ": "
-                  << source.value("title", std::string{"Untitled"}) << " | "
-                  << source.value("url", std::string{});
+                  << ReadJsonStringOrDefault(source, "title", "Untitled") << " | "
+                  << ReadJsonStringOrDefault(source, "url");
       if (snippet_only) {
         instruction << "\n  Note: this evidence comes from the search result summary because page fetch was unavailable.";
       }
       const std::string excerpt =
-          TruncateForInstruction(source.value("excerpt", std::string{}), 900);
+          TruncateForInstruction(ReadJsonStringOrDefault(source, "excerpt"), 900);
       if (!excerpt.empty()) {
         instruction << "\n  Excerpt: " << excerpt;
       }
@@ -917,23 +942,29 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
                {"message", error_message.empty() ? "search failed" : error_message}});
     } else {
       const json search_result = ParseJsonBodyOrObject(search_response->body);
-      const json results = search_result.value("results", json::array());
+      const json results = ReadJsonArrayOrDefault(search_result, "results");
       searches.push_back(
-          json{{"query", search_result.value("query", search_payload.value("query", std::string{}))},
-               {"backend", search_result.value("backend", std::string("broker_search"))},
-               {"rendered", search_result.value("backend", std::string{}) == "browser_render"},
+          json{{"query",
+                ReadJsonStringOrDefault(
+                    search_result,
+                    "query",
+                    ReadJsonStringOrDefault(search_payload, "query"))},
+               {"backend",
+                ReadJsonStringOrDefault(search_result, "backend", "broker_search")},
+               {"rendered",
+                ReadJsonStringOrDefault(search_result, "backend") == "browser_render"},
                {"result_count", results.is_array() ? static_cast<int>(results.size()) : 0}});
       if (results.is_array()) {
         for (const auto& item : results) {
-          const std::string url = item.value("url", std::string{});
+          const std::string url = ReadJsonStringOrDefault(item, "url");
           if (url.empty() || fetched_urls.count(url) > 0) {
             continue;
           }
           fetched_urls.insert(url);
           search_candidates.push_back(SearchCandidate{
               url,
-              item.value("title", std::string{}),
-              item.value("snippet", std::string{}),
+              ReadJsonStringOrDefault(item, "title"),
+              ReadJsonStringOrDefault(item, "snippet"),
           });
           if (search_candidates.size() >= 5) {
             break;
@@ -973,15 +1004,19 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
     }
     const json fetch_result = ParseJsonBodyOrObject(fetch_response->body);
     sources.push_back(
-        json{{"url", fetch_result.value("final_url", url)},
-             {"title", fetch_result.value("title", std::string{})},
-             {"backend", fetch_result.value("backend", std::string("broker_fetch"))},
+        json{{"url", ReadJsonStringOrDefault(fetch_result, "final_url", url)},
+             {"title", ReadJsonStringOrDefault(fetch_result, "title")},
+             {"backend",
+              ReadJsonStringOrDefault(fetch_result, "backend", "broker_fetch")},
              {"rendered", fetch_result.value("rendered", false)},
-             {"content_type", fetch_result.value("content_type", std::string{})},
+             {"content_type",
+              ReadJsonStringOrDefault(fetch_result, "content_type")},
              {"excerpt",
-              TruncateForInstruction(fetch_result.value("visible_text", std::string{}), 1200)},
-             {"citations", fetch_result.value("citations", json::array())},
-             {"injection_flags", fetch_result.value("injection_flags", json::array())},
+              TruncateForInstruction(
+                  ReadJsonStringOrDefault(fetch_result, "visible_text"), 1200)},
+             {"citations", ReadJsonArrayOrDefault(fetch_result, "citations")},
+             {"injection_flags",
+              ReadJsonArrayOrDefault(fetch_result, "injection_flags")},
              {"snippet_only", false}});
     ++fetched_source_count;
   }

@@ -28,11 +28,14 @@
 #include "include/cef_browser.h"
 #include "include/cef_browser_process_handler.h"
 #include "include/cef_devtools_message_observer.h"
+#include "include/cef_dialog_handler.h"
+#include "include/cef_download_handler.h"
 #include "include/cef_frame.h"
 #include "include/cef_load_handler.h"
 #include "include/cef_parser.h"
 #include "include/cef_render_handler.h"
 #include "include/cef_request_context.h"
+#include "include/cef_request_handler.h"
 #include "include/cef_task.h"
 #endif
 
@@ -140,6 +143,21 @@ std::string BasenameToken(const std::filesystem::path& path) {
       [](unsigned char ch) { return !std::isalnum(ch) && ch != '-' && ch != '_'; },
       '_');
   return value.empty() ? "session" : value;
+}
+
+std::string LowercaseAscii(std::string value) {
+  std::transform(
+      value.begin(),
+      value.end(),
+      value.begin(),
+      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return value;
+}
+
+bool IsAllowedTopLevelNavigationTarget(const std::string& url) {
+  const std::string lowered = LowercaseAscii(url);
+  return lowered.rfind("https://", 0) == 0 || lowered.rfind("http://", 0) == 0 ||
+         lowered == "about:blank";
 }
 
 std::filesystem::path WritePpmScreenshot(
@@ -298,7 +316,10 @@ struct SessionSnapshot {
 class SessionClient final : public CefClient,
                             public CefLifeSpanHandler,
                             public CefLoadHandler,
-                            public CefRenderHandler {
+                            public CefRenderHandler,
+                            public CefRequestHandler,
+                            public CefDialogHandler,
+                            public CefDownloadHandler {
  public:
   explicit SessionClient(std::filesystem::path session_root)
       : session_root_(std::move(session_root)) {}
@@ -456,6 +477,35 @@ class SessionClient final : public CefClient,
     return this;
   }
 
+  CefRefPtr<CefRequestHandler> GetRequestHandler() override {
+    return this;
+  }
+
+  CefRefPtr<CefDialogHandler> GetDialogHandler() override {
+    return this;
+  }
+
+  CefRefPtr<CefDownloadHandler> GetDownloadHandler() override {
+    return this;
+  }
+
+  bool OnBeforePopup(
+      CefRefPtr<CefBrowser>,
+      CefRefPtr<CefFrame>,
+      int,
+      const CefString&,
+      const CefString&,
+      WindowOpenDisposition,
+      bool,
+      const CefPopupFeatures&,
+      CefWindowInfo&,
+      CefRefPtr<CefClient>&,
+      CefBrowserSettings&,
+      CefRefPtr<CefDictionaryValue>&,
+      bool*) override {
+    return true;
+  }
+
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
     std::lock_guard<std::mutex> lock(mutex_);
     browser_ = browser;
@@ -533,6 +583,67 @@ class SessionClient final : public CefClient,
     pixel_height_ = height;
     has_paint_ = true;
     cv_.notify_all();
+  }
+
+  bool OnBeforeBrowse(
+      CefRefPtr<CefBrowser>,
+      CefRefPtr<CefFrame> frame,
+      CefRefPtr<CefRequest> request,
+      bool,
+      bool) override {
+    if (!frame || !frame->IsMain() || !request) {
+      return false;
+    }
+    return !IsAllowedTopLevelNavigationTarget(request->GetURL().ToString());
+  }
+
+  bool OnOpenURLFromTab(
+      CefRefPtr<CefBrowser>,
+      CefRefPtr<CefFrame>,
+      const CefString& target_url,
+      WindowOpenDisposition target_disposition,
+      bool) override {
+    return target_disposition != WOD_CURRENT_TAB ||
+           !IsAllowedTopLevelNavigationTarget(target_url.ToString());
+  }
+
+  bool OnFileDialog(
+      CefRefPtr<CefBrowser>,
+      FileDialogMode,
+      const CefString&,
+      const CefString&,
+      const std::vector<CefString>&,
+      const std::vector<CefString>&,
+      const std::vector<CefString>&,
+      CefRefPtr<CefFileDialogCallback> callback) override {
+    if (callback) {
+      callback->Cancel();
+    }
+    return true;
+  }
+
+  bool CanDownload(
+      CefRefPtr<CefBrowser>,
+      const CefString&,
+      const CefString&) override {
+    return false;
+  }
+
+  bool OnBeforeDownload(
+      CefRefPtr<CefBrowser>,
+      CefRefPtr<CefDownloadItem>,
+      const CefString&,
+      CefRefPtr<CefBeforeDownloadCallback>) override {
+    return false;
+  }
+
+  void OnDownloadUpdated(
+      CefRefPtr<CefBrowser>,
+      CefRefPtr<CefDownloadItem>,
+      CefRefPtr<CefDownloadItemCallback> callback) override {
+    if (callback) {
+      callback->Cancel();
+    }
   }
 
  private:

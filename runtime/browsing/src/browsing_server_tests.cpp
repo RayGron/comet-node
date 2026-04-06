@@ -1,8 +1,25 @@
+#include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <nlohmann/json.hpp>
+#include <optional>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <unordered_map>
+#include <unistd.h>
+#include <vector>
 
+#define private public
 #include "browsing/browsing_server.h"
+#undef private
 
 namespace {
 
@@ -10,6 +27,41 @@ void Expect(bool condition, const std::string& message) {
   if (!condition) {
     throw std::runtime_error(message);
   }
+}
+
+class TempDir final {
+ public:
+  TempDir() {
+    path_ = std::filesystem::temp_directory_path() /
+            ("comet-browsing-tests-" + std::to_string(getpid()) + "-" +
+             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(path_);
+  }
+
+  ~TempDir() {
+    std::error_code error;
+    std::filesystem::remove_all(path_, error);
+  }
+
+  const std::filesystem::path& path() const {
+    return path_;
+  }
+
+ private:
+  std::filesystem::path path_;
+};
+
+std::vector<nlohmann::json> ReadAuditLog(const std::filesystem::path& audit_path) {
+  std::ifstream input(audit_path);
+  std::vector<nlohmann::json> entries;
+  std::string line;
+  while (std::getline(input, line)) {
+    if (line.empty()) {
+      continue;
+    }
+    entries.push_back(nlohmann::json::parse(line));
+  }
+  return entries;
 }
 
 void TestPolicyParsing() {
@@ -108,6 +160,49 @@ void TestFetchSanitization() {
       "fetch sanitizer should flag prompt injection heuristics");
 }
 
+void TestSessionCleanupAndAuditLog() {
+  TempDir temp_dir;
+
+  comet::browsing::BrowsingRuntimeConfig config;
+  config.state_root = temp_dir.path();
+  config.status_path = temp_dir.path() / "status.json";
+  config.ready_path = temp_dir.path() / "ready";
+  config.policy.browser_session_enabled = true;
+  config.policy.rendered_browser_enabled = false;
+
+  comet::browsing::BrowsingServer server(std::move(config));
+
+  const auto created = server.CreateSession(nlohmann::json{{"confirmed", true}});
+  const std::string session_id = created.at("session_id").get<std::string>();
+  const auto session_root = temp_dir.path() / session_id;
+  Expect(std::filesystem::exists(session_root), "create session should allocate session root");
+
+  {
+    std::ofstream artifact(session_root / "artifact.txt");
+    artifact << "ephemeral";
+  }
+
+  const auto snapshot = server.ApplySessionAction(
+      session_id,
+      nlohmann::json{{"action", "snapshot"}});
+  Expect(snapshot.at("session_id").get<std::string>() == session_id, "snapshot should target created session");
+  Expect(snapshot.at("backend").get<std::string>() == "broker_fetch", "snapshot should use broker fallback");
+
+  const auto deleted = server.DeleteSession(session_id);
+  Expect(deleted.at("deleted").get<bool>(), "delete session should report success");
+  Expect(!std::filesystem::exists(session_root), "delete session should remove session root");
+
+  const auto audit_entries = ReadAuditLog(temp_dir.path() / "audit.log");
+  Expect(audit_entries.size() == 3, "session lifecycle should append open, action, and delete audit entries");
+  Expect(audit_entries[0].at("kind").get<std::string>() == "browser_session_open", "first audit entry kind mismatch");
+  Expect(audit_entries[0].at("backend").get<std::string>() == "session_only", "session open audit backend mismatch");
+  Expect(
+      audit_entries[1].at("kind").get<std::string>() == "browser_session_action" &&
+          audit_entries[1].at("action").get<std::string>() == "snapshot",
+      "snapshot audit entry mismatch");
+  Expect(audit_entries[2].at("kind").get<std::string>() == "browser_session_delete", "delete audit entry kind mismatch");
+}
+
 }  // namespace
 
 int main() {
@@ -117,6 +212,7 @@ int main() {
     TestSearchParsing();
     TestRenderedSearchParsing();
     TestFetchSanitization();
+    TestSessionCleanupAndAuditLog();
     std::cout << "browsing server tests passed\n";
     return 0;
   } catch (const std::exception& error) {

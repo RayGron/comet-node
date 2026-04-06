@@ -1290,6 +1290,8 @@ nlohmann::json BrowsingServer::CreateSession(const nlohmann::json& payload) {
 
   const std::string url = TrimCopy(payload.value("url", std::string{}));
   nlohmann::json observation = nullptr;
+  std::string audit_backend = "session_only";
+  bool audit_rendered = false;
   if (!url.empty()) {
     if (config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
       std::string error_message;
@@ -1304,6 +1306,8 @@ nlohmann::json BrowsingServer::CreateSession(const nlohmann::json& payload) {
       }
       FetchResult fetched =
           BuildRenderedFetchResult(url, *rendered, config_.policy, UtcNow());
+      audit_backend = fetched.backend;
+      audit_rendered = fetched.rendered;
       observation = nlohmann::json{
           {"session_id", session.id},
           {"url", fetched.final_url},
@@ -1340,6 +1344,8 @@ nlohmann::json BrowsingServer::CreateSession(const nlohmann::json& payload) {
           {"injection_flags", fetched->injection_flags},
           {"requires_confirmation", false},
       };
+      audit_backend = fetched->backend;
+      audit_rendered = fetched->rendered;
     }
   }
 
@@ -1348,7 +1354,12 @@ nlohmann::json BrowsingServer::CreateSession(const nlohmann::json& payload) {
     sessions_[session.id] = session;
   }
   AppendAuditLog(
-      nlohmann::json{{"ts", UtcNow()}, {"kind", "browser_session_open"}, {"session_id", session.id}, {"url", url}});
+      nlohmann::json{{"ts", UtcNow()},
+                     {"kind", "browser_session_open"},
+                     {"session_id", session.id},
+                     {"url", url},
+                     {"backend", audit_backend},
+                     {"rendered", audit_rendered}});
 
   return nlohmann::json{
       {"session_id", session.id},
@@ -1411,6 +1422,14 @@ nlohmann::json BrowsingServer::ApplySessionAction(
       }
       FetchResult fetched =
           BuildRenderedFetchResult(session.current_url, *rendered, config_.policy, session.updated_at);
+      AppendAuditLog(
+          nlohmann::json{{"ts", UtcNow()},
+                         {"kind", "browser_session_action"},
+                         {"action", action},
+                         {"session_id", session.id},
+                         {"url", fetched.final_url},
+                         {"backend", fetched.backend},
+                         {"rendered", fetched.rendered}});
       return nlohmann::json{
           {"session_id", session.id},
           {"url", fetched.final_url},
@@ -1424,6 +1443,14 @@ nlohmann::json BrowsingServer::ApplySessionAction(
           {"requires_confirmation", false},
       };
     }
+    AppendAuditLog(
+        nlohmann::json{{"ts", UtcNow()},
+                       {"kind", "browser_session_action"},
+                       {"action", action},
+                       {"session_id", session.id},
+                       {"url", session.current_url},
+                       {"backend", "broker_fetch"},
+                       {"rendered", false}});
     return nlohmann::json{
         {"session_id", session.id},
         {"url", session.current_url.empty() ? nlohmann::json(nullptr) : nlohmann::json(session.current_url)},
@@ -1455,6 +1482,14 @@ nlohmann::json BrowsingServer::ApplySessionAction(
       }
       FetchResult fetched =
           BuildRenderedFetchResult(session.current_url, *rendered, config_.policy, session.updated_at);
+      AppendAuditLog(
+          nlohmann::json{{"ts", UtcNow()},
+                         {"kind", "browser_session_action"},
+                         {"action", action},
+                         {"session_id", session.id},
+                         {"url", fetched.final_url},
+                         {"backend", fetched.backend},
+                         {"rendered", fetched.rendered}});
       return nlohmann::json{
           {"session_id", session.id},
           {"url", fetched.final_url},
@@ -1479,6 +1514,14 @@ nlohmann::json BrowsingServer::ApplySessionAction(
       std::lock_guard<std::mutex> lock(sessions_mutex_);
       sessions_[session_id] = session;
     }
+    AppendAuditLog(
+        nlohmann::json{{"ts", UtcNow()},
+                       {"kind", "browser_session_action"},
+                       {"action", action},
+                       {"session_id", session.id},
+                       {"url", fetched->final_url},
+                       {"backend", fetched->backend},
+                       {"rendered", fetched->rendered}});
     return nlohmann::json{
         {"session_id", session.id},
         {"url", fetched->final_url},
@@ -1519,6 +1562,14 @@ nlohmann::json BrowsingServer::ApplySessionAction(
       }
       FetchResult fetched =
           BuildRenderedFetchResult(next_url, *rendered, config_.policy, session.updated_at);
+      AppendAuditLog(
+          nlohmann::json{{"ts", UtcNow()},
+                         {"kind", "browser_session_action"},
+                         {"action", action},
+                         {"session_id", session.id},
+                         {"url", fetched.final_url},
+                         {"backend", fetched.backend},
+                         {"rendered", fetched.rendered}});
       return nlohmann::json{
           {"session_id", session.id},
           {"url", fetched.final_url},
@@ -1547,6 +1598,14 @@ nlohmann::json BrowsingServer::ApplySessionAction(
       std::lock_guard<std::mutex> lock(sessions_mutex_);
       sessions_[session_id] = session;
     }
+    AppendAuditLog(
+        nlohmann::json{{"ts", UtcNow()},
+                       {"kind", "browser_session_action"},
+                       {"action", action},
+                       {"session_id", session.id},
+                       {"url", fetched->final_url},
+                       {"backend", fetched->backend},
+                       {"rendered", fetched->rendered}});
     return nlohmann::json{
         {"session_id", session.id},
         {"url", fetched->final_url},

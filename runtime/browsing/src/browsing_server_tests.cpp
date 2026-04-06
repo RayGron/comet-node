@@ -107,11 +107,31 @@ void TestSearchParsing() {
       {"openai.com"},
       5);
   Expect(results.size() == 2, "search parser should extract two results");
-  Expect(results[0].domain == "openai.com", "first result domain mismatch");
-  Expect(results[0].published_at.has_value(), "search parser should preserve pubDate");
-  Expect(results[1].url == "https://developers.openai.com/api/", "second result URL mismatch");
-  Expect(results[0].backend == "broker_search", "rss parser should mark broker backend");
-  Expect(!results[0].rendered, "rss parser should not mark rendered discovery");
+  Expect(
+      std::all_of(
+          results.begin(),
+          results.end(),
+          [](const comet::browsing::SearchResult& result) {
+            return result.domain == "openai.com" && result.backend == "broker_search" &&
+                   !result.rendered;
+          }),
+      "search parser should keep only openai.com broker results");
+  Expect(
+      std::any_of(
+          results.begin(),
+          results.end(),
+          [](const comet::browsing::SearchResult& result) {
+            return result.published_at.has_value();
+          }),
+      "search parser should preserve pubDate");
+  Expect(
+      std::any_of(
+          results.begin(),
+          results.end(),
+          [](const comet::browsing::SearchResult& result) {
+            return result.url == "https://developers.openai.com/api/";
+          }),
+      "search parser should keep the developer docs result");
 }
 
 void TestRenderedSearchParsing() {

@@ -399,7 +399,7 @@ unsupported_status="$(
     --data '{"action":"click","confirmed":true}' \
     "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/browsing/sessions/${session_id}/actions"
 )"
-test "${unsupported_status}" = "502"
+test "${unsupported_status}" = "501"
 grep -F '"code":"browser_action_not_supported"' "${unsupported_body}" >/dev/null
 
 curl -fsS -X DELETE \

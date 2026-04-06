@@ -471,12 +471,19 @@ invoke_interaction() {
   local name="$1"
   local request_file="$2"
   local response_file="${work_root}/${name}.response.json"
-  curl -fsS -X POST \
+  local status_code
+  status_code="$(
+    curl -sS -o "${response_file}" -w '%{http_code}' -X POST \
     -H "X-Comet-Session-Token: ${auth_token}" \
     -H 'Content-Type: application/json' \
     --data-binary "@${request_file}" \
-    "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/interaction/chat/completions" \
-    >"${response_file}"
+    "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/interaction/chat/completions"
+  )"
+  if [[ "${status_code}" != "200" ]]; then
+    echo "maglev-web-live: interaction request ${name} failed with HTTP ${status_code}" >&2
+    cat "${response_file}" >&2
+    exit 1
+  fi
   printf '%s\n' "${response_file}"
 }
 

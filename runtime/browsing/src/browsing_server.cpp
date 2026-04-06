@@ -818,6 +818,27 @@ std::optional<std::string> DetectBlockedBrowsingReason(const std::string& lowere
   return std::nullopt;
 }
 
+std::optional<std::string> DetectBlockedUrlReason(
+    const std::vector<std::string>& urls,
+    const BrowsingPolicy& policy) {
+  for (const auto& url : urls) {
+    const std::string lowered_url = LowercaseCopy(url);
+    if (lowered_url.rfind("file://", 0) == 0) {
+      return "restricted_local_target";
+    }
+
+    std::string safe_reason;
+    if (!BrowsingServer::IsSafeBrowsingUrl(url, policy, &safe_reason, nullptr)) {
+      if (safe_reason == "only http and https URLs are supported" ||
+          safe_reason == "private or controller-local hosts are denied" ||
+          safe_reason == "private IP targets are denied") {
+        return "restricted_local_target";
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 int CountWords(const std::string& text) {
   int words = 0;
   bool in_word = false;
@@ -871,7 +892,8 @@ std::string UnavailableDisclosureText() {
 
 WebGatewayDecision AnalyzeWebGatewayResolveRequest(
     const nlohmann::json& payload,
-    bool plane_enabled) {
+    bool plane_enabled,
+    const BrowsingPolicy& policy) {
   WebGatewayDecision decision;
   decision.plane_enabled = plane_enabled;
   const auto messages = CollectUserMessages(payload);
@@ -936,6 +958,7 @@ WebGatewayDecision AnalyzeWebGatewayResolveRequest(
   }
   std::sort(decision.urls.begin(), decision.urls.end());
   decision.urls.erase(std::unique(decision.urls.begin(), decision.urls.end()), decision.urls.end());
+  const auto blocked_url_reason = DetectBlockedUrlReason(decision.urls, policy);
 
   decision.toggle_only = LooksLikeToggleOnlyMessage(lowered_latest, latest_message_directive);
   decision.needs_web =
@@ -946,19 +969,26 @@ WebGatewayDecision AnalyzeWebGatewayResolveRequest(
   decision.direct_fetch = !decision.urls.empty();
   decision.search_required = decision.needs_web && !decision.direct_fetch;
 
+  if (blocked_reason.has_value()) {
+    decision.decision = "blocked";
+    decision.reason = *blocked_reason;
+    decision.direct_fetch = false;
+    decision.search_required = false;
+    return decision;
+  }
+  if (blocked_url_reason.has_value()) {
+    decision.decision = "blocked";
+    decision.reason = *blocked_url_reason;
+    decision.direct_fetch = false;
+    decision.search_required = false;
+    return decision;
+  }
   if (!decision.mode_enabled) {
     decision.decision = "disabled";
     decision.reason =
         decision.mode_source == "toggle" || decision.mode_source == "explicit_mode"
             ? "user_disabled_web_mode"
             : "web_mode_disabled";
-    return decision;
-  }
-  if (blocked_reason.has_value()) {
-    decision.decision = "blocked";
-    decision.reason = *blocked_reason;
-    decision.direct_fetch = false;
-    decision.search_required = false;
     return decision;
   }
   if (!decision.plane_enabled) {
@@ -2797,7 +2827,7 @@ nlohmann::json BrowsingServer::HandleWebGatewayResolvePayload(const nlohmann::js
   runtime.login_enabled = config_.policy.login_enabled;
   runtime.session_backend = rendered_browser_ready ? "cef" : "broker_fallback";
 
-  WebGatewayDecision decision = AnalyzeWebGatewayResolveRequest(payload, true);
+  WebGatewayDecision decision = AnalyzeWebGatewayResolveRequest(payload, true, config_.policy);
   nlohmann::json searches = nlohmann::json::array();
   nlohmann::json sources = nlohmann::json::array();
   nlohmann::json errors = nlohmann::json::array();

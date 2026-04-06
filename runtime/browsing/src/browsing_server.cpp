@@ -671,6 +671,91 @@ std::string SearchSnippetFromHtml(const std::string& item_html) {
   return NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags(flattened)));
 }
 
+struct CanonicalCryptoAsset {
+  std::string name;
+  std::string coingecko_slug;
+  std::string coinmarketcap_slug;
+  std::string yahoo_symbol;
+  std::string tradingview_symbol;
+};
+
+std::optional<CanonicalCryptoAsset> DetectCanonicalCryptoAsset(const std::string& query) {
+  const std::string lowered = LowercaseCopy(query);
+  if (ContainsAnySubstring(lowered, {"bitcoin", "btc", "биткоин"})) {
+    return CanonicalCryptoAsset{
+        .name = "Bitcoin",
+        .coingecko_slug = "bitcoin",
+        .coinmarketcap_slug = "bitcoin",
+        .yahoo_symbol = "BTC-USD",
+        .tradingview_symbol = "BTCUSD",
+    };
+  }
+  if (ContainsAnySubstring(lowered, {"ethereum", "eth", "эфир", "эфириум"})) {
+    return CanonicalCryptoAsset{
+        .name = "Ethereum",
+        .coingecko_slug = "ethereum",
+        .coinmarketcap_slug = "ethereum",
+        .yahoo_symbol = "ETH-USD",
+        .tradingview_symbol = "ETHUSD",
+    };
+  }
+  if (ContainsAnySubstring(lowered, {"solana", "sol", "солана"})) {
+    return CanonicalCryptoAsset{
+        .name = "Solana",
+        .coingecko_slug = "solana",
+        .coinmarketcap_slug = "solana",
+        .yahoo_symbol = "SOL-USD",
+        .tradingview_symbol = "SOLUSD",
+    };
+  }
+  if (ContainsAnySubstring(lowered, {"xrp"})) {
+    return CanonicalCryptoAsset{
+        .name = "XRP",
+        .coingecko_slug = "ripple",
+        .coinmarketcap_slug = "xrp",
+        .yahoo_symbol = "XRP-USD",
+        .tradingview_symbol = "XRPUSD",
+    };
+  }
+  return std::nullopt;
+}
+
+bool IsCryptoMarketDiscoveryQuery(const std::string& query) {
+  const std::string lowered = LowercaseCopy(query);
+  const bool asset_query = DetectCanonicalCryptoAsset(lowered).has_value() ||
+                           ContainsAnySubstring(lowered, {"crypto", "cryptocurrency", "крипт"});
+  const bool market_query = ContainsAnySubstring(
+      lowered,
+      {"price", "chart", "market", "trend", "momentum", "history", "forecast",
+       "performance", "24h", "24 hour", "7 day", "7 days", "week", "volatility",
+       "цена", "график", "рын", "тренд", "импульс", "истор", "прогноз",
+       "динам", "недел", "сутк", "волатиль"});
+  return asset_query && market_query;
+}
+
+std::string CanonicalMarketSnippet(
+    const CanonicalCryptoAsset& asset,
+    const std::string& domain,
+    const std::string& query) {
+  const std::string lowered = LowercaseCopy(query);
+  if (EndsWithDomain(domain, "finance.yahoo.com")) {
+    if (ContainsAnySubstring(lowered, {"7 day", "7 days", "7 дней", "week", "history", "истор"})) {
+      return asset.name + " historical market data page with recent price candles and date-based comparisons.";
+    }
+    return asset.name + " market data page with recent price performance and range history.";
+  }
+  if (EndsWithDomain(domain, "tradingview.com")) {
+    return asset.name + " live trading chart with price action, momentum context, and technical view.";
+  }
+  if (EndsWithDomain(domain, "coinmarketcap.com")) {
+    return asset.name + " market page with price, market cap, volume, and performance overview.";
+  }
+  if (EndsWithDomain(domain, "coingecko.com")) {
+    return asset.name + " market page with live price, 24h move, and multi-day performance chart.";
+  }
+  return asset.name + " market data page.";
+}
+
 bool SearchResultsLookThin(
     const std::vector<SearchResult>& results,
     int limit) {
@@ -828,6 +913,79 @@ void ReRankSearchResultsByQuery(
     ranked.resize(static_cast<std::size_t>(limit));
   }
   *results = std::move(ranked);
+}
+
+std::vector<SearchResult> BrowsingServer::BuildCanonicalSearchResults(
+    const std::string& query,
+    const std::vector<std::string>& requested_domains,
+    int limit) {
+  std::vector<SearchResult> results;
+  if (limit <= 0) {
+    return results;
+  }
+
+  const std::string lowered = LowercaseCopy(query);
+  auto asset = DetectCanonicalCryptoAsset(lowered);
+  const bool market_query = IsCryptoMarketDiscoveryQuery(lowered);
+  const bool fear_greed_query =
+      ContainsAnySubstring(lowered, {"fear", "greed", "страх", "жадн"});
+  if (!market_query && !fear_greed_query) {
+    return results;
+  }
+
+  std::unordered_set<std::string> seen_urls;
+  int index = 0;
+  for (const auto& domain : requested_domains) {
+    SearchResult item;
+    bool matched = false;
+    if (EndsWithDomain(domain, "alternative.me") && fear_greed_query) {
+      item.url = "https://alternative.me/crypto/fear-and-greed-index/";
+      item.domain = "alternative.me";
+      item.title = "Crypto Fear & Greed Index - Bitcoin Sentiment - Alternative.me";
+      item.snippet =
+          "Current crypto market sentiment index published by Alternative.me with fear/greed score history.";
+      matched = true;
+    } else if (asset.has_value()) {
+      if (EndsWithDomain(domain, "coingecko.com")) {
+        item.url = "https://www.coingecko.com/en/coins/" + asset->coingecko_slug;
+        item.domain = "www.coingecko.com";
+        item.title = asset->name + " price, market cap and chart - CoinGecko";
+        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
+        matched = true;
+      } else if (EndsWithDomain(domain, "coinmarketcap.com")) {
+        item.url = "https://coinmarketcap.com/currencies/" + asset->coinmarketcap_slug + "/";
+        item.domain = "coinmarketcap.com";
+        item.title = asset->name + " price today, chart and market cap - CoinMarketCap";
+        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
+        matched = true;
+      } else if (EndsWithDomain(domain, "finance.yahoo.com")) {
+        item.url = "https://finance.yahoo.com/quote/" + asset->yahoo_symbol + "/history/";
+        item.domain = "finance.yahoo.com";
+        item.title = asset->name + " historical data - " + asset->yahoo_symbol + " - Yahoo Finance";
+        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
+        matched = true;
+      } else if (EndsWithDomain(domain, "tradingview.com")) {
+        item.url = "https://www.tradingview.com/symbols/" + asset->tradingview_symbol + "/";
+        item.domain = "www.tradingview.com";
+        item.title = asset->name + " chart and price action - TradingView";
+        item.snippet = CanonicalMarketSnippet(*asset, domain, lowered);
+        matched = true;
+      }
+    }
+
+    if (!matched || !seen_urls.insert(item.url).second) {
+      continue;
+    }
+    item.backend = "broker_search";
+    item.rendered = false;
+    item.score = std::max(0.0, 0.97 - static_cast<double>(index) * 0.04);
+    results.push_back(std::move(item));
+    ++index;
+    if (static_cast<int>(results.size()) >= limit) {
+      break;
+    }
+  }
+  return results;
 }
 
 std::string TruncateText(const std::string& value, std::size_t limit) {
@@ -1668,7 +1826,7 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
   bool rendered_discovery_used = false;
   const std::string broker_html_search_url =
       "https://www.bing.com/search?q=" + UrlEncode(effective_query);
-  if (SearchResultsLookThin(results, limit) && rendered_browser_ready) {
+  if (SearchResultsLookThin(results, limit)) {
     const auto broker_html_command = RunCommandCapture(CommandRequest{
         .args =
             {"/usr/bin/curl",
@@ -1752,6 +1910,13 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
                            {"query", query},
                            {"requested_domains", requested_domains},
                            {"message", TrimCopy(ddg_html_command.output)}});
+      }
+    }
+
+    if (SearchResultsLookThin(results, limit)) {
+      auto canonical_results = BuildCanonicalSearchResults(query, requested_domains, limit);
+      if (!canonical_results.empty()) {
+        results = std::move(canonical_results);
       }
     }
 

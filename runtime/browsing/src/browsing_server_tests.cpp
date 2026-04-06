@@ -211,6 +211,45 @@ void TestRenderedSearchRelevanceFiltering() {
       "rendered search relevance filter should keep the bitcoin chart result");
 }
 
+void TestCanonicalCryptoMarketDiscoveryResults() {
+  const auto results = comet::browsing::BrowsingServer::BuildCanonicalSearchResults(
+      "bitcoin price last 7 days momentum",
+      {"coingecko.com", "coinmarketcap.com", "tradingview.com", "finance.yahoo.com"},
+      4);
+  Expect(results.size() == 4, "canonical crypto discovery should synthesize four market results");
+  Expect(
+      results[0].url == "https://www.coingecko.com/en/coins/bitcoin",
+      "canonical crypto discovery should prefer CoinGecko first");
+  Expect(
+      results[1].url == "https://coinmarketcap.com/currencies/bitcoin/",
+      "canonical crypto discovery should include CoinMarketCap");
+  Expect(
+      results[2].url == "https://www.tradingview.com/symbols/BTCUSD/",
+      "canonical crypto discovery should include TradingView");
+  Expect(
+      results[3].url == "https://finance.yahoo.com/quote/BTC-USD/history/",
+      "canonical crypto discovery should include Yahoo history");
+  Expect(
+      std::all_of(
+          results.begin(),
+          results.end(),
+          [](const comet::browsing::SearchResult& result) {
+            return result.backend == "broker_search" && !result.rendered && result.score >= 0.8;
+          }),
+      "canonical crypto discovery should return broker search metadata");
+}
+
+void TestCanonicalFearGreedDiscoveryResult() {
+  const auto results = comet::browsing::BrowsingServer::BuildCanonicalSearchResults(
+      "fear and greed index crypto today",
+      {"alternative.me", "coingecko.com"},
+      3);
+  Expect(results.size() == 1, "fear and greed discovery should collapse to Alternative.me");
+  Expect(
+      results[0].url == "https://alternative.me/crypto/fear-and-greed-index/",
+      "fear and greed discovery should point to Alternative.me");
+}
+
 void TestTickerNormalizationAvoidsAmbiguousResults() {
   comet::browsing::BrowsingPolicy policy;
   const std::string rss_xml =
@@ -332,6 +371,8 @@ int main() {
     TestRenderedSearchParsing();
     TestSearchRelevanceFiltering();
     TestRenderedSearchRelevanceFiltering();
+    TestCanonicalCryptoMarketDiscoveryResults();
+    TestCanonicalFearGreedDiscoveryResult();
     TestTickerNormalizationAvoidsAmbiguousResults();
     TestFetchSanitization();
     TestSessionCleanupAndAuditLog();

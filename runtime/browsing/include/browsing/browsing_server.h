@@ -151,6 +151,10 @@ class BrowsingServer final {
       const std::string& url,
       std::string* error_code,
       std::string* error_message) const;
+  static std::vector<SearchResult> BuildCanonicalSearchResults(
+      const std::string& query,
+      const std::vector<std::string>& requested_domains,
+      int limit);
 
   BrowsingRuntimeConfig config_;
   std::atomic<bool> stop_requested_{false};

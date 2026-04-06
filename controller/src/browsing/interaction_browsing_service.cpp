@@ -445,6 +445,33 @@ bool ContainsSourceIntent(const std::string& lowered_text) {
   return ContainsAnySubstring(lowered_text, markers);
 }
 
+std::optional<std::string> DetectBlockedBrowsingReason(
+    const std::string& lowered_text) {
+  if (ContainsAnySubstring(
+          lowered_text,
+          {"file://", "127.0.0.1", "localhost", "169.254.169.254",
+           "/etc/passwd", "/etc/hosts"})) {
+    return "restricted_local_target";
+  }
+  if (ContainsAnySubstring(
+          lowered_text,
+          {"upload", "upload file", "local file", "загруз", "локальный файл"})) {
+    return "restricted_upload_request";
+  }
+  if (ContainsAnySubstring(
+          lowered_text,
+          {"system prompt", "internal instructions", "системный промпт",
+           "служебные инструкции"})) {
+    return "restricted_prompt_exfiltration";
+  }
+  if (ContainsAnySubstring(
+          lowered_text,
+          {"ignore previous instructions", "игнорируй предыдущие инструкции"})) {
+    return "restricted_prompt_injection";
+  }
+  return std::nullopt;
+}
+
 int CountWords(const std::string& text) {
   int words = 0;
   bool in_word = false;
@@ -516,6 +543,8 @@ BrowsingContextDecision AnalyzeBrowsingRequest(
     decision.mode_source = "one_off_request";
   }
 
+  const auto blocked_reason = DetectBlockedBrowsingReason(lowered_latest);
+
   decision.urls = ExtractUrls(decision.latest_user_message);
   decision.toggle_only =
       LooksLikeToggleOnlyMessage(lowered_latest, latest_message_directive);
@@ -534,6 +563,14 @@ BrowsingContextDecision AnalyzeBrowsingRequest(
     decision.reason = decision.mode_source == "toggle"
                           ? "user_disabled_web_mode"
                           : "web_mode_disabled";
+    return decision;
+  }
+
+  if (blocked_reason.has_value()) {
+    decision.decision = "blocked";
+    decision.reason = *blocked_reason;
+    decision.direct_fetch = false;
+    decision.search_required = false;
     return decision;
   }
 
@@ -598,6 +635,8 @@ json BuildBrowsingFlags(
   if (!context.mode_enabled) {
     lookup_state =
         context.reason == "user_disabled_web_mode" ? "disabled_by_user" : "disabled";
+  } else if (context.decision == "blocked") {
+    lookup_state = "blocked";
   } else if (context.toggle_only || context.reason == "toggle_only") {
     lookup_state = "enabled_toggle_only";
   } else if (context.decision == "not_needed" || context.reason == "context_not_needed") {
@@ -643,6 +682,9 @@ json BuildBrowsingIndicator(
       compact = "web:off user";
       label = "Web disabled by user";
     }
+  } else if (lookup_state == "blocked") {
+    compact = "web:block";
+    label = "Blocked web request";
   } else if (lookup_state == "enabled_toggle_only") {
     compact = "web:on";
     label = "Web enabled";
@@ -706,6 +748,14 @@ json BuildBrowsingTrace(
         {"stage", "toggle"},
         {"status", "applied"},
         {"compact", "toggle:applied"},
+    });
+    return trace;
+  }
+  if (context.decision == "blocked") {
+    trace.push_back(json{
+        {"stage", "guard"},
+        {"status", "blocked"},
+        {"compact", "guard:blocked"},
     });
     return trace;
   }
@@ -868,6 +918,15 @@ std::string BuildBrowsingInstruction(const json& summary) {
         << "\n\nThe latest user message only changes web mode. "
         << "Acknowledge that web access is now enabled and wait for the next task "
         << "unless the user also asked a substantive question.";
+    return instruction.str();
+  }
+
+  if (decision == "blocked") {
+    instruction
+        << "\n\nThe user requested a blocked browsing action or target. "
+        << "Refuse directly and briefly. "
+        << "Do not offer curl, shell commands, ssh, local file reads, uploads, "
+        << "metadata access, or any alternative way to reach the blocked resource.";
     return instruction.str();
   }
 

@@ -139,6 +139,30 @@ std::string UrlEncode(const std::string& value) {
   return out.str();
 }
 
+std::string UrlDecode(const std::string& value) {
+  std::string decoded;
+  decoded.reserve(value.size());
+  for (std::size_t index = 0; index < value.size(); ++index) {
+    const char ch = value[index];
+    if (ch == '%' && index + 2 < value.size()) {
+      const auto hi = static_cast<unsigned char>(value[index + 1]);
+      const auto lo = static_cast<unsigned char>(value[index + 2]);
+      if (std::isxdigit(hi) != 0 && std::isxdigit(lo) != 0) {
+        const std::string hex = value.substr(index + 1, 2);
+        decoded.push_back(static_cast<char>(std::stoi(hex, nullptr, 16)));
+        index += 2;
+        continue;
+      }
+    }
+    if (ch == '+') {
+      decoded.push_back(' ');
+      continue;
+    }
+    decoded.push_back(ch);
+  }
+  return decoded;
+}
+
 std::string StripHtmlTags(const std::string& html) {
   return std::regex_replace(html, std::regex("<[^>]+>"), " ");
 }
@@ -1012,6 +1036,77 @@ std::vector<SearchResult> BrowsingServer::ParseBingHtmlResults(
   return results;
 }
 
+std::vector<SearchResult> ParseDuckDuckGoHtmlResults(
+    const std::string& html,
+    const std::string& query,
+    const BrowsingPolicy& policy,
+    const std::vector<std::string>& requested_domains,
+    int limit) {
+  std::vector<SearchResult> results;
+  std::unordered_set<std::string> seen_urls;
+  std::regex item_pattern(
+      R"(<div[^>]*class\s*=\s*["'][^"']*\bresult\b[^"']*["'][^>]*>([\s\S]*?)</div>\s*</div>)",
+      std::regex::icase);
+  std::regex link_pattern(
+      R"(<a[^>]*class\s*=\s*["'][^"']*\bresult__a\b[^"']*["'][^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)</a>)",
+      std::regex::icase);
+  auto begin = std::sregex_iterator(html.begin(), html.end(), item_pattern);
+  auto end = std::sregex_iterator();
+  int index = 0;
+  for (auto it = begin; it != end && static_cast<int>(results.size()) < limit; ++it) {
+    const std::string item_html = (*it)[1].str();
+    std::smatch link_match;
+    if (!std::regex_search(item_html, link_match, link_pattern)) {
+      continue;
+    }
+
+    std::string href = TrimCopy(HtmlEntityDecode(link_match[1].str()));
+    const auto uddg_pos = href.find("uddg=");
+    if (uddg_pos != std::string::npos) {
+      href = UrlDecode(href.substr(uddg_pos + 5));
+      const auto amp_pos = href.find('&');
+      if (amp_pos != std::string::npos) {
+        href.resize(amp_pos);
+      }
+    }
+
+    std::string host;
+    std::string reason;
+    if (!IsSafeBrowsingUrl(href, policy, &reason, &host) ||
+        !DomainAllowed(host, policy, requested_domains)) {
+      continue;
+    }
+
+    SearchResult item;
+    item.url = href;
+    item.domain = host;
+    item.title = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags(link_match[2].str())));
+
+    std::smatch snippet_match;
+    static const std::regex kSnippetPattern(
+        R"(<a[^>]*class\s*=\s*["'][^"']*\bresult__snippet\b[^"']*["'][^>]*>([\s\S]*?)</a>)",
+        std::regex::icase);
+    if (std::regex_search(item_html, snippet_match, kSnippetPattern)) {
+      item.snippet = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags(snippet_match[1].str())));
+    }
+    if (item.snippet.empty()) {
+      item.snippet = SearchSnippetFromHtml(item_html);
+    }
+    if (item.snippet.empty()) {
+      item.snippet = item.title;
+    }
+    item.backend = "broker_search";
+    item.rendered = false;
+    item.score = std::max(0.0, 1.0 - static_cast<double>(index) * 0.05);
+    if (!item.title.empty() && seen_urls.insert(item.url).second) {
+      results.push_back(std::move(item));
+      ++index;
+    }
+  }
+  ReRankSearchResultsByQuery(query, limit, &results);
+  return results;
+}
+
 std::vector<std::string> BrowsingServer::DetectInjectionFlags(const std::string& text) {
   const std::string lowered = LowercaseCopy(text);
   std::vector<std::string> flags;
@@ -1439,6 +1534,49 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
                          {"query", query},
                          {"requested_domains", requested_domains},
                          {"message", TrimCopy(broker_html_command.output)}});
+    }
+
+    if (SearchResultsLookThin(results, limit)) {
+      const std::string ddg_html_search_url =
+          "https://html.duckduckgo.com/html/?q=" + UrlEncode(effective_query);
+      const auto ddg_html_command = RunCommandCapture(CommandRequest{
+          .args =
+              {"/usr/bin/curl",
+               "-A",
+               "Mozilla/5.0",
+               "-fsSL",
+               "--proto",
+               "=https,http",
+               "--connect-timeout",
+               "5",
+               "--max-time",
+               "20",
+               "--max-redirs",
+               "5",
+               ddg_html_search_url},
+          .environment = {},
+          .working_directory = std::nullopt,
+          .clear_environment = false,
+          .merge_stderr_into_stdout = true,
+      });
+      if (ddg_html_command.exit_code == 0) {
+        auto ddg_html_results = ParseDuckDuckGoHtmlResults(
+            ddg_html_command.output,
+            query_with_hints,
+            config_.policy,
+            requested_domains,
+            limit);
+        if (!ddg_html_results.empty()) {
+          results = std::move(ddg_html_results);
+        }
+      } else {
+        AppendAuditLog(
+            nlohmann::json{{"ts", UtcNow()},
+                           {"kind", "search_duckduckgo_html_failed"},
+                           {"query", query},
+                           {"requested_domains", requested_domains},
+                           {"message", TrimCopy(ddg_html_command.output)}});
+      }
     }
   }
   if (SearchResultsLookThin(results, limit) && rendered_browser_ready) {

@@ -382,6 +382,18 @@ std::string ComposeSearchQuery(
   return out.str();
 }
 
+std::optional<std::string> BuildSiteDiscoveryUrl(
+    const std::string& domain,
+    const std::string& query) {
+  if (EndsWithDomain(domain, "reddit.com") || EndsWithDomain(domain, "old.reddit.com")) {
+    return "https://www.reddit.com/search/?q=" + UrlEncode(query) + "&sort=relevance&t=all";
+  }
+  if (EndsWithDomain(domain, "x.com") || EndsWithDomain(domain, "twitter.com")) {
+    return "https://x.com/search?q=" + UrlEncode(query) + "&src=typed_query&f=live";
+  }
+  return std::nullopt;
+}
+
 std::string SearchSnippetFromHtml(const std::string& item_html) {
   static const std::regex kParagraphPattern(R"(<p[^>]*>([\s\S]*?)</p>)", std::regex::icase);
   std::smatch paragraph_match;
@@ -1077,27 +1089,75 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
       SearchResultsLookThin(results, limit) &&
       cef_backend_ != nullptr &&
       cef_backend_->IsAvailable()) {
-    std::string rendered_error;
-    const std::string rendered_search_url =
-        "https://www.bing.com/search?q=" + UrlEncode(effective_query);
-    const auto rendered = cef_backend_->FetchPage(
-        rendered_search_url,
-        config_.state_root / ("rendered-search-" + ShellSafeToken(comet::RandomTokenBase64(8))),
-        &rendered_error);
-    if (rendered.has_value() && !rendered->html_source.empty()) {
-      auto rendered_results =
-          ParseBingHtmlResults(rendered->html_source, config_.policy, requested_domains, limit);
-      if (!rendered_results.empty()) {
-        results = std::move(rendered_results);
-        rendered_discovery_used = true;
+    std::unordered_set<std::string> seen_urls;
+    std::vector<SearchResult> rendered_results;
+    int discovery_index = 0;
+    for (const auto& domain : requested_domains) {
+      const auto discovery_url = BuildSiteDiscoveryUrl(domain, query);
+      if (!discovery_url.has_value()) {
+        continue;
       }
-    } else if (!rendered_error.empty()) {
-      AppendAuditLog(
-          nlohmann::json{{"ts", UtcNow()},
-                         {"kind", "search_discovery_fallback_failed"},
-                         {"query", query},
-                         {"requested_domains", requested_domains},
-                         {"message", rendered_error}});
+      std::string discovery_error_code;
+      std::string discovery_error_message;
+      const auto fetched = FetchUrl(*discovery_url, &discovery_error_code, &discovery_error_message);
+      if (!fetched.has_value()) {
+        if (!discovery_error_message.empty()) {
+          AppendAuditLog(
+              nlohmann::json{{"ts", UtcNow()},
+                             {"kind", "search_discovery_fallback_failed"},
+                             {"query", query},
+                             {"requested_domain", domain},
+                             {"url", *discovery_url},
+                             {"message", discovery_error_message}});
+        }
+        continue;
+      }
+
+      SearchResult item;
+      item.url = fetched->final_url.empty() ? *discovery_url : fetched->final_url;
+      item.domain = ExtractHost(item.url).value_or(domain);
+      item.title = fetched->title.value_or("Rendered discovery for " + domain);
+      item.snippet = fetched->visible_text.empty()
+                         ? item.title
+                         : TruncateText(fetched->visible_text, static_cast<std::size_t>(640));
+      item.backend = fetched->backend;
+      item.rendered = fetched->rendered;
+      item.score = std::max(0.0, 0.9 - static_cast<double>(discovery_index) * 0.1);
+      if (seen_urls.insert(item.url).second) {
+        rendered_results.push_back(std::move(item));
+        ++discovery_index;
+      }
+      if (static_cast<int>(rendered_results.size()) >= limit) {
+        break;
+      }
+    }
+
+    if (!rendered_results.empty()) {
+      results = std::move(rendered_results);
+      rendered_discovery_used = true;
+    } else {
+      std::string rendered_error;
+      const std::string rendered_search_url =
+          "https://www.bing.com/search?q=" + UrlEncode(effective_query);
+      const auto rendered = cef_backend_->FetchPage(
+          rendered_search_url,
+          config_.state_root / ("rendered-search-" + ShellSafeToken(comet::RandomTokenBase64(8))),
+          &rendered_error);
+      if (rendered.has_value() && !rendered->html_source.empty()) {
+        rendered_results =
+            ParseBingHtmlResults(rendered->html_source, config_.policy, requested_domains, limit);
+        if (!rendered_results.empty()) {
+          results = std::move(rendered_results);
+          rendered_discovery_used = true;
+        }
+      } else if (!rendered_error.empty()) {
+        AppendAuditLog(
+            nlohmann::json{{"ts", UtcNow()},
+                           {"kind", "search_discovery_fallback_failed"},
+                           {"query", query},
+                           {"requested_domains", requested_domains},
+                           {"message", rendered_error}});
+      }
     }
   }
   AppendAuditLog(

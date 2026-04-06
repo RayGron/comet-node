@@ -47,6 +47,22 @@ int main() {
             R"(COMET_BROWSING_POLICY_JSON: "{\"blocked_domains\":[\"localhost\",\"127.0.0.1\",\"internal\"],\"browser_session_enabled\":true}")") !=
             std::string::npos,
         "compose renderer should escape JSON-valued env vars");
+    Expect(
+        yaml.find(R"(command: ["/runtime/bin/comet-workerd"])") != std::string::npos,
+        "compose renderer should keep single-token commands as a single array element");
+
+    comet::ComposeService infer_service;
+    infer_service.name = "infer-a";
+    infer_service.image = "example/infer:dev";
+    infer_service.command = "/runtime/bin/comet-inferctl container-boot";
+    infer_service.healthcheck = "NONE";
+    plan.services.push_back(std::move(infer_service));
+
+    const std::string yaml_with_infer = comet::RenderComposeYaml(plan);
+    Expect(
+        yaml_with_infer.find(R"(command: ["/runtime/bin/comet-inferctl", "container-boot"])") !=
+            std::string::npos,
+        "compose renderer should split command strings with arguments into compose array tokens");
 
 #if defined(_WIN32)
     _putenv_s("COMET_CONTROLLER_INTERNAL_HOST", "192.168.88.13");

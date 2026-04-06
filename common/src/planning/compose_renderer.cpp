@@ -1,8 +1,10 @@
 #include "comet/planning/compose_renderer.h"
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <string_view>
+#include <vector>
 
 namespace comet {
 
@@ -86,6 +88,74 @@ std::vector<std::string> UniqueGpuDevices(
   return result;
 }
 
+std::vector<std::string> SplitCommandTokens(const std::string& command) {
+  std::vector<std::string> tokens;
+  std::string current;
+  bool in_single_quotes = false;
+  bool in_double_quotes = false;
+  bool escape_next = false;
+
+  for (const char ch : command) {
+    if (escape_next) {
+      current.push_back(ch);
+      escape_next = false;
+      continue;
+    }
+
+    if (ch == '\\' && !in_single_quotes) {
+      escape_next = true;
+      continue;
+    }
+
+    if (ch == '\'' && !in_double_quotes) {
+      in_single_quotes = !in_single_quotes;
+      continue;
+    }
+
+    if (ch == '"' && !in_single_quotes) {
+      in_double_quotes = !in_double_quotes;
+      continue;
+    }
+
+    if (!in_single_quotes && !in_double_quotes &&
+        std::isspace(static_cast<unsigned char>(ch)) != 0) {
+      if (!current.empty()) {
+        tokens.push_back(current);
+        current.clear();
+      }
+      continue;
+    }
+
+    current.push_back(ch);
+  }
+
+  if (escape_next) {
+    current.push_back('\\');
+  }
+  if (!current.empty()) {
+    tokens.push_back(std::move(current));
+  }
+  if (tokens.empty() && !command.empty()) {
+    tokens.push_back(command);
+  }
+  return tokens;
+}
+
+void RenderCommand(
+    std::ostringstream& out,
+    const std::string& indent,
+    const std::string& command) {
+  const auto tokens = SplitCommandTokens(command);
+  out << indent << "command: [";
+  for (std::size_t index = 0; index < tokens.size(); ++index) {
+    if (index > 0) {
+      out << ", ";
+    }
+    out << "\"" << EscapeYamlDoubleQuoted(tokens[index]) << "\"";
+  }
+  out << "]\n";
+}
+
 }  // namespace
 
 std::string RenderComposeYaml(const NodeComposePlan& plan) {
@@ -99,7 +169,7 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
   for (const auto& service : plan.services) {
     out << "  " << service.name << ":\n";
     out << "    image: " << service.image << "\n";
-    out << "    command: [\"" << service.command << "\"]\n";
+    RenderCommand(out, "    ", service.command);
     out << "    restart: unless-stopped\n";
 
     if (!service.depends_on.empty()) {

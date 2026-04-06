@@ -537,11 +537,16 @@ std::string AugmentSearchQuery(std::string query) {
 std::optional<std::string> BuildSiteDiscoveryUrl(
     const std::string& domain,
     const std::string& query) {
+  const std::string lowered_query = LowercaseCopy(query);
   if (EndsWithDomain(domain, "reddit.com") || EndsWithDomain(domain, "old.reddit.com")) {
     return "https://www.reddit.com/search/?q=" + UrlEncode(query) + "&sort=relevance&t=all";
   }
   if (EndsWithDomain(domain, "x.com") || EndsWithDomain(domain, "twitter.com")) {
     return "https://x.com/search?q=" + UrlEncode(query) + "&src=typed_query&f=live";
+  }
+  if (EndsWithDomain(domain, "alternative.me") &&
+      ContainsAnySubstring(lowered_query, {"fear", "greed", "страх", "жадн"})) {
+    return "https://alternative.me/crypto/fear-and-greed-index/";
   }
   return std::nullopt;
 }

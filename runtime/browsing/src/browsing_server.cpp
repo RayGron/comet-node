@@ -212,6 +212,14 @@ std::string DecodeBase64ToString(const std::string& text) {
     return std::string(output.begin(), output.begin() + static_cast<std::ptrdiff_t>(actual_size));
   };
 
+  if (const auto decoded = try_decode(sodium_base64_VARIANT_URLSAFE_NO_PADDING);
+      decoded.has_value()) {
+    return *decoded;
+  }
+  if (const auto decoded = try_decode(sodium_base64_VARIANT_URLSAFE);
+      decoded.has_value()) {
+    return *decoded;
+  }
   if (const auto decoded = try_decode(sodium_base64_VARIANT_ORIGINAL_NO_PADDING);
       decoded.has_value()) {
     return *decoded;

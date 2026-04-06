@@ -29,7 +29,8 @@ class CefBrowserBackend final {
   std::optional<CefRenderedDocument> FetchPage(
       const std::string& url,
       const std::filesystem::path& worker_root,
-      std::string* error_message) const;
+      std::string* error_message,
+      bool include_html_source = false) const;
 
   std::optional<CefRenderedDocument> OpenSession(
       const std::string& session_id,

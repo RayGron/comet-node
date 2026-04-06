@@ -617,7 +617,8 @@ class CefBrowserBackend::Impl {
   std::optional<CefRenderedDocument> FetchPage(
       const std::string& url,
       const std::filesystem::path& worker_root,
-      std::string* error_message) const {
+      std::string* error_message,
+      bool include_html_source) const {
 #if COMET_WITH_CEF
     if (!IsAvailable()) {
       if (error_message != nullptr) {
@@ -629,7 +630,7 @@ class CefBrowserBackend::Impl {
     if (!client->CreateBrowser(url, error_message)) {
       return std::nullopt;
     }
-    auto snapshot = client->Snapshot(true, false, error_message);
+    auto snapshot = client->Snapshot(include_html_source, false, error_message);
     client->Close();
     if (!snapshot.has_value()) {
       return std::nullopt;
@@ -686,7 +687,7 @@ class CefBrowserBackend::Impl {
       return std::nullopt;
     }
 
-    auto snapshot = client->Snapshot(true, true, error_message);
+    auto snapshot = client->Snapshot(false, true, error_message);
     if (!snapshot.has_value()) {
       return std::nullopt;
     }
@@ -722,7 +723,7 @@ class CefBrowserBackend::Impl {
       }
       return std::nullopt;
     }
-    auto snapshot = client->Snapshot(true, true, error_message);
+    auto snapshot = client->Snapshot(false, true, error_message);
     if (!snapshot.has_value()) {
       return std::nullopt;
     }
@@ -753,7 +754,7 @@ class CefBrowserBackend::Impl {
       }
       return std::nullopt;
     }
-    auto snapshot = client->Snapshot(true, false, error_message);
+    auto snapshot = client->Snapshot(false, false, error_message);
     if (!snapshot.has_value()) {
       return std::nullopt;
     }
@@ -820,8 +821,9 @@ bool CefBrowserBackend::IsAvailable() const {
 std::optional<CefRenderedDocument> CefBrowserBackend::FetchPage(
     const std::string& url,
     const std::filesystem::path& worker_root,
-    std::string* error_message) const {
-  return impl_->FetchPage(url, worker_root, error_message);
+    std::string* error_message,
+    bool include_html_source) const {
+  return impl_->FetchPage(url, worker_root, error_message, include_html_source);
 }
 
 std::optional<CefRenderedDocument> CefBrowserBackend::OpenSession(

@@ -1159,7 +1159,8 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
       const auto rendered = cef_backend_->FetchPage(
           rendered_search_url,
           config_.state_root / ("rendered-search-" + ShellSafeToken(comet::RandomTokenBase64(8))),
-          &rendered_error);
+          &rendered_error,
+          true);
       if (rendered.has_value() && !rendered->html_source.empty()) {
         rendered_results =
             ParseBingHtmlResults(rendered->html_source, config_.policy, requested_domains, limit);
@@ -1684,7 +1685,8 @@ std::optional<FetchResult> BrowsingServer::FetchUrl(
     const auto rendered = cef_backend_->FetchPage(
         url,
         config_.state_root / ("rendered-fetch-" + ShellSafeToken(comet::RandomTokenBase64(8))),
-        &rendered_error);
+        &rendered_error,
+        false);
     if (rendered.has_value()) {
       return BuildRenderedFetchResult(url, *rendered, config_.policy, UtcNow());
     }
@@ -1703,7 +1705,8 @@ std::optional<FetchResult> BrowsingServer::FetchUrl(
     const auto rendered = cef_backend_->FetchPage(
         url,
         config_.state_root / ("rendered-fetch-" + ShellSafeToken(comet::RandomTokenBase64(8))),
-        &rendered_error);
+        &rendered_error,
+        false);
     if (rendered.has_value()) {
       return BuildRenderedFetchResult(url, *rendered, config_.policy, UtcNow());
     }

@@ -1,6 +1,7 @@
 #include "browsing/cef_browser_backend.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <condition_variable>
@@ -19,11 +20,14 @@
 #include <utility>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "browsing/cef_support.h"
 
 #if COMET_WITH_CEF
 #include "include/cef_browser.h"
 #include "include/cef_browser_process_handler.h"
+#include "include/cef_devtools_message_observer.h"
 #include "include/cef_frame.h"
 #include "include/cef_load_handler.h"
 #include "include/cef_parser.h"
@@ -43,6 +47,8 @@ constexpr int kViewWidth = 1365;
 constexpr int kViewHeight = 900;
 constexpr auto kLoadTimeout = std::chrono::seconds(20);
 constexpr auto kPaintTimeout = std::chrono::seconds(10);
+constexpr auto kFrameDataTimeout = std::chrono::seconds(10);
+constexpr auto kDevToolsTimeout = std::chrono::seconds(10);
 constexpr auto kRenderSettleDelay = std::chrono::milliseconds(1200);
 
 class LambdaTask final : public CefTask {
@@ -113,10 +119,15 @@ std::string AwaitFrameText(
     bool source) {
   auto promise = std::make_shared<std::promise<std::string>>();
   auto future = promise->get_future();
-  if (source) {
-    frame->GetSource(new PromiseStringVisitor(promise));
-  } else {
-    frame->GetText(new PromiseStringVisitor(promise));
+  PostUiTask([frame, source, promise]() {
+    if (source) {
+      frame->GetSource(new PromiseStringVisitor(promise));
+    } else {
+      frame->GetText(new PromiseStringVisitor(promise));
+    }
+  });
+  if (future.wait_for(kFrameDataTimeout) != std::future_status::ready) {
+    return {};
   }
   return future.get();
 }
@@ -156,6 +167,126 @@ std::filesystem::path WritePpmScreenshot(
   return output_path;
 }
 
+std::filesystem::path WritePngScreenshot(
+    const std::filesystem::path& session_root,
+    const std::vector<std::uint8_t>& bytes) {
+  const auto output_path = session_root / ("snapshot-" + BasenameToken(session_root) + ".png");
+  std::ofstream output(output_path, std::ios::binary);
+  if (!output.is_open()) {
+    throw std::runtime_error("failed to create rendered screenshot at " + output_path.string());
+  }
+  output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  return output_path;
+}
+
+class DevToolsMethodObserver final : public CefDevToolsMessageObserver {
+ public:
+  explicit DevToolsMethodObserver(std::shared_ptr<std::promise<std::optional<std::string>>> promise)
+      : promise_(std::move(promise)) {}
+
+  void SetMethodId(int method_id) {
+    method_id_ = method_id;
+  }
+
+  void SetRegistration(CefRefPtr<CefRegistration> registration) {
+    registration_ = std::move(registration);
+  }
+
+  void Fail() {
+    Resolve(std::nullopt);
+  }
+
+  void OnDevToolsMethodResult(
+      CefRefPtr<CefBrowser>,
+      int message_id,
+      bool success,
+      const void* result,
+      size_t result_size) override {
+    if (message_id != method_id_) {
+      return;
+    }
+    if (!success || result == nullptr || result_size == 0) {
+      Resolve(std::nullopt);
+      return;
+    }
+    Resolve(std::string(static_cast<const char*>(result), result_size));
+  }
+
+  void OnDevToolsAgentDetached(CefRefPtr<CefBrowser>) override {
+    Resolve(std::nullopt);
+  }
+
+  IMPLEMENT_REFCOUNTING(DevToolsMethodObserver);
+
+ private:
+  void Resolve(std::optional<std::string> result) {
+    if (resolved_.exchange(true)) {
+      return;
+    }
+    promise_->set_value(std::move(result));
+    registration_ = nullptr;
+  }
+
+  int method_id_ = 0;
+  std::atomic<bool> resolved_{false};
+  std::shared_ptr<std::promise<std::optional<std::string>>> promise_;
+  CefRefPtr<CefRegistration> registration_;
+};
+
+std::optional<std::vector<std::uint8_t>> CaptureScreenshotWithDevTools(
+    CefRefPtr<CefBrowser> browser) {
+  auto promise = std::make_shared<std::promise<std::optional<std::string>>>();
+  auto future = promise->get_future();
+
+  const bool submitted = InvokeOnUiThread<bool>([browser, promise]() {
+    CefRefPtr<DevToolsMethodObserver> observer = new DevToolsMethodObserver(promise);
+    observer->SetRegistration(browser->GetHost()->AddDevToolsMessageObserver(observer));
+
+    CefRefPtr<CefDictionaryValue> params = CefDictionaryValue::Create();
+    params->SetString("format", "png");
+    params->SetBool("fromSurface", true);
+    params->SetBool("captureBeyondViewport", true);
+
+    const int method_id = browser->GetHost()->ExecuteDevToolsMethod(0, "Page.captureScreenshot", params);
+    if (method_id == 0) {
+      observer->Fail();
+      return false;
+    }
+
+    observer->SetMethodId(method_id);
+    return true;
+  });
+  if (!submitted) {
+    return std::nullopt;
+  }
+  if (future.wait_for(kDevToolsTimeout) != std::future_status::ready) {
+    return std::nullopt;
+  }
+
+  const auto method_result = future.get();
+  if (!method_result.has_value() || method_result->empty()) {
+    return std::nullopt;
+  }
+
+  const auto parsed = nlohmann::json::parse(*method_result, nullptr, false);
+  if (parsed.is_discarded()) {
+    return std::nullopt;
+  }
+  const std::string encoded = parsed.value("data", std::string{});
+  if (encoded.empty()) {
+    return std::nullopt;
+  }
+
+  CefRefPtr<CefBinaryValue> decoded = CefBase64Decode(encoded);
+  if (!decoded || !decoded->IsValid() || decoded->GetSize() == 0) {
+    return std::nullopt;
+  }
+
+  std::vector<std::uint8_t> bytes(decoded->GetSize());
+  decoded->GetData(bytes.data(), bytes.size(), 0);
+  return bytes;
+}
+
 struct SessionSnapshot {
   std::string final_url;
   std::optional<std::string> title;
@@ -174,7 +305,6 @@ class SessionClient final : public CefClient,
 
   bool CreateBrowser(const std::string& initial_url, std::string* error_message) {
     const bool created = InvokeOnUiThread<bool>([this, initial_url]() {
-      std::filesystem::create_directories(session_root_ / "profile");
       CefWindowInfo window_info;
       window_info.SetAsWindowless(0);
 
@@ -182,7 +312,10 @@ class SessionClient final : public CefClient,
       browser_settings.windowless_frame_rate = 30;
 
       CefRequestContextSettings context_settings;
-      CefString(&context_settings.cache_path) = (session_root_ / "profile").string();
+      request_context_ = CefRequestContext::CreateContext(context_settings, nullptr);
+      if (!request_context_) {
+        return false;
+      }
 
       browser_ = CefBrowserHost::CreateBrowserSync(
           window_info,
@@ -190,7 +323,7 @@ class SessionClient final : public CefClient,
           initial_url,
           browser_settings,
           nullptr,
-          CefRequestContext::CreateContext(context_settings, nullptr));
+          request_context_);
       if (browser_) {
         browser_->GetHost()->WasResized();
       }
@@ -251,31 +384,32 @@ class SessionClient final : public CefClient,
     }
 
     if (capture_screenshot) {
-      InvokeOnUiThreadAndWait([browser]() {
-        browser->GetHost()->WasResized();
-      });
-      if (!WaitForPaint(error_message)) {
-        return std::nullopt;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        has_paint_ = false;
       }
+      InvokeOnUiThreadAndWait([browser]() {
+        browser->GetHost()->WasHidden(false);
+        browser->GetHost()->WasResized();
+        browser->GetHost()->Invalidate(PET_VIEW);
+      });
+      std::string ignored_paint_error;
+      WaitForPaint(&ignored_paint_error);
     }
 
-    const auto page_data = InvokeOnUiThread<std::tuple<std::string, std::string, std::string, std::string>>(
-        [browser, include_html]() {
+    const auto page_data = InvokeOnUiThread<std::tuple<CefRefPtr<CefFrame>, std::string>>(
+        [browser]() {
           CefRefPtr<CefFrame> frame = browser->GetMainFrame();
           const std::string current_url = frame ? frame->GetURL().ToString() : std::string();
-          const std::string title;
-          const std::string visible_text = frame ? AwaitFrameText(frame, false) : std::string();
-          const std::string html_source = include_html && frame ? AwaitFrameText(frame, true) : std::string();
-          return std::make_tuple(current_url, title, visible_text, html_source);
+          return std::make_tuple(frame, current_url);
         });
+    CefRefPtr<CefFrame> frame = std::get<0>(page_data);
+    const std::string html_source = include_html && frame ? AwaitFrameText(frame, true) : std::string();
 
     SessionSnapshot snapshot;
-    snapshot.final_url = std::get<0>(page_data);
-    if (!std::get<1>(page_data).empty()) {
-      snapshot.title = std::get<1>(page_data);
-    }
-    snapshot.visible_text = std::get<2>(page_data);
-    snapshot.html_source = std::get<3>(page_data);
+    snapshot.final_url = std::get<1>(page_data);
+    snapshot.visible_text.clear();
+    snapshot.html_source = html_source;
 
     if (capture_screenshot) {
       std::vector<std::uint8_t> pixels;
@@ -289,6 +423,12 @@ class SessionClient final : public CefClient,
       }
       if (!pixels.empty() && width > 0 && height > 0) {
         snapshot.screenshot_path = WritePpmScreenshot(session_root_, pixels, width, height);
+      }
+      if (!snapshot.screenshot_path.has_value()) {
+        const auto png_bytes = CaptureScreenshotWithDevTools(browser);
+        if (png_bytes.has_value() && !png_bytes->empty()) {
+          snapshot.screenshot_path = WritePngScreenshot(session_root_, *png_bytes);
+        }
       }
     }
 
@@ -445,6 +585,7 @@ class SessionClient final : public CefClient,
   mutable std::mutex mutex_;
   mutable std::condition_variable cv_;
   mutable CefRefPtr<CefBrowser> browser_;
+  CefRefPtr<CefRequestContext> request_context_;
   mutable bool load_in_progress_ = true;
   mutable bool load_failed_ = false;
   mutable std::string last_error_message_;
@@ -580,7 +721,7 @@ class CefBrowserBackend::Impl {
       }
       return std::nullopt;
     }
-    auto snapshot = client->Snapshot(false, true, error_message);
+    auto snapshot = client->Snapshot(true, true, error_message);
     if (!snapshot.has_value()) {
       return std::nullopt;
     }

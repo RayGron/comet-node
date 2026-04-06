@@ -157,4 +157,16 @@ function(comet_stage_cef_runtime target_name)
       endif()
     endif()
   endforeach()
+
+  foreach(_cef_release_resource snapshot_blob.bin v8_context_snapshot.bin)
+    if(EXISTS "${_comet_cef_root}/Release/${_cef_release_resource}")
+      add_custom_command(
+        TARGET ${target_name}
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_comet_cef_root}/Release/${_cef_release_resource}"
+                "$<TARGET_FILE_DIR:${target_name}>/${_cef_release_resource}"
+      )
+    endif()
+  endforeach()
 endfunction()

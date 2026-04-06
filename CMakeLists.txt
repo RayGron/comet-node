@@ -668,6 +668,12 @@ if(NOT WIN32)
   )
   if(COMET_WITH_CEF)
     target_compile_definitions(comet-browsingd PRIVATE COMET_WITH_CEF=1 USING_CEF_SHARED=1)
+    set_target_properties(
+      comet-browsingd
+      PROPERTIES
+        BUILD_RPATH "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN"
+    )
     comet_stage_cef_runtime(comet-browsingd)
   endif()
   comet_enable_strict_warnings(comet-browsingd)

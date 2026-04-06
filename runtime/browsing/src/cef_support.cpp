@@ -2,6 +2,7 @@
 
 #include <mutex>
 #include <stdexcept>
+#include <system_error>
 
 #if COMET_WITH_CEF
 #include <unistd.h>
@@ -17,6 +18,15 @@ namespace comet::browsing {
 #if COMET_WITH_CEF
 namespace {
 
+void AppendSwitchValue(
+    CefRefPtr<CefCommandLine> command_line,
+    const char* name,
+    const char* value) {
+  if (!command_line->HasSwitch(name)) {
+    command_line->AppendSwitchWithValue(name, value);
+  }
+}
+
 class CometCefApp final : public CefApp, public CefBrowserProcessHandler {
  public:
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
@@ -28,8 +38,20 @@ class CometCefApp final : public CefApp, public CefBrowserProcessHandler {
       CefRefPtr<CefCommandLine> command_line) override {
     command_line->AppendSwitch("disable-gpu");
     command_line->AppendSwitch("disable-gpu-compositing");
+    command_line->AppendSwitch("disable-background-networking");
+    command_line->AppendSwitch("disable-component-update");
     command_line->AppendSwitch("disable-dev-shm-usage");
+    command_line->AppendSwitch("disable-domain-reliability");
+    command_line->AppendSwitch("disable-sync");
+    command_line->AppendSwitch("metrics-recording-only");
     command_line->AppendSwitch("mute-audio");
+    command_line->AppendSwitch("no-default-browser-check");
+    command_line->AppendSwitch("no-first-run");
+    AppendSwitchValue(command_line, "password-store", "basic");
+    AppendSwitchValue(
+        command_line,
+        "disable-features",
+        "AutofillServerCommunication,CertificateTransparencyComponentUpdater,OptimizationHints,MediaRouter");
     if (process_type.empty()) {
       command_line->AppendSwitch("headless");
     }
@@ -50,6 +72,24 @@ std::string ReadExecutablePath() {
   }
   path.resize(static_cast<std::size_t>(read_count));
   return path;
+}
+
+std::filesystem::path ExecutableDirectory(const std::filesystem::path& executable_path) {
+  if (executable_path.has_parent_path()) {
+    return executable_path.parent_path();
+  }
+  return std::filesystem::current_path();
+}
+
+std::filesystem::path EnsureDirectory(const std::filesystem::path& path) {
+  const auto absolute_path = std::filesystem::absolute(path);
+  std::error_code error;
+  std::filesystem::create_directories(absolute_path, error);
+  if (error) {
+    throw std::runtime_error(
+        "failed to prepare CEF cache directory at " + absolute_path.string() + ": " + error.message());
+  }
+  return absolute_path;
 }
 
 }  // namespace
@@ -106,8 +146,13 @@ void InitializeCefOrThrow(
   settings.no_sandbox = true;
   settings.multi_threaded_message_loop = true;
   settings.windowless_rendering_enabled = true;
+  settings.log_severity = LOGSEVERITY_FATAL;
+  const auto executable_dir = ExecutableDirectory(executable_path);
+  const auto cache_root = EnsureDirectory(state_root);
   CefString(&settings.browser_subprocess_path) = executable_path.string();
-  CefString(&settings.root_cache_path) = (state_root / "cef-global").string();
+  CefString(&settings.resources_dir_path) = executable_dir.string();
+  CefString(&settings.locales_dir_path) = (executable_dir / "locales").string();
+  CefString(&settings.root_cache_path) = cache_root.string();
 
   if (!CefInitialize(main_args, settings, g_cef_app, nullptr)) {
     throw std::runtime_error("CEF initialization failed");

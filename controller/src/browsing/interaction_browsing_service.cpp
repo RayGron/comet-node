@@ -193,6 +193,48 @@ std::vector<std::string> ExtractUrls(const std::string& text) {
 }
 
 std::string SanitizeForSearchQuery(std::string text) {
+  const auto trim_metadata_suffix = [&text]() {
+    std::size_t cutoff = std::string::npos;
+    const auto note_cutoff = [&](std::string_view marker) {
+      const std::size_t pos = text.find(std::string(marker));
+      if (pos != std::string::npos &&
+          (cutoff == std::string::npos || pos < cutoff)) {
+        cutoff = pos;
+      }
+    };
+
+    note_cutoff("additional details:");
+    note_cutoff("workspaceroot:");
+    note_cutoff("platform:");
+    note_cutoff("compiler:");
+    note_cutoff("attachedfiles:");
+    note_cutoff("mountedpaths:");
+
+    const std::size_t details_pos = text.find("details:");
+    if (details_pos != std::string::npos) {
+      static const std::vector<std::string> metadata_markers = {
+          "workspaceroot:",
+          "platform:",
+          "compiler:",
+          "attachedfiles:",
+          "mountedpaths:",
+      };
+      for (const auto& marker : metadata_markers) {
+        const std::size_t marker_pos = text.find(marker, details_pos + 1);
+        if (marker_pos != std::string::npos) {
+          if (cutoff == std::string::npos || details_pos < cutoff) {
+            cutoff = details_pos;
+          }
+          break;
+        }
+      }
+    }
+
+    if (cutoff != std::string::npos) {
+      text.erase(cutoff);
+    }
+  };
+
   static const std::vector<std::string> prompt_wrappers = {
       "user message:",
       "message:",
@@ -206,6 +248,7 @@ std::string SanitizeForSearchQuery(std::string text) {
       break;
     }
   }
+  trim_metadata_suffix();
 
   static const std::vector<std::string> removable_phrases = {
       "reply to the user in chat mode.",
@@ -248,6 +291,7 @@ std::string SanitizeForSearchQuery(std::string text) {
       text.erase(pos, phrase.size());
     }
   }
+  trim_metadata_suffix();
   for (char& ch : text) {
     if (ch == '\n' || ch == '\r' || ch == '\t') {
       ch = ' ';

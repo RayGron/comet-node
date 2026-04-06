@@ -2293,6 +2293,36 @@ int main() {
     }
 
     {
+      InteractionBrowsingRuntimeTestServer runtime;
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context = BuildBrowsingRequestContext(
+          {"Enable web for this chat.",
+           "Используй веб. Проверь текущую цену ETH и коротко сравни изменение ETH и BTC за последние 24 часа.\n"
+           "Additional details:\n"
+           "workspaceRoot: /Users/vladislavhalasiuk/Projects/Repos/maglev\n"
+           "platform: linux\n"
+           "compiler: gcc-13"});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "metadata suffix sanitization should not fail");
+      const auto queries = runtime.search_queries();
+      Expect(queries.size() == 1,
+             "metadata suffix sanitization test should issue exactly one search query");
+      Expect(queries.front().find("additional details") == std::string::npos,
+             "sanitized query should strip the additional details header");
+      Expect(queries.front().find("workspaceroot") == std::string::npos,
+             "sanitized query should strip workspaceRoot metadata");
+      Expect(queries.front().find("platform:") == std::string::npos,
+             "sanitized query should strip platform metadata");
+      Expect(queries.front().find("compiler:") == std::string::npos,
+             "sanitized query should strip compiler metadata");
+      Expect(queries.front().find("цену eth") != std::string::npos,
+             "sanitized query should preserve the substantive ETH request");
+      std::cout << "ok: interaction-browsing-metadata-suffix-query-sanitization" << '\n';
+    }
+
+    {
       InteractionBrowsingRuntimeServerConfig config;
       config.search_results = json::array(
           {json{{"url", "https://example.com/shared"},

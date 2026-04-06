@@ -3,8 +3,10 @@
 #include <mutex>
 #include <stdexcept>
 #include <system_error>
+#include <vector>
 
 #if COMET_WITH_CEF
+#include <cstdlib>
 #include <unistd.h>
 
 #include "include/cef_app.h"
@@ -92,6 +94,35 @@ std::filesystem::path EnsureDirectory(const std::filesystem::path& path) {
   return absolute_path;
 }
 
+void ApplyEnvironmentIsolation(const std::filesystem::path& cache_root) {
+  const auto isolated_home = EnsureDirectory(cache_root / "home");
+  const auto isolated_config = EnsureDirectory(cache_root / "xdg-config");
+  const auto isolated_cache = EnsureDirectory(cache_root / "xdg-cache");
+  const auto isolated_data = EnsureDirectory(cache_root / "xdg-data");
+
+  setenv("HOME", isolated_home.string().c_str(), 1);
+  setenv("XDG_CONFIG_HOME", isolated_config.string().c_str(), 1);
+  setenv("XDG_CACHE_HOME", isolated_cache.string().c_str(), 1);
+  setenv("XDG_DATA_HOME", isolated_data.string().c_str(), 1);
+
+  const std::vector<const char*> secret_env_keys = {
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "GOOGLE_API_KEY",
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_SESSION_TOKEN",
+      "AZURE_OPENAI_API_KEY",
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
+      "SSH_AUTH_SOCK",
+  };
+  for (const char* key : secret_env_keys) {
+    unsetenv(key);
+  }
+}
+
 }  // namespace
 #endif
 
@@ -149,6 +180,7 @@ void InitializeCefOrThrow(
   settings.log_severity = LOGSEVERITY_FATAL;
   const auto executable_dir = ExecutableDirectory(executable_path);
   const auto cache_root = EnsureDirectory(state_root);
+  ApplyEnvironmentIsolation(cache_root);
   CefString(&settings.browser_subprocess_path) = executable_path.string();
   CefString(&settings.resources_dir_path) = executable_dir.string();
   CefString(&settings.locales_dir_path) = (executable_dir / "locales").string();

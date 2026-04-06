@@ -424,7 +424,16 @@ bool SearchResultsLookThin(
   }
   int low_signal_results = 0;
   for (const auto& result : results) {
-    if (TrimCopy(result.snippet).empty() || TrimCopy(result.snippet) == TrimCopy(result.title)) {
+    const std::string snippet = TrimCopy(result.snippet);
+    const std::string summary = LowercaseCopy(
+        TrimCopy(result.title) + "\n" + snippet + "\n" + LowercaseCopy(result.url));
+    const bool looks_blocked =
+        summary.find("you've been blocked by network security") != std::string::npos ||
+        summary.find("try reloading") != std::string::npos ||
+        summary.find("something went wrong") != std::string::npos ||
+        summary.find("/i/flow/login") != std::string::npos ||
+        summary.find("js_challenge") != std::string::npos;
+    if (snippet.empty() || snippet == TrimCopy(result.title) || looks_blocked) {
       ++low_signal_results;
     }
   }
@@ -1108,6 +1117,7 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
       cef_backend_->IsAvailable()) {
     std::unordered_set<std::string> seen_urls;
     std::vector<SearchResult> rendered_results;
+    std::vector<SearchResult> fallback_rendered_results;
     int discovery_index = 0;
     for (const auto& domain : requested_domains) {
       const auto discovery_url = BuildSiteDiscoveryUrl(domain, query);
@@ -1150,9 +1160,15 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
     }
 
     if (!rendered_results.empty()) {
-      results = std::move(rendered_results);
-      rendered_discovery_used = true;
-    } else {
+      if (SearchResultsLookThin(rendered_results, limit)) {
+        fallback_rendered_results = rendered_results;
+      } else {
+        results = std::move(rendered_results);
+        rendered_discovery_used = true;
+      }
+    }
+
+    if (!rendered_discovery_used) {
       std::string rendered_error;
       const std::string rendered_search_url =
           "https://www.bing.com/search?q=" + UrlEncode(effective_query);
@@ -1175,6 +1191,11 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
                            {"query", query},
                            {"requested_domains", requested_domains},
                            {"message", rendered_error}});
+      }
+
+      if (!rendered_discovery_used && !fallback_rendered_results.empty()) {
+        results = std::move(fallback_rendered_results);
+        rendered_discovery_used = true;
       }
     }
   }

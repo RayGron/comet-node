@@ -1121,6 +1121,18 @@ int main() {
               "no-new-privileges:true") != service_it->security_opts.end(),
           "llm-with-browsing: compose service should enable no-new-privileges");
       Expect(
+          std::find(
+              service_it->security_opts.begin(),
+              service_it->security_opts.end(),
+              "apparmor=unconfined") != service_it->security_opts.end(),
+          "llm-with-browsing: compose service should relax apparmor for CEF");
+      Expect(
+          std::find(
+              service_it->security_opts.begin(),
+              service_it->security_opts.end(),
+              "seccomp=unconfined") != service_it->security_opts.end(),
+          "llm-with-browsing: compose service should relax seccomp for CEF");
+      Expect(
           std::none_of(
               service_it->volumes.begin(),
               service_it->volumes.end(),

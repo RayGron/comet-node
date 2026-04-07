@@ -1,15 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "usage: print-build-dir.sh <os> <arch>" >&2
-  exit 1
-fi
-
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repo_dir="$(cd -- "${script_dir}/.." && pwd)"
-target_os="${1}"
-target_arch="${2}"
-build_root="${COMET_BUILD_ROOT:-${repo_dir}/build}"
+source "${script_dir}/build-context.sh"
 
-echo "${build_root}/${target_os}/${target_arch}"
+comet_resolve_target_context "${script_dir}" "$@"
+echo "${BUILD_DIR}"

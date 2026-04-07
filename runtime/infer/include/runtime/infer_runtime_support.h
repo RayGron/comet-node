@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -49,6 +50,7 @@ void WriteInferRuntimeStatus(
     bool inference_ready,
     bool gateway_ready,
     int supervisor_pid,
-    const std::string& started_at);
+    const std::string& started_at,
+    const std::optional<std::uint64_t>& kv_cache_bytes = std::nullopt);
 
 }  // namespace comet::infer::runtime_support

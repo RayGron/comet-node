@@ -128,6 +128,33 @@ void AppendUniquePublishedPort(
   ports->push_back(port);
 }
 
+std::vector<std::string> LocalWorkerGpuDevices(const std::vector<InstanceSpec>& node_instances) {
+  std::vector<std::string> gpu_devices;
+  for (const auto& candidate : node_instances) {
+    if (candidate.role != InstanceRole::Worker || !candidate.gpu_device.has_value() ||
+        candidate.gpu_device->empty()) {
+      continue;
+    }
+    if (std::find(gpu_devices.begin(), gpu_devices.end(), *candidate.gpu_device) !=
+        gpu_devices.end()) {
+      continue;
+    }
+    gpu_devices.push_back(*candidate.gpu_device);
+  }
+  return gpu_devices;
+}
+
+std::string JoinStrings(const std::vector<std::string>& values, std::string_view delimiter) {
+  std::ostringstream joined;
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    if (index > 0) {
+      joined << delimiter;
+    }
+    joined << values[index];
+  }
+  return joined.str();
+}
+
 const DiskSpec& FindDiskByName(
     const std::vector<DiskSpec>& disks,
     const std::string& node_name,
@@ -205,6 +232,12 @@ ComposeService BuildComposeService(
     AppendUniquePublishedPort(&service.published_ports, port);
   }
   service.gpu_device = instance.gpu_device;
+  if (use_llama_rpc && instance.role == InstanceRole::Infer) {
+    service.gpu_devices = LocalWorkerGpuDevices(node_instances);
+    if (!service.gpu_device.has_value() && !service.gpu_devices.empty()) {
+      service.gpu_device = service.gpu_devices.front();
+    }
+  }
   if (!service.gpu_device.has_value() && instance.role == InstanceRole::Infer &&
       !use_llama_rpc) {
     const auto local_gpu_worker = std::find_if(
@@ -221,7 +254,9 @@ ComposeService BuildComposeService(
   if (service.gpu_device.has_value()) {
     service.use_nvidia_runtime = true;
     service.environment["NVIDIA_DRIVER_CAPABILITIES"] = "compute,utility";
-    service.environment["NVIDIA_VISIBLE_DEVICES"] = *service.gpu_device;
+    service.environment["NVIDIA_VISIBLE_DEVICES"] =
+        service.gpu_devices.empty() ? *service.gpu_device
+                                    : JoinStrings(service.gpu_devices, ",");
     service.security_opts.push_back("apparmor=unconfined");
   } else if (use_llama_rpc && instance.role == InstanceRole::Infer) {
     service.use_nvidia_runtime = true;

@@ -460,6 +460,88 @@ void TestSkillsFactoryProbeFailureDoesNotBreakPayload() {
   std::cout << "ok: skills-factory-probe-failure-does-not-break-payload" << '\n';
 }
 
+void TestRuntimePayloadIncludesKvCacheBytes() {
+  const comet::controller::ControllerRuntimeSupportService runtime_support_service;
+  const std::string now = runtime_support_service.UtcNowSqlTimestamp();
+
+  comet::NodeInventory node;
+  node.name = "node-a";
+  node.gpu_devices = {"0"};
+
+  comet::DesiredState desired_state;
+  desired_state.plane_name = "plane-a";
+  desired_state.nodes.push_back(node);
+
+  comet::HostObservation observation;
+  observation.node_name = "node-a";
+  observation.plane_name = desired_state.plane_name;
+  observation.status = comet::HostObservationStatus::Applied;
+  observation.heartbeat_at = now;
+
+  comet::RuntimeStatus runtime_status;
+  runtime_status.plane_name = desired_state.plane_name;
+  runtime_status.runtime_backend = "llama-rpc-head";
+  runtime_status.runtime_phase = "running";
+  runtime_status.launch_ready = true;
+  runtime_status.kv_cache_bytes = 3ULL * 1024ULL * 1024ULL * 1024ULL;
+  observation.runtime_status_json = comet::SerializeRuntimeStatusJson(runtime_status);
+
+  std::map<std::string, comet::NodeInventory> dashboard_nodes;
+  dashboard_nodes.emplace(node.name, node);
+  std::map<std::string, comet::HostObservation> observation_by_node;
+  observation_by_node.emplace(observation.node_name, observation);
+  const std::map<std::string, comet::NodeAvailabilityOverride> availability_override_map;
+
+  const auto nodes_payload = comet::controller::DashboardService::BuildNodesPayload(
+      dashboard_nodes,
+      observation_by_node,
+      availability_override_map,
+      desired_state,
+      {},
+      desired_state.plane_name,
+      std::string("running"),
+      1,
+      300,
+      [&](const std::string& heartbeat_at) {
+        return runtime_support_service.HeartbeatAgeSeconds(heartbeat_at);
+      },
+      [&](const std::optional<long long>& age_seconds, int stale_after_seconds) {
+        return runtime_support_service.HealthFromAge(age_seconds, stale_after_seconds);
+      },
+      [&](const std::map<std::string, comet::NodeAvailabilityOverride>& overrides,
+          const std::string& node_name) {
+        return runtime_support_service.ResolveNodeAvailability(overrides, node_name);
+      },
+      [&](const comet::HostObservation& value) {
+        return runtime_support_service.ParseRuntimeStatus(value);
+      },
+      [](const comet::HostObservation&) -> std::optional<comet::GpuTelemetrySnapshot> {
+        return std::nullopt;
+      });
+
+  Expect(nodes_payload.items.size() == 1, "expected a single node payload item");
+  Expect(
+      nodes_payload.items.at(0).at("kv_cache_bytes").get<std::uint64_t>() ==
+          *runtime_status.kv_cache_bytes,
+      "node payload should expose kv_cache_bytes");
+  Expect(
+      nodes_payload.kv_cache_bytes.has_value() &&
+          *nodes_payload.kv_cache_bytes == *runtime_status.kv_cache_bytes,
+      "nodes payload should aggregate kv_cache_bytes");
+
+  const auto runtime_payload = comet::controller::DashboardService::BuildRuntimePayload(
+      nodes_payload.observed_nodes,
+      nodes_payload.ready_nodes,
+      nodes_payload.not_ready_nodes,
+      nodes_payload.degraded_gpu_nodes,
+      nodes_payload.kv_cache_bytes);
+  Expect(
+      runtime_payload.at("kv_cache_bytes").get<std::uint64_t>() == *runtime_status.kv_cache_bytes,
+      "runtime payload should expose aggregated kv_cache_bytes");
+
+  std::cout << "ok: runtime-payload-includes-kv-cache-bytes" << '\n';
+}
+
 }  // namespace
 
 int main() {
@@ -468,6 +550,7 @@ int main() {
     TestHostdStaleHeartbeatWarning();
     TestWebUiMissingStateCritical();
     TestSkillsFactoryProbeFailureDoesNotBreakPayload();
+    TestRuntimePayloadIncludesKvCacheBytes();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "dashboard service tests failed: " << error.what() << '\n';

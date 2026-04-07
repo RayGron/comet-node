@@ -28,16 +28,14 @@ namespace {
 
 constexpr std::string_view kJobMetadataPrefix = ".comet-model-job-";
 constexpr std::string_view kJobMetadataSuffix = ".json";
-constexpr std::array<std::string_view, 7> kKnownGgufQuantizations = {
+constexpr std::array<std::string_view, 5> kKnownGgufQuantizations = {
     "FP16",
-    "TQ2_0",
-    "TQ1_0",
     "Q8_0",
     "Q5_K_M",
     "Q4_K_M",
     "IQ4_NL",
 };
-constexpr std::string_view kDefaultGgufQuantization = "TQ2_0";
+constexpr std::string_view kDefaultGgufQuantization = "Q8_0";
 
 struct MultipartGroup {
   std::string root;

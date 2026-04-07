@@ -24,10 +24,8 @@ namespace {
 constexpr std::string_view kFormatGguf = "gguf";
 constexpr std::string_view kFormatSafetensors = "safetensors";
 constexpr std::string_view kFormatUnknown = "unknown";
-constexpr std::array<std::string_view, 7> kKnownQuantizations = {
+constexpr std::array<std::string_view, 5> kKnownQuantizations = {
     "FP16",
-    "TQ2_0",
-    "TQ1_0",
     "Q8_0",
     "Q5_K_M",
     "Q4_K_M",

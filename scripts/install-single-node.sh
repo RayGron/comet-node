@@ -287,7 +287,7 @@ if [[ "${skip_image_build}" != "yes" ]]; then
   run_as_root env PATH="${PATH}" HOME="${HOME}" "${script_dir}/build-runtime-images.sh" "${image_build_args[@]}"
 fi
 
-build_dir="$("${script_dir}/print-host-build-dir.sh")"
+build_dir="$("${script_dir}/print-build-dir.sh")"
 launcher_binary="${build_dir}/comet-node"
 
 if [[ ! -x "${launcher_binary}" ]]; then

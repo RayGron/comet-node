@@ -351,6 +351,8 @@ json ToJson(const RuntimeStatus& status) {
       {"gateway_health_url", status.gateway_health_url},
       {"started_at", status.started_at},
       {"last_activity_at", status.last_activity_at},
+      {"kv_cache_bytes",
+       status.kv_cache_bytes.has_value() ? json(*status.kv_cache_bytes) : json(nullptr)},
       {"ready", status.ready},
       {"active_model_ready", status.active_model_ready},
       {"gateway_plan_ready", status.gateway_plan_ready},
@@ -400,6 +402,14 @@ RuntimeStatus RuntimeStatusFromJson(const json& value) {
   status.gateway_health_url = value.value("gateway_health_url", std::string{});
   status.started_at = value.value("started_at", std::string{});
   status.last_activity_at = value.value("last_activity_at", std::string{});
+  if (value.contains("kv_cache_bytes") && value.at("kv_cache_bytes").is_number_unsigned()) {
+    status.kv_cache_bytes = value.at("kv_cache_bytes").get<std::uint64_t>();
+  } else if (value.contains("kv_cache_bytes") && value.at("kv_cache_bytes").is_number_integer()) {
+    const auto raw = value.at("kv_cache_bytes").get<std::int64_t>();
+    if (raw >= 0) {
+      status.kv_cache_bytes = static_cast<std::uint64_t>(raw);
+    }
+  }
   status.ready = value.value("ready", false);
   status.active_model_ready = value.value("active_model_ready", false);
   status.gateway_plan_ready = value.value("gateway_plan_ready", false);

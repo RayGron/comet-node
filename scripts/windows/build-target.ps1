@@ -1,7 +1,6 @@
 param(
-  [Parameter(Mandatory = $true)]
-  [ValidateSet('x64', 'arm64')]
-  [string]$TargetArch,
+  [Parameter()]
+  [string]$TargetArch = '',
 
   [Parameter()]
   [ValidateSet('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel')]
@@ -9,6 +8,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Resolve-DefaultTargetArch {
+  $osArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+  switch ($osArchitecture) {
+    'X64' { return 'x64' }
+    'Arm64' { return 'arm64' }
+    default { throw "Unsupported Windows host architecture '$osArchitecture'." }
+  }
+}
 
 function Resolve-VcpkgExe {
   param(
@@ -65,9 +73,6 @@ function Resolve-CMakeGenerator {
 function Resolve-CMakeExe {
   param(
     [Parameter(Mandatory = $true)]
-    [string]$RepoRoot,
-
-    [Parameter(Mandatory = $true)]
     [string]$VcpkgExe
   )
 
@@ -96,37 +101,34 @@ function Resolve-CMakeExe {
 
 $scriptDir = Split-Path -Parent $PSCommandPath
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..\..')).Path
+$TargetArch = if ($TargetArch) { $TargetArch } else { Resolve-DefaultTargetArch }
+if ($TargetArch -notin @('x64', 'arm64')) {
+  throw "Unsupported target architecture '$TargetArch'. Expected one of: x64, arm64."
+}
 $triplet = "$TargetArch-windows"
 $buildDir = Join-Path $repoRoot "build\windows\$TargetArch"
-$installRoot = Join-Path $repoRoot "vcpkg_installed\$triplet-root"
-$prefixPath = Join-Path $installRoot $triplet
 $vcpkgExe = Resolve-VcpkgExe -RepoRoot $repoRoot
-$cmakeExe = Resolve-CMakeExe -RepoRoot $repoRoot -VcpkgExe $vcpkgExe
+$vcpkgRoot = Split-Path -Parent $VcpkgExe
+$toolchainFile = Join-Path $vcpkgRoot 'scripts\buildsystems\vcpkg.cmake'
+$cmakeExe = Resolve-CMakeExe -VcpkgExe $vcpkgExe
 $generator = Resolve-CMakeGenerator -CmakeExe $cmakeExe
+
+if (-not (Test-Path $toolchainFile)) {
+  throw "Unable to find vcpkg toolchain file at '$toolchainFile'."
+}
 
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 Remove-Item (Join-Path $buildDir 'CMakeCache.txt') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $buildDir 'CMakeFiles') -Recurse -Force -ErrorAction SilentlyContinue
-
-& $vcpkgExe install `
-  "--x-manifest-root=$repoRoot" `
-  "--x-install-root=$installRoot" `
-  '--x-wait-for-lock' `
-  "--triplet=$triplet"
-
-if ($LASTEXITCODE -ne 0) {
-  exit $LASTEXITCODE
-}
 
 & $cmakeExe `
   '-S' $repoRoot `
   '-B' $buildDir `
   '-G' $generator `
   '-A' $TargetArch `
-  '-DCOMET_SKIP_VCPKG_TOOLCHAIN=ON' `
-  "-DCMAKE_PREFIX_PATH=$prefixPath" `
+  "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile" `
   "-DVCPKG_TARGET_TRIPLET=$triplet" `
-  "-DVCPKG_INSTALLED_DIR=$installRoot"
+  "-DCMAKE_BUILD_TYPE=$BuildType"
 
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE

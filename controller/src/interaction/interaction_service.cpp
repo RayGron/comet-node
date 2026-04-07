@@ -2973,6 +2973,11 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
                !resolution.runtime_status->active_served_model_name.empty()
            ? nlohmann::json(resolution.runtime_status->active_served_model_name)
            : nlohmann::json(nullptr)},
+      {"kv_cache_bytes",
+       resolution.runtime_status.has_value() &&
+               resolution.runtime_status->kv_cache_bytes.has_value()
+           ? nlohmann::json(*resolution.runtime_status->kv_cache_bytes)
+           : nlohmann::json(nullptr)},
       {"default_response_language",
        resolution.desired_state.interaction.has_value()
            ? nlohmann::json(

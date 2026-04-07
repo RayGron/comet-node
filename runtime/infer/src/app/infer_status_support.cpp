@@ -198,6 +198,9 @@ comet::RuntimeStatus MergeWithObservedRuntimeStatus(
     status.launch_ready =
         status.active_model_ready && status.inference_ready && status.gateway_ready;
   }
+  if (observed->kv_cache_bytes.has_value()) {
+    status.kv_cache_bytes = observed->kv_cache_bytes;
+  }
 
   return status;
 }
@@ -312,6 +315,11 @@ int PrintStatus(const RuntimeConfig& config, const std::string& backend, bool ap
   std::cout << "api_endpoints_expected=" << status.api_endpoints_expected << "\n";
   std::cout << "api_endpoints_ready=" << status.api_endpoints_ready << "\n";
   std::cout << "launch_ready=" << (status.launch_ready ? "yes" : "no") << "\n";
+  std::cout << "kv_cache_bytes="
+            << (status.kv_cache_bytes.has_value()
+                    ? std::to_string(*status.kv_cache_bytes)
+                    : std::string("n/a"))
+            << "\n";
   if (apply) {
     comet::SaveRuntimeStatusJson(status, paths.runtime_status_path.string());
   }

@@ -27,8 +27,7 @@ wait_for_command_match() {
 }
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-read -r host_os host_arch < <("${script_dir}/detect-host-target.sh")
-build_dir="$("${script_dir}/print-build-dir.sh" "${host_os}" "${host_arch}")"
+build_dir="$("${script_dir}/print-build-dir.sh")"
 skip_build=0
 if [[ "${1:-}" == "--skip-build" ]]; then
   skip_build=1
@@ -79,7 +78,7 @@ cmake -E remove_directory "${remote_root}"
 cmake -E remove_directory "${local_root}"
 
 if [[ "${skip_build}" -eq 0 ]]; then
-  "${script_dir}/build-target.sh" "${host_os}" "${host_arch}" Debug
+  "${script_dir}/build-target.sh" Debug
 fi
 
 remote_http_port="$("${script_dir}/comet-devtool.sh" free-port)"

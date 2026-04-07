@@ -3,8 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
-read -r host_os host_arch < <("${script_dir}/detect-host-target.sh")
-build_dir="$("${script_dir}/print-build-dir.sh" "${host_os}" "${host_arch}")"
+build_dir="$("${script_dir}/print-build-dir.sh")"
 
 skip_build=0
 for arg in "$@"; do
@@ -18,7 +17,7 @@ for arg in "$@"; do
 done
 
 if [[ "${skip_build}" -eq 0 ]]; then
-  "${script_dir}/configure-build.sh" "${host_os}" "${host_arch}" Debug >/dev/null
+  "${script_dir}/configure-build.sh" Debug >/dev/null
   cmake --build "${build_dir}" --target comet-controller comet-browsingd -j 8 >/dev/null
 fi
 

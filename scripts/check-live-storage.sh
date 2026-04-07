@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-build_dir="${repo_root}/build/linux/x64"
+build_dir="$("${repo_root}/scripts/print-build-dir.sh")"
 
 skip_build=0
 
@@ -20,7 +20,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "${skip_build}" -eq 0 ]]; then
-  "${repo_root}/scripts/build-target.sh" linux x64 Debug >/dev/null
+  "${repo_root}/scripts/build-target.sh" Debug >/dev/null
 fi
 
 run_as_root() {

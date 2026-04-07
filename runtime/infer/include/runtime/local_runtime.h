@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,7 +23,8 @@ class LocalRuntime final {
       std::unique_ptr<LlamaLibraryEngine> engine,
       InferSignalService& signal_service,
       bool dynamic_upstream = false,
-      std::optional<UpstreamTarget> upstream = std::nullopt);
+      std::optional<UpstreamTarget> upstream = std::nullopt,
+      std::function<std::optional<std::uint64_t>()> kv_cache_bytes_provider = {});
 
   LocalRuntime(const LocalRuntime&) = delete;
   LocalRuntime& operator=(const LocalRuntime&) = delete;
@@ -42,6 +45,7 @@ class LocalRuntime final {
   InferSignalService& signal_service_;
   bool dynamic_upstream_ = false;
   std::optional<UpstreamTarget> upstream_;
+  std::function<std::optional<std::uint64_t>()> kv_cache_bytes_provider_;
   LocalHttpServer inference_server_;
   LocalHttpServer gateway_server_;
 };

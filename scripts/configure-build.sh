@@ -1,36 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 3 ]]; then
-  echo "usage: configure-build.sh <os> <arch> [build-type]" >&2
-  exit 1
-fi
-
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repo_dir="$(cd -- "${script_dir}/.." && pwd)"
-target_os="${1}"
-target_arch="${2}"
-build_type="${3:-Debug}"
+source "${script_dir}/build-context.sh"
+
+comet_resolve_build_context "${script_dir}" "$@"
+
 cuda_root=""
 cuda_nvcc=""
 openmp_root=""
 openmp_include_dir=""
 openmp_library=""
-
-case "${build_type}" in
-  Debug|Release|RelWithDebInfo|MinSizeRel)
-    ;;
-  *)
-    echo "error: unsupported build type '${build_type}'" >&2
-    echo "supported values: Debug, Release, RelWithDebInfo, MinSizeRel" >&2
-    exit 1
-    ;;
-esac
-
-if ! resolved_target="$("${script_dir}/resolve-build-target.sh" "${target_os}" "${target_arch}")"; then
-  exit 1
-fi
-eval "${resolved_target}"
 
 detect_cuda_root() {
   local candidate=""
@@ -76,7 +56,7 @@ detect_macos_openmp() {
   local candidate=""
   local root_candidates=()
 
-  if [[ "${target_os}" != "macos" ]]; then
+  if [[ "${TARGET_OS}" != "macos" ]]; then
     return 1
   fi
 
@@ -126,42 +106,36 @@ fi
 
 if detect_macos_openmp; then
   :
-elif [[ "${target_os}" == "macos" ]]; then
+elif [[ "${TARGET_OS}" == "macos" ]]; then
   echo "[cmake] OpenMP runtime was not found for macOS; building without OpenMP (install with 'brew install libomp' to enable it)" >&2
 fi
 
-build_dir="$("${script_dir}/print-build-dir.sh" "${target_os}" "${target_arch}")"
-"${script_dir}/ensure-vcpkg-deps.sh" "${VCPKG_TRIPLET}"
-vcpkg_installed_dir="${repo_dir}/vcpkg_installed/${VCPKG_TRIPLET}-root"
+vcpkg_root="$("${script_dir}/find-vcpkg.sh" --root)"
+vcpkg_toolchain="${vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
 ninja_exe="$("${script_dir}/find-ninja.sh")"
 cmake_exe="$("${script_dir}/find-cmake.sh")"
-cmake_prefix_path="${vcpkg_installed_dir}/${VCPKG_TRIPLET}"
 
-mkdir -p "${build_dir}"
-cache_path="${build_dir}/CMakeCache.txt"
+if [[ ! -f "${vcpkg_toolchain}" ]]; then
+  echo "error: vcpkg toolchain file was not found under '${vcpkg_root}'" >&2
+  exit 1
+fi
+
+mkdir -p "${BUILD_DIR}"
+cache_path="${BUILD_DIR}/CMakeCache.txt"
 needs_clean_reconfigure=0
 
 if [[ -f "${cache_path}" ]]; then
-  if ! grep -Fq "CMAKE_BUILD_TYPE:STRING=${build_type}" "${cache_path}"; then
+  if ! grep -Fq "CMAKE_BUILD_TYPE:STRING=${BUILD_TYPE}" "${cache_path}"; then
     needs_clean_reconfigure=1
   fi
   if ! grep -Fq "VCPKG_TARGET_TRIPLET:UNINITIALIZED=${VCPKG_TRIPLET}" "${cache_path}" \
     && ! grep -Fq "VCPKG_TARGET_TRIPLET:STRING=${VCPKG_TRIPLET}" "${cache_path}"; then
     needs_clean_reconfigure=1
   fi
-  if ! grep -Fq "VCPKG_INSTALLED_DIR:UNINITIALIZED=${vcpkg_installed_dir}" "${cache_path}" \
-    && ! grep -Fq "VCPKG_INSTALLED_DIR:PATH=${vcpkg_installed_dir}" "${cache_path}" \
-    && ! grep -Fq "VCPKG_INSTALLED_DIR:STRING=${vcpkg_installed_dir}" "${cache_path}"; then
-    needs_clean_reconfigure=1
-  fi
-  if ! grep -Fq "COMET_SKIP_VCPKG_TOOLCHAIN:BOOL=ON" "${cache_path}" \
-    && ! grep -Fq "COMET_SKIP_VCPKG_TOOLCHAIN:UNINITIALIZED=ON" "${cache_path}" \
-    && ! grep -Fq "COMET_SKIP_VCPKG_TOOLCHAIN:STRING=ON" "${cache_path}"; then
-    needs_clean_reconfigure=1
-  fi
-  if ! grep -Fq "CMAKE_PREFIX_PATH:UNINITIALIZED=${cmake_prefix_path}" "${cache_path}" \
-    && ! grep -Fq "CMAKE_PREFIX_PATH:PATH=${cmake_prefix_path}" "${cache_path}" \
-    && ! grep -Fq "CMAKE_PREFIX_PATH:STRING=${cmake_prefix_path}" "${cache_path}"; then
+  if ! grep -Fq "CMAKE_TOOLCHAIN_FILE:FILEPATH=${vcpkg_toolchain}" "${cache_path}" \
+    && ! grep -Fq "CMAKE_TOOLCHAIN_FILE:PATH=${vcpkg_toolchain}" "${cache_path}" \
+    && ! grep -Fq "CMAKE_TOOLCHAIN_FILE:STRING=${vcpkg_toolchain}" "${cache_path}" \
+    && ! grep -Fq "CMAKE_TOOLCHAIN_FILE:UNINITIALIZED=${vcpkg_toolchain}" "${cache_path}"; then
     needs_clean_reconfigure=1
   fi
   if [[ -n "${cuda_root}" ]]; then
@@ -216,21 +190,19 @@ if [[ -f "${cache_path}" ]]; then
 fi
 
 if [[ "${needs_clean_reconfigure}" == "1" ]]; then
-  echo "[cmake] cache settings changed; recreating ${build_dir}" >&2
+  echo "[cmake] cache settings changed; recreating ${BUILD_DIR}" >&2
   "${cmake_exe}" -E rm -f "${cache_path}"
-  "${cmake_exe}" -E remove_directory "${build_dir}/CMakeFiles"
+  "${cmake_exe}" -E remove_directory "${BUILD_DIR}/CMakeFiles"
 fi
 
 cmake_args=(
-  -S "${repo_dir}"
-  -B "${build_dir}"
+  -S "${REPO_DIR}"
+  -B "${BUILD_DIR}"
   -G Ninja
-  -DCMAKE_BUILD_TYPE="${build_type}"
+  -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
   -DCMAKE_MAKE_PROGRAM="${ninja_exe}"
-  -DCMAKE_PREFIX_PATH="${cmake_prefix_path}"
-  -DCOMET_SKIP_VCPKG_TOOLCHAIN=ON
+  -DCMAKE_TOOLCHAIN_FILE="${vcpkg_toolchain}"
   -DVCPKG_TARGET_TRIPLET="${VCPKG_TRIPLET}"
-  -DVCPKG_INSTALLED_DIR="${vcpkg_installed_dir}"
 )
 
 cmake_args+=("-DCUDAToolkit_ROOT=${cuda_root}")
@@ -246,4 +218,4 @@ fi
 
 "${cmake_exe}" "${cmake_args[@]}"
 
-echo "${build_dir}"
+echo "${BUILD_DIR}"

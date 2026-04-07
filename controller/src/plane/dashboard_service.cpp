@@ -740,7 +740,8 @@ nlohmann::json DashboardService::BuildPayload(
       nodes_payload.observed_nodes,
       nodes_payload.ready_nodes,
       nodes_payload.not_ready_nodes,
-      nodes_payload.degraded_gpu_nodes);
+      nodes_payload.degraded_gpu_nodes,
+      nodes_payload.kv_cache_bytes);
   payload["skills"] = PlaneDashboardSkillsSummaryService::BuildPayload(
       *view.desired_state,
       store.LoadPlaneSkillBindings(view.desired_state->plane_name, std::nullopt));
@@ -1035,12 +1036,15 @@ json DashboardService::BuildRuntimePayload(
     int observed_nodes,
     int ready_nodes,
     int not_ready_nodes,
-    int degraded_gpu_nodes) {
+    int degraded_gpu_nodes,
+    const std::optional<std::uint64_t>& kv_cache_bytes) {
   return json{
       {"observed_nodes", observed_nodes},
       {"ready_nodes", ready_nodes},
       {"not_ready_nodes", not_ready_nodes},
       {"degraded_gpu_telemetry_nodes", degraded_gpu_nodes},
+      {"kv_cache_bytes",
+       kv_cache_bytes.has_value() ? json(*kv_cache_bytes) : json(nullptr)},
   };
 }
 
@@ -1157,6 +1161,14 @@ DashboardService::NodesPayload DashboardService::BuildNodesPayload(
           runtime_status->runtime_backend.empty()
               ? json(nullptr)
               : json(runtime_status->runtime_backend);
+      item["kv_cache_bytes"] =
+          runtime_status->kv_cache_bytes.has_value()
+              ? json(*runtime_status->kv_cache_bytes)
+              : json(nullptr);
+      if (runtime_status->kv_cache_bytes.has_value()) {
+        payload.kv_cache_bytes =
+            payload.kv_cache_bytes.value_or(0) + *runtime_status->kv_cache_bytes;
+      }
       if (runtime_status->launch_ready) {
         ++payload.ready_nodes;
       } else {
@@ -1177,6 +1189,7 @@ DashboardService::NodesPayload DashboardService::BuildNodesPayload(
         item["runtime_phase"] =
             fallback.runtime_phase.empty() ? json(nullptr)
                                            : json(fallback.runtime_phase);
+        item["kv_cache_bytes"] = nullptr;
         if (fallback.launch_ready) {
           ++payload.ready_nodes;
         } else {
@@ -1185,6 +1198,7 @@ DashboardService::NodesPayload DashboardService::BuildNodesPayload(
       } else {
         item["runtime_launch_ready"] = nullptr;
         item["runtime_phase"] = nullptr;
+        item["kv_cache_bytes"] = nullptr;
         ++payload.not_ready_nodes;
       }
     }

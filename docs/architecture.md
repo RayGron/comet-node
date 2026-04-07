@@ -20,6 +20,11 @@
 - the controller now also has a static asset serving seam through `serve --ui-root <dir>`; this remains a development fallback and local inspection seam, not the target production browser-hosting path
 - the first operator UI exists today as a plain static bundle under `ui/operator/`, but the production Phase H direction is now a separate global `comet-web-ui` sidecar that serves a React operator UI and reverse-proxies controller REST/SSE
 - the first controller-managed `comet-web-ui` lifecycle seam now exists through `ensure-web-ui`, `show-web-ui-status`, and `stop-web-ui`; it materializes controller-local compose/config under `var/web-ui` and can run that sidecar through Docker Compose when requested
+- the controller now also owns conversation persistence for interaction traffic:
+  - user-scoped conversation sessions stay in controller SQLite
+  - prompt reconstruction is controller-owned, not runtime-owned
+  - older turns can be compacted into structured summary blocks while the recent tail stays verbatim
+  - inactive sessions can be archived into compressed `zstd` payloads and restored on demand
 - the browser-facing runtime architecture is now explicitly layered as:
   - `Level 0`: `comet-web-ui`
   - `Level 1`: `comet-controller`
@@ -90,6 +95,20 @@ The first implementation slice is intentionally narrow:
 - infer compose healthchecks now probe the live infer HTTP health endpoint instead of only checking for a marker file
 - `hostd show-runtime-status` reads the same `runtime-status.json` from the infer node shared disk, so the host agent and infer-side helper share one runtime snapshot instead of maintaining separate ad-hoc summaries
 - when `hostd` reports observed state back to the controller, it now includes that serialized runtime snapshot too, so controller-side host observations and health views can show runtime readiness without talking to infer containers directly
+- interaction requests can now carry a controller-managed `session_id`, and the controller persists:
+  - canonical message history
+  - per-session context state such as applied skills and browsing mode
+  - prompt budgeting metadata such as `latest_prompt_tokens` and `estimated_context_tokens`
+  - structured summary blocks that replace older prompt segments during continuation requests
+- controller-side prompt assembly is now memory-aware:
+  - stored summary blocks are converted into a synthetic system instruction
+  - only the recent message tail plus request delta are sent verbatim to the runtime
+  - summary creation is triggered when the estimated prompt size exceeds a soft fraction of `max_model_len`
+- inactive interaction sessions can now move through an archive lifecycle:
+  - live rows stay in SQLite for active sessions
+  - archived sessions write compressed `.json.zst` payloads under `interaction-archives/<plane>/`
+  - archive metadata and checksums stay in controller state
+  - archived sessions are restored into live rows on first access
 - the controller can persist desired state in SQLite
 - the controller can queue per-node host assignments in SQLite for `hostd`
 - queued host assignments are versioned by desired generation, and older pending/claimed rows are superseded instead of being silently dropped
@@ -153,6 +172,10 @@ That seam should stay stable even after the following pieces are added:
 - Docker API execution
 - REST API, SSE, multi-plane browser workflows, and the `comet-web-ui` sidecar
 - scheduler logic for sharing and draining GPUs
+
+The interaction path now has a second stable seam of its own:
+
+`client request -> controller-owned session lookup/restore -> summary-assisted prompt reconstruction -> runtime inference -> controller-owned session persistence/archive`
 
 ## Phase H Direction
 

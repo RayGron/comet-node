@@ -122,11 +122,11 @@ brew install pkg-config autoconf automake libtool libomp
 Configure and build with the host-aware scripts:
 
 ```bash
-./scripts/build-host.sh Debug
+./scripts/build-target.sh
 ```
 
-`comet-node` resolves the host OS and architecture automatically, and it can use `cmake`
-downloaded by `vcpkg` when `cmake` is not in `PATH`.
+That default is equivalent to a host build in `Debug`. The scripts now resolve host OS,
+architecture, build directory, `vcpkg` toolchain, and CUDA/OpenMP hints automatically.
 
 Build output paths are grouped by platform and architecture. By default they live under
 `build/`, but you can relocate the build root with `COMET_BUILD_ROOT`.
@@ -141,21 +141,30 @@ Examples:
 You can also resolve a target build directory directly:
 
 ```bash
-./scripts/print-build-dir.sh linux x64
+./scripts/print-build-dir.sh
 ```
 
 Manual configure/build is still supported:
 
 ```bash
-"$(./scripts/find-cmake.sh)" -S . -B "$(./scripts/print-host-build-dir.sh)"
-"$(./scripts/find-cmake.sh)" --build "$(./scripts/print-host-build-dir.sh)"
+"$(./scripts/find-cmake.sh)" -S . -B "$(./scripts/print-build-dir.sh)"
+"$(./scripts/find-cmake.sh)" --build "$(./scripts/print-build-dir.sh)"
 ```
 
-Explicit non-host targets still go through the same script family:
+Common variants:
 
 ```bash
-./scripts/build-target.sh linux x64 Debug
+./scripts/build-target.sh Release
+./scripts/configure-build.sh
+./scripts/package-target.sh
+```
+
+Explicit non-host targets still work:
+
+```bash
+./scripts/build-target.sh linux x64
 ./scripts/build-target.sh macos arm64 Release
+./scripts/package-target.sh linux arm64
 ```
 
 For the current multi-repo workspace and VS Code user-settings split, see
@@ -166,34 +175,41 @@ For the current multi-repo workspace and VS Code user-settings split, see
 Windows builds use the native Windows toolchain even when started from a Remote WSL session:
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File scripts\windows\build-target.ps1 x64 Debug
-powershell.exe -ExecutionPolicy Bypass -File scripts\windows\build-target.ps1 x64 Release
+powershell.exe -ExecutionPolicy Bypass -File scripts\windows\build-target.ps1
+powershell.exe -ExecutionPolicy Bypass -File scripts\windows\build-target.ps1 -BuildType Release
+powershell.exe -ExecutionPolicy Bypass -File scripts\windows\build-target.ps1 -TargetArch arm64 -BuildType Release
 ```
 
 Windows packaging:
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File scripts\windows\package-target.ps1 x64
+powershell.exe -ExecutionPolicy Bypass -File scripts\windows\package-target.ps1
 ```
 
 ## Quick Start
 
+Resolve the current host build directory once:
+
+```bash
+BUILD_DIR="$(./scripts/print-build-dir.sh)"
+```
+
 Initialize a local controller DB:
 
 ```bash
-./build/linux/x64/comet-controller init-db --db var/controller.sqlite
+"${BUILD_DIR}/comet-controller" init-db --db var/controller.sqlite
 ```
 
 Validate a `desired-state.v2.json` bundle:
 
 ```bash
-./build/linux/x64/comet-controller validate-bundle --bundle config/v2-llama-rpc-backend
+"${BUILD_DIR}/comet-controller" validate-bundle --bundle config/v2-llama-rpc-backend
 ```
 
 Apply a v2 plane state directly:
 
 ```bash
-./build/linux/x64/comet-controller apply-state-file \
+"${BUILD_DIR}/comet-controller" apply-state-file \
   --db var/controller.sqlite \
   --artifacts-root var/artifacts \
   --state config/v2-llama-rpc-backend/desired-state.v2.json
@@ -202,7 +218,7 @@ Apply a v2 plane state directly:
 Import a bundle directory that contains `desired-state.v2.json`:
 
 ```bash
-./build/linux/x64/comet-controller import-bundle \
+"${BUILD_DIR}/comet-controller" import-bundle \
   --bundle config/v2-llama-rpc-backend \
   --db var/controller.sqlite
 ```

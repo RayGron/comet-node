@@ -20,8 +20,7 @@ wait_for_http() {
 }
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-read -r host_os host_arch < <("${script_dir}/detect-host-target.sh")
-build_dir="$("${script_dir}/print-build-dir.sh" "${host_os}" "${host_arch}")"
+build_dir="$("${script_dir}/print-build-dir.sh")"
 db_path="${PWD}/var/controller.sqlite"
 artifacts_root="${PWD}/var/artifacts"
 runtime_root="${PWD}/var/runtime"
@@ -153,7 +152,7 @@ cmake -E remove_directory "${remote_agent_install_root}"
 cmake -E remove_directory "${remote_agent_rotated_install_root}"
 cmake -E rm -f "${bad_state_root}"
 
-"${script_dir}/build-target.sh" "${host_os}" "${host_arch}" Debug
+"${script_dir}/build-target.sh" Debug
 
 "${build_dir}/comet-node" version | grep -F 'comet-node 0.1.0' >/dev/null
 "${build_dir}/comet-node" doctor controller | grep -F 'controller_binary=yes' >/dev/null

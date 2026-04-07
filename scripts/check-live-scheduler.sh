@@ -116,8 +116,7 @@ wait_for_verified_move() {
   return 1
 }
 
-read -r host_os host_arch < <("${script_dir}/detect-host-target.sh")
-build_dir="$("${script_dir}/print-build-dir.sh" "${host_os}" "${host_arch}")"
+build_dir="$("${script_dir}/print-build-dir.sh")"
 
 mkdir -p "${repo_root}/var"
 work_root="$(mktemp -d "${repo_root}/var/live-scheduler.XXXXXX")"
@@ -142,7 +141,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[live-scheduler] building host binaries"
-"${script_dir}/build-target.sh" "${host_os}" "${host_arch}" Debug >/dev/null
+"${script_dir}/build-target.sh" Debug >/dev/null
 
 if [[ "${skip_build_images}" != "yes" ]]; then
   echo "[live-scheduler] building runtime images"

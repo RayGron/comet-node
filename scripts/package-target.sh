@@ -1,45 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "usage: package-target.sh <os> <arch>" >&2
-  exit 1
-fi
-
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repo_dir="$(cd -- "${script_dir}/.." && pwd)"
-target_os="${1}"
-target_arch="${2}"
-build_dir="$("${script_dir}/print-build-dir.sh" "${target_os}" "${target_arch}")"
+source "${script_dir}/build-context.sh"
 
-"${script_dir}/build-target.sh" "${target_os}" "${target_arch}" Release
+comet_resolve_target_context "${script_dir}" "$@"
 
-dist_dir="${repo_dir}/dist/${target_os}/${target_arch}"
-package_stem="comet-node-${target_os}-${target_arch}"
+"${script_dir}/build-target.sh" "${TARGET_OS}" "${TARGET_ARCH}" Release
+
+dist_dir="${REPO_DIR}/dist/${TARGET_OS}/${TARGET_ARCH}"
+package_stem="comet-node-${TARGET_OS}-${TARGET_ARCH}"
 mkdir -p "${dist_dir}"
 
 declare -a artifacts=()
 
 for candidate in \
-  "${build_dir}/comet-node" \
-  "${build_dir}/comet-node.exe" \
-  "${build_dir}/comet-controller" \
-  "${build_dir}/comet-controller.exe" \
-  "${build_dir}/comet-hostd" \
-  "${build_dir}/comet-hostd.exe" \
-  "${build_dir}/libcomet-common.a" \
-  "${build_dir}/comet-common.lib"; do
+  "${BUILD_DIR}/comet-node" \
+  "${BUILD_DIR}/comet-node.exe" \
+  "${BUILD_DIR}/comet-controller" \
+  "${BUILD_DIR}/comet-controller.exe" \
+  "${BUILD_DIR}/comet-hostd" \
+  "${BUILD_DIR}/comet-hostd.exe" \
+  "${BUILD_DIR}/libcomet-common.a" \
+  "${BUILD_DIR}/comet-common.lib"; do
   if [[ -f "${candidate}" ]]; then
     artifacts+=("$(basename "${candidate}")")
   fi
 done
 
 if [[ ${#artifacts[@]} -eq 0 ]]; then
-  echo "error: no packageable build artifacts were found in '${build_dir}'" >&2
+  echo "error: no packageable build artifacts were found in '${BUILD_DIR}'" >&2
   exit 1
 fi
 
-case "${target_os}" in
+case "${TARGET_OS}" in
   windows)
     package_file="${dist_dir}/${package_stem}.zip"
     package_format="zip"
@@ -53,7 +47,7 @@ esac
 rm -f "${package_file}"
 
 (
-  cd "${build_dir}"
+  cd "${BUILD_DIR}"
   cmake -E tar "cf" "${package_file}" --format="${package_format}" -- "${artifacts[@]}"
 )
 

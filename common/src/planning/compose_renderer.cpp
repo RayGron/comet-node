@@ -1,6 +1,7 @@
 #include "comet/planning/compose_renderer.h"
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <string_view>
 
@@ -58,6 +59,99 @@ std::vector<std::string> UniqueGpuDevices(
   return result;
 }
 
+std::string EscapeYamlDoubleQuoted(const std::string& value) {
+  std::string escaped;
+  escaped.reserve(value.size());
+  for (const char ch : value) {
+    switch (ch) {
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        escaped.push_back(ch);
+        break;
+    }
+  }
+  return escaped;
+}
+
+std::vector<std::string> SplitCommandArguments(const std::string& command) {
+  std::vector<std::string> arguments;
+  std::string current;
+  bool in_single_quotes = false;
+  bool in_double_quotes = false;
+  bool escape_next = false;
+
+  for (const char ch : command) {
+    if (escape_next) {
+      current.push_back(ch);
+      escape_next = false;
+      continue;
+    }
+
+    if (ch == '\\' && !in_single_quotes) {
+      escape_next = true;
+      continue;
+    }
+
+    if (ch == '\'' && !in_double_quotes) {
+      in_single_quotes = !in_single_quotes;
+      continue;
+    }
+
+    if (ch == '"' && !in_single_quotes) {
+      in_double_quotes = !in_double_quotes;
+      continue;
+    }
+
+    if (!in_single_quotes && !in_double_quotes &&
+        std::isspace(static_cast<unsigned char>(ch))) {
+      if (!current.empty()) {
+        arguments.push_back(std::move(current));
+        current.clear();
+      }
+      continue;
+    }
+
+    current.push_back(ch);
+  }
+
+  if (escape_next) {
+    current.push_back('\\');
+  }
+  if (!current.empty()) {
+    arguments.push_back(std::move(current));
+  }
+  if (arguments.empty() && !command.empty()) {
+    arguments.push_back(command);
+  }
+  return arguments;
+}
+
+void RenderCommand(std::ostringstream& out, const std::string& indent, const std::string& command) {
+  const auto arguments = SplitCommandArguments(command);
+  out << indent << "command: [";
+  for (std::size_t index = 0; index < arguments.size(); ++index) {
+    if (index > 0) {
+      out << ", ";
+    }
+    out << "\"" << EscapeYamlDoubleQuoted(arguments[index]) << "\"";
+  }
+  out << "]\n";
+}
+
 }  // namespace
 
 std::string RenderComposeYaml(const NodeComposePlan& plan) {
@@ -71,7 +165,7 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
   for (const auto& service : plan.services) {
     out << "  " << service.name << ":\n";
     out << "    image: " << service.image << "\n";
-    out << "    command: [\"" << service.command << "\"]\n";
+    RenderCommand(out, "    ", service.command);
     out << "    restart: unless-stopped\n";
 
     if (!service.depends_on.empty()) {

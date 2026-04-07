@@ -157,6 +157,7 @@ struct RuntimeStatus {
   std::string gateway_health_url;
   std::string started_at;
   std::string last_activity_at;
+  std::optional<std::uint64_t> kv_cache_bytes;
   bool ready = false;
   bool active_model_ready = false;
   bool gateway_plan_ready = false;

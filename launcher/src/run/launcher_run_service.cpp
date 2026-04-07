@@ -518,6 +518,7 @@ int LauncherRunService::RunControllerSupervisor(
     host.advertised_address = local_controller_url;
     host.public_key_base64 =
         Trim(ReadTextFile(options.state_root.parent_path() / "keys" / "hostd.pub.b64"));
+    host.controller_public_key_fingerprint = controller_fingerprint;
     host.transport_mode = "out";
     host.execution_mode = "mixed";
     host.registration_state = "registered";
@@ -531,6 +532,7 @@ int LauncherRunService::RunControllerSupervisor(
         "--runtime-root", options.runtime_root.string(), "--state-root",
         options.state_root.string(), "--host-private-key",
         (options.state_root.parent_path() / "keys" / "hostd.key.b64").string(),
+        "--foreground",
         "--compose-mode", options.hostd_compose_mode, "--poll-interval-sec",
         std::to_string(options.hostd_poll_interval_sec),
     }));

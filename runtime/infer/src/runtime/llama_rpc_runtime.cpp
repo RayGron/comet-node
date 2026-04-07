@@ -9,14 +9,18 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
+#include <string_view>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -108,6 +112,62 @@ std::string ResolveExecutablePath(const char* env_name, const char* fallback) {
   return fallback;
 }
 
+std::string Trim(std::string value) {
+  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+    value.erase(value.begin());
+  }
+  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+    value.pop_back();
+  }
+  return value;
+}
+
+std::optional<std::uint64_t> ParseKvCacheBytesLine(std::string_view line) {
+  constexpr std::string_view kMarker = "KV buffer size =";
+  const std::size_t marker = line.find(kMarker);
+  if (marker == std::string_view::npos) {
+    return std::nullopt;
+  }
+
+  std::string payload(line.substr(marker + kMarker.size()));
+  payload = Trim(std::move(payload));
+  if (payload.empty()) {
+    return std::nullopt;
+  }
+
+  std::istringstream stream(payload);
+  double amount = 0.0;
+  std::string unit;
+  if (!(stream >> amount >> unit) || !std::isfinite(amount) || amount < 0.0) {
+    return std::nullopt;
+  }
+
+  while (!unit.empty() && !std::isalnum(static_cast<unsigned char>(unit.back()))) {
+    unit.pop_back();
+  }
+
+  double multiplier = 0.0;
+  if (unit == "B") {
+    multiplier = 1.0;
+  } else if (unit == "KiB") {
+    multiplier = 1024.0;
+  } else if (unit == "MiB") {
+    multiplier = 1024.0 * 1024.0;
+  } else if (unit == "GiB") {
+    multiplier = 1024.0 * 1024.0 * 1024.0;
+  } else if (unit == "KB") {
+    multiplier = 1000.0;
+  } else if (unit == "MB") {
+    multiplier = 1000.0 * 1000.0;
+  } else if (unit == "GB") {
+    multiplier = 1000.0 * 1000.0 * 1000.0;
+  } else {
+    return std::nullopt;
+  }
+
+  return static_cast<std::uint64_t>(std::llround(amount * multiplier));
+}
+
 int ResolveParallelSlots(const RuntimeConfig& config) {
   return std::max(1, config.max_num_seqs);
 }
@@ -191,12 +251,27 @@ int LlamaRpcRuntime::Run() {
     throw std::runtime_error("timed out waiting for rpc workers: " + rpc_servers);
   }
   const std::string rpc_devices = BuildRpcDeviceList(config_);
+  kv_cache_bytes_.reset();
+  kv_cache_log_lines_.clear();
+
+  int stderr_pipe[2] = {-1, -1};
+  if (pipe(stderr_pipe) != 0) {
+    throw std::runtime_error("failed to create llama-server stderr pipe");
+  }
 
   pid_t child = fork();
   if (child < 0) {
+    close(stderr_pipe[0]);
+    close(stderr_pipe[1]);
     throw std::runtime_error("failed to fork llama-server process");
   }
   if (child == 0) {
+    close(stderr_pipe[0]);
+    if (dup2(stderr_pipe[1], STDERR_FILENO) < 0) {
+      std::perror("dup2 stderr");
+      _exit(127);
+    }
+    close(stderr_pipe[1]);
     const json active_model = LoadActiveModel(config_);
     comet::runtime::ModelIdentity model_identity =
         comet::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model);
@@ -257,6 +332,8 @@ int LlamaRpcRuntime::Run() {
     _exit(127);
   }
 
+  close(stderr_pipe[1]);
+  StartServerLogPump(stderr_pipe[0]);
   child_pid_ = child;
   if (!EnsureLocalServerReady(120)) {
     StopServer();
@@ -271,7 +348,8 @@ int LlamaRpcRuntime::Run() {
       nullptr,
       signal_service_,
       false,
-      UpstreamTarget{"127.0.0.1", config_.llama_port});
+      UpstreamTarget{"127.0.0.1", config_.llama_port},
+      [this]() { return CurrentKvCacheBytes(); });
   const int runtime_rc = runtime.Run();
   StopServer();
   return runtime_rc;
@@ -412,8 +490,77 @@ bool LlamaRpcRuntime::WaitForRpcServersReady(
   return false;
 }
 
+void LlamaRpcRuntime::StartServerLogPump(int read_fd) {
+  child_stderr_fd_ = read_fd;
+  child_stderr_thread_ = std::thread([this, read_fd]() {
+    std::string pending;
+    char buffer[4096];
+    while (true) {
+      const ssize_t bytes_read = read(read_fd, buffer, sizeof(buffer));
+      if (bytes_read == 0) {
+        break;
+      }
+      if (bytes_read < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        break;
+      }
+
+      std::cerr.write(buffer, bytes_read);
+      std::cerr.flush();
+      pending.append(buffer, static_cast<std::size_t>(bytes_read));
+
+      std::size_t newline = std::string::npos;
+      while ((newline = pending.find('\n')) != std::string::npos) {
+        std::string line = pending.substr(0, newline);
+        if (!line.empty() && line.back() == '\r') {
+          line.pop_back();
+        }
+        ProcessServerLogLine(line);
+        pending.erase(0, newline + 1);
+      }
+    }
+
+    if (!pending.empty()) {
+      if (!pending.empty() && pending.back() == '\r') {
+        pending.pop_back();
+      }
+      ProcessServerLogLine(pending);
+    }
+
+    close(read_fd);
+  });
+}
+
+void LlamaRpcRuntime::StopServerLogPump() {
+  if (child_stderr_thread_.joinable()) {
+    child_stderr_thread_.join();
+  }
+  child_stderr_fd_.reset();
+}
+
+void LlamaRpcRuntime::ProcessServerLogLine(const std::string& line) {
+  const auto parsed = ParseKvCacheBytesLine(line);
+  if (!parsed.has_value()) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> guard(metrics_mutex_);
+  if (!kv_cache_log_lines_.insert(line).second) {
+    return;
+  }
+  kv_cache_bytes_ = kv_cache_bytes_.value_or(0) + *parsed;
+}
+
+std::optional<std::uint64_t> LlamaRpcRuntime::CurrentKvCacheBytes() const {
+  std::lock_guard<std::mutex> guard(metrics_mutex_);
+  return kv_cache_bytes_;
+}
+
 void LlamaRpcRuntime::StopServer() {
   if (!child_pid_.has_value()) {
+    StopServerLogPump();
     return;
   }
   const pid_t pid = *child_pid_;
@@ -424,6 +571,7 @@ void LlamaRpcRuntime::StopServer() {
     const pid_t wait_result = waitpid(pid, &child_status, WNOHANG);
     if (wait_result == pid) {
       child_pid_.reset();
+      StopServerLogPump();
       return;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -432,6 +580,7 @@ void LlamaRpcRuntime::StopServer() {
   int child_status = 0;
   waitpid(pid, &child_status, 0);
   child_pid_.reset();
+  StopServerLogPump();
 }
 
 }  // namespace comet::infer

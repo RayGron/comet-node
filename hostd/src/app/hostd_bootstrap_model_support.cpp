@@ -95,14 +95,6 @@ bool LooksLikeRecognizedModelDirectory(const std::string& path) {
   return fs::exists(root / "config.json", error) || fs::exists(root / "params.json", error);
 }
 
-bool LooksLikeReadySharedModelDirectory(const std::string& path) {
-  if (!LooksLikeRecognizedModelDirectory(path)) {
-    return false;
-  }
-  std::error_code error;
-  return fs::exists(fs::path(path) / ".comet-model-ready", error) && !error;
-}
-
 std::string ActiveModelPathForNode(
     const HostdBootstrapModelSupport::Deps& deps,
     const comet::DesiredState& state,
@@ -185,8 +177,8 @@ std::string BootstrapRuntimeModelPath(
     const HostdBootstrapModelSupport::Deps& deps,
     const comet::DesiredState& state,
     const std::string& target_host_path) {
-  const auto& shared_disk =
-      RequirePlaneSharedDiskForNode(deps, state, deps.require_single_node_name(state));
+  const std::string node_name = deps.require_single_node_name(state);
+  const comet::DiskSpec shared_disk = RequirePlaneSharedDiskForNode(deps, state, node_name);
   const fs::path target_path(target_host_path);
   const fs::path shared_root(shared_disk.host_path);
   std::string relative = target_path.lexically_relative(shared_root).generic_string();

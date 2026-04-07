@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
@@ -74,6 +75,7 @@ class DashboardService {
     int ready_nodes = 0;
     int not_ready_nodes = 0;
     int degraded_gpu_nodes = 0;
+    std::optional<std::uint64_t> kv_cache_bytes;
   };
 
   struct Deps {
@@ -138,7 +140,8 @@ class DashboardService {
       int observed_nodes,
       int ready_nodes,
       int not_ready_nodes,
-      int degraded_gpu_nodes);
+      int degraded_gpu_nodes,
+      const std::optional<std::uint64_t>& kv_cache_bytes);
 
   static nlohmann::json BuildRecentEventsPayload(
       const std::vector<comet::EventRecord>& recent_events,

@@ -2,8 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-read -r host_os host_arch < <("${script_dir}/detect-host-target.sh")
-build_dir="$("${script_dir}/print-build-dir.sh" "${host_os}" "${host_arch}")"
+build_dir="$("${script_dir}/print-build-dir.sh")"
 
 skip_build=0
 for arg in "$@"; do
@@ -17,7 +16,7 @@ for arg in "$@"; do
 done
 
 if [[ "${skip_build}" -eq 0 ]]; then
-  "${script_dir}/build-target.sh" "${host_os}" "${host_arch}" Debug
+  "${script_dir}/build-target.sh" Debug
 fi
 
 basic_db="${PWD}/var/controller-phase-f-live.sqlite"

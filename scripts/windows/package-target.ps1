@@ -1,14 +1,26 @@
 param(
-  [Parameter(Mandatory = $true)]
-  [ValidateSet('x64', 'arm64')]
-  [string]$TargetArch
+  [Parameter()]
+  [string]$TargetArch = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
+function Resolve-DefaultTargetArch {
+  $osArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+  switch ($osArchitecture) {
+    'X64' { return 'x64' }
+    'Arm64' { return 'arm64' }
+    default { throw "Unsupported Windows host architecture '$osArchitecture'." }
+  }
+}
+
 $scriptDir = Split-Path -Parent $PSCommandPath
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..\..')).Path
 $buildScript = Join-Path $scriptDir 'build-target.ps1'
+$TargetArch = if ($TargetArch) { $TargetArch } else { Resolve-DefaultTargetArch }
+if ($TargetArch -notin @('x64', 'arm64')) {
+  throw "Unsupported target architecture '$TargetArch'. Expected one of: x64, arm64."
+}
 $buildDir = Join-Path $repoRoot "build\windows\$TargetArch"
 $distDir = Join-Path $repoRoot "dist\windows\$TargetArch"
 $packagePath = Join-Path $distDir "comet-node-windows-$TargetArch.zip"

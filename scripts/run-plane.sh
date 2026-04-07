@@ -116,7 +116,7 @@ resolve_sudo_prefix() {
 
 hostd_report_observation() {
   local sudo_prefix="$1"
-  local hostd_bin="${COMET_HOSTD_BIN:-$("${repo_root}/scripts/print-host-build-dir.sh")/comet-hostd}"
+  local hostd_bin="${COMET_HOSTD_BIN:-$("${repo_root}/scripts/print-build-dir.sh")/comet-hostd}"
   local db_path="${COMET_NODE_CONTROLLER_DB:-/var/lib/comet-node/controller.sqlite}"
   local node_name="${COMET_NODE_NAME:-local-hostd}"
   local state_root="${COMET_NODE_HOSTD_STATE_ROOT:-/var/lib/comet-node/hostd-state}"

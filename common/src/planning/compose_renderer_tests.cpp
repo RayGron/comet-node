@@ -40,6 +40,23 @@ int main() {
     Expect(
         yaml.find("device_ids: [\"0\", \"2\", \"3\", \"0\"]") == std::string::npos,
         "compose renderer should not emit duplicate gpu device ids");
+    Expect(
+        yaml.find("command: [\"/runtime/bin/comet-workerd\"]") != std::string::npos,
+        "compose renderer should keep single-token commands as a one-element argv array");
+
+    comet::ComposeService infer_service;
+    infer_service.name = "infer-a";
+    infer_service.image = "example/infer:dev";
+    infer_service.command = "/runtime/bin/comet-inferctl container-boot --backend llama-rpc-head";
+    infer_service.healthcheck = "CMD-SHELL test -f /tmp/comet-ready";
+    plan.services.clear();
+    plan.services.push_back(std::move(infer_service));
+    const std::string infer_yaml = comet::RenderComposeYaml(plan);
+    Expect(
+        infer_yaml.find(
+            "command: [\"/runtime/bin/comet-inferctl\", \"container-boot\", \"--backend\", "
+            "\"llama-rpc-head\"]") != std::string::npos,
+        "compose renderer should split multi-token commands into argv entries");
 
 #if defined(_WIN32)
     _putenv_s("COMET_CONTROLLER_INTERNAL_HOST", "192.168.88.13");
@@ -54,6 +71,27 @@ int main() {
         std::find(extra_hosts.begin(), extra_hosts.end(), "controller.internal:192.168.88.13") !=
             extra_hosts.end(),
         "planner should map controller.internal to the configured internal host");
+
+    auto llama_rpc_state = comet::BuildDemoState();
+    llama_rpc_state.inference.runtime_engine = "llama.cpp";
+    llama_rpc_state.inference.distributed_backend = "llama_rpc";
+    const auto llama_rpc_plans = comet::BuildNodeComposePlans(llama_rpc_state);
+    Expect(!llama_rpc_plans.empty(),
+           "planner should render a compose plan for llama-rpc demo state");
+    const auto infer_it = std::find_if(
+        llama_rpc_plans.front().services.begin(),
+        llama_rpc_plans.front().services.end(),
+        [](const comet::ComposeService& compose_service) {
+          return compose_service.name == "infer-main";
+        });
+    Expect(infer_it != llama_rpc_plans.front().services.end(),
+           "planner should include infer service in llama-rpc compose plan");
+    Expect(infer_it->gpu_devices.size() == 1 && infer_it->gpu_devices.front() == "0",
+           "planner should inherit local worker gpu devices for llama-rpc infer");
+    const auto visible_devices = infer_it->environment.find("NVIDIA_VISIBLE_DEVICES");
+    Expect(
+        visible_devices != infer_it->environment.end() && visible_devices->second == "0",
+        "planner should expose inherited gpu devices through NVIDIA_VISIBLE_DEVICES");
 #if defined(_WIN32)
     _putenv_s("COMET_CONTROLLER_INTERNAL_HOST", "");
 #else

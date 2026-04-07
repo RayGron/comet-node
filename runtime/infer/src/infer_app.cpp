@@ -396,7 +396,8 @@ comet::RuntimeStatus BuildRuntimeStatus(
     bool inference_ready,
     bool gateway_ready,
     int supervisor_pid,
-    const std::string& started_at) {
+    const std::string& started_at,
+    const std::optional<std::uint64_t>& kv_cache_bytes) {
   const json registry = LoadRegistry(config);
   const json active_model = LoadActiveModel(config);
   const json gateway_plan = LoadGatewayPlan(config);
@@ -450,6 +451,7 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.gateway_health_url = RuntimeGatewayHealthUrl(config);
   status.started_at = started_at;
   status.last_activity_at = started_at;
+  status.kv_cache_bytes = kv_cache_bytes;
   const bool replica_topology_ready =
       topology.replica_groups_expected == 0 ||
       topology.replica_groups_ready >= topology.replica_groups_expected;
@@ -479,7 +481,8 @@ void WriteRuntimeStatus(
     bool inference_ready,
     bool gateway_ready,
     int supervisor_pid,
-    const std::string& started_at) {
+    const std::string& started_at,
+    const std::optional<std::uint64_t>& kv_cache_bytes) {
   comet::SaveRuntimeStatusJson(
       BuildRuntimeStatus(
           config,
@@ -488,7 +491,8 @@ void WriteRuntimeStatus(
           inference_ready,
           gateway_ready,
           supervisor_pid,
-          started_at),
+          started_at,
+          kv_cache_bytes),
       BuildControlPaths(config).runtime_status_path.string());
 }
 
@@ -1537,7 +1541,8 @@ void WriteInferRuntimeStatus(
     bool inference_ready,
     bool gateway_ready,
     int supervisor_pid,
-    const std::string& started_at) {
+    const std::string& started_at,
+    const std::optional<std::uint64_t>& kv_cache_bytes) {
   ::WriteRuntimeStatus(
       config,
       backend,
@@ -1545,7 +1550,8 @@ void WriteInferRuntimeStatus(
       inference_ready,
       gateway_ready,
       supervisor_pid,
-      started_at);
+      started_at,
+      kv_cache_bytes);
 }
 
 }  // namespace comet::infer::runtime_support

@@ -6,8 +6,7 @@ repo_root="$(cd -- "${script_dir}/.." && pwd)"
 
 bin_path="${COMET_DEVTOOL_BIN:-}"
 if [[ -z "${bin_path}" ]]; then
-  read -r host_os host_arch < <("${repo_root}/scripts/detect-host-target.sh")
-  candidate="$("${repo_root}/scripts/print-build-dir.sh" "${host_os}" "${host_arch}")/comet-devtool"
+  candidate="$("${repo_root}/scripts/print-build-dir.sh")/comet-devtool"
   if [[ -x "${candidate}" ]]; then
     bin_path="${candidate}"
   fi

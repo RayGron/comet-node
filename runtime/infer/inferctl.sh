@@ -9,8 +9,7 @@ if [[ -z "${bin_path}" ]]; then
   if [[ -x /runtime/bin/comet-inferctl ]]; then
     bin_path="/runtime/bin/comet-inferctl"
   else
-    read -r host_os host_arch < <("${repo_root}/scripts/detect-host-target.sh")
-    candidate="$("${repo_root}/scripts/print-build-dir.sh" "${host_os}" "${host_arch}")/comet-inferctl"
+    candidate="$("${repo_root}/scripts/print-build-dir.sh")/comet-inferctl"
     if [[ -x "${candidate}" ]]; then
       bin_path="${candidate}"
     fi

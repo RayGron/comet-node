@@ -9,7 +9,7 @@ if [[ "${host_os}" != "macos" ]]; then
   exit 1
 fi
 
-build_dir="$("${script_dir}/print-build-dir.sh" "${host_os}" "${host_arch}")"
+build_dir="$("${script_dir}/print-build-dir.sh")"
 launcher_root="${PWD}/var/check-macos-launcher"
 
 cleanup() {
@@ -24,7 +24,7 @@ next_port() {
 cleanup
 
 echo "macos-check: build debug"
-"${script_dir}/build-target.sh" "${host_os}" "${host_arch}" Debug >/dev/null
+"${script_dir}/build-target.sh" Debug >/dev/null
 
 echo "macos-check: launcher smoke"
 "${build_dir}/comet-node" doctor controller | grep -F 'controller_binary=yes' >/dev/null

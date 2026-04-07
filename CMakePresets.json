@@ -14,10 +14,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux",
-        "COMET_SKIP_VCPKG_TOOLCHAIN": "ON",
-        "VCPKG_TARGET_TRIPLET": "x64-linux",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
+        "VCPKG_TARGET_TRIPLET": "x64-linux"
       }
     },
     {
@@ -33,10 +30,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/arm64-linux",
-        "COMET_SKIP_VCPKG_TOOLCHAIN": "ON",
-        "VCPKG_TARGET_TRIPLET": "arm64-linux",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
+        "VCPKG_TARGET_TRIPLET": "arm64-linux"
       }
     },
     {
@@ -46,10 +40,7 @@
       "binaryDir": "${sourceDir}/build/windows/x64",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows",
-        "COMET_SKIP_VCPKG_TOOLCHAIN": "ON",
-        "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
       }
     },
     {
@@ -59,10 +50,7 @@
       "binaryDir": "${sourceDir}/build/windows/arm64",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/arm64-windows",
-        "COMET_SKIP_VCPKG_TOOLCHAIN": "ON",
-        "VCPKG_TARGET_TRIPLET": "arm64-windows",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
+        "VCPKG_TARGET_TRIPLET": "arm64-windows"
       }
     },
     {
@@ -72,10 +60,7 @@
       "binaryDir": "${sourceDir}/build/macos/x64",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-osx",
-        "COMET_SKIP_VCPKG_TOOLCHAIN": "ON",
-        "VCPKG_TARGET_TRIPLET": "x64-osx",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
+        "VCPKG_TARGET_TRIPLET": "x64-osx"
       }
     },
     {
@@ -85,10 +70,7 @@
       "binaryDir": "${sourceDir}/build/macos/arm64",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/arm64-osx",
-        "COMET_SKIP_VCPKG_TOOLCHAIN": "ON",
-        "VCPKG_TARGET_TRIPLET": "arm64-osx",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
+        "VCPKG_TARGET_TRIPLET": "arm64-osx"
       }
     }
   ],

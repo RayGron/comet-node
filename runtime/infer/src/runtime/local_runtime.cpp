@@ -25,7 +25,8 @@ LocalRuntime::LocalRuntime(
     std::unique_ptr<LlamaLibraryEngine> engine,
     InferSignalService& signal_service,
     bool dynamic_upstream,
-    std::optional<UpstreamTarget> upstream)
+    std::optional<UpstreamTarget> upstream,
+    std::function<std::optional<std::uint64_t>()> kv_cache_bytes_provider)
     : config_(config),
       backend_(std::move(backend)),
       started_at_(std::move(started_at)),
@@ -33,6 +34,7 @@ LocalRuntime::LocalRuntime(
       signal_service_(signal_service),
       dynamic_upstream_(dynamic_upstream),
       upstream_(std::move(upstream)),
+      kv_cache_bytes_provider_(std::move(kv_cache_bytes_provider)),
       inference_server_(
           "0.0.0.0",
           config.api_port,
@@ -130,6 +132,8 @@ bool LocalRuntime::EnsureReplicaLeadersPrewarmed() const {
 void LocalRuntime::WriteCurrentRuntimeStatus(const std::string& phase) const {
   const bool inference_ready = phase == "running" && InferenceReady();
   const bool gateway_ready = phase == "running" && GatewayReady();
+  const std::optional<std::uint64_t> kv_cache_bytes =
+      kv_cache_bytes_provider_ ? kv_cache_bytes_provider_() : std::nullopt;
   runtime_support::WriteInferRuntimeStatus(
       config_,
       backend_,
@@ -137,7 +141,8 @@ void LocalRuntime::WriteCurrentRuntimeStatus(const std::string& phase) const {
       inference_ready,
       gateway_ready,
       static_cast<int>(getpid()),
-      started_at_);
+      started_at_,
+      kv_cache_bytes);
 }
 
 }  // namespace comet::infer

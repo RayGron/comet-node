@@ -134,7 +134,8 @@ int ServeControllerHttp(
         interaction_http_service.StreamPlaneInteractionSse(
             client_fd,
             interaction_db_path,
-            request);
+            request,
+            auth_support);
       },
       [](const std::string& method, const std::string& path) {
         return ParseInteractionStreamPlaneName(method, path);

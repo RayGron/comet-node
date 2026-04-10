@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -17,6 +18,7 @@
 #include "plane/dashboard_service.h"
 #include "read_model/state_aggregate_loader.h"
 #include "scheduler/scheduler_domain_service.h"
+#include "scheduler/scheduler_domain_support.h"
 #include "scheduler/scheduler_view_service.h"
 
 namespace fs = std::filesystem;
@@ -194,46 +196,71 @@ class HealthProbeTestServer {
   std::thread thread_;
 };
 
+class TestSchedulerDomainSupport final : public comet::controller::SchedulerDomainSupport {
+ public:
+  std::optional<long long> HeartbeatAgeSeconds(
+      const std::string& heartbeat_at) const override {
+    return runtime_support_service_.HeartbeatAgeSeconds(heartbeat_at);
+  }
+
+  std::string HealthFromAge(
+      const std::optional<long long>& age_seconds,
+      int stale_after_seconds) const override {
+    return runtime_support_service_.HealthFromAge(age_seconds, stale_after_seconds);
+  }
+
+  std::optional<comet::RuntimeStatus> ParseRuntimeStatus(
+      const comet::HostObservation& observation) const override {
+    return runtime_support_service_.ParseRuntimeStatus(observation);
+  }
+
+  std::optional<comet::GpuTelemetrySnapshot> ParseGpuTelemetry(
+      const comet::HostObservation& observation) const override {
+    return runtime_support_service_.ParseGpuTelemetry(observation);
+  }
+
+  std::map<std::string, comet::NodeAvailabilityOverride> BuildAvailabilityOverrideMap(
+      const std::vector<comet::NodeAvailabilityOverride>& availability_overrides) const override {
+    return runtime_support_service_.BuildAvailabilityOverrideMap(availability_overrides);
+  }
+
+  comet::NodeAvailability ResolveNodeAvailability(
+      const std::map<std::string, comet::NodeAvailabilityOverride>& overrides,
+      const std::string& node_name) const override {
+    return runtime_support_service_.ResolveNodeAvailability(overrides, node_name);
+  }
+
+  bool IsNodeSchedulable(comet::NodeAvailability availability) const override {
+    return availability == comet::NodeAvailability::Active;
+  }
+
+  std::optional<long long> TimestampAgeSeconds(
+      const std::string& timestamp_text) const override {
+    return runtime_support_service_.TimestampAgeSeconds(timestamp_text);
+  }
+
+  std::optional<std::string> ObservedSchedulingGateReason(
+      const std::vector<comet::HostObservation>&,
+      const std::string&,
+      int) const override {
+    return std::nullopt;
+  }
+
+ private:
+  comet::controller::ControllerRuntimeSupportService runtime_support_service_;
+};
+
 comet::controller::SchedulerDomainService MakeSchedulerDomainService() {
-  const comet::controller::ControllerRuntimeSupportService runtime_support_service;
-  return comet::controller::SchedulerDomainService({
-      [&](const std::string& heartbeat_at) {
-        return runtime_support_service.HeartbeatAgeSeconds(heartbeat_at);
-      },
-      [&](const std::optional<long long>& age_seconds, int stale_after_seconds) {
-        return runtime_support_service.HealthFromAge(age_seconds, stale_after_seconds);
-      },
-      [&](const comet::HostObservation& observation) {
-        return runtime_support_service.ParseRuntimeStatus(observation);
-      },
-      [&](const comet::HostObservation& observation) {
-        return runtime_support_service.ParseGpuTelemetry(observation);
-      },
-      [&](const std::vector<comet::NodeAvailabilityOverride>& availability_overrides) {
-        return runtime_support_service.BuildAvailabilityOverrideMap(availability_overrides);
-      },
-      [&](const std::map<std::string, comet::NodeAvailabilityOverride>& overrides,
-          const std::string& node_name) {
-        return runtime_support_service.ResolveNodeAvailability(overrides, node_name);
-      },
-      [](comet::NodeAvailability availability) {
-        return availability == comet::NodeAvailability::Active;
-      },
-      [&](const std::string& timestamp_text) {
-        return runtime_support_service.TimestampAgeSeconds(timestamp_text);
-      },
-      [](const std::vector<comet::HostObservation>&,
-         const std::string&,
-         int) -> std::optional<std::string> {
-        return std::nullopt;
-      },
-      300,
-      100,
-      300,
-      60,
-      85,
-      1024,
-  });
+  return comet::controller::SchedulerDomainService(
+      std::make_shared<TestSchedulerDomainSupport>(),
+      comet::controller::SchedulerDomainPolicyConfig{
+          300,
+          100,
+          300,
+          60,
+          85,
+          1024,
+      });
 }
 
 comet::controller::DashboardService MakeDashboardService() {
@@ -331,6 +358,15 @@ json FindServiceItem(const json& payload, const std::string& id) {
     }
   }
   throw std::runtime_error("missing self service item " + id);
+}
+
+json FindPlaneServiceTarget(const json& placement_payload, const std::string& service) {
+  for (const auto& item : placement_payload.at("service_targets")) {
+    if (item.value("service", std::string()) == service) {
+      return item;
+    }
+  }
+  throw std::runtime_error("missing plane service target " + service);
 }
 
 void TestHealthySelfServicesPayload() {
@@ -612,6 +648,137 @@ void TestPlaneScopedNodesIgnoreForeignRuntimeStatus() {
   std::cout << "ok: plane-scoped-nodes-ignore-foreign-runtime-status" << '\n';
 }
 
+void TestPlanePayloadExposesPlacementFirstTargets() {
+  comet::DesiredState desired_state;
+  desired_state.plane_name = "placement-plane";
+  desired_state.plane_mode = comet::PlaneMode::Llm;
+  desired_state.placement_target = std::string("node:worker-a");
+  desired_state.app_host = comet::ExternalAppHostConfig{
+      "10.0.0.15",
+      std::optional<std::string>("/tmp/id_ed25519"),
+      std::nullopt,
+      std::nullopt,
+  };
+  desired_state.skills = comet::SkillsSettings{true, {"skill-a"}};
+
+  comet::NodeInventory node;
+  node.name = "worker-a";
+  desired_state.nodes.push_back(node);
+
+  comet::InstanceSpec infer;
+  infer.name = "infer-placement-plane";
+  infer.role = comet::InstanceRole::Infer;
+  infer.node_name = "worker-a";
+  desired_state.instances.push_back(infer);
+
+  comet::InstanceSpec worker;
+  worker.name = "worker-placement-plane";
+  worker.role = comet::InstanceRole::Worker;
+  worker.node_name = "worker-a";
+  desired_state.instances.push_back(worker);
+
+  comet::InstanceSpec app;
+  app.name = "app-placement-plane";
+  app.role = comet::InstanceRole::App;
+  app.node_name = "worker-a";
+  desired_state.instances.push_back(app);
+
+  comet::InstanceSpec skills;
+  skills.name = "skills-placement-plane";
+  skills.role = comet::InstanceRole::Skills;
+  skills.node_name = "worker-a";
+  desired_state.instances.push_back(skills);
+
+  comet::PlaneRecord plane_record;
+  plane_record.name = "placement-plane";
+  plane_record.plane_mode = "llm";
+  plane_record.generation = 3;
+  plane_record.applied_generation = 2;
+  plane_record.state = "running";
+
+  const auto payload = comet::controller::DashboardService::BuildPlanePayload(
+      desired_state,
+      3,
+      plane_record,
+      2);
+  const auto& placement = payload.at("placement");
+  Expect(
+      placement.at("mode").get<std::string>() == "placement-first",
+      "plane payload should expose placement-first mode");
+  Expect(
+      placement.at("primary_node").get<std::string>() == "worker-a",
+      "plane payload should expose primary placement node");
+  Expect(
+      placement.at("app_host").at("enabled").get<bool>(),
+      "plane payload should expose enabled external app host");
+  Expect(
+      placement.at("app_host").at("address").get<std::string>() == "10.0.0.15",
+      "plane payload should expose external app host address");
+  Expect(
+      placement.at("app_host").at("auth_mode").get<std::string>() == "ssh-key",
+      "plane payload should expose external app host auth mode");
+  Expect(
+      FindPlaneServiceTarget(placement, "app").at("target_type").get<std::string>() ==
+          "external-app-host",
+      "app target should resolve to external app host");
+  Expect(
+      FindPlaneServiceTarget(placement, "skills-runtime").at("binding").get<std::string>() ==
+          "skills-follow-app",
+      "skills runtime should follow the app host");
+  Expect(
+      FindPlaneServiceTarget(placement, "skills-factory").at("target").get<std::string>() ==
+          "comet-controller",
+      "skills factory should stay on comet");
+  std::cout << "ok: plane-payload-exposes-placement-first-targets" << '\n';
+}
+
+void TestPlanePayloadExposesLegacyCompatibilityMode() {
+  comet::DesiredState desired_state;
+  desired_state.plane_name = "legacy-plane";
+  desired_state.plane_mode = comet::PlaneMode::Llm;
+
+  comet::NodeInventory infer_node;
+  infer_node.name = "controller-node";
+  desired_state.nodes.push_back(infer_node);
+  comet::NodeInventory worker_node;
+  worker_node.name = "worker-node-a";
+  desired_state.nodes.push_back(worker_node);
+
+  comet::InstanceSpec infer;
+  infer.name = "infer-legacy-plane";
+  infer.role = comet::InstanceRole::Infer;
+  infer.node_name = "controller-node";
+  desired_state.instances.push_back(infer);
+
+  comet::InstanceSpec worker;
+  worker.name = "worker-legacy-plane";
+  worker.role = comet::InstanceRole::Worker;
+  worker.node_name = "worker-node-a";
+  desired_state.instances.push_back(worker);
+
+  const auto payload = comet::controller::DashboardService::BuildPlanePayload(
+      desired_state,
+      1,
+      std::nullopt,
+      0);
+  const auto& placement = payload.at("placement");
+  Expect(
+      placement.at("mode").get<std::string>() == "legacy-topology-compatibility",
+      "plane payload should expose legacy compatibility mode when placement_target is absent");
+  Expect(
+      placement.at("primary_node").is_null(),
+      "legacy compatibility payload should not invent a primary node");
+  Expect(
+      FindPlaneServiceTarget(placement, "infer").at("target").get<std::string>() ==
+          "controller-node",
+      "infer target should reflect legacy node placement");
+  Expect(
+      FindPlaneServiceTarget(placement, "worker").at("target_type").get<std::string>() ==
+          "node-group",
+      "worker target should expose grouped node placement");
+  std::cout << "ok: plane-payload-exposes-legacy-compatibility-mode" << '\n';
+}
+
 }  // namespace
 
 int main() {
@@ -622,6 +789,8 @@ int main() {
     TestSkillsFactoryProbeFailureDoesNotBreakPayload();
     TestRuntimePayloadIncludesKvCacheBytes();
     TestPlaneScopedNodesIgnoreForeignRuntimeStatus();
+    TestPlanePayloadExposesPlacementFirstTargets();
+    TestPlanePayloadExposesLegacyCompatibilityMode();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "dashboard service tests failed: " << error.what() << '\n';

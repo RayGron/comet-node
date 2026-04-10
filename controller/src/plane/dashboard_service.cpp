@@ -4,6 +4,7 @@
 #include "http/controller_http_transport.h"
 #include "infra/controller_runtime_support_service.h"
 #include "plane/plane_dashboard_skills_summary_service.h"
+#include "plane/plane_placement_payload_builder.h"
 #include "read_model/state_aggregate_loader.h"
 #include "web/web_ui_service.h"
 
@@ -904,6 +905,7 @@ json DashboardService::BuildPlanePayload(
       {"disk_count", desired_state.disks.size()},
       {"shared_disk_name", desired_state.plane_shared_disk_name},
       {"control_root", desired_state.control_root},
+      {"placement", PlanePlacementPayloadBuilder(desired_state).Build()},
       {"bootstrap_model", BuildBootstrapModelPayload(desired_state.bootstrap_model)},
   };
 }

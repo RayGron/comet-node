@@ -415,6 +415,7 @@ int BundleCliService::ApplyDesiredState(
   desired_state_policy_service_.ResolveDesiredStateDynamicPlacements(
       store, &effective_desired_state);
   desired_state_policy_service_.ValidateDesiredStateForControllerAdmission(
+      store,
       effective_desired_state);
   desired_state_policy_service_.ValidateDesiredStateExecutionModes(
       effective_desired_state);

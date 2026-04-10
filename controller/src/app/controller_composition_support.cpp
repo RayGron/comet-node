@@ -1,6 +1,7 @@
 #include "app/controller_composition_support.h"
 
 #include "app/controller_request_context.h"
+#include "observation/plane_observation_matcher.h"
 
 namespace comet::controller::composition_support {
 
@@ -129,53 +130,16 @@ std::vector<comet::RuntimeProcessStatus> ParseInstanceRuntimeStatuses(
 bool ObservationMatchesPlane(
     const comet::HostObservation& observation,
     const std::string& plane_name) {
-  if (observation.plane_name == plane_name) {
-    return true;
-  }
-  if (observation.observed_state_json.empty()) {
-    return false;
-  }
-
-  const auto observed_state =
-      comet::DeserializeDesiredStateJson(observation.observed_state_json);
-  if (observed_state.plane_name == plane_name) {
-    return true;
-  }
-  for (const auto& disk : observed_state.disks) {
-    if (disk.plane_name == plane_name) {
-      return true;
-    }
-  }
-  for (const auto& instance : observed_state.instances) {
-    if (instance.plane_name == plane_name) {
-      return true;
-    }
-  }
-  try {
-    const auto instance_statuses = ParseInstanceRuntimeStatuses(observation);
-    for (const auto& status : instance_statuses) {
-      const std::string worker_prefix = "worker-" + plane_name + "-";
-      if (status.instance_name == "infer-" + plane_name ||
-          status.instance_name == "worker-" + plane_name ||
-          status.instance_name.rfind(worker_prefix, 0) == 0) {
-        return true;
-      }
-    }
-  } catch (const std::exception&) {
-  }
-  return false;
+  const comet::controller::PlaneObservationMatcher plane_observation_matcher;
+  return plane_observation_matcher.ObservationMatchesPlane(observation, plane_name);
 }
 
 std::vector<comet::HostObservation> FilterHostObservationsForPlane(
     const std::vector<comet::HostObservation>& observations,
     const std::string& plane_name) {
-  std::vector<comet::HostObservation> result;
-  for (const auto& observation : observations) {
-    if (ObservationMatchesPlane(observation, plane_name)) {
-      result.push_back(observation);
-    }
-  }
-  return result;
+  const comet::controller::PlaneObservationMatcher plane_observation_matcher;
+  return plane_observation_matcher.FilterHostObservationsForPlane(
+      observations, plane_name);
 }
 
 bool CanFinalizeDeletedPlane(comet::ControllerStore& store, const std::string& plane_name) {

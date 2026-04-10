@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-#include "interaction/interaction_service.h"
+#include "interaction/interaction_types.h"
 
 struct HttpResponse {
   int status_code = 200;

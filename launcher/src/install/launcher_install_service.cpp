@@ -215,6 +215,7 @@ void LauncherInstallService::InstallHostd(
   options.controller_url = command_line.FindFlagValue("--controller").value_or("");
   options.controller_fingerprint =
       command_line.FindFlagValue("--controller-fingerprint").value_or("");
+  options.onboarding_key = command_line.FindFlagValue("--onboarding-key").value_or("");
   options.node_name = command_line.FindFlagValue("--node").value_or("local-hostd");
   options.transport_mode =
       command_line.FindFlagValue("--transport").value_or(options.transport_mode);
@@ -373,6 +374,9 @@ std::string LauncherInstallService::RenderConfigToml(
     out << "[hostd]\n";
     out << "node_name = \"" << hostd->node_name << "\"\n";
     out << "controller_url = \"" << hostd->controller_url << "\"\n";
+    if (!hostd->onboarding_key.empty()) {
+      out << "onboarding_key = \"" << hostd->onboarding_key << "\"\n";
+    }
     out << "transport_mode = \"" << hostd->transport_mode << "\"\n";
     out << "execution_mode = \"" << hostd->execution_mode << "\"\n";
     out << "listen_address = \"" << hostd->listen_address << "\"\n";
@@ -382,6 +386,7 @@ std::string LauncherInstallService::RenderConfigToml(
     out << "host_private_key = \"" << hostd_private_key.string() << "\"\n";
     out << "host_public_key = \"" << hostd_public_key.string() << "\"\n";
     out << "trusted_controller_fingerprint = \"" << controller_fingerprint << "\"\n\n";
+    out << "inventory_scan_interval_sec = " << hostd->inventory_scan_interval_sec << "\n\n";
   }
   return out.str();
 }

@@ -117,6 +117,17 @@ SigningKeypair GenerateSigningKeypair() {
   };
 }
 
+std::string DerivePublicKeyBase64(const std::string& private_key_base64) {
+  EnsureCrypto();
+  const auto private_key =
+      DecodeFixedSizeBase64(private_key_base64, "private key", crypto_sign_SECRETKEYBYTES);
+  std::array<unsigned char, crypto_sign_PUBLICKEYBYTES> public_key{};
+  if (crypto_sign_ed25519_sk_to_pk(public_key.data(), private_key.data()) != 0) {
+    throw std::runtime_error("failed to derive public key from private key");
+  }
+  return EncodeBase64(public_key.data(), public_key.size());
+}
+
 std::string ComputeKeyFingerprintHex(const std::string& public_key_base64) {
   EnsureCrypto();
   const auto public_key =

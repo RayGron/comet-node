@@ -8,7 +8,11 @@
 
 #include <nlohmann/json.hpp>
 
-#include "app/hostd_local_state_support.h"
+#include "app/hostd_desired_state_path_support.h"
+#include "app/hostd_local_runtime_state_support.h"
+#include "app/hostd_local_state_path_support.h"
+#include "app/hostd_local_state_repository.h"
+#include "app/hostd_runtime_telemetry_support.h"
 #include "comet/state/desired_state_v2_renderer.h"
 
 namespace {
@@ -89,32 +93,40 @@ int main() {
     const std::string node_name = "local-hostd";
     const std::string plane_a = "plane-a";
     const std::string plane_b = "plane-b";
+    const comet::hostd::HostdDesiredStatePathSupport desired_state_path_support;
+    const comet::hostd::HostdRuntimeTelemetrySupport runtime_telemetry_support;
+    const comet::hostd::HostdLocalStatePathSupport local_state_path_support;
+    const comet::hostd::HostdLocalStateRepository local_state_repository(local_state_path_support);
+    const comet::hostd::HostdLocalRuntimeStateSupport local_runtime_state_support(
+        desired_state_path_support,
+        local_state_repository,
+        runtime_telemetry_support);
 
-    comet::hostd::local_state_support::SaveLocalAppliedState(
+    local_state_repository.SaveLocalAppliedState(
         state_root,
         node_name,
         BuildState(plane_a, node_name),
         plane_a);
-    comet::hostd::local_state_support::SaveLocalAppliedGeneration(
+    local_state_repository.SaveLocalAppliedGeneration(
         state_root,
         node_name,
         11,
         plane_a);
-    comet::hostd::local_state_support::SaveLocalAppliedState(
+    local_state_repository.SaveLocalAppliedState(
         state_root,
         node_name,
         BuildState(plane_b, node_name),
         plane_b);
-    comet::hostd::local_state_support::SaveLocalAppliedGeneration(
+    local_state_repository.SaveLocalAppliedGeneration(
         state_root,
         node_name,
         12,
         plane_b);
-    comet::hostd::local_state_support::RewriteAggregateLocalState(state_root, node_name);
-    comet::hostd::local_state_support::RewriteAggregateLocalGeneration(state_root, node_name);
+    local_state_repository.RewriteAggregateLocalState(state_root, node_name);
+    local_state_repository.RewriteAggregateLocalGeneration(state_root, node_name);
 
     const fs::path plane_a_root =
-        comet::hostd::local_state_support::LocalPlaneRoot(state_root, node_name, plane_a);
+        local_state_path_support.LocalPlaneRoot(state_root, node_name, plane_a);
     fs::create_directories(plane_a_root / "nested");
     {
       std::ofstream log_file(plane_a_root / "post-deploy.log");
@@ -125,25 +137,23 @@ int main() {
       nested_file << "still here";
     }
 
-    comet::hostd::local_state_support::RemoveLocalAppliedPlaneState(
+    local_state_repository.RemoveLocalAppliedPlaneState(
         state_root,
         node_name,
         plane_a);
-    comet::hostd::local_state_support::RewriteAggregateLocalState(state_root, node_name);
-    comet::hostd::local_state_support::RewriteAggregateLocalGeneration(state_root, node_name);
+    local_state_repository.RewriteAggregateLocalState(state_root, node_name);
+    local_state_repository.RewriteAggregateLocalGeneration(state_root, node_name);
 
     Expect(!fs::exists(plane_a_root), "plane-a root should be removed recursively");
     Expect(
-        !comet::hostd::local_state_support::LoadLocalAppliedState(state_root, node_name, plane_a)
-             .has_value(),
+        !local_state_repository.LoadLocalAppliedState(state_root, node_name, plane_a).has_value(),
         "plane-a state should be absent after removal");
     Expect(
-        comet::hostd::local_state_support::LoadLocalAppliedState(state_root, node_name, plane_b)
+        local_state_repository.LoadLocalAppliedState(state_root, node_name, plane_b)
             .has_value(),
         "plane-b state should remain present");
 
-    const auto aggregate_state =
-        comet::hostd::local_state_support::LoadLocalAppliedState(state_root, node_name);
+    const auto aggregate_state = local_state_repository.LoadLocalAppliedState(state_root, node_name);
     Expect(aggregate_state.has_value(), "aggregate state should still exist");
     Expect(aggregate_state->instances.size() == 4,
            "aggregate should only contain plane-b infer aggregator, infer leaf, worker, and skills instances");
@@ -154,7 +164,7 @@ int main() {
             [&](const comet::InstanceSpec& instance) { return instance.plane_name == plane_b; }),
         "aggregate should only contain plane-b instances");
     Expect(
-        comet::hostd::local_state_support::ExpectedRuntimeStatusCountForNode(
+        local_runtime_state_support.ExpectedRuntimeStatusCountForNode(
             *aggregate_state,
             node_name) == 4,
         "infer aggregator, infer leaf, worker, and skills instances should all contribute runtime statuses");
@@ -162,13 +172,13 @@ int main() {
     const std::string partial_plane = "plane-partial";
     const comet::DesiredState partial_state =
         BuildPartialLlmStateWithoutInfer(partial_plane, node_name);
-    comet::hostd::local_state_support::SaveLocalAppliedState(
+    local_state_repository.SaveLocalAppliedState(
         state_root,
         node_name,
         partial_state,
         partial_plane);
     const auto reloaded_partial_state =
-        comet::hostd::local_state_support::LoadLocalAppliedState(
+        local_state_repository.LoadLocalAppliedState(
             state_root,
             node_name,
             partial_plane);
@@ -193,7 +203,7 @@ int main() {
     bad_state.nodes.push_back(std::move(other_node));
     bool threw = false;
     try {
-      (void)comet::hostd::local_state_support::RequireSingleNodeName(bad_state);
+      (void)local_state_repository.RequireSingleNodeName(bad_state);
     } catch (const std::exception&) {
       threw = true;
     }

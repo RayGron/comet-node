@@ -155,6 +155,36 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
   std::cout << "ok-roundtrip: " << name << '\n';
 }
 
+void ExpectPlacementFirstProjection(const json& source, const std::string& name) {
+  const auto rendered = comet::DesiredStateV2Renderer::Render(source);
+  const auto projected = comet::DesiredStateV2Projector::Project(rendered);
+  comet::DesiredStateV2Validator::ValidateOrThrow(projected);
+
+  Expect(projected.contains("placement"), name + ": placement block missing");
+  Expect(!projected.contains("topology"), name + ": topology must be suppressed");
+  if (projected.contains("infer")) {
+    Expect(!projected.at("infer").contains("node"), name + ": infer.node must be suppressed");
+  }
+  if (projected.contains("worker")) {
+    Expect(!projected.at("worker").contains("node"), name + ": worker.node must be suppressed");
+    Expect(
+        !projected.at("worker").contains("assignments"),
+        name + ": worker.assignments must be suppressed");
+  }
+  if (projected.contains("app")) {
+    Expect(!projected.at("app").contains("node"), name + ": app.node must be suppressed");
+  }
+  if (projected.contains("skills")) {
+    Expect(!projected.at("skills").contains("node"), name + ": skills.node must be suppressed");
+  }
+  if (projected.contains("webgateway")) {
+    Expect(
+        !projected.at("webgateway").contains("node"),
+        name + ": webgateway.node must be suppressed");
+  }
+  std::cout << "ok-placement-first: " << name << '\n';
+}
+
 }  // namespace
 
 int main() {
@@ -392,6 +422,28 @@ int main() {
             {"app", {{"enabled", false}}},
         },
         "llm-with-browsing");
+
+    ExpectPlacementFirstProjection(
+        json{
+            {"version", 2},
+            {"plane_name", "placement-first-clean"},
+            {"plane_mode", "llm"},
+            {"placement",
+             {{"primary_node", "worker-node-a"},
+              {"app_host", {{"address", "10.0.0.15"}, {"ssh_key_path", "/tmp/id_ed25519"}}}}},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-placement-clean"},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
+            {"skills", {{"enabled", true}, {"image", "example/skills:dev"}}},
+        },
+        "placement-first-clean");
 
     return 0;
   } catch (const std::exception& ex) {

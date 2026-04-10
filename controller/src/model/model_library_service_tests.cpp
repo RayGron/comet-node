@@ -72,6 +72,31 @@ HttpRequest JsonRequest(
   return request;
 }
 
+void UpsertHost(
+    comet::ControllerStore& store,
+    const std::string& node_name,
+    const std::string& derived_role,
+    const fs::path& storage_root,
+    std::uint64_t free_bytes) {
+  comet::RegisteredHostRecord host;
+  host.node_name = node_name;
+  host.registration_state = "registered";
+  host.session_state = "connected";
+  host.execution_mode = "mixed";
+  host.derived_role = derived_role;
+  host.role_reason = "test";
+  host.capabilities_json =
+      nlohmann::json{
+          {"storage_root", storage_root.string()},
+          {"storage_total_bytes", 500ULL * 1024ULL * 1024ULL * 1024ULL},
+          {"storage_free_bytes", free_bytes},
+      }
+          .dump();
+  host.created_at = "2026-03-30 00:00:00";
+  host.updated_at = host.created_at;
+  store.UpsertRegisteredHost(host);
+}
+
 }  // namespace
 
 int main() {
@@ -80,12 +105,14 @@ int main() {
     const fs::path db_path = temp_root / "controller.sqlite";
     const fs::path src_root = temp_root / "src";
     const fs::path dst_root = temp_root / "dst";
+    const fs::path storage_root = temp_root / "storage-dst";
     const fs::path source_path = src_root / "smoke.gguf";
     const fs::path target_path = dst_root / "smoke.gguf";
     std::error_code error;
     fs::remove_all(temp_root, error);
     fs::create_directories(src_root);
     fs::create_directories(dst_root);
+    fs::create_directories(storage_root);
     {
       std::ofstream out(source_path);
       out << "persistent-model-library-job";
@@ -128,12 +155,31 @@ int main() {
 
     comet::ControllerStore store(db_path.string());
     store.Initialize();
+    UpsertHost(
+        store,
+        "worker-node-a",
+        "worker",
+        dst_root,
+        500ULL * 1024ULL * 1024ULL * 1024ULL);
+    UpsertHost(
+        store,
+        "storage-node-a",
+        "storage",
+        storage_root,
+        500ULL * 1024ULL * 1024ULL * 1024ULL);
+    UpsertHost(
+        store,
+        "storage-node-low",
+        "storage",
+        temp_root / "storage-low",
+        4);
     const std::string now = "2026-03-30 00:00:00";
     store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
         .id = "job-1",
         .status = "queued",
         .phase = "queued",
         .model_id = "model-1",
+        .node_name = "",
         .target_root = dst_root.string(),
         .target_subdir = "",
         .detected_source_format = "gguf",
@@ -159,6 +205,21 @@ int main() {
     const auto payload = service.BuildPayload(db_path.string());
     Expect(payload.at("jobs").is_array(), "jobs payload should be an array");
     Expect(payload.at("jobs").size() == 1, "jobs payload should contain persisted queued job");
+    bool found_worker_node = false;
+    bool found_storage_node = false;
+    for (const auto& node : payload.at("nodes")) {
+      if (node.at("node_name").get<std::string>() == "worker-node-a") {
+        found_worker_node =
+            node.at("derived_role").get<std::string>() == "worker" &&
+            node.at("storage_root").get<std::string>() == dst_root.string();
+      }
+      if (node.at("node_name").get<std::string>() == "storage-node-a") {
+        found_storage_node =
+            node.at("derived_role").get<std::string>() == "storage";
+      }
+    }
+    Expect(found_worker_node, "payload should expose connected worker node capacity");
+    Expect(found_storage_node, "payload should expose connected storage node capacity");
 
     bool completed = false;
     for (int attempt = 0; attempt < 50; ++attempt) {
@@ -176,6 +237,66 @@ int main() {
     Expect(
         ReadFile(target_path) == "persistent-model-library-job",
         "downloaded model payload should match source contents");
+
+    const fs::path node_target_path = dst_root / "node-aware" / "smoke.gguf";
+    const auto node_download_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "model-node-aware"},
+                {"target_node_name", "worker-node-a"},
+                {"target_subdir", "node-aware"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(source_path)})},
+                {"format", "gguf"},
+            }));
+    Expect(node_download_response.status_code == 202, "node-aware download should be accepted");
+    const auto node_download_job_id =
+        nlohmann::json::parse(node_download_response.body).at("job").at("id").get<std::string>();
+    const auto node_download_job =
+        WaitForJobStatus(store, node_download_job_id, "completed");
+    Expect(node_download_job.node_name == "worker-node-a",
+           "node-aware download job should persist target node_name");
+    Expect(fs::exists(node_target_path), "node-aware download target should exist");
+
+    const fs::path storage_target_path = storage_root / "storage-aware" / "smoke.gguf";
+    const auto storage_download_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "model-storage-aware"},
+                {"target_node_name", "storage-node-a"},
+                {"target_subdir", "storage-aware"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(source_path)})},
+                {"format", "gguf"},
+            }));
+    Expect(storage_download_response.status_code == 202,
+           "storage node should be accepted for non-quantized download");
+    const auto storage_download_job_id =
+        nlohmann::json::parse(storage_download_response.body).at("job").at("id").get<std::string>();
+    const auto storage_download_job =
+        WaitForJobStatus(store, storage_download_job_id, "completed");
+    Expect(storage_download_job.node_name == "storage-node-a",
+           "storage download job should persist target node_name");
+    Expect(fs::exists(storage_target_path), "storage-node download target should exist");
+
+    const auto low_capacity_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "model-storage-low"},
+                {"target_node_name", "storage-node-low"},
+                {"target_subdir", "storage-aware"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(source_path)})},
+                {"format", "gguf"},
+            }));
+    Expect(low_capacity_response.status_code == 409,
+           "download should reject nodes without enough free capacity");
 
     const auto set_worker_response = service.SetSkillsFactoryWorker(
         db_path.string(),
@@ -201,6 +322,7 @@ int main() {
         .status = "queued",
         .phase = "queued",
         .model_id = "model-2",
+        .node_name = "",
         .target_root = dst_root.string(),
         .target_subdir = "",
         .detected_source_format = "gguf",
@@ -285,8 +407,14 @@ int main() {
             nlohmann::json{{"job_id", "job-2"}}));
     Expect(hide_response.status_code == 200, "hide download job should succeed");
     const auto visible_after_hide = service.BuildPayload(db_path.string());
+    bool hidden_job_visible = false;
+    for (const auto& job : visible_after_hide.at("jobs")) {
+      if (job.at("id").get<std::string>() == "job-2") {
+        hidden_job_visible = true;
+      }
+    }
     Expect(
-        visible_after_hide.at("jobs").size() == 1,
+        !hidden_job_visible,
         "hidden download job should disappear from visible payload");
     auto hidden_job = store.LoadModelLibraryDownloadJob("job-2");
     Expect(hidden_job.has_value(), "hidden job should remain in the database");
@@ -352,8 +480,14 @@ int main() {
     Expect(
         recovered_job->bytes_done == fs::file_size(recovered_part),
         "restored metadata job should recover bytes_done from partial file");
+    bool recovered_job_visible = false;
+    for (const auto& job : recovered_payload.at("jobs")) {
+      if (job.at("id").get<std::string>() == "job-3") {
+        recovered_job_visible = true;
+      }
+    }
     Expect(
-        recovered_payload.at("jobs").size() == 2,
+        recovered_job_visible,
         "metadata-backed job should be visible in jobs payload after recovery");
 
     const fs::path resumable_source_path = src_root / "resumable.gguf";
@@ -381,6 +515,7 @@ int main() {
         .status = "stopped",
         .phase = "stopped",
         .model_id = "model-5",
+        .node_name = "",
         .target_root = dst_root.string(),
         .target_subdir = "",
         .detected_source_format = "gguf",
@@ -443,6 +578,7 @@ int main() {
         .status = "running",
         .phase = "running",
         .model_id = "model-4",
+        .node_name = "",
         .target_root = dst_root.string(),
         .target_subdir = "multipart",
         .detected_source_format = "gguf",
@@ -485,6 +621,7 @@ int main() {
         .status = "completed",
         .phase = "completed",
         .model_id = "model-4",
+        .node_name = "",
         .target_root = dst_root.string(),
         .target_subdir = "multipart",
         .detected_source_format = "gguf",
@@ -613,6 +750,9 @@ int main() {
         completed_quantized_job.job_kind == "quantization",
         "quantization endpoint should persist job_kind=quantization");
     Expect(
+        completed_quantized_job.node_name == "worker-node-a",
+        "quantization job should persist the worker node that stores the source model");
+    Expect(
         fs::exists(dst_root / "converted-base" / "gemma-4-E2B-Q8_0.gguf"),
         "Q8_0 output should exist after dedicated quantization");
     Expect(
@@ -674,6 +814,19 @@ int main() {
         normalized_fp16_job.quantizations ==
             std::vector<std::string>{"FP16"},
         "FP16 quantization jobs should persist canonical quantization names");
+
+    const auto storage_quantization_response = service.EnqueueQuantization(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/quantize",
+            nlohmann::json{
+                {"source_path", storage_target_path.string()},
+                {"replace_existing", true},
+            }));
+    Expect(
+        storage_quantization_response.status_code == 409,
+        "quantization should reject base GGUF files that live on storage nodes");
 
     const fs::path mixed_config_path = src_root / "config.json";
     const fs::path mixed_tokenizer_path = src_root / "tokenizer.json";

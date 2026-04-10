@@ -26,6 +26,7 @@ class DesiredStatePolicyService {
       comet::DesiredState* desired_state) const;
 
   void ValidateDesiredStateForControllerAdmission(
+      comet::ControllerStore& store,
       const comet::DesiredState& desired_state) const;
 
   void ValidateDesiredStateExecutionModes(
@@ -75,11 +76,18 @@ class DesiredStatePolicyService {
       int observed_utilization_pct,
       const std::optional<std::string>& preferred_node_name,
       const std::optional<std::string>& preferred_gpu_device) const;
+  bool HybridGpuAlreadyAssigned(
+      const comet::DesiredState& desired_state,
+      const comet::InstanceSpec& current_worker,
+      const std::string& node_name,
+      const std::string& gpu_device) const;
+  bool UsesLlamaRpcRuntime(const comet::DesiredState& desired_state) const;
   void ReservePlacement(
       std::map<std::pair<std::string, std::string>, PlacementUsage>* placement_usage,
       const comet::InstanceSpec& worker) const;
   const comet::InstanceSpec* FindInferInstance(
       const comet::DesiredState& desired_state) const;
+  std::string InferInstanceNameForWorker(const comet::InstanceSpec& instance) const;
   void RefreshDerivedWorkerMetadata(
       comet::DesiredState* desired_state) const;
   void ApplyObservedHostGpuInventory(

@@ -3,6 +3,7 @@
 #include "app/controller_composition_support.h"
 #include "app/controller_request_context.h"
 #include "infra/controller_network_manager.h"
+#include "interaction/interaction_request_contract_support.h"
 
 #include <algorithm>
 #include <cctype>
@@ -138,7 +139,8 @@ int ServeControllerHttp(
             auth_support);
       },
       [](const std::string& method, const std::string& path) {
-        return ParseInteractionStreamPlaneName(method, path);
+        return InteractionRequestContractSupport{}.ParseInteractionStreamPlaneName(
+            method, path);
       },
       [&](const comet::EventRecord& event) {
         return read_model_service.BuildEventPayloadItem(event);

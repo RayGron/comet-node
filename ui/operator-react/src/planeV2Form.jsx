@@ -39,6 +39,13 @@ const FIELD_INFO = {
   gatewayPort: "HTTP port exposed by the plane gateway.",
   inferencePort: "Internal inference API port used by infer and worker services.",
   serverName: "Logical host name advertised by the gateway and status surfaces.",
+  primaryNode: "Primary comet-node selected for this plane. By default plane containers colocate on this node.",
+  appHostEnabled: "Deploy the app container to an external SSH host instead of the primary comet-node.",
+  appHostAddress: "Address of the external SSH host that should run the app container.",
+  appHostAuthMode: "Authentication mode used for the external app host SSH connection.",
+  appHostSshKeyPath: "Path to the SSH private key used to deploy the app container.",
+  appHostUsername: "SSH username for the external app host.",
+  appHostPassword: "SSH password for the external app host.",
   topologyEnabled: "Enable custom node topology for split-host or multi-role layouts.",
   topologyNodes: "Define logical nodes and their execution mode for advanced placement scenarios.",
   placementMode: "Scheduler placement strategy for workers.",
@@ -203,6 +210,32 @@ function normalizeWorkerAssignments(assignments) {
   }));
 }
 
+function derivePrimaryNodeFromDesiredStateV2(value) {
+  const placementNode = String(value?.placement?.primary_node || "").trim();
+  if (placementNode) {
+    return placementNode;
+  }
+  const inferNode = String(value?.infer?.node || "").trim();
+  if (inferNode) {
+    return inferNode;
+  }
+  const workerNode = String(value?.worker?.node || "").trim();
+  if (workerNode) {
+    return workerNode;
+  }
+  const appNode = String(value?.app?.node || "").trim();
+  if (appNode) {
+    return appNode;
+  }
+  const topologyNode = Array.isArray(value?.topology?.nodes)
+    ? value.topology.nodes.find((item) => String(item?.name || "").trim())
+    : null;
+  if (topologyNode?.name) {
+    return String(topologyNode.name).trim();
+  }
+  return "local-hostd";
+}
+
 export function isDesiredStateV2(value) {
   return Boolean(value && typeof value === "object" && value.version === 2);
 }
@@ -242,6 +275,13 @@ export function buildNewPlaneFormState() {
     inferencePort: 18094,
     serverName: "",
     serverNameManual: false,
+    primaryNode: "local-hostd",
+    appHostEnabled: false,
+    appHostAddress: "",
+    appHostAuthMode: "ssh-key",
+    appHostSshKeyPath: "",
+    appHostUsername: "",
+    appHostPassword: "",
     topologyEnabled: false,
     topologyNodes: [],
     inferImage: "",
@@ -305,9 +345,13 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     Array.isArray(app?.volumes) && app.volumes.length > 0 ? app.volumes[0] : {};
   const inferStorage = infer?.storage || {};
   const workerStorage = worker?.storage || {};
+  const appHost = value?.placement?.app_host || {};
   const planeName = value?.plane_name || defaults.planeName;
   const servedModelName = value?.model?.served_model_name || deriveServedModelName(planeName);
   const serverName = network.server_name || deriveServerName(planeName);
+  const primaryNode = derivePrimaryNodeFromDesiredStateV2(value);
+  const appHostAuthMode =
+    appHost?.ssh_key_path ? "ssh-key" : appHost?.username || appHost?.password ? "password" : defaults.appHostAuthMode;
   return {
     ...defaults,
     planeName,
@@ -349,6 +393,13 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     inferencePort: Number(network.inference_port ?? defaults.inferencePort),
     serverName,
     serverNameManual: serverName !== deriveServerName(planeName),
+    primaryNode,
+    appHostEnabled: Boolean(appHost?.address),
+    appHostAddress: appHost?.address || "",
+    appHostAuthMode,
+    appHostSshKeyPath: appHost?.ssh_key_path || "",
+    appHostUsername: appHost?.username || "",
+    appHostPassword: appHost?.password || "",
     topologyEnabled: Boolean(value?.topology?.nodes?.length),
     topologyNodes: normalizeTopologyNodes(value?.topology?.nodes),
     inferImage: infer.image || "",
@@ -457,6 +508,9 @@ export function buildDesiredStateV2FromForm(form) {
       inference_port: parseNumber(form.inferencePort, 18094),
       server_name: serverName,
     },
+    placement: {
+      primary_node: String(form.primaryNode || "").trim() || "local-hostd",
+    },
     app: {
       enabled: Boolean(form.appEnabled),
     },
@@ -491,6 +545,22 @@ export function buildDesiredStateV2FromForm(form) {
       desiredState.topology = {
         nodes,
       };
+    }
+  }
+
+  if (form.appHostEnabled && String(form.appHostAddress || "").trim()) {
+    desiredState.placement.app_host = {
+      address: String(form.appHostAddress || "").trim(),
+    };
+    if (form.appHostAuthMode === "password") {
+      if (String(form.appHostUsername || "").trim()) {
+        desiredState.placement.app_host.username = String(form.appHostUsername || "").trim();
+      }
+      if (String(form.appHostPassword || "").trim()) {
+        desiredState.placement.app_host.password = String(form.appHostPassword || "").trim();
+      }
+    } else if (String(form.appHostSshKeyPath || "").trim()) {
+      desiredState.placement.app_host.ssh_key_path = String(form.appHostSshKeyPath || "").trim();
     }
   }
 
@@ -561,7 +631,7 @@ export function buildDesiredStateV2FromForm(form) {
     if (Object.keys(inferEnv).length > 0) {
       desiredState.infer.env = inferEnv;
     }
-    if (form.inferNode.trim()) {
+    if (form.topologyEnabled && form.inferNode.trim()) {
       desiredState.infer.node = form.inferNode.trim();
     }
     if (form.inferStorageEnabled) {
@@ -595,13 +665,13 @@ export function buildDesiredStateV2FromForm(form) {
     if (Object.keys(workerEnv).length > 0) {
       desiredState.worker.env = workerEnv;
     }
-    if (form.workerNode.trim()) {
+    if (form.topologyEnabled && form.workerNode.trim()) {
       desiredState.worker.node = form.workerNode.trim();
     }
     if (form.workerGpuDevice.trim()) {
       desiredState.worker.gpu_device = form.workerGpuDevice.trim();
     }
-    if (form.workerAssignmentsEnabled) {
+    if (form.topologyEnabled && form.workerAssignmentsEnabled) {
       const assignments = (Array.isArray(form.workerAssignments) ? form.workerAssignments : [])
         .map((assignment) => {
           const rendered = {
@@ -637,7 +707,7 @@ export function buildDesiredStateV2FromForm(form) {
     if (Object.keys(appEnv).length > 0) {
       desiredState.app.env = appEnv;
     }
-    if (form.appNode.trim()) {
+    if (form.topologyEnabled && form.appNode.trim()) {
       desiredState.app.node = form.appNode.trim();
     }
     desiredState.app.publish = [
@@ -772,11 +842,31 @@ export function validatePlaneV2Form(form) {
   }
 
   const referencedNodes = [
+    String(form?.primaryNode || "").trim(),
     String(form?.inferNode || "").trim(),
     String(form?.workerNode || "").trim(),
     String(form?.appNode || "").trim(),
     ...enabledAssignments.map((assignment) => String(assignment.node || "").trim()),
   ].filter(Boolean);
+
+  if (!String(form?.primaryNode || "").trim()) {
+    errors.push("Primary node is required.");
+  }
+  if (form?.appHostEnabled && !form?.appEnabled) {
+    errors.push("External app host requires the app container to be enabled.");
+  }
+  if (form?.appHostEnabled && !String(form?.appHostAddress || "").trim()) {
+    errors.push("External app host address is required.");
+  }
+  if (form?.appHostEnabled && form?.appHostAuthMode === "ssh-key" &&
+      !String(form?.appHostSshKeyPath || "").trim()) {
+    errors.push("External app host SSH key path is required.");
+  }
+  if (form?.appHostEnabled && form?.appHostAuthMode === "password") {
+    if (!String(form?.appHostUsername || "").trim() || !String(form?.appHostPassword || "").trim()) {
+      errors.push("External app host username and password are required together.");
+    }
+  }
   if (form?.topologyEnabled && topologyNodeNames.length > 0) {
     const unknownNodes = referencedNodes.filter((name) => !topologyNodeNames.includes(name));
     if (unknownNodes.length > 0) {
@@ -1140,6 +1230,12 @@ export function PlaneV2FormBuilder({
         if (key === "appEnabled" && event.target.checked && !next.appNode && next.topologyEnabled) {
           next.appNode = next.inferNode || next.workerNode || "";
         }
+        if (key === "appHostEnabled" && !event.target.checked) {
+          next.appHostAddress = "";
+          next.appHostSshKeyPath = "";
+          next.appHostUsername = "";
+          next.appHostPassword = "";
+        }
         return next;
       });
   }
@@ -1228,11 +1324,12 @@ export function PlaneV2FormBuilder({
   function enableSingleHostLayout() {
     updatePlaneDialogForm(setDialog, (current) => ({
       ...current,
-      topologyEnabled: true,
-      topologyNodes: [{ name: "local-hostd", executionMode: "mixed", gpuMemoryText: "" }],
-      inferNode: "local-hostd",
-      workerNode: "local-hostd",
-      appNode: current.appEnabled ? "local-hostd" : current.appNode,
+      primaryNode: "local-hostd",
+      topologyEnabled: false,
+      topologyNodes: [],
+      inferNode: "",
+      workerNode: "",
+      appNode: "",
       workerAssignmentsEnabled: false,
       workerAssignments: [],
     }));
@@ -1257,6 +1354,7 @@ export function PlaneV2FormBuilder({
         ...current,
         runtimeEngine: "llama.cpp",
         inferReplicas: workerCount,
+        primaryNode: "infer-hostd",
         topologyEnabled: true,
         topologyNodes: topologyNodesValue,
         inferNode: "infer-hostd",
@@ -1956,18 +2054,27 @@ export function PlaneV2FormBuilder({
 
       <AdvancedSection
         title="Placement and topology"
-        description="Use only for split-host, manual GPU placement, or per-worker assignment layouts."
+        description="Primary node selection is the normal path. Custom topology stays available only for legacy split-host and manual placement layouts."
       >
         <SectionMeta>{topologySummary}</SectionMeta>
         <SectionActions>
           <button className="ghost-button" type="button" onClick={enableSingleHostLayout}>
-            Use single-host layout
+            Use placement-first single-node layout
           </button>
           <button className="ghost-button" type="button" onClick={generateSplitHostLayout}>
-            Generate split-host layout
+            Generate legacy split-host layout
           </button>
         </SectionActions>
         <div className="plane-form-grid">
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.primaryNode}>Primary node</InfoLabel>
+            <input
+              className={inputClassName(Boolean(fieldError("Primary node is required.")))}
+              value={form.primaryNode}
+              onChange={bindText("primaryNode")}
+            />
+            <FieldHint message={fieldError("Primary node is required.")} />
+          </label>
           <label className="field-label plane-checkbox">
             <input
               type="checkbox"
@@ -2038,61 +2145,70 @@ export function PlaneV2FormBuilder({
             </label>
           ) : null}
         </div>
-        <div className="plane-form-grid">
-          <label className="field-label">
-            <InfoLabel info={FIELD_INFO.workerNode}>Worker node</InfoLabel>
-            <input className="text-input" value={form.workerNode} onChange={bindText("workerNode")} />
-          </label>
-          <label className="field-label">
-            <InfoLabel info={FIELD_INFO.workerGpuDevice}>Worker GPU device</InfoLabel>
-            <input
-              className="text-input"
-              value={form.workerGpuDevice}
-              onChange={bindText("workerGpuDevice")}
-            />
-          </label>
-          {form.planeMode === "llm" ? (
+        {form.topologyEnabled ? (
+          <>
+            <div className="plane-form-grid">
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.workerNode}>Worker node</InfoLabel>
+                <input className="text-input" value={form.workerNode} onChange={bindText("workerNode")} />
+              </label>
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.workerGpuDevice}>Worker GPU device</InfoLabel>
+                <input
+                  className="text-input"
+                  value={form.workerGpuDevice}
+                  onChange={bindText("workerGpuDevice")}
+                />
+              </label>
+              {form.planeMode === "llm" ? (
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
+                  <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
+                </label>
+              ) : null}
+            </div>
+            <div className="plane-form-grid">
+              <label className="field-label plane-checkbox">
+                <input
+                  type="checkbox"
+                  checked={form.workerAssignmentsEnabled}
+                  onChange={bindCheck("workerAssignmentsEnabled")}
+                />
+                <InfoLabel info={FIELD_INFO.workerAssignmentsEnabled} className="field-label-inline">
+                  Per-worker assignments
+                </InfoLabel>
+              </label>
+            </div>
+            <SectionActions>
+              <button className="ghost-button" type="button" onClick={matchAssignmentsToWorkers}>
+                Match assignments to worker count
+              </button>
+            </SectionActions>
             <label className="field-label">
-              <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
-              <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
+              <InfoLabel info={FIELD_INFO.workerAssignments}>Worker assignments</InfoLabel>
+              <WorkerAssignmentRows
+                assignments={form.workerAssignments}
+                disabled={!form.workerAssignmentsEnabled}
+                onChange={updateWorkerAssignments}
+              />
+              <FieldHint
+                message={firstMatching(validation.errors, [
+                  "Worker assignments count must match the number of workers",
+                  "Each worker assignment must include a node name",
+                ])}
+              />
+              <FieldHint
+                message={fieldWarning("Per-worker assignments are easier to reason about")}
+                severity="warning"
+              />
             </label>
-          ) : null}
-        </div>
-        <div className="plane-form-grid">
-          <label className="field-label plane-checkbox">
-            <input
-              type="checkbox"
-              checked={form.workerAssignmentsEnabled}
-              onChange={bindCheck("workerAssignmentsEnabled")}
-            />
-            <InfoLabel info={FIELD_INFO.workerAssignmentsEnabled} className="field-label-inline">
-              Per-worker assignments
-            </InfoLabel>
-          </label>
-        </div>
-        <SectionActions>
-          <button className="ghost-button" type="button" onClick={matchAssignmentsToWorkers}>
-            Match assignments to worker count
-          </button>
-        </SectionActions>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.workerAssignments}>Worker assignments</InfoLabel>
-          <WorkerAssignmentRows
-            assignments={form.workerAssignments}
-            disabled={!form.workerAssignmentsEnabled}
-            onChange={updateWorkerAssignments}
-          />
+          </>
+        ) : (
           <FieldHint
-            message={firstMatching(validation.errors, [
-              "Worker assignments count must match the number of workers",
-              "Each worker assignment must include a node name",
-            ])}
-          />
-          <FieldHint
-            message={fieldWarning("Per-worker assignments are easier to reason about")}
+            message="Legacy per-service node pinning and per-worker assignments stay disabled until Custom topology is enabled."
             severity="warning"
           />
-        </label>
+        )}
       </AdvancedSection>
 
       <AdvancedSection
@@ -2207,10 +2323,19 @@ export function PlaneV2FormBuilder({
                 </label>
               </div>
               <div className="plane-form-grid">
-                <label className="field-label">
-                  <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
-                  <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
-                </label>
+                {form.topologyEnabled ? (
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
+                    <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
+                  </label>
+                ) : (
+                  <div className="field-label">
+                    <InfoLabel info={FIELD_INFO.primaryNode}>Infer node</InfoLabel>
+                    <div className="plane-form-section-copy">
+                      Infer colocates with the selected primary node unless legacy topology is enabled.
+                    </div>
+                  </div>
+                )}
                 <label className="field-label plane-checkbox">
                   <input
                     type="checkbox"
@@ -2371,10 +2496,29 @@ export function PlaneV2FormBuilder({
             </label>
           </div>
           <div className="plane-form-grid">
-            <label className="field-label">
-              <InfoLabel info={FIELD_INFO.appNode}>App node</InfoLabel>
-              <input className="text-input" value={form.appNode} onChange={bindText("appNode")} />
+            <label className="field-label plane-checkbox">
+              <input
+                type="checkbox"
+                checked={form.appHostEnabled}
+                onChange={bindCheck("appHostEnabled")}
+              />
+              <InfoLabel info={FIELD_INFO.appHostEnabled} className="field-label-inline">
+                External app host
+              </InfoLabel>
             </label>
+            {form.topologyEnabled ? (
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.appNode}>App node</InfoLabel>
+                <input className="text-input" value={form.appNode} onChange={bindText("appNode")} />
+              </label>
+            ) : (
+              <div className="field-label">
+                <InfoLabel info={FIELD_INFO.primaryNode}>App placement</InfoLabel>
+                <div className="plane-form-section-copy">
+                  App runs on the primary node by default and moves only when External app host is enabled.
+                </div>
+              </div>
+            )}
             <label className="field-label plane-checkbox">
               <input
                 type="checkbox"
@@ -2386,6 +2530,67 @@ export function PlaneV2FormBuilder({
               </InfoLabel>
             </label>
           </div>
+          {form.appHostEnabled ? (
+            <>
+              <div className="plane-form-grid">
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appHostAddress}>App host address</InfoLabel>
+                  <input
+                    className={inputClassName(Boolean(fieldError("External app host address is required.")))}
+                    value={form.appHostAddress}
+                    onChange={bindText("appHostAddress")}
+                  />
+                  <FieldHint message={fieldError("External app host address is required.")} />
+                  <FieldHint message={fieldError("External app host requires the app container to be enabled.")} />
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appHostAuthMode}>App host auth mode</InfoLabel>
+                  <select
+                    className="text-input"
+                    value={form.appHostAuthMode}
+                    onChange={bindText("appHostAuthMode")}
+                  >
+                    <option value="ssh-key">ssh-key</option>
+                    <option value="password">password</option>
+                  </select>
+                </label>
+              </div>
+              {form.appHostAuthMode === "password" ? (
+                <div className="plane-form-grid">
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.appHostUsername}>App host username</InfoLabel>
+                    <input
+                      className={inputClassName(Boolean(fieldError("External app host username and password are required together.")))}
+                      value={form.appHostUsername}
+                      onChange={bindText("appHostUsername")}
+                    />
+                  </label>
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.appHostPassword}>App host password</InfoLabel>
+                    <input
+                      className={inputClassName(Boolean(fieldError("External app host username and password are required together.")))}
+                      type="password"
+                      value={form.appHostPassword}
+                      onChange={bindText("appHostPassword")}
+                    />
+                    <FieldHint message={fieldError("External app host username and password are required together.")} />
+                  </label>
+                </div>
+              ) : (
+                <div className="plane-form-grid">
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.appHostSshKeyPath}>App host SSH key path</InfoLabel>
+                    <input
+                      className={inputClassName(Boolean(fieldError("External app host SSH key path is required.")))}
+                      value={form.appHostSshKeyPath}
+                      onChange={bindText("appHostSshKeyPath")}
+                    />
+                    <FieldHint message={fieldError("External app host SSH key path is required.")} />
+                  </label>
+                </div>
+              )}
+            </>
+          ) : null}
           <label className="field-label">
             <InfoLabel info={FIELD_INFO.appEnv}>App env</InfoLabel>
             <textarea

@@ -118,12 +118,12 @@ std::optional<comet::GpuDeviceTelemetry> FindObservedGpuDeviceTelemetry(
     const std::vector<comet::HostObservation>& observations,
     const std::string& node_name,
     const std::string& gpu_device,
-    const SchedulerDomainService::Deps& deps) {
+    const SchedulerDomainSupport& domain_support) {
   const auto observation = FindHostObservationForNode(observations, node_name);
   if (!observation.has_value()) {
     return std::nullopt;
   }
-  const auto telemetry = deps.parse_gpu_telemetry(*observation);
+  const auto telemetry = domain_support.ParseGpuTelemetry(*observation);
   if (!telemetry.has_value()) {
     return std::nullopt;
   }
@@ -140,9 +140,9 @@ bool ObservedGpuDeviceHasForeignProcess(
     const std::string& node_name,
     const std::string& gpu_device,
     const std::string& worker_name,
-    const SchedulerDomainService::Deps& deps) {
+    const SchedulerDomainSupport& domain_support) {
   const auto device =
-      FindObservedGpuDeviceTelemetry(observations, node_name, gpu_device, deps);
+      FindObservedGpuDeviceTelemetry(observations, node_name, gpu_device, domain_support);
   if (!device.has_value()) {
     return false;
   }
@@ -160,28 +160,33 @@ std::optional<std::string> ObservedGpuPlacementGateReason(
     const std::string& target_node_name,
     const std::string& target_gpu_device,
     bool moving_to_different_gpu,
-    const SchedulerDomainService::Deps& deps) {
+    const SchedulerDomainSupport& domain_support,
+    const SchedulerDomainPolicyConfig& policy_config) {
   const auto device =
-      FindObservedGpuDeviceTelemetry(observations, target_node_name, target_gpu_device, deps);
+      FindObservedGpuDeviceTelemetry(
+          observations,
+          target_node_name,
+          target_gpu_device,
+          domain_support);
   if (!device.has_value()) {
     return std::nullopt;
   }
 
   if (worker.memory_cap_mb.has_value() &&
       device->free_vram_mb <
-          (*worker.memory_cap_mb + deps.observed_move_vram_reserve_mb)) {
+          (*worker.memory_cap_mb + policy_config.observed_move_vram_reserve_mb)) {
     return std::string("observed-insufficient-vram");
   }
 
   if (moving_to_different_gpu &&
       device->gpu_utilization_pct >=
-          deps.compute_pressure_utilization_threshold_pct &&
+          policy_config.compute_pressure_utilization_threshold_pct &&
       ObservedGpuDeviceHasForeignProcess(
           observations,
           target_node_name,
           target_gpu_device,
           worker.name,
-          deps)) {
+          domain_support)) {
     return std::string("compute-pressure");
   }
 
@@ -190,7 +195,11 @@ std::optional<std::string> ObservedGpuPlacementGateReason(
 
 }  // namespace
 
-SchedulerDomainService::SchedulerDomainService(Deps deps) : deps_(std::move(deps)) {}
+SchedulerDomainService::SchedulerDomainService(
+    std::shared_ptr<const SchedulerDomainSupport> domain_support,
+    SchedulerDomainPolicyConfig policy_config)
+    : domain_support_(std::move(domain_support)),
+      policy_config_(std::move(policy_config)) {}
 
 std::vector<RolloutLifecycleEntry> SchedulerDomainService::BuildRolloutLifecycleEntries(
     const comet::DesiredState& desired_state,
@@ -310,15 +319,15 @@ std::vector<RolloutLifecycleEntry> SchedulerDomainService::BuildRolloutLifecycle
       entry.detail = "target node observation failed";
     } else if (
         target_observation.has_value() &&
-        deps_.health_from_age(
-            deps_.heartbeat_age_seconds(target_observation->heartbeat_at),
-            deps_.default_stale_after_seconds) == "stale") {
+        domain_support_->HealthFromAge(
+            domain_support_->HeartbeatAgeSeconds(target_observation->heartbeat_at),
+            policy_config_.default_stale_after_seconds) == "stale") {
       entry.phase = SchedulerRolloutPhase::HostStale;
       entry.detail = "target node observation stale";
     } else if (
         target_observation.has_value() &&
-        deps_.parse_runtime_status(*target_observation).has_value() &&
-        deps_.parse_runtime_status(*target_observation)->runtime_phase == "failed") {
+        domain_support_->ParseRuntimeStatus(*target_observation).has_value() &&
+        domain_support_->ParseRuntimeStatus(*target_observation)->runtime_phase == "failed") {
       entry.phase = SchedulerRolloutPhase::RuntimeFailed;
       entry.detail = "target runtime reported failed phase";
     } else if (
@@ -388,11 +397,11 @@ SchedulerDomainService::BuildRebalanceControllerGateSummary(
       static_cast<int>(summary.blocking_assignment_nodes.size());
 
   const auto availability_override_map =
-      deps_.build_availability_override_map(availability_overrides);
+      domain_support_->BuildAvailabilityOverrideMap(availability_overrides);
   std::set<std::string> unconverged_nodes;
   for (const auto& node : desired_state.nodes) {
-    if (!deps_.is_node_schedulable(
-            deps_.resolve_node_availability(availability_override_map, node.name))) {
+    if (!domain_support_->IsNodeSchedulable(
+            domain_support_->ResolveNodeAvailability(availability_override_map, node.name))) {
       continue;
     }
     const auto observation = FindHostObservationForNode(observations, node.name);
@@ -404,8 +413,8 @@ SchedulerDomainService::BuildRebalanceControllerGateSummary(
       unconverged_nodes.insert(node.name);
       continue;
     }
-    const auto age_seconds = deps_.heartbeat_age_seconds(observation->heartbeat_at);
-    if (deps_.health_from_age(age_seconds, stale_after_seconds) != "online") {
+    const auto age_seconds = domain_support_->HeartbeatAgeSeconds(observation->heartbeat_at);
+    if (domain_support_->HealthFromAge(age_seconds, stale_after_seconds) != "online") {
       unconverged_nodes.insert(node.name);
       continue;
     }
@@ -465,9 +474,9 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
     entry.current_node_name = recommendation.current_node_name;
     entry.current_gpu_device = recommendation.current_gpu_device;
     const auto availability_override_map =
-        deps_.build_availability_override_map(availability_overrides);
+        domain_support_->BuildAvailabilityOverrideMap(availability_overrides);
     const auto source_availability =
-        deps_.resolve_node_availability(
+        domain_support_->ResolveNodeAvailability(
             availability_override_map,
             recommendation.current_node_name);
     const bool source_requires_exit =
@@ -535,11 +544,11 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
           continue;
         }
         const auto target_availability =
-            deps_.resolve_node_availability(
+            domain_support_->ResolveNodeAvailability(
                 availability_override_map,
                 candidate.node_name);
         if (candidate.node_name != recommendation.current_node_name &&
-            deps_.is_node_schedulable(target_availability)) {
+            domain_support_->IsNodeSchedulable(target_availability)) {
           selected_candidate = &candidate;
           break;
         }
@@ -575,21 +584,21 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
     entry.preemption_required = selected_candidate->preemption_required;
     entry.victim_worker_names = selected_candidate->preemption_victims;
     const auto target_availability =
-        deps_.resolve_node_availability(
+        domain_support_->ResolveNodeAvailability(
             availability_override_map,
             selected_candidate->node_name);
 
     if (worker_runtime_it != scheduler_runtime.worker_runtime_by_name.end()) {
       const auto last_move_age =
-          deps_.timestamp_age_seconds(worker_runtime_it->second.last_move_at);
+          domain_support_->TimestampAgeSeconds(worker_runtime_it->second.last_move_at);
       if (last_move_age.has_value() &&
-          *last_move_age < deps_.worker_minimum_residency_seconds) {
+          *last_move_age < policy_config_.worker_minimum_residency_seconds) {
         entry.rebalance_class = "stable";
         entry.decision = "hold";
         entry.state = "min-residency";
         entry.gate_reason =
             "min-residency(" + std::to_string(*last_move_age) + "<" +
-            std::to_string(deps_.worker_minimum_residency_seconds) + ")";
+            std::to_string(policy_config_.worker_minimum_residency_seconds) + ")";
         entries.push_back(std::move(entry));
         continue;
       }
@@ -602,24 +611,24 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
     const auto source_move_age =
         source_node_runtime_it == scheduler_runtime.node_runtime_by_name.end()
             ? std::optional<long long>{}
-            : deps_.timestamp_age_seconds(source_node_runtime_it->second.last_move_at);
+            : domain_support_->TimestampAgeSeconds(source_node_runtime_it->second.last_move_at);
     const auto target_move_age =
         target_node_runtime_it == scheduler_runtime.node_runtime_by_name.end()
             ? std::optional<long long>{}
-            : deps_.timestamp_age_seconds(target_node_runtime_it->second.last_move_at);
+            : domain_support_->TimestampAgeSeconds(target_node_runtime_it->second.last_move_at);
     if ((source_move_age.has_value() &&
-         *source_move_age < deps_.node_cooldown_after_move_seconds) ||
+         *source_move_age < policy_config_.node_cooldown_after_move_seconds) ||
         (target_move_age.has_value() &&
-         *target_move_age < deps_.node_cooldown_after_move_seconds)) {
+         *target_move_age < policy_config_.node_cooldown_after_move_seconds)) {
       entry.rebalance_class = "gated";
       entry.decision = "hold";
       entry.state = "cooldown";
       if (source_move_age.has_value() && target_move_age.has_value() &&
-          *source_move_age < deps_.node_cooldown_after_move_seconds &&
-          *target_move_age < deps_.node_cooldown_after_move_seconds) {
+          *source_move_age < policy_config_.node_cooldown_after_move_seconds &&
+          *target_move_age < policy_config_.node_cooldown_after_move_seconds) {
         entry.gate_reason = "cooldown-source-and-target";
       } else if (source_move_age.has_value() &&
-                 *source_move_age < deps_.node_cooldown_after_move_seconds) {
+                 *source_move_age < policy_config_.node_cooldown_after_move_seconds) {
         entry.gate_reason = "cooldown-source";
       } else {
         entry.gate_reason = "cooldown-target";
@@ -638,7 +647,7 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
       continue;
     }
 
-    if (!deps_.is_node_schedulable(target_availability)) {
+    if (!domain_support_->IsNodeSchedulable(target_availability)) {
       entry.rebalance_class = "gated";
       entry.decision = "hold";
       entry.state = "gated-target";
@@ -670,7 +679,7 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
     }
 
     const auto gate_reason =
-        deps_.observed_scheduling_gate_reason(
+        domain_support_->ObservedSchedulingGateReason(
             observations,
             selected_candidate->node_name,
             stale_after_seconds);
@@ -688,7 +697,8 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
                        selected_candidate->node_name != recommendation.current_node_name ||
                            selected_candidate->gpu_device !=
                                recommendation.current_gpu_device,
-                       deps_);
+                       *domain_support_,
+                       policy_config_);
                gpu_gate_reason.has_value()) {
       entry.rebalance_class = "gated";
       entry.decision = "hold";
@@ -699,13 +709,13 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
       entry.decision = "defer";
       entry.state = source_requires_exit ? "drain-preemption" : "deferred-preemption";
     } else if (selected_candidate->score <
-               deps_.minimum_safe_direct_rebalance_score) {
+               policy_config_.minimum_safe_direct_rebalance_score) {
       entry.rebalance_class = "stable";
       entry.decision = "hold";
       entry.state = "below-threshold";
       entry.gate_reason =
           "score-below-threshold(" + std::to_string(selected_candidate->score) +
-          "<" + std::to_string(deps_.minimum_safe_direct_rebalance_score) + ")";
+          "<" + std::to_string(policy_config_.minimum_safe_direct_rebalance_score) + ")";
     } else if (selected_candidate->same_node &&
                selected_candidate->action == "upgrade-to-exclusive") {
       entry.rebalance_class = "safe-direct";

@@ -13,6 +13,7 @@
 #include "comet/planning/execution_plan.h"
 #include "comet/runtime/infer_runtime_config.h"
 #include "comet/state/state_json.h"
+#include "comet/state/desired_state_v2_projector.h"
 #include "comet/state/desired_state_v2_renderer.h"
 #include "comet/state/desired_state_v2_validator.h"
 #include "comet/state/worker_group_topology.h"
@@ -1385,6 +1386,190 @@ int main() {
                {{"share_mode", "exclusive"}, {"gpu_fraction", 0.5}, {"memory_cap_mb", 24576}}}}},
         },
         "exclusive-share-mode-requires-full-gpu");
+
+    {
+      const json placement_primary_node{
+          {"version", 2},
+          {"plane_name", "placement-primary-node"},
+          {"plane_mode", "llm"},
+          {"placement", {{"primary_node", "remote-worker-a"}}},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-placement"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 2}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(placement_primary_node, "placement-primary-node");
+      Expect(state.placement_target == std::optional<std::string>("node:remote-worker-a"),
+             "placement-primary-node: placement_target should render from placement.primary_node");
+      Expect(!state.nodes.empty() && state.nodes.front().name == "remote-worker-a",
+             "placement-primary-node: renderer should synthesize node inventory");
+      const auto projected = comet::DesiredStateV2Projector::Project(state);
+      Expect(projected.contains("placement") && projected.at("placement").is_object(),
+             "placement-primary-node: projector should emit placement block");
+      Expect(projected.at("placement").at("primary_node").get<std::string>() == "remote-worker-a",
+             "placement-primary-node: projector primary_node mismatch");
+      Expect(!projected.contains("topology"),
+             "placement-primary-node: projector should suppress topology when placement_target is set");
+      const auto persisted = comet::DeserializeDesiredStateJson(
+          comet::SerializeDesiredStateJson(state));
+      Expect(
+          persisted.placement_target == std::optional<std::string>("node:remote-worker-a"),
+          "placement-primary-node: placement_target should survive desired-state persistence");
+      std::cout << "ok: placement-primary-node" << '\n';
+    }
+
+    {
+      const json legacy_topology_compatibility{
+          {"version", 2},
+          {"plane_name", "legacy-topology-compatibility"},
+          {"plane_mode", "llm"},
+          {"topology",
+           {{"nodes",
+             json::array(
+                 {{{"name", "controller-node"}, {"execution_mode", "mixed"}},
+                  {{"name", "worker-node-a"}, {"execution_mode", "worker-only"}}})}}},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-legacy-topology"},
+           }},
+          {"runtime", {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", true}, {"image", "example/app:dev"}, {"node", "controller-node"}}},
+          {"skills", {{"enabled", true}, {"image", "example/skills:dev"}, {"node", "controller-node"}}},
+          {"worker", {{"assignments", json::array({{{"node", "worker-node-a"}, {"gpu_device", "0"}}})}}},
+      };
+      const auto state = RenderValid(
+          legacy_topology_compatibility,
+          "legacy-topology-compatibility");
+      const auto worker_it = std::find_if(
+          state.instances.begin(),
+          state.instances.end(),
+          [](const comet::InstanceSpec& instance) {
+            return instance.role == comet::InstanceRole::Worker;
+          });
+      Expect(worker_it != state.instances.end(),
+             "legacy-topology-compatibility: worker instance should render");
+      Expect(worker_it->node_name == "worker-node-a",
+             "legacy-topology-compatibility: worker assignment node mismatch");
+      Expect(worker_it->gpu_device == std::optional<std::string>("0"),
+             "legacy-topology-compatibility: worker assignment gpu_device mismatch");
+      const auto skills_it = std::find_if(
+          state.instances.begin(),
+          state.instances.end(),
+          [](const comet::InstanceSpec& instance) {
+            return instance.role == comet::InstanceRole::Skills;
+          });
+      Expect(skills_it != state.instances.end(),
+             "legacy-topology-compatibility: skills instance should render");
+      Expect(skills_it->node_name == "controller-node",
+             "legacy-topology-compatibility: skills node mismatch");
+      std::cout << "ok: legacy-topology-compatibility" << '\n';
+    }
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-legacy-infer-node-without-topology"},
+            {"plane_mode", "llm"},
+            {"placement", {{"primary_node", "worker-a"}}},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-legacy-infer"},
+             }},
+            {"runtime", {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}, {"node", "other-node"}}},
+        },
+        "legacy-infer-node-requires-topology");
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-legacy-worker-assignments-without-topology"},
+            {"plane_mode", "compute"},
+            {"placement", {{"primary_node", "worker-a"}}},
+            {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+            {"worker", {{"assignments", json::array({{{"node", "worker-a"}, {"gpu_device", "0"}}})}}},
+        },
+        "legacy-worker-assignments-require-topology");
+
+    {
+      const json placement_app_host{
+          {"version", 2},
+          {"plane_name", "placement-app-host"},
+          {"plane_mode", "llm"},
+          {"placement",
+           {{"primary_node", "worker-a"},
+            {"app_host", {{"address", "10.0.0.15"}, {"ssh_key_path", "/tmp/id_ed25519"}}}}},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-placement-app-host"},
+           }},
+          {"runtime", {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
+          {"skills", {{"enabled", true}, {"image", "example/skills:dev"}}},
+      };
+      const auto state = RenderValid(placement_app_host, "placement-app-host");
+      Expect(state.app_host.has_value(), "placement-app-host: app_host should render");
+      Expect(state.app_host->address == "10.0.0.15",
+             "placement-app-host: app_host address mismatch");
+      const auto app_it = std::find_if(
+          state.instances.begin(),
+          state.instances.end(),
+          [](const comet::InstanceSpec& instance) {
+            return instance.role == comet::InstanceRole::App;
+          });
+      Expect(app_it != state.instances.end(),
+             "placement-app-host: app instance should render");
+      Expect(app_it->environment.at("COMET_EXTERNAL_APP_HOST_ADDRESS") == "10.0.0.15",
+             "placement-app-host: app should include external host address");
+      Expect(app_it->labels.at("comet.deployment.target") == "external-app-host",
+             "placement-app-host: app should mark external deployment target");
+      const auto skills_it = std::find_if(
+          state.instances.begin(),
+          state.instances.end(),
+          [](const comet::InstanceSpec& instance) {
+            return instance.role == comet::InstanceRole::Skills;
+          });
+      Expect(skills_it != state.instances.end(),
+             "placement-app-host: skills instance should render");
+      Expect(skills_it->environment.at("COMET_EXTERNAL_APP_HOST_BINDING") == "skills-follow-app",
+             "placement-app-host: skills should follow app host binding");
+      const auto projected = comet::DesiredStateV2Projector::Project(state);
+      Expect(projected.at("placement").at("app_host").at("ssh_key_path").get<std::string>() ==
+                 "/tmp/id_ed25519",
+             "placement-app-host: projector should preserve ssh_key_path");
+      std::cout << "ok: placement-app-host" << '\n';
+    }
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-app-host-auth"},
+            {"plane_mode", "compute"},
+            {"placement",
+             {{"primary_node", "worker-a"},
+              {"app_host",
+               {{"address", "10.0.0.15"},
+                {"ssh_key_path", "/tmp/id_ed25519"},
+                {"username", "root"},
+                {"password", "secret"}}}}},
+            {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+            {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
+        },
+        "placement-app-host-rejects-mixed-auth");
 
     return 0;
   } catch (const std::exception& ex) {

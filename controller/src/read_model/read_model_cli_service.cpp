@@ -4,8 +4,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/state/state_json.h"
-
 namespace comet::controller {
 
 namespace {
@@ -67,46 +65,6 @@ ReadModelCliService::ReadModelCliService(
       default_stale_after_seconds_(default_stale_after_seconds),
       verification_stable_samples_required_(verification_stable_samples_required) {}
 
-bool ReadModelCliService::ObservationMatchesPlane(
-    const comet::HostObservation& observation,
-    const std::string& plane_name) const {
-  if (observation.plane_name == plane_name) {
-    return true;
-  }
-  if (observation.observed_state_json.empty()) {
-    return false;
-  }
-
-  const auto observed_state =
-      comet::DeserializeDesiredStateJson(observation.observed_state_json);
-  if (observed_state.plane_name == plane_name) {
-    return true;
-  }
-  for (const auto& disk : observed_state.disks) {
-    if (disk.plane_name == plane_name) {
-      return true;
-    }
-  }
-  for (const auto& instance : observed_state.instances) {
-    if (instance.plane_name == plane_name) {
-      return true;
-    }
-  }
-  return false;
-}
-
-std::vector<comet::HostObservation> ReadModelCliService::FilterHostObservationsForPlane(
-    const std::vector<comet::HostObservation>& observations,
-    const std::string& plane_name) const {
-  std::vector<comet::HostObservation> result;
-  for (const auto& observation : observations) {
-    if (ObservationMatchesPlane(observation, plane_name)) {
-      result.push_back(observation);
-    }
-  }
-  return result;
-}
-
 int ReadModelCliService::ShowHostAssignments(
     const std::string& db_path,
     const std::optional<std::string>& node_name) const {
@@ -130,7 +88,7 @@ int ReadModelCliService::ShowHostObservations(
   comet::ControllerStore store(db_path);
   store.Initialize();
   const auto observations = plane_name.has_value()
-                                ? FilterHostObservationsForPlane(
+                                ? plane_observation_matcher_.FilterHostObservationsForPlane(
                                       store.LoadHostObservations(node_name),
                                       *plane_name)
                                 : store.LoadHostObservations(node_name);
@@ -310,7 +268,7 @@ int ReadModelCliService::ShowDiskState(
           ? store.LoadDiskRuntimeStates(desired_state->plane_name, node_name)
           : std::vector<comet::DiskRuntimeState>{},
       plane_name.has_value()
-          ? FilterHostObservationsForPlane(
+          ? plane_observation_matcher_.FilterHostObservationsForPlane(
                 store.LoadHostObservations(node_name),
                 *plane_name)
           : store.LoadHostObservations(node_name),

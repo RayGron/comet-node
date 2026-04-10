@@ -23,7 +23,13 @@ bool AssignmentReferencesRolloutAction(
 
 }  // namespace
 
-SchedulerExecutionSupport::SchedulerExecutionSupport(Deps deps) : deps_(std::move(deps)) {}
+SchedulerExecutionSupport::SchedulerExecutionSupport(
+    std::shared_ptr<const SchedulerAssignmentQuerySupport> assignment_query_support,
+    std::shared_ptr<const SchedulerVerificationSupport> verification_support,
+    SchedulerExecutionVerificationConfig verification_config)
+    : assignment_query_support_(std::move(assignment_query_support)),
+      verification_support_(std::move(verification_support)),
+      verification_config_(std::move(verification_config)) {}
 
 std::optional<comet::RolloutActionRecord> SchedulerExecutionSupport::FindPriorRolloutActionForWorker(
     const std::vector<comet::RolloutActionRecord>& actions,
@@ -188,7 +194,9 @@ std::vector<comet::HostAssignment> SchedulerExecutionSupport::BuildEvictionAssig
   }
 
   const auto plane_assignment =
-      deps_.find_latest_host_assignment_for_plane(existing_assignments, desired_state.plane_name);
+      assignment_query_support_->FindLatestHostAssignmentForPlane(
+          existing_assignments,
+          desired_state.plane_name);
   std::vector<comet::HostAssignment> assignments;
   for (const auto& [node_name, victim_workers] : victim_workers_by_node) {
     comet::HostAssignment assignment;
@@ -200,12 +208,12 @@ std::vector<comet::HostAssignment> SchedulerExecutionSupport::BuildEvictionAssig
         comet::SerializeDesiredStateJson(
             comet::SliceDesiredStateForNode(eviction_state, node_name));
     const auto latest_assignment =
-        deps_.find_latest_host_assignment_for_node(existing_assignments, node_name);
+        assignment_query_support_->FindLatestHostAssignmentForNode(existing_assignments, node_name);
     assignment.artifacts_root = latest_assignment.has_value()
                                     ? latest_assignment->artifacts_root
                                     : (plane_assignment.has_value()
                                            ? plane_assignment->artifacts_root
-                                           : deps_.default_artifacts_root_provider());
+                                           : assignment_query_support_->DefaultArtifactsRoot());
     assignment.status = comet::HostAssignmentStatus::Pending;
     std::ostringstream message;
     message << RolloutActionTag(action.id)
@@ -369,18 +377,19 @@ SchedulerVerificationResult SchedulerExecutionSupport::EvaluateSchedulerActionVe
       rollback_mode ? plane_runtime.target_gpu_device : plane_runtime.source_gpu_device;
 
   const auto target_observation =
-      deps_.find_host_observation_for_node(observations, expected_node);
+      verification_support_->FindHostObservationForNode(observations, expected_node);
   const auto source_observation =
-      deps_.find_host_observation_for_node(observations, cleared_node);
+      verification_support_->FindHostObservationForNode(observations, cleared_node);
   if (!target_observation.has_value()) {
     result.detail = "missing-target-observation";
   } else {
-    const auto target_runtimes = deps_.parse_instance_runtime_statuses(*target_observation);
+    const auto target_runtimes =
+        verification_support_->ParseInstanceRuntimeStatuses(*target_observation);
     const auto target_runtime = FindInstanceRuntimeStatus(
         target_runtimes,
         plane_runtime.active_worker_name,
         expected_gpu);
-    const auto target_telemetry = deps_.parse_gpu_telemetry(*target_observation);
+    const auto target_telemetry = verification_support_->ParseGpuTelemetry(*target_observation);
     const bool target_generation_applied =
         target_observation->applied_generation.has_value() &&
         *target_observation->applied_generation >= plane_runtime.action_generation;
@@ -398,12 +407,14 @@ SchedulerVerificationResult SchedulerExecutionSupport::EvaluateSchedulerActionVe
 
     bool source_cleared = true;
     if (source_observation.has_value()) {
-      const auto source_runtimes = deps_.parse_instance_runtime_statuses(*source_observation);
+      const auto source_runtimes =
+          verification_support_->ParseInstanceRuntimeStatuses(*source_observation);
       const auto source_runtime = FindInstanceRuntimeStatus(
           source_runtimes,
           plane_runtime.active_worker_name,
           cleared_gpu);
-      const auto source_telemetry = deps_.parse_gpu_telemetry(*source_observation);
+      const auto source_telemetry =
+          verification_support_->ParseGpuTelemetry(*source_observation);
       source_cleared =
           source_runtime == nullptr &&
           !TelemetryShowsOwnedProcess(
@@ -412,12 +423,13 @@ SchedulerVerificationResult SchedulerExecutionSupport::EvaluateSchedulerActionVe
               plane_runtime.active_worker_name);
     }
 
-    result.converged =
+      result.converged =
         target_generation_applied && target_runtime_ready && target_gpu_owned && source_cleared;
     if (result.converged) {
       result.next_stable_samples = plane_runtime.stable_samples + 1;
       result.stable =
-          result.next_stable_samples >= deps_.verification_stable_samples_required();
+          result.next_stable_samples >=
+          verification_config_.verification_stable_samples_required;
       result.detail = "verified-sample";
     } else {
       result.next_stable_samples = 0;
@@ -430,9 +442,11 @@ SchedulerVerificationResult SchedulerExecutionSupport::EvaluateSchedulerActionVe
     }
   }
 
-  const auto action_age = deps_.timestamp_age_seconds(plane_runtime.started_at);
+  const auto action_age =
+      verification_support_->TimestampAgeSeconds(plane_runtime.started_at);
   result.timed_out =
-      action_age.has_value() && *action_age >= deps_.verification_timeout_seconds();
+      action_age.has_value() &&
+      *action_age >= verification_config_.verification_timeout_seconds;
   return result;
 }
 
@@ -442,7 +456,7 @@ void SchedulerExecutionSupport::MarkWorkerMoveVerified(
   if (store == nullptr) {
     return;
   }
-  const std::string now = deps_.utc_now_sql_timestamp();
+  const std::string now = verification_support_->UtcNowSqlTimestamp();
   comet::SchedulerWorkerRuntime worker_runtime;
   if (const auto current = store->LoadSchedulerWorkerRuntime(plane_runtime.active_worker_name);
       current.has_value()) {
@@ -483,7 +497,7 @@ void SchedulerExecutionSupport::MarkWorkersEvicted(
   if (store == nullptr) {
     return;
   }
-  const std::string now = deps_.utc_now_sql_timestamp();
+  const std::string now = verification_support_->UtcNowSqlTimestamp();
   for (const auto& worker_name : worker_names) {
     if (worker_name.empty()) {
       continue;

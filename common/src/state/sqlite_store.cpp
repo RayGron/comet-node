@@ -6,6 +6,7 @@
 #include "comet/state/disk_runtime_repository.h"
 #include "comet/state/event_repository.h"
 #include "comet/state/interaction_repository.h"
+#include "comet/state/model_library_repository.h"
 #include "comet/state/node_availability_repository.h"
 #include "comet/state/observation_repository.h"
 #include "comet/state/plane_repository.h"
@@ -15,13 +16,11 @@
 #include "comet/state/sqlite_store.h"
 #include "comet/state/sqlite_store_schema.h"
 #include "comet/state/sqlite_store_support.h"
-#include "comet/state/sqlite_statement.h"
 #include "comet/state/state_json.h"
 
 #include <array>
 #include <filesystem>
 #include <map>
-#include <nlohmann/json.hpp>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -33,14 +32,10 @@ namespace comet {
 
 namespace {
 
-using Statement = SqliteStatement;
 using sqlite_store_support::AsSqlite;
 using sqlite_store_support::AvailabilityOverrideFromStatement;
 using sqlite_store_support::EnsureColumn;
 using sqlite_store_support::Exec;
-using sqlite_store_support::ToColumnText;
-using sqlite_store_support::ToOptionalColumnInt;
-using nlohmann::json;
 
 constexpr const char* kBootstrapSql = R"SQL(
 PRAGMA journal_mode=WAL;
@@ -81,6 +76,11 @@ CREATE TABLE IF NOT EXISTS registered_hosts (
     transport_mode TEXT NOT NULL DEFAULT 'out',
     execution_mode TEXT NOT NULL DEFAULT 'mixed',
     registration_state TEXT NOT NULL DEFAULT 'registered',
+    onboarding_key_hash TEXT NOT NULL DEFAULT '',
+    onboarding_state TEXT NOT NULL DEFAULT 'none',
+    derived_role TEXT NOT NULL DEFAULT 'ineligible',
+    role_reason TEXT NOT NULL DEFAULT '',
+    last_inventory_scan_at TEXT NOT NULL DEFAULT '',
     session_state TEXT NOT NULL DEFAULT 'disconnected',
     session_token TEXT NOT NULL DEFAULT '',
     session_expires_at TEXT NOT NULL DEFAULT '',
@@ -165,6 +165,7 @@ CREATE TABLE IF NOT EXISTS model_library_download_jobs (
     status TEXT NOT NULL DEFAULT 'queued',
     phase TEXT NOT NULL DEFAULT 'queued',
     model_id TEXT NOT NULL DEFAULT '',
+    node_name TEXT NOT NULL DEFAULT '',
     target_root TEXT NOT NULL DEFAULT '',
     target_subdir TEXT NOT NULL DEFAULT '',
     detected_source_format TEXT NOT NULL DEFAULT '',
@@ -517,56 +518,6 @@ CREATE TABLE IF NOT EXISTS scheduler_node_runtime (
 );
 )SQL";
 
-std::string SerializeStringArray(const std::vector<std::string>& values) {
-  return json(values).dump();
-}
-
-std::vector<std::string> ParseStringArray(const std::string& payload) {
-  if (payload.empty()) {
-    return {};
-  }
-  try {
-    const json parsed = json::parse(payload);
-    if (!parsed.is_array()) {
-      return {};
-    }
-    return parsed.get<std::vector<std::string>>();
-  } catch (...) {
-    return {};
-  }
-}
-
-ModelLibraryDownloadJobRecord ModelLibraryDownloadJobFromStatement(sqlite3_stmt* statement) {
-  ModelLibraryDownloadJobRecord job;
-  job.id = ToColumnText(statement, 0);
-  job.job_kind = ToColumnText(statement, 1);
-  job.status = ToColumnText(statement, 2);
-  job.phase = ToColumnText(statement, 3);
-  job.model_id = ToColumnText(statement, 4);
-  job.target_root = ToColumnText(statement, 5);
-  job.target_subdir = ToColumnText(statement, 6);
-  job.detected_source_format = ToColumnText(statement, 7);
-  job.desired_output_format = ToColumnText(statement, 8);
-  job.source_urls = ParseStringArray(ToColumnText(statement, 9));
-  job.target_paths = ParseStringArray(ToColumnText(statement, 10));
-  job.quantizations = ParseStringArray(ToColumnText(statement, 11));
-  job.retained_output_paths = ParseStringArray(ToColumnText(statement, 12));
-  job.current_item = ToColumnText(statement, 13);
-  job.staging_directory = ToColumnText(statement, 14);
-  if (sqlite3_column_type(statement, 15) != SQLITE_NULL) {
-    job.bytes_total =
-        static_cast<std::uintmax_t>(sqlite3_column_int64(statement, 15));
-  }
-  job.bytes_done = static_cast<std::uintmax_t>(sqlite3_column_int64(statement, 16));
-  job.part_count = sqlite3_column_int(statement, 17);
-  job.keep_base_gguf = sqlite3_column_int(statement, 18) != 0;
-  job.error_message = ToColumnText(statement, 19);
-  job.hidden = sqlite3_column_int(statement, 20) != 0;
-  job.created_at = ToColumnText(statement, 21);
-  job.updated_at = ToColumnText(statement, 22);
-  return job;
-}
-
 }  // namespace
 
 ControllerStore::ControllerStore(std::string db_path) : db_path_(std::move(db_path)) {
@@ -817,104 +768,19 @@ bool ControllerStore::TouchAuthSession(
 
 void ControllerStore::UpsertModelLibraryDownloadJob(
     const ModelLibraryDownloadJobRecord& job) {
-  Statement statement(
-      AsSqlite(db_),
-      "INSERT INTO model_library_download_jobs("
-      "id, job_kind, status, phase, model_id, target_root, target_subdir, detected_source_format, "
-      "desired_output_format, source_urls_json, target_paths_json, quantizations_json, "
-      "retained_output_paths_json, current_item, staging_directory, bytes_total, "
-      "bytes_done, part_count, keep_base_gguf, error_message, hidden, created_at, updated_at) "
-      "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23) "
-      "ON CONFLICT(id) DO UPDATE SET "
-      "job_kind = excluded.job_kind, "
-      "status = excluded.status, "
-      "phase = excluded.phase, "
-      "model_id = excluded.model_id, "
-      "target_root = excluded.target_root, "
-      "target_subdir = excluded.target_subdir, "
-      "detected_source_format = excluded.detected_source_format, "
-      "desired_output_format = excluded.desired_output_format, "
-      "source_urls_json = excluded.source_urls_json, "
-      "target_paths_json = excluded.target_paths_json, "
-      "quantizations_json = excluded.quantizations_json, "
-      "retained_output_paths_json = excluded.retained_output_paths_json, "
-      "current_item = excluded.current_item, "
-      "staging_directory = excluded.staging_directory, "
-      "bytes_total = excluded.bytes_total, "
-      "bytes_done = excluded.bytes_done, "
-      "part_count = excluded.part_count, "
-      "keep_base_gguf = excluded.keep_base_gguf, "
-      "error_message = excluded.error_message, "
-      "hidden = excluded.hidden, "
-      "created_at = excluded.created_at, "
-      "updated_at = excluded.updated_at;");
-  statement.BindText(1, job.id);
-  statement.BindText(2, job.job_kind);
-  statement.BindText(3, job.status);
-  statement.BindText(4, job.phase);
-  statement.BindText(5, job.model_id);
-  statement.BindText(6, job.target_root);
-  statement.BindText(7, job.target_subdir);
-  statement.BindText(8, job.detected_source_format);
-  statement.BindText(9, job.desired_output_format);
-  statement.BindText(10, SerializeStringArray(job.source_urls));
-  statement.BindText(11, SerializeStringArray(job.target_paths));
-  statement.BindText(12, SerializeStringArray(job.quantizations));
-  statement.BindText(13, SerializeStringArray(job.retained_output_paths));
-  statement.BindText(14, job.current_item);
-  statement.BindText(15, job.staging_directory);
-  statement.BindOptionalInt64(
-      16,
-      job.bytes_total.has_value()
-          ? std::optional<std::int64_t>(static_cast<std::int64_t>(*job.bytes_total))
-          : std::nullopt);
-  statement.BindInt64(17, static_cast<std::int64_t>(job.bytes_done));
-  statement.BindInt(18, job.part_count);
-  statement.BindInt(19, job.keep_base_gguf ? 1 : 0);
-  statement.BindText(20, job.error_message);
-  statement.BindInt(21, job.hidden ? 1 : 0);
-  statement.BindText(22, job.created_at);
-  statement.BindText(23, job.updated_at);
-  statement.StepDone();
+  ModelLibraryRepository(AsSqlite(db_)).UpsertModelLibraryDownloadJob(job);
 }
 
 std::optional<ModelLibraryDownloadJobRecord> ControllerStore::LoadModelLibraryDownloadJob(
     const std::string& job_id) const {
-  Statement statement(
-      AsSqlite(db_),
-      "SELECT id, job_kind, status, phase, model_id, target_root, target_subdir, detected_source_format, "
-      "desired_output_format, source_urls_json, target_paths_json, quantizations_json, "
-      "retained_output_paths_json, current_item, staging_directory, bytes_total, bytes_done, "
-      "part_count, keep_base_gguf, error_message, hidden, created_at, updated_at "
-      "FROM model_library_download_jobs WHERE id = ?1;");
-  statement.BindText(1, job_id);
-  if (!statement.StepRow()) {
-    return std::nullopt;
-  }
-  return ModelLibraryDownloadJobFromStatement(statement.raw());
+  return ModelLibraryRepository(AsSqlite(db_))
+      .LoadModelLibraryDownloadJob(job_id);
 }
 
 std::vector<ModelLibraryDownloadJobRecord> ControllerStore::LoadModelLibraryDownloadJobs(
     const std::optional<std::string>& status) const {
-  std::string sql =
-      "SELECT id, job_kind, status, phase, model_id, target_root, target_subdir, detected_source_format, "
-      "desired_output_format, source_urls_json, target_paths_json, quantizations_json, "
-      "retained_output_paths_json, current_item, staging_directory, bytes_total, bytes_done, "
-      "part_count, keep_base_gguf, error_message, hidden, created_at, updated_at "
-      "FROM model_library_download_jobs";
-  if (status.has_value()) {
-    sql += " WHERE status = ?1";
-  }
-  sql += " ORDER BY created_at DESC, id DESC;";
-  Statement statement(AsSqlite(db_), sql);
-  if (status.has_value()) {
-    statement.BindText(1, *status);
-  }
-  std::vector<ModelLibraryDownloadJobRecord> jobs;
-  while (statement.StepRow()) {
-    jobs.push_back(ModelLibraryDownloadJobFromStatement(statement.raw()));
-  }
-  return jobs;
+  return ModelLibraryRepository(AsSqlite(db_))
+      .LoadModelLibraryDownloadJobs(status);
 }
 
 void ControllerStore::UpsertSkillsFactorySkill(const SkillsFactorySkillRecord& skill) {
@@ -1076,12 +942,8 @@ bool ControllerStore::DeleteControllerSetting(const std::string& setting_key) {
 }
 
 bool ControllerStore::DeleteModelLibraryDownloadJob(const std::string& job_id) {
-  Statement statement(
-      AsSqlite(db_),
-      "DELETE FROM model_library_download_jobs WHERE id = ?1;");
-  statement.BindText(1, job_id);
-  statement.StepDone();
-  return sqlite3_changes(AsSqlite(db_)) > 0;
+  return ModelLibraryRepository(AsSqlite(db_))
+      .DeleteModelLibraryDownloadJob(job_id);
 }
 
 bool ControllerStore::UpdatePlaneState(

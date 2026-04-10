@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include "infra/controller_runtime_support_service.h"
+#include "observation/plane_observation_matcher.h"
 #include "comet/runtime/runtime_status.h"
 #include "comet/state/sqlite_store.h"
 
@@ -49,20 +50,13 @@ class ReadModelService {
       const std::optional<std::string>& category,
       int limit) const;
 
- nlohmann::json BuildNodeAvailabilityPayload(
+  nlohmann::json BuildNodeAvailabilityPayload(
       const std::string& db_path,
       const std::optional<std::string>& node_name) const;
 
  private:
-  bool ObservationMatchesPlane(
-      const comet::HostObservation& observation,
-      const std::string& plane_name) const;
-
-  std::vector<comet::HostObservation> FilterHostObservationsForPlane(
-      const std::vector<comet::HostObservation>& observations,
-      const std::string& plane_name) const;
-
   ControllerRuntimeSupportService runtime_support_service_;
+  PlaneObservationMatcher plane_observation_matcher_;
 };
 
 }  // namespace comet::controller

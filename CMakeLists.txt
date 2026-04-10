@@ -226,12 +226,15 @@ add_library(
   common/src/state/controller_settings_repository.cpp
   common/src/state/desired_state_repository.cpp
   common/src/state/desired_state_sqlite_codec.cpp
+  common/src/state/desired_state_placement_resolver.cpp
   common/src/state/desired_state_v2_projector.cpp
+  common/src/state/desired_state_v2_projector_support.cpp
   common/src/state/desired_state_v2_renderer.cpp
   common/src/state/desired_state_v2_validator.cpp
   common/src/state/disk_runtime_repository.cpp
   common/src/state/event_repository.cpp
   common/src/state/interaction_repository.cpp
+  common/src/state/model_library_repository.cpp
   common/src/state/node_availability_repository.cpp
   common/src/state/observation_repository.cpp
   common/src/state/plane_repository.cpp
@@ -243,6 +246,8 @@ add_library(
   common/src/state/sqlite_store_support.cpp
   common/src/state/skills_factory_repository.cpp
   common/src/planning/scheduling_policy.cpp
+  common/src/state/state_json_runtime_codecs.cpp
+  common/src/state/state_json_settings_codecs.cpp
   common/src/state/state_json.cpp
   common/src/state/sqlite_store.cpp
 )
@@ -314,9 +319,11 @@ add_executable(
   controller/src/infra/controller_request_support.cpp
   controller/src/infra/controller_network_manager.cpp
   controller/src/model/model_conversion_service.cpp
+  controller/src/model/model_library_node_placement.cpp
   controller/src/model/model_library_service.cpp
   controller/src/model/model_library_service_tests.cpp
   controller/src/model/model_library_support.cpp
+  controller/src/observation/plane_observation_matcher.cpp
 )
 target_include_directories(comet-model-library-tests PRIVATE common/include controller/include)
 target_link_libraries(comet-model-library-tests PRIVATE comet-common)
@@ -363,11 +370,23 @@ add_executable(
   controller/src/browsing/plane_browsing_service.cpp
   controller/src/infra/controller_network_manager.cpp
   controller/src/http/controller_http_transport.cpp
+  controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_contract_responder.cpp
+  controller/src/interaction/interaction_model_identity_builder.cpp
   controller/src/interaction/interaction_payload_builder.cpp
+  controller/src/interaction/interaction_request_contract_support.cpp
+  controller/src/interaction/interaction_request_identity_support.cpp
+  controller/src/interaction/interaction_request_heuristics.cpp
+  controller/src/interaction/interaction_replica_group_summary_builder.cpp
+  controller/src/interaction/interaction_runtime_text_support.cpp
+  controller/src/interaction/interaction_text_post_processor.cpp
+  controller/src/interaction/interaction_upstream_event_parser.cpp
+  controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
   controller/src/interaction/interaction_service.cpp
   controller/src/plane/plane_dashboard_skills_summary_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_runtime_sync_service.cpp
+  controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
   controller/src/skills/plane_skills_service_tests.cpp
 )
@@ -390,6 +409,7 @@ add_executable(
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_catalog_service.cpp
   controller/src/skills/plane_skill_runtime_sync_service.cpp
+  controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
   controller/src/skills/skills_factory_service.cpp
   controller/src/skills/skills_factory_service_tests.cpp
@@ -406,7 +426,9 @@ add_executable(
   controller/src/infra/controller_network_manager.cpp
   controller/src/infra/controller_runtime_support_service.cpp
   controller/src/host/host_assignment_reconciliation_service.cpp
+  controller/src/observation/plane_observation_matcher.cpp
   controller/src/plane/dashboard_service.cpp
+  controller/src/plane/plane_placement_payload_builder.cpp
   controller/src/plane/dashboard_service_tests.cpp
   controller/src/plane/plane_dashboard_skills_summary_service.cpp
   controller/src/read_model/state_aggregate_loader.cpp
@@ -421,7 +443,34 @@ target_link_libraries(
 comet_enable_strict_warnings(comet-dashboard-service-tests)
 
 add_executable(
+  comet-plane-registry-tests
+  controller/src/infra/controller_runtime_support_service.cpp
+  controller/src/host/host_assignment_reconciliation_service.cpp
+  controller/src/observation/plane_observation_matcher.cpp
+  controller/src/plane/plane_placement_payload_builder.cpp
+  controller/src/plane/plane_deletion_support.cpp
+  controller/src/plane/plane_registry_query_support.cpp
+  controller/src/plane/plane_registry_service.cpp
+  controller/src/plane/plane_registry_service_tests.cpp)
+target_include_directories(
+  comet-plane-registry-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-plane-registry-tests PRIVATE comet-common Threads::Threads)
+comet_enable_strict_warnings(comet-plane-registry-tests)
+
+add_executable(
+  comet-plane-observation-matcher-tests
+  controller/src/observation/plane_observation_matcher.cpp
+  controller/src/observation/plane_observation_matcher_tests.cpp
+)
+target_include_directories(
+  comet-plane-observation-matcher-tests PRIVATE common/include controller/include)
+target_link_libraries(comet-plane-observation-matcher-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-plane-observation-matcher-tests)
+
+add_executable(
   comet-read-model-tests
+  controller/src/observation/plane_observation_matcher.cpp
   controller/src/infra/controller_runtime_support_service.cpp
   controller/src/read_model/read_model_service.cpp
   controller/src/read_model/read_model_service_tests.cpp
@@ -442,12 +491,317 @@ add_executable(
   controller/src/app/controller_request_context.cpp
   controller/src/app/controller_time_support.cpp
   controller/src/infra/controller_network_manager.cpp
+  controller/src/observation/plane_observation_matcher.cpp
 )
 target_include_directories(
   comet-auth-http-tests PRIVATE common/include controller/include)
 target_link_libraries(
   comet-auth-http-tests PRIVATE comet-common Threads::Threads)
 comet_enable_strict_warnings(comet-auth-http-tests)
+
+add_executable(
+  comet-host-registry-tests
+  controller/src/host/host_registry_service.cpp
+  controller/src/host/host_registry_service_tests.cpp
+)
+target_include_directories(
+  comet-host-registry-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-host-registry-tests PRIVATE comet-common Threads::Threads)
+comet_enable_strict_warnings(comet-host-registry-tests)
+
+add_executable(
+  comet-interaction-browsing-tests
+  controller/src/browsing/interaction_browsing_service.cpp
+  controller/src/browsing/plane_browsing_service.cpp
+  controller/src/http/controller_http_transport.cpp
+  controller/src/infra/controller_network_manager.cpp
+  controller/src/browsing/interaction_browsing_service_tests.cpp
+)
+target_include_directories(
+  comet-interaction-browsing-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-browsing-tests PRIVATE comet-common Threads::Threads)
+comet_enable_strict_warnings(comet-interaction-browsing-tests)
+
+add_executable(
+  comet-interaction-request-heuristics-tests
+  controller/src/interaction/interaction_request_heuristics.cpp
+  controller/src/interaction/interaction_request_heuristics_tests.cpp
+)
+target_include_directories(
+  comet-interaction-request-heuristics-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-request-heuristics-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-request-heuristics-tests)
+
+add_executable(
+  comet-interaction-completion-policy-support-tests
+  controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_completion_policy_support_tests.cpp
+  controller/src/interaction/interaction_request_heuristics.cpp
+  controller/src/interaction/interaction_text_post_processor.cpp
+)
+target_include_directories(
+  comet-interaction-completion-policy-support-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-completion-policy-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-completion-policy-support-tests)
+
+add_executable(
+  comet-interaction-request-contract-support-tests
+  controller/src/interaction/interaction_request_contract_support.cpp
+  controller/src/interaction/interaction_request_contract_support_tests.cpp
+)
+target_include_directories(
+  comet-interaction-request-contract-support-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-request-contract-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-request-contract-support-tests)
+
+add_executable(
+  comet-interaction-request-identity-support-tests
+  controller/src/interaction/interaction_request_identity_support.cpp
+  controller/src/interaction/interaction_request_identity_support_tests.cpp
+)
+target_include_directories(
+  comet-interaction-request-identity-support-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-request-identity-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-request-identity-support-tests)
+
+add_executable(
+  comet-interaction-model-identity-builder-tests
+  controller/src/interaction/interaction_model_identity_builder.cpp
+  controller/src/interaction/interaction_model_identity_builder_tests.cpp
+  controller/src/interaction/interaction_request_contract_support.cpp
+)
+target_include_directories(
+  comet-interaction-model-identity-builder-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-model-identity-builder-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-model-identity-builder-tests)
+
+add_executable(
+  comet-interaction-runtime-text-support-tests
+  controller/src/interaction/interaction_runtime_text_support.cpp
+  controller/src/interaction/interaction_runtime_text_support_tests.cpp
+)
+target_include_directories(
+  comet-interaction-runtime-text-support-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-runtime-text-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-runtime-text-support-tests)
+
+add_executable(
+  comet-interaction-text-post-processor-tests
+  controller/src/interaction/interaction_text_post_processor.cpp
+  controller/src/interaction/interaction_text_post_processor_tests.cpp
+)
+target_include_directories(
+  comet-interaction-text-post-processor-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-text-post-processor-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-text-post-processor-tests)
+
+add_executable(
+  comet-interaction-upstream-event-parser-tests
+  controller/src/interaction/interaction_upstream_event_parser.cpp
+  controller/src/interaction/interaction_upstream_event_parser_tests.cpp
+)
+target_include_directories(
+  comet-interaction-upstream-event-parser-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-upstream-event-parser-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-upstream-event-parser-tests)
+
+add_executable(
+  comet-interaction-conversation-payload-builder-tests
+  controller/src/interaction/interaction_conversation_payload_builder.cpp
+  controller/src/interaction/interaction_conversation_payload_builder_tests.cpp
+)
+target_include_directories(
+  comet-interaction-conversation-payload-builder-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-conversation-payload-builder-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-conversation-payload-builder-tests)
+
+add_executable(
+  comet-interaction-conversation-record-builder-tests
+  controller/src/interaction/interaction_conversation_payload_builder.cpp
+  controller/src/interaction/interaction_conversation_record_builder.cpp
+  controller/src/interaction/interaction_conversation_record_builder_tests.cpp
+)
+target_include_directories(
+  comet-interaction-conversation-record-builder-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-conversation-record-builder-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-conversation-record-builder-tests)
+
+add_executable(
+  comet-interaction-conversation-archive-service-tests
+  controller/src/app/controller_time_support.cpp
+  controller/src/interaction/interaction_conversation_archive_service.cpp
+  controller/src/interaction/interaction_conversation_payload_builder.cpp
+  controller/src/interaction/interaction_conversation_record_builder.cpp
+  controller/src/interaction/interaction_conversation_archive_service_tests.cpp
+)
+target_include_directories(
+  comet-interaction-conversation-archive-service-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-conversation-archive-service-tests PRIVATE comet-common)
+if(TARGET zstd::libzstd_shared)
+  target_link_libraries(
+    comet-interaction-conversation-archive-service-tests PRIVATE zstd::libzstd_shared)
+elseif(TARGET zstd::libzstd_static)
+  target_link_libraries(
+    comet-interaction-conversation-archive-service-tests PRIVATE zstd::libzstd_static)
+endif()
+comet_enable_strict_warnings(comet-interaction-conversation-archive-service-tests)
+
+add_executable(
+  comet-interaction-stream-http-error-response-builder-tests
+  controller/src/app/controller_composition_support.cpp
+  controller/src/app/controller_request_context.cpp
+  controller/src/infra/controller_network_manager.cpp
+  controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_contract_responder.cpp
+  controller/src/interaction/interaction_request_identity_support.cpp
+  controller/src/interaction/interaction_request_heuristics.cpp
+  controller/src/interaction/interaction_stream_http_error_response_builder.cpp
+  controller/src/interaction/interaction_stream_http_error_response_builder_tests.cpp
+  controller/src/interaction/interaction_request_contract_support.cpp
+  controller/src/interaction/interaction_text_post_processor.cpp
+  controller/src/interaction/interaction_upstream_event_parser.cpp
+  controller/src/observation/plane_observation_matcher.cpp
+)
+target_include_directories(
+  comet-interaction-stream-http-error-response-builder-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-stream-http-error-response-builder-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-stream-http-error-response-builder-tests)
+
+add_executable(
+  comet-interaction-sse-frame-builder-tests
+  controller/src/interaction/interaction_sse_frame_builder.cpp
+  controller/src/interaction/interaction_sse_frame_builder_tests.cpp
+)
+target_include_directories(
+  comet-interaction-sse-frame-builder-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-sse-frame-builder-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-sse-frame-builder-tests)
+
+add_executable(
+  comet-interaction-stream-http-request-preparation-service-tests
+  controller/src/app/controller_composition_support.cpp
+  controller/src/app/controller_request_context.cpp
+  controller/src/app/controller_time_support.cpp
+  controller/src/auth/auth_support_service.cpp
+  controller/src/browsing/plane_browsing_service.cpp
+  controller/src/http/controller_http_transport.cpp
+  controller/src/infra/controller_network_manager.cpp
+  controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_conversation_archive_service.cpp
+  controller/src/interaction/interaction_conversation_payload_builder.cpp
+  controller/src/interaction/interaction_conversation_record_builder.cpp
+  controller/src/interaction/interaction_conversation_service.cpp
+  controller/src/interaction/interaction_contract_responder.cpp
+  controller/src/interaction/interaction_model_identity_builder.cpp
+  controller/src/interaction/interaction_request_contract_support.cpp
+  controller/src/interaction/interaction_request_identity_support.cpp
+  controller/src/interaction/interaction_request_heuristics.cpp
+  controller/src/interaction/interaction_replica_group_summary_builder.cpp
+  controller/src/interaction/interaction_runtime_text_support.cpp
+  controller/src/interaction/interaction_service.cpp
+  controller/src/interaction/interaction_stream_http_error_response_builder.cpp
+  controller/src/interaction/interaction_stream_http_request_preparation_service.cpp
+  controller/src/interaction/interaction_stream_http_request_preparation_service_tests.cpp
+  controller/src/interaction/interaction_text_post_processor.cpp
+  controller/src/interaction/interaction_upstream_event_parser.cpp
+  controller/src/observation/plane_observation_matcher.cpp
+  controller/src/skills/plane_skill_contextual_resolver_service.cpp
+  controller/src/skills/plane_skill_runtime_sync_service.cpp
+  controller/src/skills/plane_skills_target_resolver.cpp
+  controller/src/skills/plane_skills_service.cpp
+)
+target_include_directories(
+  comet-interaction-stream-http-request-preparation-service-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-stream-http-request-preparation-service-tests PRIVATE comet-common)
+if(TARGET zstd::libzstd_shared)
+  target_link_libraries(
+    comet-interaction-stream-http-request-preparation-service-tests PRIVATE zstd::libzstd_shared)
+elseif(TARGET zstd::libzstd_static)
+  target_link_libraries(
+    comet-interaction-stream-http-request-preparation-service-tests PRIVATE zstd::libzstd_static)
+endif()
+comet_enable_strict_warnings(
+  comet-interaction-stream-http-request-preparation-service-tests)
+
+add_executable(
+  comet-interaction-continuation-payload-builder-tests
+  controller/src/interaction/interaction_continuation_payload_builder.cpp
+  controller/src/interaction/interaction_continuation_payload_builder_tests.cpp
+  controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_request_identity_support.cpp
+  controller/src/interaction/interaction_request_heuristics.cpp
+  controller/src/interaction/interaction_text_post_processor.cpp
+  controller/src/interaction/interaction_upstream_event_parser.cpp
+  controller/src/interaction/interaction_request_contract_support.cpp
+)
+target_include_directories(
+  comet-interaction-continuation-payload-builder-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-continuation-payload-builder-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-continuation-payload-builder-tests)
+
+add_executable(
+  comet-interaction-http-support-tests
+  controller/src/app/controller_language_support.cpp
+  controller/src/app/controller_composition_support.cpp
+  controller/src/app/controller_request_context.cpp
+  controller/src/http/controller_http_transport.cpp
+  controller/src/infra/controller_network_manager.cpp
+  controller/src/infra/controller_runtime_support_service.cpp
+  controller/src/interaction/interaction_continuation_payload_builder.cpp
+  controller/src/interaction/interaction_http_support.cpp
+  controller/src/interaction/interaction_model_identity_builder.cpp
+  controller/src/interaction/interaction_payload_builder.cpp
+  controller/src/interaction/interaction_replica_group_summary_builder.cpp
+  controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
+  controller/src/interaction/interaction_http_support_tests.cpp
+  controller/src/interaction/interaction_runtime_support_service.cpp
+  controller/src/observation/plane_observation_matcher.cpp
+  controller/src/plane/desired_state_policy_service.cpp
+)
+target_include_directories(
+  comet-interaction-http-support-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-http-support-tests PRIVATE comet-common Threads::Threads)
+comet_enable_strict_warnings(comet-interaction-http-support-tests)
+
+add_executable(
+  comet-interaction-replica-group-summary-builder-tests
+  controller/src/interaction/interaction_replica_group_summary_builder.cpp
+  controller/src/interaction/interaction_replica_group_summary_builder_tests.cpp
+)
+target_include_directories(
+  comet-interaction-replica-group-summary-builder-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-replica-group-summary-builder-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-replica-group-summary-builder-tests)
+
+add_executable(
+  comet-interaction-utf8-payload-sanitizer-tests
+  controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
+  controller/src/interaction/interaction_utf8_payload_sanitizer_tests.cpp
+)
+target_include_directories(
+  comet-interaction-utf8-payload-sanitizer-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-interaction-utf8-payload-sanitizer-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-interaction-utf8-payload-sanitizer-tests)
 
 add_library(
   comet-webgateway-runtime
@@ -481,12 +835,233 @@ comet_enable_strict_warnings(comet-webgateway-tests)
 
 add_executable(
   comet-hostd-local-state-tests
-  hostd/src/app/hostd_local_state_support.cpp
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_local_runtime_state_support.cpp
+  hostd/src/app/hostd_local_state_path_support.cpp
+  hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_runtime_telemetry_support.cpp
+  hostd/src/app/hostd_system_telemetry_collector.cpp
   hostd/src/app/hostd_local_state_support_tests.cpp
 )
 target_include_directories(comet-hostd-local-state-tests PRIVATE common/include hostd/include)
 target_link_libraries(comet-hostd-local-state-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-hostd-local-state-tests)
+
+add_executable(
+  comet-hostd-command-support-tests
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_command_support_tests.cpp
+)
+target_include_directories(comet-hostd-command-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(comet-hostd-command-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-command-support-tests)
+
+add_executable(
+  comet-hostd-post-deploy-support-tests
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_local_state_path_support.cpp
+  hostd/src/app/hostd_post_deploy_support.cpp
+  hostd/src/app/hostd_repo_root_support.cpp
+  hostd/src/app/hostd_post_deploy_support_tests.cpp
+)
+target_include_directories(comet-hostd-post-deploy-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(comet-hostd-post-deploy-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-post-deploy-support-tests)
+
+add_executable(
+  comet-hostd-disk-runtime-support-tests
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_disk_runtime_support.cpp
+  hostd/src/app/hostd_file_support.cpp
+  hostd/src/app/hostd_disk_runtime_support_tests.cpp
+)
+target_include_directories(
+  comet-hostd-disk-runtime-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(comet-hostd-disk-runtime-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-disk-runtime-support-tests)
+
+add_executable(
+  comet-hostd-file-support-tests
+  hostd/src/app/hostd_file_support.cpp
+  hostd/src/app/hostd_file_support_tests.cpp
+)
+target_include_directories(comet-hostd-file-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(comet-hostd-file-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-file-support-tests)
+
+add_executable(
+  comet-hostd-desired-state-path-support-tests
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_desired_state_path_support_tests.cpp
+)
+target_include_directories(
+  comet-hostd-desired-state-path-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(comet-hostd-desired-state-path-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-desired-state-path-support-tests)
+
+add_executable(
+  comet-hostd-desired-state-display-support-tests
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_desired_state_display_support.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_local_runtime_state_support.cpp
+  hostd/src/app/hostd_local_state_path_support.cpp
+  hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_runtime_telemetry_support.cpp
+  hostd/src/app/hostd_system_telemetry_collector.cpp
+  hostd/src/app/hostd_desired_state_display_support_tests.cpp
+)
+target_include_directories(
+  comet-hostd-desired-state-display-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(comet-hostd-desired-state-display-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-desired-state-display-support-tests)
+
+add_executable(
+  comet-hostd-desired-state-apply-plan-support-tests
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_compose_runtime_support.cpp
+  hostd/src/app/hostd_desired_state_apply_plan_support.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_disk_runtime_support.cpp
+  hostd/src/app/hostd_file_support.cpp
+  hostd/src/app/hostd_repo_root_support.cpp
+  hostd/src/app/hostd_desired_state_apply_plan_support_tests.cpp
+)
+target_include_directories(
+  comet-hostd-desired-state-apply-plan-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(
+  comet-hostd-desired-state-apply-plan-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-desired-state-apply-plan-support-tests)
+
+add_executable(
+  comet-hostd-bootstrap-model-artifact-support-tests
+  hostd/src/app/hostd_bootstrap_model_artifact_support.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_bootstrap_model_artifact_support_tests.cpp
+)
+target_include_directories(
+  comet-hostd-bootstrap-model-artifact-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(
+  comet-hostd-bootstrap-model-artifact-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-bootstrap-model-artifact-support-tests)
+
+add_executable(
+  comet-hostd-bootstrap-active-model-support-tests
+  hostd/src/app/hostd_bootstrap_active_model_support.cpp
+  hostd/src/app/hostd_bootstrap_model_artifact_support.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_file_support.cpp
+  hostd/src/app/hostd_local_state_path_support.cpp
+  hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_bootstrap_active_model_support_tests.cpp
+)
+target_include_directories(
+  comet-hostd-bootstrap-active-model-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(
+  comet-hostd-bootstrap-active-model-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-bootstrap-active-model-support-tests)
+
+add_executable(
+  comet-hostd-bootstrap-transfer-support-tests
+  hostd/src/app/hostd_bootstrap_transfer_support.cpp
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_observed_state_snapshot_builder.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_file_support.cpp
+  hostd/src/app/hostd_local_runtime_state_support.cpp
+  hostd/src/app/hostd_local_state_path_support.cpp
+  hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_reporting_support.cpp
+  hostd/src/app/hostd_runtime_telemetry_support.cpp
+  hostd/src/app/hostd_system_telemetry_collector.cpp
+  hostd/src/app/hostd_controller_transport_support.cpp
+  hostd/src/app/hostd_bootstrap_transfer_support_tests.cpp
+)
+target_include_directories(
+  comet-hostd-bootstrap-transfer-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(
+  comet-hostd-bootstrap-transfer-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-bootstrap-transfer-support-tests)
+
+add_executable(
+  comet-hostd-bootstrap-model-support-factory-tests
+  hostd/src/app/hostd_bootstrap_active_model_support.cpp
+  hostd/src/app/hostd_bootstrap_model_artifact_support.cpp
+  hostd/src/app/hostd_bootstrap_model_support.cpp
+  hostd/src/app/hostd_bootstrap_model_support_factory.cpp
+  hostd/src/app/hostd_bootstrap_transfer_support.cpp
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_observed_state_snapshot_builder.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_file_support.cpp
+  hostd/src/app/hostd_local_runtime_state_support.cpp
+  hostd/src/app/hostd_local_state_path_support.cpp
+  hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_reporting_support.cpp
+  hostd/src/app/hostd_runtime_telemetry_support.cpp
+  hostd/src/app/hostd_system_telemetry_collector.cpp
+  hostd/src/app/hostd_controller_transport_support.cpp
+  hostd/src/app/hostd_bootstrap_model_support_factory_tests.cpp
+)
+target_include_directories(
+  comet-hostd-bootstrap-model-support-factory-tests PRIVATE common/include hostd/include)
+target_link_libraries(
+  comet-hostd-bootstrap-model-support-factory-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-bootstrap-model-support-factory-tests)
+
+add_executable(
+  comet-hostd-desired-state-apply-support-tests
+  hostd/src/app/hostd_bootstrap_active_model_support.cpp
+  hostd/src/app/hostd_bootstrap_model_artifact_support.cpp
+  hostd/src/app/hostd_bootstrap_model_support.cpp
+  hostd/src/app/hostd_bootstrap_model_support_factory.cpp
+  hostd/src/app/hostd_bootstrap_transfer_support.cpp
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_compose_runtime_support.cpp
+  hostd/src/app/hostd_controller_transport_support.cpp
+  hostd/src/app/hostd_desired_state_apply_plan_support.cpp
+  hostd/src/app/hostd_desired_state_apply_support.cpp
+  hostd/src/app/hostd_desired_state_display_support.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_disk_runtime_support.cpp
+  hostd/src/app/hostd_file_support.cpp
+  hostd/src/app/hostd_local_runtime_state_support.cpp
+  hostd/src/app/hostd_local_state_path_support.cpp
+  hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_observed_state_snapshot_builder.cpp
+  hostd/src/app/hostd_post_deploy_support.cpp
+  hostd/src/app/hostd_reporting_support.cpp
+  hostd/src/app/hostd_repo_root_support.cpp
+  hostd/src/app/hostd_runtime_telemetry_support.cpp
+  hostd/src/app/hostd_system_telemetry_collector.cpp
+  hostd/src/app/hostd_desired_state_apply_support_tests.cpp
+)
+target_include_directories(
+  comet-hostd-desired-state-apply-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(
+  comet-hostd-desired-state-apply-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-desired-state-apply-support-tests)
+
+add_executable(
+  comet-hostd-reporting-support-tests
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_controller_transport_support.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_local_runtime_state_support.cpp
+  hostd/src/app/hostd_local_state_path_support.cpp
+  hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_observed_state_snapshot_builder.cpp
+  hostd/src/app/hostd_reporting_support.cpp
+  hostd/src/app/hostd_runtime_telemetry_support.cpp
+  hostd/src/app/hostd_system_telemetry_collector.cpp
+  hostd/src/app/hostd_reporting_support_tests.cpp
+)
+target_include_directories(
+  comet-hostd-reporting-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(comet-hostd-reporting-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-reporting-support-tests)
 
 add_executable(
   comet-hostd-repo-root-support-tests
@@ -508,12 +1083,25 @@ target_link_libraries(comet-hostd-assignment-lock-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-hostd-assignment-lock-tests)
 
 add_executable(
+  comet-hostd-cli-request-resolution-support-tests
+  hostd/src/cli/hostd_command_line.cpp
+  hostd/src/cli/hostd_cli_request_resolution_support.cpp
+  hostd/src/cli/hostd_cli_request_resolution_support_tests.cpp
+)
+target_include_directories(
+  comet-hostd-cli-request-resolution-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(
+  comet-hostd-cli-request-resolution-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-cli-request-resolution-support-tests)
+
+add_executable(
   comet-controller
   controller/src/auth/auth_http_service.cpp
   controller/src/auth/auth_http_support.cpp
   controller/src/auth/auth_payload_service.cpp
   controller/src/auth/auth_support_service.cpp
   controller/src/host/host_assignment_reconciliation_service.cpp
+  controller/src/observation/plane_observation_matcher.cpp
   controller/src/scheduler/assignment_orchestration_service.cpp
   controller/src/bundle/bundle_cli_service.cpp
   controller/src/bundle/bundle_http_service.cpp
@@ -521,6 +1109,11 @@ add_executable(
   controller/src/infra/controller_action.cpp
   controller/src/app/controller_command_line.cpp
   controller/src/app/controller_component_factory.cpp
+  controller/src/app/controller_component_defaults.cpp
+  controller/src/app/controller_http_component_factory.cpp
+  controller/src/app/controller_plane_component_factory.cpp
+  controller/src/app/controller_read_model_component_factory.cpp
+  controller/src/app/controller_scheduler_component_factory.cpp
   controller/src/app/controller_component_factory_support.cpp
   controller/src/app/controller_composition_support.cpp
   controller/src/app/controller_http_service_support.cpp
@@ -549,28 +1142,52 @@ add_executable(
   controller/src/browsing/interaction_browsing_service.cpp
   controller/src/browsing/plane_browsing_service.cpp
   controller/src/plane/dashboard_service.cpp
+  controller/src/plane/plane_placement_payload_builder.cpp
   controller/src/plane/plane_desired_state_request_parser.cpp
   controller/src/infra/controller_ui_service.cpp
   controller/src/host/host_registry_service.cpp
   controller/src/host/hostd_http_service.cpp
   controller/src/host/hostd_http_support.cpp
+  controller/src/interaction/interaction_conversation_archive_service.cpp
+  controller/src/interaction/interaction_continuation_payload_builder.cpp
+  controller/src/interaction/interaction_conversation_payload_builder.cpp
+  controller/src/interaction/interaction_conversation_record_builder.cpp
+  controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_contract_responder.cpp
   controller/src/interaction/interaction_conversation_service.cpp
   controller/src/interaction/interaction_http_service.cpp
+  controller/src/interaction/interaction_http_executor_factory.cpp
   controller/src/interaction/interaction_http_support.cpp
+  controller/src/interaction/interaction_model_identity_builder.cpp
   controller/src/interaction/interaction_payload_builder.cpp
+  controller/src/interaction/interaction_request_contract_support.cpp
+  controller/src/interaction/interaction_request_identity_support.cpp
+  controller/src/interaction/interaction_request_heuristics.cpp
+  controller/src/interaction/interaction_replica_group_summary_builder.cpp
+  controller/src/interaction/interaction_runtime_text_support.cpp
+  controller/src/interaction/interaction_sse_frame_builder.cpp
+  controller/src/interaction/interaction_stream_http_error_response_builder.cpp
+  controller/src/interaction/interaction_stream_http_request_preparation_service.cpp
+  controller/src/interaction/interaction_text_post_processor.cpp
+  controller/src/interaction/interaction_upstream_event_parser.cpp
+  controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
   controller/src/interaction/interaction_runtime_support_service.cpp
   controller/src/interaction/interaction_service.cpp
   controller/src/model/model_library_http_service.cpp
   controller/src/model/model_library_http_support.cpp
   controller/src/model/model_conversion_service.cpp
+  controller/src/model/model_library_node_placement.cpp
   controller/src/model/model_library_service.cpp
   controller/src/model/model_library_support.cpp
   controller/src/plane/plane_http_service.cpp
   controller/src/plane/plane_http_support.cpp
   controller/src/plane/plane_dashboard_skills_summary_service.cpp
+  controller/src/plane/plane_lifecycle_support.cpp
   controller/src/plane/plane_mutation_service.cpp
   controller/src/plane/plane_realization_service.cpp
+  controller/src/plane/plane_registry_query_support.cpp
   controller/src/plane/plane_registry_service.cpp
+  controller/src/plane/plane_state_presentation_support.cpp
   controller/src/read_model/read_model_cli_service.cpp
   controller/src/read_model/read_model_http_service.cpp
   controller/src/read_model/read_model_http_support.cpp
@@ -578,6 +1195,8 @@ add_executable(
   controller/src/app/remote_controller_cli_service.cpp
   controller/src/scheduler/scheduler_cli_service.cpp
   controller/src/scheduler/scheduler_domain_service.cpp
+  controller/src/scheduler/scheduler_domain_support.cpp
+  controller/src/scheduler/scheduler_execution_dependencies.cpp
   controller/src/scheduler/scheduler_execution_support.cpp
   controller/src/scheduler/scheduler_http_service.cpp
   controller/src/scheduler/scheduler_view_service.cpp
@@ -585,6 +1204,7 @@ add_executable(
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_catalog_service.cpp
   controller/src/skills/plane_skill_runtime_sync_service.cpp
+  controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
   controller/src/skills/skills_factory_http_service.cpp
   controller/src/skills/skills_factory_service.cpp
@@ -619,19 +1239,40 @@ comet_enable_strict_warnings(comet-controller)
 add_executable(
   comet-hostd
   hostd/src/app/hostd_composition_root.cpp
-  hostd/src/app/hostd_cli_actions.cpp
+  hostd/src/app/hostd_service_component_factory.cpp
+  hostd/src/app/hostd_support_component_factory.cpp
+  hostd/src/app/hostd_app_assignment_support.cpp
+  hostd/src/app/hostd_app_controller_support.cpp
+  hostd/src/app/hostd_app_observation_support.cpp
+  hostd/src/app/hostd_bootstrap_active_model_support.cpp
+  hostd/src/app/hostd_bootstrap_model_artifact_support.cpp
   hostd/src/app/hostd_bootstrap_model_support.cpp
+  hostd/src/app/hostd_bootstrap_model_support_factory.cpp
+  hostd/src/app/hostd_bootstrap_transfer_support.cpp
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_compose_runtime_support.cpp
   hostd/src/app/hostd_controller_transport_support.cpp
-  hostd/src/app/hostd_local_state_support.cpp
+  hostd/src/app/hostd_desired_state_apply_plan_support.cpp
+  hostd/src/app/hostd_desired_state_apply_support.cpp
+  hostd/src/app/hostd_desired_state_display_support.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_disk_runtime_support.cpp
+  hostd/src/app/hostd_file_support.cpp
+  hostd/src/app/hostd_local_runtime_state_support.cpp
+  hostd/src/app/hostd_local_state_path_support.cpp
+  hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_observed_state_snapshot_builder.cpp
+  hostd/src/app/hostd_post_deploy_support.cpp
+  hostd/src/app/hostd_reporting_support.cpp
   hostd/src/app/hostd_repo_root_support.cpp
-  hostd/src/app/hostd_telemetry_support.cpp
-  hostd/src/backend/default_http_hostd_backend_support.cpp
+  hostd/src/app/hostd_runtime_telemetry_support.cpp
+  hostd/src/app/hostd_system_telemetry_collector.cpp
   hostd/src/backend/hostd_backend_factory.cpp
   hostd/src/backend/http_hostd_backend.cpp
   hostd/src/backend/local_db_hostd_backend.cpp
-  hostd/src/observation/default_hostd_observation_support.cpp
+  hostd/src/cli/hostd_cli_command_dispatcher.cpp
+  hostd/src/cli/hostd_cli_request_resolution_support.cpp
   hostd/src/observation/hostd_observation_service.cpp
-  hostd/src/state_apply/default_hostd_assignment_support.cpp
   hostd/src/state_apply/hostd_assignment_lock.cpp
   hostd/src/state_apply/hostd_assignment_service.cpp
   hostd/src/cli/hostd_cli.cpp

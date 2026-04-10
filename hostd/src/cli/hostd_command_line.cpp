@@ -15,9 +15,9 @@ void HostdCommandLine::PrintUsage(std::ostream& out) const {
       << "  comet-hostd show-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>] [--config <path>]\n"
       << "  comet-hostd show-local-state --node <node-name> [--state-root <path>]\n"
       << "  comet-hostd show-runtime-status --node <node-name> [--state-root <path>]\n"
-      << "  comet-hostd report-observed-state --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--state-root <path>]\n"
+      << "  comet-hostd report-observed-state --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--state-root <path>]\n"
       << "  comet-hostd apply-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n"
-      << "  comet-hostd apply-next-assignment --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n";
+      << "  comet-hostd apply-next-assignment --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n";
 }
 
 bool HostdCommandLine::HasCommand() const {
@@ -62,6 +62,10 @@ std::optional<std::string> HostdCommandLine::host_private_key() const {
 
 std::optional<std::string> HostdCommandLine::controller_fingerprint() const {
   return FindOptionValue("--controller-fingerprint");
+}
+
+std::optional<std::string> HostdCommandLine::onboarding_key() const {
+  return FindOptionValue("--onboarding-key");
 }
 
 std::optional<std::string> HostdCommandLine::config_path() const {

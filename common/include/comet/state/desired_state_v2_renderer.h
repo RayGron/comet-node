@@ -16,6 +16,7 @@ class DesiredStateV2Renderer final {
   DesiredState RenderState();
 
   void RenderIdentity();
+  void RenderPlacement();
   void RenderHooks();
   void RenderModel();
   void RenderInteraction();
@@ -33,11 +34,18 @@ class DesiredStateV2Renderer final {
   int InferReplicaCount() const;
   int WorkerCount() const;
   int ExpectedWorkers() const;
+  bool HasExternalAppHost() const;
+  std::string ExternalAppHostAuthMode() const;
+  bool LegacyTopologyPlacementEnabled() const;
   std::string ResolveInferNodeName() const;
   std::string ResolveInferNodeName(int infer_index) const;
   std::string ResolveAppNodeName() const;
   std::string ResolveWorkerNodeName(int worker_index) const;
   std::optional<std::string> ResolveWorkerGpuDevice(int worker_index) const;
+  std::optional<std::string> ResolveLegacyServiceNodeName(
+      const nlohmann::json& service_json,
+      const char* service_name) const;
+  std::optional<std::string> ResolveLegacyWorkerAssignmentNodeName(int worker_index) const;
   std::string DefaultNodeName() const;
   const NodeInventory& RequireNode(const std::string& node_name, const char* context) const;
   std::string SharedDiskNodeName() const;
@@ -62,6 +70,9 @@ class DesiredStateV2Renderer final {
   std::string BuildCommandFromStartSpec(
       const nlohmann::json& start,
       const std::string& default_command) const;
+  void ApplyExternalAppHostMetadata(
+      InstanceSpec* instance,
+      const std::string& binding) const;
   std::string DefaultInferRuntimeBackend() const;
   std::string DefaultWorkerBootMode() const;
   void NormalizeInferenceSettings();

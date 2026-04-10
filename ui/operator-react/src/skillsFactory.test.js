@@ -171,6 +171,73 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(reparsed.browserSessionEnabled).toBe(true);
   });
 
+  it("round-trips placement primary node and external app host through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "placement-ui-plane";
+    form.modelPath = "/models/qwen";
+    form.primaryNode = "worker-node-a";
+    form.appEnabled = true;
+    form.appImage = "example/app:dev";
+    form.appHostEnabled = true;
+    form.appHostAddress = "10.0.0.15";
+    form.appHostAuthMode = "ssh-key";
+    form.appHostSshKeyPath = "/home/test/.ssh/id_ed25519";
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.placement).toEqual({
+      primary_node: "worker-node-a",
+      app_host: {
+        address: "10.0.0.15",
+        ssh_key_path: "/home/test/.ssh/id_ed25519",
+      },
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.primaryNode).toBe("worker-node-a");
+    expect(reparsed.appHostEnabled).toBe(true);
+    expect(reparsed.appHostAddress).toBe("10.0.0.15");
+    expect(reparsed.appHostAuthMode).toBe("ssh-key");
+    expect(reparsed.appHostSshKeyPath).toBe("/home/test/.ssh/id_ed25519");
+  });
+
+  it("does not emit legacy node-placement fields when topology is disabled", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "placement-clean-plane";
+    form.modelPath = "/models/qwen";
+    form.primaryNode = "worker-node-a";
+    form.inferOverridesEnabled = true;
+    form.inferNode = "legacy-infer-node";
+    form.workerNode = "legacy-worker-node";
+    form.workerAssignmentsEnabled = true;
+    form.workerAssignments = [{ node: "legacy-worker-node", gpuDevice: "0" }];
+    form.appEnabled = true;
+    form.appImage = "example/app:dev";
+    form.appNode = "legacy-app-node";
+    form.topologyEnabled = false;
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.placement).toEqual({
+      primary_node: "worker-node-a",
+    });
+    expect(desiredState.infer.node).toBeUndefined();
+    expect(desiredState.worker.node).toBeUndefined();
+    expect(desiredState.worker.assignments).toBeUndefined();
+    expect(desiredState.app.node).toBeUndefined();
+  });
+
+  it("validates required placement-first fields for external app host", () => {
+    const form = buildNewPlaneFormState();
+    form.modelPath = "/models/qwen";
+    form.primaryNode = "";
+    form.appHostEnabled = true;
+
+    const validation = validatePlaneV2Form(form);
+    expect(validation.errors).toContain("Primary node is required.");
+    expect(validation.errors).toContain("External app host requires the app container to be enabled.");
+    expect(validation.errors).toContain("External app host address is required.");
+    expect(validation.errors).toContain("External app host SSH key path is required.");
+  });
+
   it("warns when browser sessions are enabled without browsing", () => {
     const form = buildNewPlaneFormState();
     form.modelPath = "/models/qwen";

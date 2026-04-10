@@ -20,6 +20,15 @@ bool StartsWithPathPrefix(const std::string& path, const std::string& prefix) {
   return path.rfind(prefix, 0) == 0;
 }
 
+struct HostInventorySummary {
+  std::string storage_root;
+  int gpu_count = 0;
+  std::uint64_t total_memory_bytes = 0;
+  std::uint64_t storage_total_bytes = 0;
+  std::uint64_t storage_free_bytes = 0;
+  bool has_storage_capacity = false;
+};
+
 std::optional<std::string> FindQueryStringValue(
     const HttpRequest& request,
     const std::string& key) {
@@ -105,6 +114,94 @@ comet::HostObservation ParseHostObservationPayload(const json& payload) {
       payload.value("cpu_telemetry_json", std::string{});
   observation.heartbeat_at = payload.value("heartbeat_at", std::string{});
   return observation;
+}
+
+json ParseCapabilitiesJson(const std::string& capabilities_json) {
+  if (capabilities_json.empty()) {
+    return json::object();
+  }
+  const json parsed = json::parse(capabilities_json, nullptr, false);
+  return parsed.is_discarded() ? json::object() : parsed;
+}
+
+HostInventorySummary BuildInventorySummary(
+    const comet::RegisteredHostRecord& host,
+    const comet::HostObservation& observation) {
+  HostInventorySummary summary;
+  const json capabilities = ParseCapabilitiesJson(host.capabilities_json);
+  if (capabilities.contains("storage_root") && capabilities["storage_root"].is_string()) {
+    summary.storage_root = capabilities["storage_root"].get<std::string>();
+  }
+  if (!observation.gpu_telemetry_json.empty()) {
+    summary.gpu_count = static_cast<int>(
+        comet::DeserializeGpuTelemetryJson(observation.gpu_telemetry_json).devices.size());
+  }
+  if (!observation.cpu_telemetry_json.empty()) {
+    summary.total_memory_bytes =
+        comet::DeserializeCpuTelemetryJson(observation.cpu_telemetry_json).total_memory_bytes;
+  }
+  if (!observation.disk_telemetry_json.empty()) {
+    const auto disks = comet::DeserializeDiskTelemetryJson(observation.disk_telemetry_json);
+    for (const auto& item : disks.items) {
+      if (item.disk_name == "storage-root" ||
+          (!summary.storage_root.empty() && item.mount_point == summary.storage_root)) {
+        summary.storage_total_bytes = item.total_bytes;
+        summary.storage_free_bytes = item.free_bytes;
+        summary.has_storage_capacity = item.total_bytes > 0;
+        if (summary.storage_root.empty()) {
+          summary.storage_root = item.mount_point;
+        }
+        break;
+      }
+    }
+  }
+  return summary;
+}
+
+std::pair<std::string, std::string> DeriveRole(const HostInventorySummary& summary) {
+  constexpr std::uint64_t kMinDiskBytes = 100ULL * 1024ULL * 1024ULL * 1024ULL;
+  constexpr std::uint64_t kStorageRamBytes = 32ULL * 1024ULL * 1024ULL * 1024ULL;
+  constexpr std::uint64_t kWorkerRamBytes = 64ULL * 1024ULL * 1024ULL * 1024ULL;
+
+  if (summary.gpu_count == 0 &&
+      summary.total_memory_bytes > 0 &&
+      summary.total_memory_bytes < kStorageRamBytes &&
+      summary.storage_total_bytes > kMinDiskBytes) {
+    return {"storage", "eligible: no gpu, ram < 32 GB, disk > 100 GB"};
+  }
+  if (summary.gpu_count >= 1 &&
+      summary.total_memory_bytes >= kWorkerRamBytes &&
+      summary.storage_total_bytes > kMinDiskBytes) {
+    return {"worker", "eligible: gpu >= 1, ram >= 64 GB, disk > 100 GB"};
+  }
+  if (summary.storage_total_bytes <= kMinDiskBytes) {
+    return {"ineligible", "disk <= 100 GB"};
+  }
+  if (summary.gpu_count == 0 && summary.total_memory_bytes >= kStorageRamBytes) {
+    return {"ineligible", "no gpu and ram outside storage threshold"};
+  }
+  if (summary.gpu_count >= 1 && summary.total_memory_bytes < kWorkerRamBytes) {
+    return {"ineligible", "gpu present but ram < 64 GB"};
+  }
+  return {"ineligible", "inventory does not match storage or worker role"};
+}
+
+json MergeCapabilities(
+    const std::string& capabilities_json,
+    const HostInventorySummary& summary) {
+  json capabilities = ParseCapabilitiesJson(capabilities_json);
+  if (!summary.storage_root.empty()) {
+    capabilities["storage_root"] = summary.storage_root;
+  }
+  if (summary.total_memory_bytes > 0) {
+    capabilities["total_memory_bytes"] = summary.total_memory_bytes;
+  }
+  capabilities["gpu_count"] = summary.gpu_count;
+  if (summary.has_storage_capacity) {
+    capabilities["storage_total_bytes"] = summary.storage_total_bytes;
+    capabilities["storage_free_bytes"] = summary.storage_free_bytes;
+  }
+  return capabilities;
 }
 
 json BuildDiskRuntimeStatePayloadItem(const comet::DiskRuntimeState& state) {
@@ -289,6 +386,10 @@ class HostdRequestContext {
       comet::RegisteredHostRecord* host,
       const std::string& message_type,
       const json& payload) {
+    if (const auto latest = store_.LoadRegisteredHost(host->node_name);
+        latest.has_value()) {
+      *host = *latest;
+    }
     host->session_controller_sequence += 1;
     store_.UpsertRegisteredHost(*host);
     const comet::EncryptedEnvelope envelope = comet::EncryptEnvelopeBase64(
@@ -348,10 +449,27 @@ HttpResponse HostdHttpService::HandleRegister(
           {});
     }
     HostdRequestContext context(support_, db_path);
-    comet::RegisteredHostRecord host;
-    if (const auto current = context.store().LoadRegisteredHost(node_name);
-        current.has_value()) {
-      host = *current;
+    auto current = context.store().LoadRegisteredHost(node_name);
+    if (!current.has_value()) {
+      return context.Json(
+          404,
+          json{{"status", "not_found"},
+               {"message", "host node is not provisioned"}});
+    }
+    comet::RegisteredHostRecord host = *current;
+    const std::string onboarding_key = body.value("onboarding_key", std::string{});
+    if (host.onboarding_key_hash.empty()) {
+      return context.Json(
+          409,
+          json{{"status", "conflict"},
+               {"message", "host node does not accept onboarding registration"}});
+    }
+    if (onboarding_key.empty() ||
+        comet::ComputeSha256Hex(onboarding_key) != host.onboarding_key_hash) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid onboarding key"}});
     }
     host.node_name = node_name;
     host.advertised_address =
@@ -370,7 +488,9 @@ HttpResponse HostdHttpService::HandleRegister(
     comet::ParseHostExecutionMode(host.execution_mode);
     host.registration_state = body.value(
         "registration_state",
-        host.registration_state.empty() ? "registered" : host.registration_state);
+        std::string("registered"));
+    host.onboarding_key_hash.clear();
+    host.onboarding_state = "completed";
     host.session_state = body.value(
         "session_state",
         host.session_state.empty() ? "disconnected" : host.session_state);
@@ -391,7 +511,11 @@ HttpResponse HostdHttpService::HandleRegister(
         200,
         json{{"service", "comet-controller"},
              {"node_name", node_name},
-             {"registration_state", host.registration_state}});
+             {"registration_state", host.registration_state},
+             {"controller_public_key_fingerprint",
+              host.controller_public_key_fingerprint.empty()
+                  ? json(nullptr)
+                  : json(host.controller_public_key_fingerprint)}});
   } catch (const std::exception& error) {
     return support_.build_json_response(
         500,
@@ -405,11 +529,53 @@ HttpResponse HostdHttpService::HandleRegister(
 HttpResponse HostdHttpService::HandleHosts(
     const std::string& db_path,
     const HttpRequest& request) const {
-  if (request.method != "GET") {
-    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
-  }
   try {
     HostdRequestContext context(support_, db_path);
+    if (request.method == "POST") {
+      const json body = ParseJsonBody(request);
+      const std::string node_name = body.value("node_name", std::string{});
+      if (node_name.empty()) {
+        return context.Json(
+            400,
+            json{{"status", "bad_request"},
+                 {"message", "missing required field 'node_name'"}});
+      }
+      if (context.store().LoadRegisteredHost(node_name).has_value()) {
+        return context.Json(
+            409,
+            json{{"status", "conflict"},
+                 {"message", "host node already exists"}});
+      }
+      const std::string onboarding_key = comet::RandomTokenBase64(24);
+      comet::RegisteredHostRecord host;
+      host.node_name = node_name;
+      host.transport_mode = "out";
+      host.execution_mode = "mixed";
+      host.registration_state = "provisioned";
+      host.onboarding_key_hash = comet::ComputeSha256Hex(onboarding_key);
+      host.onboarding_state = "pending";
+      host.derived_role = "ineligible";
+      host.role_reason = "awaiting first inventory scan";
+      host.session_state = "disconnected";
+      host.status_message = "node provisioned; awaiting comet-node onboarding";
+      context.store().UpsertRegisteredHost(host);
+      context.EmitHostRegistryEvent(
+          "provisioned",
+          "provisioned host node for onboarding",
+          json::object(),
+          node_name,
+          "info");
+      return context.Json(
+          200,
+          json{{"service", "comet-controller"},
+               {"node_name", node_name},
+               {"onboarding_key", onboarding_key},
+               {"onboarding_state", host.onboarding_state}});
+    }
+    if (request.method != "GET") {
+      return support_.build_json_response(
+          405, json{{"status", "method_not_allowed"}}, {});
+    }
     return context.Json(
         200,
         context.MakeHostRegistryService().BuildPayload(
@@ -856,6 +1022,19 @@ HttpResponse HostdHttpService::HandleObservations(
                {"message", "node mismatch for host observation"}});
     }
     context.store().UpsertHostObservation(observation);
+    if (auto current = context.store().LoadRegisteredHost(observation.node_name);
+        current.has_value()) {
+      const auto inventory = BuildInventorySummary(*current, observation);
+      const auto [derived_role, role_reason] = DeriveRole(inventory);
+      current->derived_role = derived_role;
+      current->role_reason = role_reason;
+      current->last_inventory_scan_at = support_.utc_now_sql_timestamp();
+      current->capabilities_json = MergeCapabilities(
+          current->capabilities_json,
+          inventory)
+                                      .dump();
+      context.store().UpsertRegisteredHost(*current);
+    }
     return context.EncryptedResponse(
         &host,
         "observations/upsert",

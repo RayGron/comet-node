@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "http/controller_http_transport.h"
+#include "skills/plane_skills_target_resolver.h"
 
 namespace comet::controller {
 
@@ -29,50 +30,6 @@ constexpr int kMinimumContextualScore = 6;
 constexpr std::size_t kMaximumSelectedSkills = 3;
 constexpr int kSecondaryScoreGapLimit = 3;
 constexpr int kSecondaryScorePercentOfTop = 85;
-
-std::vector<std::pair<std::string, std::string>> DefaultJsonHeaders() {
-  return {{"Content-Type", "application/json"}};
-}
-
-std::string NormalizeControllerTargetHost(const PublishedPort& port) {
-  if (port.host_ip.empty() || port.host_ip == "0.0.0.0") {
-    return "127.0.0.1";
-  }
-  return port.host_ip;
-}
-
-const InstanceSpec* FindSkillsInstance(const DesiredState& desired_state) {
-  const auto it = std::find_if(
-      desired_state.instances.begin(),
-      desired_state.instances.end(),
-      [](const InstanceSpec& instance) {
-        return instance.role == InstanceRole::Skills;
-      });
-  if (it == desired_state.instances.end()) {
-    return nullptr;
-  }
-  return &*it;
-}
-
-std::optional<ControllerEndpointTarget> ResolvePlaneLocalSkillsTarget(
-    const DesiredState& desired_state) {
-  const auto* skills = FindSkillsInstance(desired_state);
-  if (skills == nullptr) {
-    return std::nullopt;
-  }
-  const auto published = std::find_if(
-      skills->published_ports.begin(),
-      skills->published_ports.end(),
-      [](const PublishedPort& port) { return port.host_port > 0; });
-  if (published == skills->published_ports.end()) {
-    return std::nullopt;
-  }
-  ControllerEndpointTarget target;
-  target.host = NormalizeControllerTargetHost(*published);
-  target.port = published->host_port;
-  target.raw = "http://" + target.host + ":" + std::to_string(target.port);
-  return target;
-}
 
 std::string NormalizeSkillText(const std::string& value) {
   auto next_code_point = [](const std::string& input, std::size_t* offset) {
@@ -501,7 +458,7 @@ std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
     return {};
   }
 
-  const auto target = ResolvePlaneLocalSkillsTarget(desired_state);
+  const auto target = PlaneSkillsTargetResolver::ResolvePlaneLocalTarget(desired_state);
   if (!target.has_value()) {
     return {};
   }
@@ -509,7 +466,11 @@ std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
   HttpResponse response;
   try {
     response = SendControllerHttpRequest(
-        *target, "GET", "/v1/skills", "", DefaultJsonHeaders());
+        *target,
+        "GET",
+        "/v1/skills",
+        "",
+        PlaneSkillsTargetResolver::DefaultJsonHeaders());
   } catch (const std::exception&) {
     return {};
   }

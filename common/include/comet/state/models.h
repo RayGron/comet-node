@@ -293,6 +293,13 @@ struct BrowsingSettings {
 using WebGatewayPolicySettings = BrowsingPolicySettings;
 using WebGatewaySettings = BrowsingSettings;
 
+struct ExternalAppHostConfig {
+  std::string address;
+  std::optional<std::string> ssh_key_path;
+  std::optional<std::string> username;
+  std::optional<std::string> password;
+};
+
 struct DesiredState {
   std::string plane_name;
   std::string plane_shared_disk_name;
@@ -305,6 +312,7 @@ struct DesiredState {
   std::optional<InteractionSettings> interaction;
   std::optional<SkillsSettings> skills;
   std::optional<BrowsingSettings> browsing;
+  std::optional<ExternalAppHostConfig> app_host;
   InferenceRuntimeSettings inference;
   WorkerGroupSpec worker_group;
   GatewaySettings gateway;

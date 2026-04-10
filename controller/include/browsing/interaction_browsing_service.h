@@ -30,6 +30,23 @@ class InteractionBrowsingService final {
       const PlaneInteractionResolution& resolution,
       const InteractionRequestContext& request_context,
       InteractionSessionResult* result) const;
+
+ private:
+  std::string ReadPersistedBrowsingMode(
+      const InteractionRequestContext& context) const;
+
+  std::string LastUserMessageContent(
+      const InteractionRequestContext& context) const;
+
+  bool LatestMessageRequestsLookup(
+      const InteractionRequestContext& context) const;
+
+  std::optional<nlohmann::json> BuildLocalEnabledIdleContext(
+      const InteractionRequestContext& context) const;
+
+  void PersistBrowsingMode(
+      const nlohmann::json& webgateway_context,
+      InteractionRequestContext* context) const;
 };
 
 }  // namespace comet::controller

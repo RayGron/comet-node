@@ -6,16 +6,16 @@
 
 #include "comet/core/platform_compat.h"
 
-namespace comet::hostd::appsupport {
-namespace {
+namespace comet::hostd {
 
-bool LooksLikeCometRepoRoot(const std::filesystem::path& path) {
+bool HostdRepoRootSupport::LooksLikeCometRepoRoot(const std::filesystem::path& path) {
   std::error_code error;
   return std::filesystem::exists(path / "scripts" / "build-runtime-images.sh", error) && !error &&
          std::filesystem::exists(path / "runtime" / "base" / "Dockerfile", error) && !error;
 }
 
-std::optional<std::filesystem::path> FindRepoRootFromPath(std::filesystem::path current) {
+std::optional<std::filesystem::path> HostdRepoRootSupport::FindRepoRootFromPath(
+    std::filesystem::path current) {
   while (!current.empty()) {
     if (LooksLikeCometRepoRoot(current)) {
       return current;
@@ -29,7 +29,8 @@ std::optional<std::filesystem::path> FindRepoRootFromPath(std::filesystem::path 
   return std::nullopt;
 }
 
-std::optional<std::filesystem::path> FindRepoRootInSiblingRepos(std::filesystem::path current) {
+std::optional<std::filesystem::path> HostdRepoRootSupport::FindRepoRootInSiblingRepos(
+    std::filesystem::path current) {
   while (!current.empty()) {
     const auto candidate = current / "repos" / "comet-node";
     if (LooksLikeCometRepoRoot(candidate)) {
@@ -44,7 +45,7 @@ std::optional<std::filesystem::path> FindRepoRootInSiblingRepos(std::filesystem:
   return std::nullopt;
 }
 
-std::optional<std::filesystem::path> DetectCometRepoRootNear(
+std::optional<std::filesystem::path> HostdRepoRootSupport::DetectCometRepoRootNear(
     const std::filesystem::path& start) {
   if (const auto from_path = FindRepoRootFromPath(start); from_path.has_value()) {
     return from_path;
@@ -52,7 +53,7 @@ std::optional<std::filesystem::path> DetectCometRepoRootNear(
   return FindRepoRootInSiblingRepos(start);
 }
 
-std::string StripBundlePrefixIfPresent(const std::string& value) {
+std::string HostdRepoRootSupport::StripBundlePrefixIfPresent(const std::string& value) {
   constexpr std::string_view kBundlePrefix = "bundle://";
   if (value.rfind(kBundlePrefix.data(), 0) == 0) {
     return value.substr(kBundlePrefix.size());
@@ -60,9 +61,7 @@ std::string StripBundlePrefixIfPresent(const std::string& value) {
   return value;
 }
 
-}  // namespace
-
-std::optional<std::filesystem::path> DetectCometRepoRoot() {
+std::optional<std::filesystem::path> HostdRepoRootSupport::DetectCometRepoRoot() const {
   try {
     if (const auto from_cwd = DetectCometRepoRootNear(std::filesystem::current_path());
         from_cwd.has_value()) {
@@ -78,10 +77,10 @@ std::optional<std::filesystem::path> DetectCometRepoRoot() {
   return DetectCometRepoRootNear(std::filesystem::path(executable_path).parent_path());
 }
 
-std::optional<std::filesystem::path> ResolvePlaneOwnedPath(
+std::optional<std::filesystem::path> HostdRepoRootSupport::ResolvePlaneOwnedPath(
     const comet::DesiredState& state,
     const std::string& relative_path,
-    const std::string& artifacts_root) {
+    const std::string& artifacts_root) const {
   const std::string normalized_path = StripBundlePrefixIfPresent(relative_path);
   if (normalized_path.empty()) {
     return std::nullopt;
@@ -120,4 +119,4 @@ std::optional<std::filesystem::path> ResolvePlaneOwnedPath(
   return std::nullopt;
 }
 
-}  // namespace comet::hostd::appsupport
+}  // namespace comet::hostd

@@ -67,12 +67,13 @@ int main() {
 
     {
       CurrentPathGuard guard(build_root);
-      const auto repo = comet::hostd::appsupport::DetectCometRepoRoot();
+      const comet::hostd::HostdRepoRootSupport support;
+      const auto repo = support.DetectCometRepoRoot();
       Expect(repo.has_value(), "repo root should be detected from split builds/repos layout");
       Expect(repo->lexically_normal() == repo_root.lexically_normal(),
              "detected repo root should match repos/comet-node");
 
-      const auto plane_script = comet::hostd::appsupport::ResolvePlaneOwnedPath(
+      const auto plane_script = support.ResolvePlaneOwnedPath(
           BuildDesiredState("lt-cypher-ai"),
           "deploy/scripts/post-deploy.sh",
           artifacts_root.string());
@@ -82,7 +83,7 @@ int main() {
               (plane_root / "deploy" / "scripts" / "post-deploy.sh").lexically_normal(),
           "sibling plane hook path should match");
 
-      const auto artifact_script = comet::hostd::appsupport::ResolvePlaneOwnedPath(
+      const auto artifact_script = support.ResolvePlaneOwnedPath(
           BuildDesiredState("lt-cypher-ai"),
           "bundle://deploy/scripts/artifact-hook.sh",
           artifacts_root.string());

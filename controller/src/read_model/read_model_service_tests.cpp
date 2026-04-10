@@ -78,9 +78,13 @@ comet::DesiredState BuildMixedObservedState() {
 
   push_instance("infer-lt-cypher-ai", comet::InstanceRole::Infer, "lt-cypher-ai", std::nullopt);
   push_instance("worker-lt-cypher-ai", comet::InstanceRole::Worker, "lt-cypher-ai", "0");
+  push_instance("app-lt-cypher-ai", comet::InstanceRole::App, "lt-cypher-ai", std::nullopt);
   push_instance("infer-maglev", comet::InstanceRole::Infer, "maglev", std::nullopt);
   push_instance("worker-maglev-a", comet::InstanceRole::Worker, "maglev", "1");
   push_instance("worker-maglev-b", comet::InstanceRole::Worker, "maglev", "2");
+  push_instance("app-maglev", comet::InstanceRole::App, "maglev", std::nullopt);
+  push_instance("skills-maglev", comet::InstanceRole::Skills, "maglev", std::nullopt);
+  push_instance("webgateway-maglev", comet::InstanceRole::Browsing, "maglev", std::nullopt);
 
   const auto make_worker_member =
       [](const std::string& name,
@@ -148,12 +152,21 @@ void TestPlaneScopedHostObservationsPayloadFiltersForeignEntities() {
           "worker-lt-cypher-ai", "worker", "local-hostd", "", "0", "running", now, now, 102, 0,
           true},
       comet::RuntimeProcessStatus{
+          "app-lt-cypher-ai", "app", "local-hostd", "", "", "running", now, now, 103, 0, true},
+      comet::RuntimeProcessStatus{
           "infer-maglev", "infer", "local-hostd", "", "", "running", now, now, 201, 0, true},
       comet::RuntimeProcessStatus{
           "worker-maglev-a", "worker", "local-hostd", "", "1", "running", now, now, 202, 0,
           true},
       comet::RuntimeProcessStatus{
           "worker-maglev-b", "worker", "local-hostd", "", "2", "running", now, now, 203, 0,
+          true},
+      comet::RuntimeProcessStatus{
+          "app-maglev", "app", "local-hostd", "", "", "running", now, now, 204, 0, true},
+      comet::RuntimeProcessStatus{
+          "skills-maglev", "skills", "local-hostd", "", "", "running", now, now, 205, 0, true},
+      comet::RuntimeProcessStatus{
+          "webgateway-maglev", "browsing", "local-hostd", "", "", "running", now, now, 206, 0,
           true},
   });
 
@@ -214,7 +227,7 @@ void TestPlaneScopedHostObservationsPayloadFiltersForeignEntities() {
       observed_state.at("plane_name").get<std::string>() == "maglev",
       "observed_state should be rewritten to the selected plane");
   Expect(
-      observed_state.at("instances").size() == 3,
+      observed_state.at("instances").size() == 6,
       "observed_state should contain only maglev instances");
   for (const auto& instance : observed_state.at("instances")) {
     Expect(
@@ -223,13 +236,27 @@ void TestPlaneScopedHostObservationsPayloadFiltersForeignEntities() {
   }
 
   const json instance_runtimes = item.at("instance_runtimes").at("items");
-  Expect(instance_runtimes.size() == 3, "expected only maglev runtime processes");
+  Expect(instance_runtimes.size() == 6, "expected only maglev runtime processes");
+  bool saw_app_runtime = false;
+  bool saw_skills_runtime = false;
+  bool saw_webgateway_runtime = false;
   for (const auto& runtime_item : instance_runtimes) {
     const std::string instance_name = runtime_item.at("instance_name").get<std::string>();
     Expect(
         instance_name.find("lt-cypher-ai") == std::string::npos,
         "foreign runtime process leaked into plane-scoped payload");
+    saw_app_runtime = saw_app_runtime || instance_name == "app-maglev";
+    saw_skills_runtime = saw_skills_runtime || instance_name == "skills-maglev";
+    saw_webgateway_runtime =
+        saw_webgateway_runtime || instance_name == "webgateway-maglev";
   }
+  Expect(saw_app_runtime, "app runtime status should be retained in plane-scoped payload");
+  Expect(
+      saw_skills_runtime,
+      "skills runtime status should be retained in plane-scoped payload");
+  Expect(
+      saw_webgateway_runtime,
+      "webgateway runtime status should be retained in plane-scoped payload");
 
   const json gpu_devices = item.at("gpu_telemetry").at("devices");
   Expect(gpu_devices.size() == 2, "gpu device list should remain node-scoped");

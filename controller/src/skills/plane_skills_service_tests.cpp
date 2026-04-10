@@ -15,6 +15,7 @@
 #include "comet/core/platform_compat.h"
 #include "comet/state/sqlite_store.h"
 #include "browsing/interaction_browsing_service.h"
+#include "interaction/interaction_completion_policy_support.h"
 #include "interaction/interaction_payload_builder.h"
 #include "interaction/interaction_service.h"
 #include "browsing/plane_browsing_service.h"
@@ -3443,11 +3444,12 @@ int main() {
           json{{"active_model_id", MakeInvalidUtf8Text()},
                {"served_model_name", "test-model"}};
 
-      const auto resolved_policy = comet::controller::ResolveInteractionCompletionPolicy(
-          resolution.desired_state,
-          json{{"messages",
-                json::array(
-                    {json{{"role", "user"}, {"content", std::string("hello")}}})}});
+      const auto resolved_policy =
+          comet::controller::InteractionCompletionPolicySupport{}.ResolvePolicy(
+              resolution.desired_state,
+              json{{"messages",
+                    json::array(
+                        {json{{"role", "user"}, {"content", std::string("hello")}}})}});
 
       json payload{
           {"messages",

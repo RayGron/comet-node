@@ -17,7 +17,10 @@ class IHostdBackendFactory {
       const std::optional<std::string>& db_path,
       const std::optional<std::string>& controller_url,
       const std::optional<std::string>& host_private_key_path,
-      const std::optional<std::string>& controller_fingerprint) const = 0;
+      const std::optional<std::string>& controller_fingerprint,
+      const std::optional<std::string>& onboarding_key,
+      const std::string& node_name,
+      const std::string& storage_root) const = 0;
 };
 
 class HostdBackendFactory final : public IHostdBackendFactory {
@@ -28,7 +31,10 @@ class HostdBackendFactory final : public IHostdBackendFactory {
       const std::optional<std::string>& db_path,
       const std::optional<std::string>& controller_url,
       const std::optional<std::string>& host_private_key_path,
-      const std::optional<std::string>& controller_fingerprint) const override;
+      const std::optional<std::string>& controller_fingerprint,
+      const std::optional<std::string>& onboarding_key,
+      const std::string& node_name,
+      const std::string& storage_root) const override;
 
  private:
   const IHttpHostdBackendSupport& support_;

@@ -28,6 +28,7 @@ class HostdCommandLine {
   std::optional<std::string> state_root() const;
   std::optional<std::string> host_private_key() const;
   std::optional<std::string> controller_fingerprint() const;
+  std::optional<std::string> onboarding_key() const;
   std::optional<std::string> config_path() const;
 
   std::string ResolveDbPath(const std::optional<std::string>& db_arg) const;

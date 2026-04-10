@@ -2,38 +2,58 @@
 
 #include <algorithm>
 #include <iostream>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <utility>
 
 #include "host/host_assignment_reconciliation_service.h"
-#include "plane/plane_deletion_support.h"
 
 namespace comet::controller {
 
 PlaneService::PlaneService(
     std::string db_path,
-    PlaneTimestampFormatter timestamp_formatter,
-    PlaneStateSummaryPrinter state_summary_printer,
-    PlaneStatePreparer state_preparer,
-    PlaneEventAppender event_appender,
-    PlaneDeleteFinalizer can_finalize_deleted_plane,
-    PlaneHostAssignmentFinder find_latest_host_assignment,
-    PlaneStartAssignmentBuilder build_start_assignments,
-    PlaneStopAssignmentBuilder build_stop_assignments,
-    PlaneDeleteAssignmentBuilder build_delete_assignments,
-    DefaultArtifactsRootProvider default_artifacts_root_provider)
+    std::shared_ptr<const PlaneStatePresentationSupport> state_presentation_support,
+    std::shared_ptr<const PlaneLifecycleSupport> lifecycle_support)
     : db_path_(std::move(db_path)),
-      timestamp_formatter_(std::move(timestamp_formatter)),
-      state_summary_printer_(std::move(state_summary_printer)),
-      state_preparer_(std::move(state_preparer)),
-      event_appender_(std::move(event_appender)),
-      can_finalize_deleted_plane_(std::move(can_finalize_deleted_plane)),
-      find_latest_host_assignment_(std::move(find_latest_host_assignment)),
-      build_start_assignments_(std::move(build_start_assignments)),
-      build_stop_assignments_(std::move(build_stop_assignments)),
-      build_delete_assignments_(std::move(build_delete_assignments)),
-      default_artifacts_root_provider_(std::move(default_artifacts_root_provider)) {}
+      state_presentation_support_(std::move(state_presentation_support)),
+      lifecycle_support_(std::move(lifecycle_support)) {}
+
+bool PlaneService::FinalizeDeletedPlaneIfReady(
+    comet::ControllerStore& store,
+    const std::string& plane_name) const {
+  const auto plane = store.LoadPlane(plane_name);
+  if (!plane.has_value() || plane->state != "deleting" ||
+      !lifecycle_support_->CanFinalizeDeletedPlane(store, plane_name)) {
+    return false;
+  }
+
+  store.DeletePlane(plane_name);
+  lifecycle_support_->AppendPlaneEvent(
+      store,
+      "deleted",
+      "plane deleted from controller registry after cleanup convergence",
+      nlohmann::json{
+          {"plane_name", plane_name},
+          {"deleted_generation", plane->generation},
+      },
+      "");
+  return true;
+}
+
+std::string PlaneService::ResolveArtifactsRoot(
+    comet::ControllerStore& store,
+    const comet::PlaneRecord& plane,
+    const std::string& plane_name) const {
+  if (!plane.artifacts_root.empty()) {
+    return plane.artifacts_root;
+  }
+  const auto assignments = store.LoadHostAssignments(std::nullopt, std::nullopt, plane_name);
+  const auto plane_assignment =
+      lifecycle_support_->FindLatestHostAssignmentForPlane(assignments, plane_name);
+  return plane_assignment.has_value() ? plane_assignment->artifacts_root
+                                      : lifecycle_support_->DefaultArtifactsRoot();
+}
 
 int PlaneService::ListPlanes() const {
   comet::ControllerStore store(db_path_);
@@ -56,11 +76,7 @@ int PlaneService::ListPlanes() const {
 int PlaneService::ShowPlane(const std::string& plane_name) const {
   comet::ControllerStore store(db_path_);
   store.Initialize();
-  plane_deletion_support::FinalizeDeletedPlaneIfReady(
-      store,
-      plane_name,
-      can_finalize_deleted_plane_,
-      event_appender_);
+  (void)FinalizeDeletedPlaneIfReady(store, plane_name);
   const auto state = store.LoadDesiredState(plane_name);
   const auto plane = store.LoadPlane(plane_name);
   if (!state.has_value() || !plane.has_value()) {
@@ -72,8 +88,9 @@ int PlaneService::ShowPlane(const std::string& plane_name) const {
   std::cout << "  state=" << plane->state << "\n";
   std::cout << "  generation=" << plane->generation << "\n";
   std::cout << "  rebalance_iteration=" << plane->rebalance_iteration << "\n";
-  std::cout << "  created_at=" << timestamp_formatter_(plane->created_at) << "\n";
-  state_summary_printer_(*state);
+  std::cout << "  created_at=" << state_presentation_support_->FormatTimestamp(plane->created_at)
+            << "\n";
+  state_presentation_support_->PrintStateSummary(*state);
   return 0;
 }
 
@@ -90,7 +107,7 @@ int PlaneService::StartPlane(const std::string& plane_name) const {
     throw std::runtime_error("desired state for plane '" + plane_name + "' not found");
   }
 
-  state_preparer_(store, &*desired_state);
+  lifecycle_support_->PrepareDesiredState(store, &*desired_state);
   if (plane->state == "running") {
     std::cout << "plane already running: " << plane_name << "\n";
     return 0;
@@ -102,20 +119,12 @@ int PlaneService::StartPlane(const std::string& plane_name) const {
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
   const auto observations = store.LoadHostObservations();
   const auto scheduling_report = comet::EvaluateSchedulingPolicy(*desired_state);
-  const std::string artifacts_root = [&]() {
-    if (!plane->artifacts_root.empty()) {
-      return plane->artifacts_root;
-    }
-    const auto assignments = store.LoadHostAssignments();
-    const auto plane_assignment = find_latest_host_assignment_(assignments, plane_name);
-    return plane_assignment.has_value() ? plane_assignment->artifacts_root
-                                        : default_artifacts_root_provider_();
-  }();
+  const std::string artifacts_root = ResolveArtifactsRoot(store, *plane, plane_name);
 
   store.ReplaceRolloutActions(
       desired_state->plane_name, plane->generation, scheduling_report.rollout_actions);
   store.EnqueueHostAssignments(
-      build_start_assignments_(
+      lifecycle_support_->BuildStartAssignments(
           *desired_state,
           artifacts_root,
           plane->generation,
@@ -124,9 +133,8 @@ int PlaneService::StartPlane(const std::string& plane_name) const {
           scheduling_report),
       "superseded by start-plane lifecycle transition");
   (void)reconciliation_service.Reconcile(store, plane_name);
-  event_appender_(
+  lifecycle_support_->AppendPlaneEvent(
       store,
-      "plane",
       "started",
       "plane lifecycle moved to running and apply assignments were queued",
       nlohmann::json{
@@ -161,18 +169,10 @@ int PlaneService::StopPlane(const std::string& plane_name) const {
       plane_name,
       "superseded by stop-plane controller lifecycle transition");
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
-  const std::string artifacts_root = [&]() {
-    if (!plane->artifacts_root.empty()) {
-      return plane->artifacts_root;
-    }
-    const auto assignments = store.LoadHostAssignments();
-    const auto plane_assignment = find_latest_host_assignment_(assignments, plane_name);
-    return plane_assignment.has_value() ? plane_assignment->artifacts_root
-                                        : default_artifacts_root_provider_();
-  }();
+  const std::string artifacts_root = ResolveArtifactsRoot(store, *plane, plane_name);
 
   store.EnqueueHostAssignments(
-      build_stop_assignments_(
+      lifecycle_support_->BuildStopAssignments(
           *desired_state,
           plane->generation,
           artifacts_root,
@@ -182,9 +182,8 @@ int PlaneService::StopPlane(const std::string& plane_name) const {
   if (!store.UpdatePlaneState(plane_name, "stopped")) {
     throw std::runtime_error("failed to update plane state for '" + plane_name + "'");
   }
-  event_appender_(
+  lifecycle_support_->AppendPlaneEvent(
       store,
-      "plane",
       "stopped",
       "plane lifecycle moved to stopped and stop assignments were queued",
       nlohmann::json{
@@ -213,18 +212,7 @@ int PlaneService::DeletePlane(const std::string& plane_name) const {
     throw std::runtime_error("desired state for plane '" + plane_name + "' not found");
   }
 
-  if (plane->state == "deleting" && can_finalize_deleted_plane_(store, plane_name)) {
-    store.DeletePlane(plane_name);
-    event_appender_(
-        store,
-        "plane",
-        "deleted",
-        "plane deleted from controller registry after cleanup convergence",
-        nlohmann::json{
-            {"plane_name", plane_name},
-            {"deleted_generation", plane->generation},
-        },
-        "");
+  if (plane->state == "deleting" && FinalizeDeletedPlaneIfReady(store, plane_name)) {
     std::cout << "plane deleted: " << plane_name
               << " desired_generation=" << plane->generation << "\n";
     return 0;
@@ -233,15 +221,7 @@ int PlaneService::DeletePlane(const std::string& plane_name) const {
   const int superseded = store.SupersedeHostAssignmentsForPlane(
       plane_name,
       "superseded by delete-plane controller lifecycle transition");
-  const std::string artifacts_root = [&]() {
-    if (!plane->artifacts_root.empty()) {
-      return plane->artifacts_root;
-    }
-    const auto assignments = store.LoadHostAssignments(std::nullopt, std::nullopt, plane_name);
-    const auto plane_assignment = find_latest_host_assignment_(assignments, plane_name);
-    return plane_assignment.has_value() ? plane_assignment->artifacts_root
-                                        : default_artifacts_root_provider_();
-  }();
+  const std::string artifacts_root = ResolveArtifactsRoot(store, *plane, plane_name);
   if (!store.UpdatePlaneState(plane_name, "deleting")) {
     throw std::runtime_error("failed to update plane state for '" + plane_name + "'");
   }
@@ -282,13 +262,15 @@ int PlaneService::DeletePlane(const std::string& plane_name) const {
           }
         }
         cleanup_state.nodes = std::move(nodes);
-        return build_delete_assignments_(cleanup_state, plane->generation, artifacts_root);
+        return lifecycle_support_->BuildDeleteAssignments(
+            cleanup_state,
+            plane->generation,
+            artifacts_root);
       }(),
       "superseded by delete-plane lifecycle transition");
   (void)reconciliation_service.Reconcile(store, plane_name);
-  event_appender_(
+  lifecycle_support_->AppendPlaneEvent(
       store,
-      "plane",
       "delete-requested",
       "plane delete was requested and cleanup assignments were queued",
       nlohmann::json{

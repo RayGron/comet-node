@@ -74,6 +74,7 @@ void HostdAssignmentService::ApplyStateOps(
         backend,
         support_.BuildObservedStateSnapshot(
             node_name,
+            storage_root,
             state_root,
             comet::HostObservationStatus::Applied,
             desired_generation.has_value()
@@ -85,6 +86,7 @@ void HostdAssignmentService::ApplyStateOps(
         backend,
         support_.BuildObservedStateSnapshot(
             node_name,
+            storage_root,
             state_root,
             comet::HostObservationStatus::Failed,
             error.what()),
@@ -98,6 +100,7 @@ void HostdAssignmentService::ApplyNextAssignment(
     const std::optional<std::string>& controller_url,
     const std::optional<std::string>& host_private_key_path,
     const std::optional<std::string>& controller_fingerprint,
+    const std::optional<std::string>& onboarding_key,
     const std::string& node_name,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
@@ -113,7 +116,10 @@ void HostdAssignmentService::ApplyNextAssignment(
       db_path,
       controller_url,
       host_private_key_path,
-      controller_fingerprint);
+      controller_fingerprint,
+      onboarding_key,
+      node_name,
+      storage_root);
   const auto assignment = backend->ClaimNextHostAssignment(node_name);
   if (!assignment.has_value()) {
     std::cout << "no pending assignments for node=" << node_name << "\n";
@@ -188,6 +194,7 @@ void HostdAssignmentService::ApplyNextAssignment(
         *backend,
         support_.BuildObservedStateSnapshot(
             node_name,
+            storage_root,
             state_root,
             comet::HostObservationStatus::Applying,
             applying_status_message,
@@ -221,6 +228,7 @@ void HostdAssignmentService::ApplyNextAssignment(
         *backend,
         support_.BuildObservedStateSnapshot(
             node_name,
+            storage_root,
             state_root,
             comet::HostObservationStatus::Applied,
             (is_drain_assignment ? "drained node for desired generation "
@@ -279,6 +287,7 @@ void HostdAssignmentService::ApplyNextAssignment(
         *backend,
         support_.BuildObservedStateSnapshot(
             node_name,
+            storage_root,
             state_root,
             comet::HostObservationStatus::Failed,
             error_message,

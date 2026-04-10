@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "http/controller_http_transport.h"
+#include "interaction/interaction_replica_group_summary_builder.h"
 
 #include "comet/state/models.h"
 #include "comet/runtime/runtime_status.h"
@@ -43,6 +44,11 @@ class InteractionRuntimeSupportService {
       const comet::DesiredState& desired_state,
       const std::function<std::vector<comet::RuntimeProcessStatus>(
           const comet::HostObservation&)>& parse_instance_runtime_statuses) const;
+
+ private:
+  std::string NormalizeInteractionHost(const std::string& host) const;
+
+  InteractionReplicaGroupSummaryBuilder interaction_replica_group_summary_builder_;
 };
 
 }  // namespace comet::controller

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <nlohmann/json.hpp>
 
 namespace comet {
@@ -15,7 +17,9 @@ class DesiredStateV2Validator final {
   void ValidateTopLevel() const;
   void ValidateModel() const;
   void ValidateRuntime() const;
+  void ValidatePlacement() const;
   void ValidateTopology() const;
+  void ValidateLegacyPlacementCompatibility() const;
   void ValidateInfer() const;
   void ValidateWorker() const;
   void ValidateWorkerResources() const;
@@ -26,7 +30,8 @@ class DesiredStateV2Validator final {
 
   void RequireObject(const char* field_name) const;
   void ValidateStartBlock(const nlohmann::json& service_json, const char* service_name) const;
-  std::optional<std::string> TopologyNodeExecutionMode(const std::string& node_name) const;
+  bool LegacyTopologyPlacementEnabled() const;
+  std::optional<std::string> KnownNodeExecutionMode(const std::string& node_name) const;
   void ValidateNodeRoleCompatibility(
       const std::string& node_name,
       const char* service_name,

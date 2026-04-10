@@ -1,10 +1,11 @@
 #pragma once
 
-#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "scheduler/scheduler_execution_dependencies.h"
 #include "scheduler/scheduler_service.h"
 
 #include "comet/runtime/runtime_status.h"
@@ -12,47 +13,17 @@
 
 namespace comet::controller {
 
+struct SchedulerExecutionVerificationConfig {
+  int verification_timeout_seconds = 0;
+  int verification_stable_samples_required = 0;
+};
+
 class SchedulerExecutionSupport {
  public:
-  using FindLatestHostAssignmentForNodeFn =
-      std::function<std::optional<comet::HostAssignment>(
-          const std::vector<comet::HostAssignment>&,
-          const std::string&)>;
-  using FindLatestHostAssignmentForPlaneFn =
-      std::function<std::optional<comet::HostAssignment>(
-          const std::vector<comet::HostAssignment>&,
-          const std::string&)>;
-  using DefaultArtifactsRootProvider = std::function<std::string()>;
-  using FindHostObservationForNodeFn =
-      std::function<std::optional<comet::HostObservation>(
-          const std::vector<comet::HostObservation>&,
-          const std::string&)>;
-  using ParseInstanceRuntimeStatusesFn =
-      std::function<std::vector<comet::RuntimeProcessStatus>(
-          const comet::HostObservation&)>;
-  using ParseGpuTelemetryFn =
-      std::function<std::optional<comet::GpuTelemetrySnapshot>(
-          const comet::HostObservation&)>;
-  using TimestampAgeSecondsFn =
-      std::function<std::optional<long long>(const std::string&)>;
-  using VerificationTimeoutSecondsFn = std::function<int()>;
-  using VerificationStableSamplesRequiredFn = std::function<int()>;
-  using UtcNowSqlTimestampFn = std::function<std::string()>;
-
-  struct Deps {
-    FindLatestHostAssignmentForNodeFn find_latest_host_assignment_for_node;
-    FindLatestHostAssignmentForPlaneFn find_latest_host_assignment_for_plane;
-    DefaultArtifactsRootProvider default_artifacts_root_provider;
-    FindHostObservationForNodeFn find_host_observation_for_node;
-    ParseInstanceRuntimeStatusesFn parse_instance_runtime_statuses;
-    ParseGpuTelemetryFn parse_gpu_telemetry;
-    TimestampAgeSecondsFn timestamp_age_seconds;
-    VerificationTimeoutSecondsFn verification_timeout_seconds;
-    VerificationStableSamplesRequiredFn verification_stable_samples_required;
-    UtcNowSqlTimestampFn utc_now_sql_timestamp;
-  };
-
-  explicit SchedulerExecutionSupport(Deps deps);
+  SchedulerExecutionSupport(
+      std::shared_ptr<const SchedulerAssignmentQuerySupport> assignment_query_support,
+      std::shared_ptr<const SchedulerVerificationSupport> verification_support,
+      SchedulerExecutionVerificationConfig verification_config);
 
   std::optional<comet::RolloutActionRecord> FindPriorRolloutActionForWorker(
       const std::vector<comet::RolloutActionRecord>& actions,
@@ -106,7 +77,9 @@ class SchedulerExecutionSupport {
       const std::string& gpu_device,
       const std::string& instance_name) const;
 
-  Deps deps_;
+  std::shared_ptr<const SchedulerAssignmentQuerySupport> assignment_query_support_;
+  std::shared_ptr<const SchedulerVerificationSupport> verification_support_;
+  SchedulerExecutionVerificationConfig verification_config_;
 };
 
 }  // namespace comet::controller

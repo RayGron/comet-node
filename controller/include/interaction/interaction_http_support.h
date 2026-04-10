@@ -12,9 +12,10 @@
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
 #include "interaction/interaction_runtime_support_service.h"
-#include "interaction/interaction_service.h"
+#include "interaction/interaction_types.h"
 #include "infra/controller_network_manager.h"
 #include "infra/controller_runtime_support_service.h"
+#include "observation/plane_observation_matcher.h"
 #include "plane/desired_state_policy_service.h"
 
 #include "comet/core/platform_compat.h"
@@ -80,4 +81,5 @@ class InteractionHttpSupport final {
   const comet::controller::DesiredStatePolicyService& desired_state_policy_service_;
   const comet::controller::InteractionRuntimeSupportService&
       interaction_runtime_support_service_;
+  comet::controller::PlaneObservationMatcher plane_observation_matcher_;
 };

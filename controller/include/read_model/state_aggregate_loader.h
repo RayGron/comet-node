@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "infra/controller_runtime_support_service.h"
+#include "observation/plane_observation_matcher.h"
 #include "plane/dashboard_service.h"
 #include "scheduler/scheduler_domain_service.h"
 #include "scheduler/scheduler_view_service.h"
@@ -39,14 +40,6 @@ class StateAggregateLoader {
       const std::optional<std::string>& plane_name = std::nullopt) const;
 
  private:
-  bool ObservationMatchesPlane(
-      const comet::HostObservation& observation,
-      const std::string& plane_name) const;
-
-  std::vector<comet::HostObservation> FilterHostObservationsForPlane(
-      const std::vector<comet::HostObservation>& observations,
-      const std::string& plane_name) const;
-
   SchedulerRuntimeView LoadSchedulerRuntimeView(
       comet::ControllerStore& store,
       const std::optional<comet::DesiredState>& desired_state) const;
@@ -54,6 +47,7 @@ class StateAggregateLoader {
   const SchedulerDomainService& scheduler_domain_service_;
   const SchedulerViewService& scheduler_view_service_;
   ControllerRuntimeSupportService runtime_support_service_;
+  PlaneObservationMatcher plane_observation_matcher_;
   int maximum_rebalance_iterations_ = 1;
 };
 

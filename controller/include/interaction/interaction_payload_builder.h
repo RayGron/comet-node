@@ -4,7 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "interaction/interaction_service.h"
+#include "interaction/interaction_types.h"
 
 namespace comet::controller {
 

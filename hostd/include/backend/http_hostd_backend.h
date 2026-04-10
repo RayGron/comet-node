@@ -14,6 +14,9 @@ class HttpHostdBackend final : public HostdBackend {
       std::string controller_url,
       std::string private_key_base64,
       std::string trusted_controller_fingerprint,
+      std::string onboarding_key,
+      std::string node_name,
+      std::string storage_root,
       const IHttpHostdBackendSupport& support);
 
   std::optional<comet::HostAssignment> ClaimNextHostAssignment(
@@ -36,6 +39,7 @@ class HttpHostdBackend final : public HostdBackend {
   static bool IsRecoverableSessionErrorMessage(const std::string& message);
 
   void ResetSessionState();
+  void EnsureRegistered(const std::string& node_name);
   std::string BuildRequestAad(const std::string& message_type, std::uint64_t sequence_number) const;
   std::string BuildResponseAad(const std::string& message_type, std::uint64_t sequence_number) const;
   nlohmann::json SendEncryptedControllerJsonRequest(
@@ -58,11 +62,15 @@ class HttpHostdBackend final : public HostdBackend {
   std::string controller_url_;
   std::string private_key_base64_;
   std::string trusted_controller_fingerprint_;
+  std::string onboarding_key_;
+  std::string configured_node_name_;
+  std::string storage_root_;
   const IHttpHostdBackendSupport& support_;
   std::string session_token_;
   std::string session_node_name_;
   std::uint64_t host_sequence_ = 0;
   std::uint64_t controller_sequence_ = 0;
+  bool registration_attempted_ = false;
 };
 
 }  // namespace comet::hostd

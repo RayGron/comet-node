@@ -18,6 +18,7 @@ struct EncryptedEnvelope {
 void InitializeCrypto();
 
 SigningKeypair GenerateSigningKeypair();
+std::string DerivePublicKeyBase64(const std::string& private_key_base64);
 std::string ComputeKeyFingerprintHex(const std::string& public_key_base64);
 std::string RandomTokenBase64(int byte_count = 32);
 std::string ComputeSha256Hex(const std::string& value);

@@ -3,8 +3,6 @@
 #include <set>
 #include <utility>
 
-#include "comet/state/state_json.h"
-
 namespace comet::controller {
 
 StateAggregateLoader::StateAggregateLoader(
@@ -16,59 +14,6 @@ StateAggregateLoader::StateAggregateLoader(
       scheduler_view_service_(scheduler_view_service),
       runtime_support_service_(std::move(runtime_support_service)),
       maximum_rebalance_iterations_(maximum_rebalance_iterations) {}
-
-bool StateAggregateLoader::ObservationMatchesPlane(
-    const comet::HostObservation& observation,
-    const std::string& plane_name) const {
-  if (observation.plane_name == plane_name) {
-    return true;
-  }
-  if (observation.observed_state_json.empty()) {
-    return false;
-  }
-
-  const auto observed_state =
-      comet::DeserializeDesiredStateJson(observation.observed_state_json);
-  if (observed_state.plane_name == plane_name) {
-    return true;
-  }
-  for (const auto& disk : observed_state.disks) {
-    if (disk.plane_name == plane_name) {
-      return true;
-    }
-  }
-  for (const auto& instance : observed_state.instances) {
-    if (instance.plane_name == plane_name) {
-      return true;
-    }
-  }
-  try {
-    const auto instance_statuses =
-        runtime_support_service_.ParseInstanceRuntimeStatuses(observation);
-    for (const auto& status : instance_statuses) {
-      const std::string worker_prefix = "worker-" + plane_name + "-";
-      if (status.instance_name == "infer-" + plane_name ||
-          status.instance_name == "worker-" + plane_name ||
-          status.instance_name.rfind(worker_prefix, 0) == 0) {
-        return true;
-      }
-    }
-  } catch (const std::exception&) {
-  }
-  return false;
-}
-
-std::vector<comet::HostObservation> StateAggregateLoader::FilterHostObservationsForPlane(
-    const std::vector<comet::HostObservation>& observations,
-    const std::string& plane_name) const {
-  std::vector<comet::HostObservation> result;
-  for (const auto& observation : observations) {
-    if (ObservationMatchesPlane(observation, plane_name)) {
-      result.push_back(observation);
-    }
-  }
-  return result;
-}
 
 SchedulerRuntimeView StateAggregateLoader::LoadSchedulerRuntimeView(
     comet::ControllerStore& store,
@@ -123,7 +68,7 @@ RolloutActionsViewData StateAggregateLoader::LoadRolloutActionsViewData(
     if (view.desired_generation.has_value()) {
       const auto plane_assignments =
           store.LoadHostAssignments(std::nullopt, std::nullopt, view.desired_state->plane_name);
-      const auto plane_observations = FilterHostObservationsForPlane(
+      const auto plane_observations = plane_observation_matcher_.FilterHostObservationsForPlane(
           store.LoadHostObservations(),
           view.desired_state->plane_name);
       view.lifecycle = scheduler_domain_service_.BuildRolloutLifecycleEntries(
@@ -161,7 +106,7 @@ RebalancePlanViewData StateAggregateLoader::LoadRebalancePlanViewData(
       (plane_name.has_value() ? store.LoadDesiredGeneration(*plane_name)
                               : store.LoadDesiredGeneration())
           .value_or(0);
-  const auto observations = FilterHostObservationsForPlane(
+  const auto observations = plane_observation_matcher_.FilterHostObservationsForPlane(
       store.LoadHostObservations(),
       view.desired_state->plane_name);
   const auto assignments =
@@ -238,7 +183,7 @@ StateAggregateViewData StateAggregateLoader::LoadStateAggregateViewData(
   view.scheduling_report = comet::EvaluateSchedulingPolicy(*view.desired_state);
   view.observations =
       plane_name.has_value()
-          ? FilterHostObservationsForPlane(
+          ? plane_observation_matcher_.FilterHostObservationsForPlane(
                 store.LoadHostObservations(),
                 *plane_name)
           : store.LoadHostObservations();

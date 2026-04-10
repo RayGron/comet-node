@@ -181,6 +181,11 @@ struct RegisteredHostRecord {
   std::string transport_mode;
   std::string execution_mode = "mixed";
   std::string registration_state;
+  std::string onboarding_key_hash;
+  std::string onboarding_state;
+  std::string derived_role;
+  std::string role_reason;
+  std::string last_inventory_scan_at;
   std::string session_state;
   std::string session_token;
   std::string session_expires_at;
@@ -255,6 +260,7 @@ struct ModelLibraryDownloadJobRecord {
   std::string status = "queued";
   std::string phase = "queued";
   std::string model_id;
+  std::string node_name;
   std::string target_root;
   std::string target_subdir;
   std::string detected_source_format;

@@ -9,7 +9,7 @@
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
 #include "interaction/interaction_http_support.h"
-#include "interaction/interaction_service.h"
+#include "interaction/interaction_types.h"
 #include "comet/core/platform_compat.h"
 
 class AuthSupportService;
@@ -50,36 +50,12 @@ class InteractionHttpService {
       const std::string& path,
       const std::string& body = "") const;
 
-  void StreamPlaneInteractionSse(
+ void StreamPlaneInteractionSse(
       comet::platform::SocketHandle client_fd,
       const std::string& db_path,
       const HttpRequest& request,
       AuthSupportService& auth_support) const;
 
  private:
-  static nlohmann::json BuildContinuationPayload(
-      const nlohmann::json& original_payload,
-      const std::string& accumulated_text,
-      const comet::controller::InteractionCompletionPolicy& policy,
-      bool natural_stop_without_marker,
-      int total_completion_tokens);
-
-  bool SendInteractionSseEvent(
-      comet::platform::SocketHandle client_fd,
-      const std::string& event_name,
-      const nlohmann::json& payload) const;
-
-  bool SendInteractionSseDone(comet::platform::SocketHandle client_fd) const;
-
-  comet::controller::InteractionPlaneResolver MakePlaneResolver() const;
-  comet::controller::InteractionSessionExecutor MakeSessionExecutor() const;
-  comet::controller::InteractionStreamSegmentExecutor
-  MakeStreamSegmentExecutor() const;
-  comet::controller::InteractionProxyExecutor MakeProxyExecutor() const;
-  comet::controller::InteractionStreamRequestResolver
-  MakeStreamRequestResolver() const;
-  comet::controller::InteractionStreamSessionExecutor
-  MakeStreamSessionExecutor() const;
-
   InteractionHttpSupport support_;
 };

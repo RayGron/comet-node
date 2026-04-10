@@ -6,8 +6,10 @@
 #include "comet/state/sqlite_store.h"
 #include "host/host_assignment_reconciliation_service.h"
 #include "plane/controller_state_service.h"
+#include "plane/plane_lifecycle_support.h"
 #include "plane/plane_deletion_support.h"
 #include "plane/plane_service.h"
+#include "plane/plane_state_presentation_support.h"
 
 namespace fs = std::filesystem;
 
@@ -65,40 +67,75 @@ comet::HostObservation BuildHostObservation(
   return observation;
 }
 
+class TestPlaneStatePresentationSupport final
+    : public comet::controller::PlaneStatePresentationSupport {
+ public:
+  std::string FormatTimestamp(const std::string& value) const override { return value; }
+
+  void PrintStateSummary(const comet::DesiredState&) const override {}
+};
+
+class TestPlaneLifecycleSupport final : public comet::controller::PlaneLifecycleSupport {
+ public:
+  void PrepareDesiredState(
+      comet::ControllerStore&,
+      comet::DesiredState*) const override {}
+
+  void AppendPlaneEvent(
+      comet::ControllerStore&,
+      const std::string&,
+      const std::string&,
+      const nlohmann::json&,
+      const std::string&) const override {}
+
+  bool CanFinalizeDeletedPlane(
+      comet::ControllerStore&,
+      const std::string&) const override {
+    return true;
+  }
+
+  std::optional<comet::HostAssignment> FindLatestHostAssignmentForPlane(
+      const std::vector<comet::HostAssignment>&,
+      const std::string&) const override {
+    return std::nullopt;
+  }
+
+  std::vector<comet::HostAssignment> BuildStartAssignments(
+      const comet::DesiredState&,
+      const std::string&,
+      int,
+      const std::vector<comet::NodeAvailabilityOverride>&,
+      const std::vector<comet::HostObservation>&,
+      const comet::SchedulingPolicyReport&) const override {
+    return {};
+  }
+
+  std::vector<comet::HostAssignment> BuildStopAssignments(
+      const comet::DesiredState&,
+      int,
+      const std::string&,
+      const std::vector<comet::NodeAvailabilityOverride>&) const override {
+    return {};
+  }
+
+  std::vector<comet::HostAssignment> BuildDeleteAssignments(
+      const comet::DesiredState&,
+      int,
+      const std::string&) const override {
+    return {};
+  }
+
+  std::string DefaultArtifactsRoot() const override { return "/tmp/artifacts"; }
+};
+
 comet::controller::PlaneService BuildPlaneService(const std::string& db_path) {
+  auto state_presentation_support =
+      std::make_shared<TestPlaneStatePresentationSupport>();
+  auto lifecycle_support = std::make_shared<TestPlaneLifecycleSupport>();
   return comet::controller::PlaneService(
       db_path,
-      [](const std::string& value) { return value; },
-      [](const comet::DesiredState&) {},
-      [](comet::ControllerStore&, comet::DesiredState*) {},
-      [](comet::ControllerStore&,
-         const std::string&,
-         const std::string&,
-         const std::string&,
-         const nlohmann::json&,
-         const std::string&) {},
-      [](comet::ControllerStore&, const std::string&) { return true; },
-      [](const std::vector<comet::HostAssignment>&, const std::string&) {
-        return std::optional<comet::HostAssignment>{};
-      },
-      [](const comet::DesiredState&,
-         const std::string&,
-         int,
-         const std::vector<comet::NodeAvailabilityOverride>&,
-         const std::vector<comet::HostObservation>&,
-         const comet::SchedulingPolicyReport&) {
-        return std::vector<comet::HostAssignment>{};
-      },
-      [](const comet::DesiredState&,
-         int,
-         const std::string&,
-         const std::vector<comet::NodeAvailabilityOverride>&) {
-        return std::vector<comet::HostAssignment>{};
-      },
-      [](const comet::DesiredState&, int, const std::string&) {
-        return std::vector<comet::HostAssignment>{};
-      },
-      []() { return std::string("/tmp/artifacts"); });
+      std::move(state_presentation_support),
+      std::move(lifecycle_support));
 }
 
 }  // namespace

@@ -73,6 +73,7 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
 
 DesiredState DesiredStateV2Renderer::RenderState() {
   RenderIdentity();
+  RenderPlacement();
   RenderHooks();
   RenderModel();
   RenderInteraction();
@@ -153,6 +154,32 @@ void DesiredStateV2Renderer::RenderIdentity() {
       browsing_settings.policy = std::move(policy);
     }
     state_.browsing = std::move(browsing_settings);
+  }
+}
+
+void DesiredStateV2Renderer::RenderPlacement() {
+  if (!value_.contains("placement") || !value_.at("placement").is_object()) {
+    return;
+  }
+  const auto& placement = value_.at("placement");
+  const std::string primary_node = placement.value("primary_node", std::string{});
+  if (!primary_node.empty()) {
+    state_.placement_target = "node:" + primary_node;
+  }
+  if (placement.contains("app_host") && placement.at("app_host").is_object()) {
+    ExternalAppHostConfig app_host;
+    const auto& app_host_json = placement.at("app_host");
+    app_host.address = app_host_json.value("address", std::string{});
+    if (app_host_json.contains("ssh_key_path") && app_host_json.at("ssh_key_path").is_string()) {
+      app_host.ssh_key_path = app_host_json.at("ssh_key_path").get<std::string>();
+    }
+    if (app_host_json.contains("username") && app_host_json.at("username").is_string()) {
+      app_host.username = app_host_json.at("username").get<std::string>();
+    }
+    if (app_host_json.contains("password") && app_host_json.at("password").is_string()) {
+      app_host.password = app_host_json.at("password").get<std::string>();
+    }
+    state_.app_host = std::move(app_host);
   }
 }
 
@@ -312,6 +339,16 @@ void DesiredStateV2Renderer::RenderNodeTopology() {
         }
         state_.nodes.push_back(std::move(node));
       }
+    }
+  }
+  if (state_.nodes.empty() && state_.placement_target.has_value()) {
+    constexpr std::string_view kNodePrefix = "node:";
+    if (state_.placement_target->rfind(kNodePrefix, 0) == 0) {
+      NodeInventory node;
+      node.name = state_.placement_target->substr(kNodePrefix.size());
+      node.platform = "linux";
+      node.execution_mode = HostExecutionMode::Mixed;
+      state_.nodes.push_back(std::move(node));
     }
   }
   if (!state_.nodes.empty()) {
@@ -607,6 +644,7 @@ void DesiredStateV2Renderer::RenderAppInstance() {
       });
     }
   }
+  ApplyExternalAppHostMetadata(&app, "app");
 
   const int app_private_disk_size_gb =
       ExtractPrivateDiskSizeGb(app_json_, kDefaultAppPrivateDiskSizeGb, "volumes");
@@ -640,8 +678,9 @@ void DesiredStateV2Renderer::RenderSkillsInstance() {
   skills.name = BuildSkillsInstanceName();
   skills.role = InstanceRole::Skills;
   skills.plane_name = state_.plane_name;
-  if (skills_json_.contains("node") && skills_json_.at("node").is_string()) {
-    skills.node_name = RequireNode(skills_json_.at("node").get<std::string>(), "skills").name;
+  if (const auto legacy_node_name = ResolveLegacyServiceNodeName(skills_json_, "skills");
+      legacy_node_name.has_value()) {
+    skills.node_name = *legacy_node_name;
   } else {
     skills.node_name = ResolveAppNodeName();
   }
@@ -693,6 +732,7 @@ void DesiredStateV2Renderer::RenderSkillsInstance() {
         kSkillsContainerPort,
     });
   }
+  ApplyExternalAppHostMetadata(&skills, "skills-follow-app");
   state_.instances.push_back(skills);
 
   DiskSpec skills_private_disk;
@@ -717,9 +757,9 @@ void DesiredStateV2Renderer::RenderWebGatewayInstance() {
   browsing.name = BuildWebGatewayInstanceName();
   browsing.role = InstanceRole::Browsing;
   browsing.plane_name = state_.plane_name;
-  if (browsing_json_.contains("node") && browsing_json_.at("node").is_string()) {
-    browsing.node_name =
-        RequireNode(browsing_json_.at("node").get<std::string>(), "webgateway").name;
+  if (const auto legacy_node_name = ResolveLegacyServiceNodeName(browsing_json_, "webgateway");
+      legacy_node_name.has_value()) {
+    browsing.node_name = *legacy_node_name;
   } else {
     browsing.node_name = ResolveAppNodeName();
   }
@@ -813,13 +853,38 @@ int DesiredStateV2Renderer::ExpectedWorkers() const {
   return std::max(1, WorkerCount());
 }
 
+bool DesiredStateV2Renderer::HasExternalAppHost() const {
+  return state_.app_host.has_value() && !state_.app_host->address.empty();
+}
+
+std::string DesiredStateV2Renderer::ExternalAppHostAuthMode() const {
+  if (!HasExternalAppHost()) {
+    return "none";
+  }
+  if (state_.app_host->ssh_key_path.has_value() && !state_.app_host->ssh_key_path->empty()) {
+    return "ssh-key";
+  }
+  if (state_.app_host->username.has_value() && state_.app_host->password.has_value() &&
+      !state_.app_host->username->empty() && !state_.app_host->password->empty()) {
+    return "password";
+  }
+  return "unknown";
+}
+
+bool DesiredStateV2Renderer::LegacyTopologyPlacementEnabled() const {
+  return value_.contains("topology") && value_.at("topology").is_object();
+}
+
 std::string DesiredStateV2Renderer::ResolveInferNodeName() const {
   return ResolveInferNodeName(0);
 }
 
 std::string DesiredStateV2Renderer::ResolveInferNodeName(int infer_index) const {
-  if (infer_index == 0 && infer_json_.contains("node") && infer_json_.at("node").is_string()) {
-    return RequireNode(infer_json_.at("node").get<std::string>(), "infer").name;
+  if (infer_index == 0) {
+    if (const auto legacy_node_name = ResolveLegacyServiceNodeName(infer_json_, "infer");
+        legacy_node_name.has_value()) {
+      return *legacy_node_name;
+    }
   }
   if (InferReplicaCount() > 1 && infer_index > 0) {
     const int replica_index = infer_index - 1;
@@ -836,28 +901,28 @@ std::string DesiredStateV2Renderer::ResolveInferNodeName(int infer_index) const 
 }
 
 std::string DesiredStateV2Renderer::ResolveAppNodeName() const {
-  if (app_json_.contains("node") && app_json_.at("node").is_string()) {
-    return RequireNode(app_json_.at("node").get<std::string>(), "app").name;
+  if (const auto legacy_node_name = ResolveLegacyServiceNodeName(app_json_, "app");
+      legacy_node_name.has_value()) {
+    return *legacy_node_name;
   }
   return ResolveInferNodeName();
 }
 
 std::string DesiredStateV2Renderer::ResolveWorkerNodeName(int worker_index) const {
-  if (worker_json_.contains("assignments") && worker_json_.at("assignments").is_array() &&
-      worker_index < static_cast<int>(worker_json_.at("assignments").size())) {
-    const auto& assignment = worker_json_.at("assignments").at(worker_index);
-    if (assignment.contains("node") && assignment.at("node").is_string()) {
-      return RequireNode(assignment.at("node").get<std::string>(), "worker assignment").name;
-    }
+  if (const auto assignment_node_name = ResolveLegacyWorkerAssignmentNodeName(worker_index);
+      assignment_node_name.has_value()) {
+    return *assignment_node_name;
   }
-  if (worker_json_.contains("node") && worker_json_.at("node").is_string()) {
-    return RequireNode(worker_json_.at("node").get<std::string>(), "worker").name;
+  if (const auto legacy_node_name = ResolveLegacyServiceNodeName(worker_json_, "worker");
+      legacy_node_name.has_value()) {
+    return *legacy_node_name;
   }
   return DefaultNodeName();
 }
 
 std::optional<std::string> DesiredStateV2Renderer::ResolveWorkerGpuDevice(int worker_index) const {
-  if (worker_json_.contains("assignments") && worker_json_.at("assignments").is_array() &&
+  if (LegacyTopologyPlacementEnabled() && worker_json_.contains("assignments") &&
+      worker_json_.at("assignments").is_array() &&
       worker_index < static_cast<int>(worker_json_.at("assignments").size())) {
     const auto& assignment = worker_json_.at("assignments").at(worker_index);
     if (assignment.contains("gpu_device") && assignment.at("gpu_device").is_string()) {
@@ -868,6 +933,30 @@ std::optional<std::string> DesiredStateV2Renderer::ResolveWorkerGpuDevice(int wo
     return worker_json_.at("gpu_device").get<std::string>();
   }
   return std::nullopt;
+}
+
+std::optional<std::string> DesiredStateV2Renderer::ResolveLegacyServiceNodeName(
+    const nlohmann::json& service_json,
+    const char* service_name) const {
+  if (!LegacyTopologyPlacementEnabled() || !service_json.contains("node") ||
+      !service_json.at("node").is_string()) {
+    return std::nullopt;
+  }
+  return RequireNode(service_json.at("node").get<std::string>(), service_name).name;
+}
+
+std::optional<std::string> DesiredStateV2Renderer::ResolveLegacyWorkerAssignmentNodeName(
+    int worker_index) const {
+  if (!LegacyTopologyPlacementEnabled() || !worker_json_.contains("assignments") ||
+      !worker_json_.at("assignments").is_array() ||
+      worker_index >= static_cast<int>(worker_json_.at("assignments").size())) {
+    return std::nullopt;
+  }
+  const auto& assignment = worker_json_.at("assignments").at(worker_index);
+  if (!assignment.contains("node") || !assignment.at("node").is_string()) {
+    return std::nullopt;
+  }
+  return RequireNode(assignment.at("node").get<std::string>(), "worker assignment").name;
 }
 
 std::string DesiredStateV2Renderer::DefaultNodeName() const {
@@ -1019,6 +1108,22 @@ std::string DesiredStateV2Renderer::BuildCommandFromStartSpec(
   }
   const auto command = start.value("command", std::string{});
   return command.empty() ? default_command : command;
+}
+
+void DesiredStateV2Renderer::ApplyExternalAppHostMetadata(
+    InstanceSpec* instance,
+    const std::string& binding) const {
+  if (instance == nullptr || !HasExternalAppHost()) {
+    return;
+  }
+  instance->environment["COMET_DEPLOYMENT_TARGET"] = "external-app-host";
+  instance->environment["COMET_EXTERNAL_APP_HOST_ADDRESS"] = state_.app_host->address;
+  instance->environment["COMET_EXTERNAL_APP_HOST_AUTH_MODE"] = ExternalAppHostAuthMode();
+  instance->environment["COMET_EXTERNAL_APP_HOST_BINDING"] = binding;
+  instance->labels["comet.deployment.target"] = "external-app-host";
+  instance->labels["comet.external_app_host.address"] = state_.app_host->address;
+  instance->labels["comet.external_app_host.auth_mode"] = ExternalAppHostAuthMode();
+  instance->labels["comet.external_app_host.binding"] = binding;
 }
 
 int DesiredStateV2Renderer::BuildSkillsHostPort() const {

@@ -109,6 +109,8 @@ GeneratedConfig GeneratedConfigLoader::Load(const fs::path& path) const {
         config.hostd.node_name = UnquoteTomlValue(raw_value);
       } else if (key == "controller_url") {
         config.hostd.controller_url = UnquoteTomlValue(raw_value);
+      } else if (key == "onboarding_key") {
+        config.hostd.onboarding_key = UnquoteTomlValue(raw_value);
       } else if (key == "transport_mode") {
         config.hostd.transport_mode = UnquoteTomlValue(raw_value);
       } else if (key == "execution_mode") {
@@ -127,6 +129,8 @@ GeneratedConfig GeneratedConfigLoader::Load(const fs::path& path) const {
         config.hostd.host_public_key = fs::path(UnquoteTomlValue(raw_value));
       } else if (key == "trusted_controller_fingerprint") {
         config.hostd.trusted_controller_fingerprint = UnquoteTomlValue(raw_value);
+      } else if (key == "inventory_scan_interval_sec") {
+        config.hostd.inventory_scan_interval_sec = std::stoi(raw_value);
       }
     }
   }

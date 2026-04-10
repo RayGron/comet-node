@@ -47,9 +47,7 @@ std::vector<comet::RuntimeProcessStatus> InteractionHttpSupport::ParseInstanceRu
 bool InteractionHttpSupport::ObservationMatchesPlane(
     const comet::HostObservation& observation,
     const std::string& plane_name) const {
-  return comet::controller::composition_support::ObservationMatchesPlane(
-      observation,
-      plane_name);
+  return plane_observation_matcher_.ObservationMatchesPlane(observation, plane_name);
 }
 
 std::optional<comet::RuntimeStatus> InteractionHttpSupport::BuildPlaneScopedRuntimeStatus(

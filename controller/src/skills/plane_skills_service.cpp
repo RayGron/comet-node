@@ -1,51 +1,15 @@
 #include "skills/plane_skills_service.h"
 
-#include <algorithm>
 #include <set>
 #include <stdexcept>
 
 #include "skills/plane_skill_contextual_resolver_service.h"
 #include "skills/plane_skill_runtime_sync_service.h"
+#include "skills/plane_skills_target_resolver.h"
 
 namespace comet::controller {
 
-namespace {
-
 using nlohmann::json;
-
-std::vector<std::pair<std::string, std::string>> DefaultJsonHeaders() {
-  return {{"Content-Type", "application/json"}};
-}
-
-std::string NormalizeControllerTargetHost(const PublishedPort& port) {
-  if (port.host_ip.empty() || port.host_ip == "0.0.0.0") {
-    return "127.0.0.1";
-  }
-  return port.host_ip;
-}
-
-const InstanceSpec* FindSkillsInstance(const DesiredState& desired_state) {
-  const auto it = std::find_if(
-      desired_state.instances.begin(),
-      desired_state.instances.end(),
-      [](const InstanceSpec& instance) { return instance.role == InstanceRole::Skills; });
-  if (it == desired_state.instances.end()) {
-    return nullptr;
-  }
-  return &*it;
-}
-
-std::string NormalizeSkillPathSuffix(const std::string& path_suffix) {
-  if (path_suffix.empty() || path_suffix == "/") {
-    return "/v1/skills";
-  }
-  if (path_suffix.front() == '/') {
-    return "/v1/skills" + path_suffix;
-  }
-  return "/v1/skills/" + path_suffix;
-}
-
-}  // namespace
 
 bool PlaneSkillsService::IsEnabled(const DesiredState& desired_state) const {
   return desired_state.skills.has_value() && desired_state.skills->enabled;
@@ -53,22 +17,7 @@ bool PlaneSkillsService::IsEnabled(const DesiredState& desired_state) const {
 
 std::optional<ControllerEndpointTarget> PlaneSkillsService::ResolveTarget(
     const DesiredState& desired_state) const {
-  const auto* skills = FindSkillsInstance(desired_state);
-  if (skills == nullptr) {
-    return std::nullopt;
-  }
-  const auto published = std::find_if(
-      skills->published_ports.begin(),
-      skills->published_ports.end(),
-      [](const PublishedPort& port) { return port.host_port > 0; });
-  if (published == skills->published_ports.end()) {
-    return std::nullopt;
-  }
-  ControllerEndpointTarget target;
-  target.host = NormalizeControllerTargetHost(*published);
-  target.port = published->host_port;
-  target.raw = "http://" + target.host + ":" + std::to_string(target.port);
-  return target;
+  return PlaneSkillsTargetResolver::ResolvePlaneLocalTarget(desired_state);
 }
 
 std::optional<std::string> PlaneSkillsService::ParseSessionId(const json& payload) {
@@ -282,7 +231,11 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
           resolution.db_path, resolution.desired_state);
     }
     const HttpResponse response = SendControllerHttpRequest(
-        *target, "POST", "/v1/skills/resolve", request_payload.dump(), DefaultJsonHeaders());
+        *target,
+        "POST",
+        "/v1/skills/resolve",
+        request_payload.dump(),
+        PlaneSkillsTargetResolver::DefaultJsonHeaders());
     if (response.status_code == 400) {
       json error_payload = response.body.empty() ? json::object() : json::parse(response.body);
       const std::string code = error_payload.value("error", std::string("invalid_skill_reference"));
@@ -365,7 +318,11 @@ std::optional<HttpResponse> PlaneSkillsService::ProxyPlaneSkillsRequest(
 
   try {
     return SendControllerHttpRequest(
-        *target, method, NormalizeSkillPathSuffix(path_suffix), body, DefaultJsonHeaders());
+        *target,
+        method,
+        PlaneSkillsTargetResolver::NormalizeSkillPathSuffix(path_suffix),
+        body,
+        PlaneSkillsTargetResolver::DefaultJsonHeaders());
   } catch (const std::exception&) {
     if (error_code != nullptr) {
       *error_code = "skills_not_ready";

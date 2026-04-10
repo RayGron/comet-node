@@ -243,6 +243,11 @@ int LauncherRunService::RunHostd(
                             loaded_config->hostd.trusted_controller_fingerprint.has_value()
                         ? *loaded_config->hostd.trusted_controller_fingerprint
                         : "");
+  options.onboarding_key =
+      command_line.FindFlagValue("--onboarding-key")
+          .value_or(loaded_config && loaded_config->hostd.onboarding_key.has_value()
+                        ? *loaded_config->hostd.onboarding_key
+                        : "");
   options.node_name =
       command_line.FindFlagValue("--node")
           .value_or(loaded_config && loaded_config->hostd.node_name.has_value()
@@ -267,6 +272,11 @@ int LauncherRunService::RunHostd(
       command_line.FindFlagValue("--compose-mode").value_or(options.compose_mode);
   options.poll_interval_sec = LauncherCommandLine::ParseIntValue(
       command_line.FindFlagValue("--poll-interval-sec"), options.poll_interval_sec);
+  options.inventory_scan_interval_sec = LauncherCommandLine::ParseIntValue(
+      command_line.FindFlagValue("--inventory-scan-interval-sec"),
+      loaded_config && loaded_config->hostd.inventory_scan_interval_sec.has_value()
+          ? *loaded_config->hostd.inventory_scan_interval_sec
+          : options.inventory_scan_interval_sec);
 
   if (!(std::getenv("COMET_SERVICE_MODE") != nullptr &&
         std::string(std::getenv("COMET_SERVICE_MODE")) == "1") &&
@@ -324,6 +334,7 @@ int LauncherRunService::RunHostdLoop(
   }
   std::cout
       << "next_step=leave hostd running so it can receive assignments and upload telemetry\n";
+  auto next_inventory_report_at = std::chrono::steady_clock::now();
 
   while (!signal_manager.stop_requested()) {
     std::vector<std::string> apply_args = {
@@ -344,6 +355,9 @@ int LauncherRunService::RunHostdLoop(
         apply_args.insert(
             apply_args.end(), {"--controller-fingerprint", options.controller_fingerprint});
       }
+      if (!options.onboarding_key.empty()) {
+        apply_args.insert(apply_args.end(), {"--onboarding-key", options.onboarding_key});
+      }
       if (!options.host_private_key_path.empty()) {
         apply_args.insert(
             apply_args.end(), {"--host-private-key", options.host_private_key_path.string()});
@@ -356,30 +370,38 @@ int LauncherRunService::RunHostdLoop(
       std::cerr << "comet-node: hostd apply-next-assignment exit=" << apply_code << "\n";
     }
 
-    std::vector<std::string> report_args = {
-        hostd_binary.string(),
-        "report-observed-state",
-        "--node",
-        options.node_name,
-        "--state-root",
-        options.state_root.string(),
-    };
-    if (!options.controller_url.empty()) {
-      report_args.insert(report_args.end(), {"--controller", options.controller_url});
-      if (!options.controller_fingerprint.empty()) {
-        report_args.insert(
-            report_args.end(), {"--controller-fingerprint", options.controller_fingerprint});
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= next_inventory_report_at) {
+      std::vector<std::string> report_args = {
+          hostd_binary.string(),
+          "report-observed-state",
+          "--node",
+          options.node_name,
+          "--state-root",
+          options.state_root.string(),
+      };
+      if (!options.controller_url.empty()) {
+        report_args.insert(report_args.end(), {"--controller", options.controller_url});
+        if (!options.controller_fingerprint.empty()) {
+          report_args.insert(
+              report_args.end(), {"--controller-fingerprint", options.controller_fingerprint});
+        }
+        if (!options.onboarding_key.empty()) {
+          report_args.insert(report_args.end(), {"--onboarding-key", options.onboarding_key});
+        }
+        if (!options.host_private_key_path.empty()) {
+          report_args.insert(
+              report_args.end(), {"--host-private-key", options.host_private_key_path.string()});
+        }
+      } else {
+        report_args.insert(report_args.end(), {"--db", options.db_path.string()});
       }
-      if (!options.host_private_key_path.empty()) {
-        report_args.insert(
-            report_args.end(), {"--host-private-key", options.host_private_key_path.string()});
+      const int report_code = process_runner_.RunCommand(report_args);
+      if (report_code != 0) {
+        std::cerr << "comet-node: hostd report-observed-state exit=" << report_code << "\n";
       }
-    } else {
-      report_args.insert(report_args.end(), {"--db", options.db_path.string()});
-    }
-    const int report_code = process_runner_.RunCommand(report_args);
-    if (report_code != 0) {
-      std::cerr << "comet-node: hostd report-observed-state exit=" << report_code << "\n";
+      next_inventory_report_at =
+          now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
     }
 
     for (int second = 0;

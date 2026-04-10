@@ -7,14 +7,34 @@
 
 namespace comet::hostd {
 
+namespace {
+
+std::string JsonNullableStringOrEmpty(
+    const nlohmann::json& payload,
+    const char* key) {
+  const auto it = payload.find(key);
+  if (it == payload.end() || it->is_null() || !it->is_string()) {
+    return {};
+  }
+  return it->get<std::string>();
+}
+
+}  // namespace
+
 HttpHostdBackend::HttpHostdBackend(
     std::string controller_url,
     std::string private_key_base64,
     std::string trusted_controller_fingerprint,
+    std::string onboarding_key,
+    std::string node_name,
+    std::string storage_root,
     const IHttpHostdBackendSupport& support)
     : controller_url_(std::move(controller_url)),
       private_key_base64_(std::move(private_key_base64)),
       trusted_controller_fingerprint_(std::move(trusted_controller_fingerprint)),
+      onboarding_key_(std::move(onboarding_key)),
+      configured_node_name_(std::move(node_name)),
+      storage_root_(std::move(storage_root)),
       support_(support) {}
 
 std::optional<comet::HostAssignment> HttpHostdBackend::ClaimNextHostAssignment(
@@ -124,11 +144,54 @@ bool HttpHostdBackend::IsRecoverableSessionErrorMessage(const std::string& messa
          message.find("stale or replayed host session request") != std::string::npos;
 }
 
+bool IsOnboardingRegistrationNeededMessage(const std::string& message) {
+  return message.find("host node is not registered") != std::string::npos ||
+         message.find("registered host is missing public key") != std::string::npos;
+}
+
 void HttpHostdBackend::ResetSessionState() {
   session_token_.clear();
   session_node_name_.clear();
   host_sequence_ = 0;
   controller_sequence_ = 0;
+}
+
+void HttpHostdBackend::EnsureRegistered(const std::string& node_name) {
+  if (registration_attempted_) {
+    return;
+  }
+  registration_attempted_ = true;
+  if (onboarding_key_.empty()) {
+    return;
+  }
+  if (!configured_node_name_.empty() && configured_node_name_ != node_name) {
+    throw std::runtime_error(
+        "configured hostd node name '" + configured_node_name_ +
+        "' does not match requested node '" + node_name + "'");
+  }
+  const auto response = support_.SendControllerJsonRequest(
+      controller_url_,
+      "POST",
+      "/api/v1/hostd/register",
+      nlohmann::json{
+          {"node_name", node_name},
+          {"public_key_base64", comet::DerivePublicKeyBase64(private_key_base64_)},
+          {"onboarding_key", onboarding_key_},
+          {"transport_mode", "out"},
+          {"execution_mode", "mixed"},
+          {"capabilities_json",
+           nlohmann::json{
+               {"storage_root", storage_root_},
+           }.dump()},
+          {"status_message", "registered via comet-node remote hostd onboarding"},
+      });
+  const std::string controller_fingerprint =
+      JsonNullableStringOrEmpty(response, "controller_public_key_fingerprint");
+  if (!trusted_controller_fingerprint_.empty() &&
+      !controller_fingerprint.empty() &&
+      controller_fingerprint != trusted_controller_fingerprint_) {
+    throw std::runtime_error("controller fingerprint mismatch during host registration");
+  }
 }
 
 std::string HttpHostdBackend::BuildRequestAad(
@@ -217,19 +280,39 @@ void HttpHostdBackend::EnsureSession(const std::string& node_name, const std::st
   const std::string timestamp = std::to_string(std::time(nullptr));
   const std::string message = "hostd-session-open\n" + node_name + "\n" + timestamp + "\n" + nonce;
   const std::string signature = comet::SignDetachedBase64(message, private_key_base64_);
-  const auto response = support_.SendControllerJsonRequest(
-      controller_url_,
-      "POST",
-      "/api/v1/hostd/session/open",
-      nlohmann::json{
-          {"node_name", node_name},
-          {"timestamp", timestamp},
-          {"nonce", nonce},
-          {"signature", signature},
-          {"status_message", status_message},
-      });
+  nlohmann::json response;
+  try {
+    response = support_.SendControllerJsonRequest(
+        controller_url_,
+        "POST",
+        "/api/v1/hostd/session/open",
+        nlohmann::json{
+            {"node_name", node_name},
+            {"timestamp", timestamp},
+            {"nonce", nonce},
+            {"signature", signature},
+            {"status_message", status_message},
+        });
+  } catch (const std::exception& error) {
+    if (onboarding_key_.empty() ||
+        !IsOnboardingRegistrationNeededMessage(error.what())) {
+      throw;
+    }
+    EnsureRegistered(node_name);
+    response = support_.SendControllerJsonRequest(
+        controller_url_,
+        "POST",
+        "/api/v1/hostd/session/open",
+        nlohmann::json{
+            {"node_name", node_name},
+            {"timestamp", timestamp},
+            {"nonce", nonce},
+            {"signature", signature},
+            {"status_message", status_message},
+        });
+  }
   const std::string controller_fingerprint =
-      response.value("controller_public_key_fingerprint", std::string{});
+      JsonNullableStringOrEmpty(response, "controller_public_key_fingerprint");
   if (!trusted_controller_fingerprint_.empty() &&
       controller_fingerprint != trusted_controller_fingerprint_) {
     throw std::runtime_error("controller fingerprint mismatch during host session open");

@@ -36,6 +36,7 @@ class IHostdAssignmentSupport {
       const std::string& tag) const = 0;
   virtual comet::HostObservation BuildObservedStateSnapshot(
       const std::string& node_name,
+      const std::string& storage_root,
       const std::string& state_root,
       comet::HostObservationStatus status,
       const std::string& status_message,
@@ -115,6 +116,7 @@ class HostdAssignmentService {
       const std::optional<std::string>& controller_url,
       const std::optional<std::string>& host_private_key_path,
       const std::optional<std::string>& controller_fingerprint,
+      const std::optional<std::string>& onboarding_key,
       const std::string& node_name,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root,

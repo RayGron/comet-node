@@ -113,6 +113,11 @@ void InitializeSchema(
       "model_library_download_jobs",
       "keep_base_gguf",
       "keep_base_gguf INTEGER NOT NULL DEFAULT 1");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
+      "node_name",
+      "node_name TEXT NOT NULL DEFAULT ''");
   EnsureColumn(db, "planes", "control_root", "control_root TEXT NOT NULL DEFAULT ''");
   EnsureColumn(db, "planes", "artifacts_root", "artifacts_root TEXT NOT NULL DEFAULT ''");
   EnsureColumn(db, "planes", "plane_mode", "plane_mode TEXT NOT NULL DEFAULT 'compute'");
@@ -415,6 +420,31 @@ void InitializeSchema(
   EnsureColumn(
       db,
       "registered_hosts",
+      "onboarding_key_hash",
+      "onboarding_key_hash TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "onboarding_state",
+      "onboarding_state TEXT NOT NULL DEFAULT 'none'");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "derived_role",
+      "derived_role TEXT NOT NULL DEFAULT 'ineligible'");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "role_reason",
+      "role_reason TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "last_inventory_scan_at",
+      "last_inventory_scan_at TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
       "session_state",
       "session_state TEXT NOT NULL DEFAULT 'disconnected'");
   EnsureColumn(
@@ -457,6 +487,11 @@ void InitializeSchema(
       "registered_hosts",
       "last_heartbeat_at",
       "last_heartbeat_at TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
+      "node_name",
+      "node_name TEXT NOT NULL DEFAULT ''");
   EnsureColumn(
       db,
       "model_library_download_jobs",

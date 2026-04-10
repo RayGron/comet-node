@@ -1,17 +1,30 @@
 #include "host/host_registry_service.h"
 
 #include <cctype>
+#include <cstdint>
 #include <iostream>
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
 #include "comet/security/crypto_utils.h"
+#include "comet/runtime/runtime_status.h"
 
 namespace comet::controller {
 
 namespace {
 
 using nlohmann::json;
+
+struct HostInventorySummary {
+  std::string storage_root;
+  int gpu_count = 0;
+  std::uint64_t total_memory_bytes = 0;
+  std::uint64_t storage_total_bytes = 0;
+  std::uint64_t storage_free_bytes = 0;
+  bool has_storage_capacity = false;
+};
 
 std::string TrimWhitespace(const std::string& value) {
   std::size_t start = 0;
@@ -29,6 +42,79 @@ std::string TrimWhitespace(const std::string& value) {
   return value.substr(start, end - start);
 }
 
+json ParseCapabilitiesJson(const std::string& capabilities_json) {
+  if (capabilities_json.empty()) {
+    return json::object();
+  }
+  return json::parse(capabilities_json, nullptr, false).is_discarded()
+             ? json::object()
+             : json::parse(capabilities_json, nullptr, false);
+}
+
+HostInventorySummary BuildInventorySummary(
+    const comet::RegisteredHostRecord& host,
+    const std::optional<comet::HostObservation>& observation) {
+  HostInventorySummary summary;
+  const json capabilities = ParseCapabilitiesJson(host.capabilities_json);
+  if (capabilities.contains("storage_root") && capabilities["storage_root"].is_string()) {
+    summary.storage_root = capabilities["storage_root"].get<std::string>();
+  }
+  if (observation.has_value()) {
+    if (!observation->gpu_telemetry_json.empty()) {
+      summary.gpu_count = static_cast<int>(
+          comet::DeserializeGpuTelemetryJson(observation->gpu_telemetry_json).devices.size());
+    }
+    if (!observation->cpu_telemetry_json.empty()) {
+      summary.total_memory_bytes =
+          comet::DeserializeCpuTelemetryJson(observation->cpu_telemetry_json).total_memory_bytes;
+    }
+    if (!observation->disk_telemetry_json.empty()) {
+      const auto disk = comet::DeserializeDiskTelemetryJson(observation->disk_telemetry_json);
+      for (const auto& item : disk.items) {
+        if (item.disk_name == "storage-root" ||
+            (!summary.storage_root.empty() && item.mount_point == summary.storage_root)) {
+          summary.storage_total_bytes = item.total_bytes;
+          summary.storage_free_bytes = item.free_bytes;
+          summary.has_storage_capacity = item.total_bytes > 0;
+          if (summary.storage_root.empty()) {
+            summary.storage_root = item.mount_point;
+          }
+          break;
+        }
+      }
+    }
+  }
+  return summary;
+}
+
+std::pair<std::string, std::string> DeriveRole(const HostInventorySummary& summary) {
+  constexpr std::uint64_t kMinDiskBytes = 100ULL * 1024ULL * 1024ULL * 1024ULL;
+  constexpr std::uint64_t kStorageRamBytes = 32ULL * 1024ULL * 1024ULL * 1024ULL;
+  constexpr std::uint64_t kWorkerRamBytes = 64ULL * 1024ULL * 1024ULL * 1024ULL;
+
+  if (summary.gpu_count == 0 &&
+      summary.total_memory_bytes > 0 &&
+      summary.total_memory_bytes < kStorageRamBytes &&
+      summary.storage_total_bytes > kMinDiskBytes) {
+    return {"storage", "eligible: no gpu, ram < 32 GB, disk > 100 GB"};
+  }
+  if (summary.gpu_count >= 1 &&
+      summary.total_memory_bytes >= kWorkerRamBytes &&
+      summary.storage_total_bytes > kMinDiskBytes) {
+    return {"worker", "eligible: gpu >= 1, ram >= 64 GB, disk > 100 GB"};
+  }
+  if (summary.storage_total_bytes <= kMinDiskBytes) {
+    return {"ineligible", "disk <= 100 GB"};
+  }
+  if (summary.gpu_count == 0 && summary.total_memory_bytes >= kStorageRamBytes) {
+    return {"ineligible", "no gpu and ram outside storage threshold"};
+  }
+  if (summary.gpu_count >= 1 && summary.total_memory_bytes < kWorkerRamBytes) {
+    return {"ineligible", "gpu present but ram < 64 GB"};
+  }
+  return {"ineligible", "inventory does not match storage or worker role"};
+}
+
 }  // namespace
 
 HostRegistryService::HostRegistryService(
@@ -40,9 +126,34 @@ json HostRegistryService::BuildPayload(
     const std::optional<std::string>& node_name) const {
   comet::ControllerStore store(db_path_);
   store.Initialize();
+  const auto observations = store.LoadHostObservations(node_name);
+  std::map<std::string, comet::HostObservation> observation_by_node;
+  for (const auto& observation : observations) {
+    observation_by_node[observation.node_name] = observation;
+  }
 
   json items = json::array();
   for (const auto& host : store.LoadRegisteredHosts(node_name)) {
+    const auto observation_it = observation_by_node.find(host.node_name);
+    const std::optional<comet::HostObservation> observation =
+        observation_it == observation_by_node.end()
+            ? std::nullopt
+            : std::optional<comet::HostObservation>(observation_it->second);
+    const auto inventory = BuildInventorySummary(host, observation);
+    const auto [derived_role, role_reason] =
+        host.derived_role.empty() ? DeriveRole(inventory)
+                                  : std::pair<std::string, std::string>(
+                                        host.derived_role,
+                                        host.role_reason.empty() ? DeriveRole(inventory).second
+                                                                 : host.role_reason);
+    std::set<std::string> plane_participation;
+    if (observation.has_value() && !observation->plane_name.empty()) {
+      plane_participation.insert(observation->plane_name);
+    }
+    json planes = json::array();
+    for (const auto& plane_name_value : plane_participation) {
+      planes.push_back(plane_name_value);
+    }
     items.push_back(json{
         {"node_name", host.node_name},
         {"advertised_address",
@@ -51,7 +162,14 @@ json HostRegistryService::BuildPayload(
         {"execution_mode",
          host.execution_mode.empty() ? json("mixed") : json(host.execution_mode)},
         {"registration_state", host.registration_state},
+        {"onboarding_state",
+         host.onboarding_state.empty() ? json("none") : json(host.onboarding_state)},
         {"session_state", host.session_state},
+        {"derived_role", derived_role},
+        {"role_eligible", derived_role == "storage" || derived_role == "worker"},
+        {"role_reason", role_reason.empty() ? json(nullptr) : json(role_reason)},
+        {"last_inventory_scan_at",
+         host.last_inventory_scan_at.empty() ? json(nullptr) : json(host.last_inventory_scan_at)},
         {"controller_public_key_fingerprint",
          host.controller_public_key_fingerprint.empty()
              ? json(nullptr)
@@ -68,6 +186,22 @@ json HostRegistryService::BuildPayload(
          host.session_expires_at.empty() ? json(nullptr) : json(host.session_expires_at)},
         {"last_heartbeat_at",
          host.last_heartbeat_at.empty() ? json(nullptr) : json(host.last_heartbeat_at)},
+        {"capacity_summary",
+         json{
+             {"storage_root",
+              inventory.storage_root.empty() ? json(nullptr) : json(inventory.storage_root)},
+             {"storage_total_bytes", inventory.has_storage_capacity
+                                         ? json(inventory.storage_total_bytes)
+                                         : json(nullptr)},
+             {"storage_free_bytes", inventory.has_storage_capacity
+                                        ? json(inventory.storage_free_bytes)
+                                        : json(nullptr)},
+             {"gpu_count", inventory.gpu_count},
+             {"total_memory_bytes", inventory.total_memory_bytes > 0
+                                        ? json(inventory.total_memory_bytes)
+                                        : json(nullptr)},
+         }},
+        {"plane_participation", planes},
         {"updated_at", host.updated_at},
     });
   }

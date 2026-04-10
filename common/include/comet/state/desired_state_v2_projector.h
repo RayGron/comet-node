@@ -17,6 +17,7 @@ class DesiredStateV2Projector final {
 
   void CollectInstancesAndDisks();
   void ProjectIdentity();
+  void ProjectPlacement();
   void ProjectHooks();
   void ProjectModel();
   void ProjectTopology();
@@ -41,17 +42,7 @@ class DesiredStateV2Projector final {
   const DiskSpec* FindSharedDisk() const;
 
   nlohmann::json ProjectModelSource() const;
-  nlohmann::json ProjectServiceStart(
-      const InstanceSpec& instance,
-      const std::string& default_command) const;
-  nlohmann::json ProjectPublishedPorts(const InstanceSpec& instance) const;
-  nlohmann::json ProjectServiceStorage(const DiskSpec* disk) const;
-  nlohmann::json ProjectAppVolumes(const DiskSpec* disk) const;
-  std::map<std::string, std::string> ProjectCustomEnv(
-      const InstanceSpec& instance,
-      bool strip_comet_env) const;
 
-  bool IsDefaultWorkerImage(const std::string& image) const;
   std::string PreferredModelSourceType() const;
   std::string AddBundlePrefixIfRelative(const std::string& value) const;
 

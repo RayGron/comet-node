@@ -4,7 +4,9 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 
+#include "comet/state/desired_state_placement_resolver.h"
 #include "comet/state/worker_group_topology.h"
 
 namespace comet::controller {
@@ -93,7 +95,33 @@ DesiredStatePolicyService::DescribeUnsupportedControllerLocalRuntime(
 }
 
 void DesiredStatePolicyService::ValidateDesiredStateForControllerAdmission(
+    comet::ControllerStore& store,
     const comet::DesiredState& desired_state) const {
+  const comet::DesiredStatePlacementResolver placement_resolver(desired_state);
+  if (const auto placement_node_name = placement_resolver.PrimaryNodeName();
+      placement_node_name.has_value()) {
+    const auto host = store.LoadRegisteredHost(*placement_node_name);
+    if (!host.has_value()) {
+      throw std::invalid_argument(
+          "placement.primary_node '" + *placement_node_name +
+          "' is not registered in comet");
+    }
+    if (host->registration_state != "registered") {
+      throw std::invalid_argument(
+          "placement.primary_node '" + *placement_node_name +
+          "' is not ready for plane placement");
+    }
+    if (host->session_state != "connected") {
+      throw std::invalid_argument(
+          "placement.primary_node '" + *placement_node_name +
+          "' is not currently connected");
+    }
+    if (host->derived_role != "worker") {
+      throw std::invalid_argument(
+          "placement.primary_node '" + *placement_node_name +
+          "' must have derived_role=worker");
+    }
+  }
   for (const auto& node : desired_state.nodes) {
     if (const auto detail =
             DescribeUnsupportedControllerLocalRuntime(desired_state, node.name);
@@ -197,13 +225,11 @@ int DesiredStatePolicyService::ScoreAutoPlacementCandidate(
   return score;
 }
 
-namespace {
-
-bool HybridGpuAlreadyAssigned(
+bool DesiredStatePolicyService::HybridGpuAlreadyAssigned(
     const comet::DesiredState& desired_state,
     const comet::InstanceSpec& current_worker,
     const std::string& node_name,
-    const std::string& gpu_device) {
+    const std::string& gpu_device) const {
   if (!comet::HybridDataParallelEnabled(desired_state.inference)) {
     return false;
   }
@@ -222,20 +248,20 @@ bool HybridGpuAlreadyAssigned(
   return false;
 }
 
-bool UsesLlamaRpcRuntime(const comet::DesiredState& desired_state) {
+bool DesiredStatePolicyService::UsesLlamaRpcRuntime(
+    const comet::DesiredState& desired_state) const {
   return desired_state.inference.runtime_engine == "llama.cpp" &&
          desired_state.inference.distributed_backend == "llama_rpc";
 }
 
-std::string InferInstanceNameForWorker(const comet::InstanceSpec& instance) {
+std::string DesiredStatePolicyService::InferInstanceNameForWorker(
+    const comet::InstanceSpec& instance) const {
   const auto it = instance.environment.find("COMET_INFER_INSTANCE_NAME");
   if (it == instance.environment.end()) {
     return {};
   }
   return it->second;
 }
-
-}  // namespace
 
 void DesiredStatePolicyService::ReservePlacement(
     std::map<std::pair<std::string, std::string>, PlacementUsage>* placement_usage,

@@ -71,17 +71,23 @@ void HostdObservationService::ReportLocalObservedState(
     const std::optional<std::string>& controller_url,
     const std::optional<std::string>& host_private_key_path,
     const std::optional<std::string>& controller_fingerprint,
+    const std::optional<std::string>& onboarding_key,
     const std::string& node_name,
+    const std::string& storage_root,
     const std::string& state_root) const {
   auto backend = backend_factory_.CreateBackend(
       db_path,
       controller_url,
       host_private_key_path,
-      controller_fingerprint);
+      controller_fingerprint,
+      onboarding_key,
+      node_name,
+      storage_root);
   ReportObservedState(
       *backend,
       support_.BuildObservedStateSnapshot(
           node_name,
+          storage_root,
           state_root,
           comet::HostObservationStatus::Idle,
           "manual heartbeat"),

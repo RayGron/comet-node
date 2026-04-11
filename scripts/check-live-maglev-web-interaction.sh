@@ -210,6 +210,39 @@ try:
         """,
         (auth_token,),
     )
+    conn.execute(
+        """
+        INSERT INTO registered_hosts(
+          node_name,
+          public_key_base64,
+          transport_mode,
+          execution_mode,
+          registration_state,
+          derived_role,
+          role_reason,
+          session_state,
+          session_expires_at,
+          last_session_at,
+          last_heartbeat_at,
+          capabilities_json,
+          status_message
+        ) VALUES (
+          'local-hostd',
+          'dGVzdA==',
+          'out',
+          'mixed',
+          'registered',
+          'worker',
+          'live smoke connected hostd',
+          'connected',
+          datetime('now', '+1 day'),
+          datetime('now'),
+          datetime('now'),
+          '{"capacity_summary":{"gpu_count":1,"storage_root":"/tmp/naim","storage_total_bytes":200000000000,"storage_free_bytes":150000000000,"total_memory_bytes":68719476736}}',
+          'registered by live smoke'
+        )
+        """
+    )
     conn.commit()
 finally:
     conn.close()

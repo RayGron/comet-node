@@ -167,6 +167,7 @@ wait "${remote_controller_pid}" >/dev/null 2>&1 || true
 remote_controller_pid=""
 
 local_http_port="$("${script_dir}/naim-devtool.sh" free-port)"
+local_skills_port="$("${script_dir}/naim-devtool.sh" free-port)"
 
 "${build_dir}/naim-node" install controller \
   --with-hostd \
@@ -194,7 +195,9 @@ local_http_port="$("${script_dir}/naim-devtool.sh" free-port)"
   --runtime-root "${local_runtime_root}" \
   --state-root "${local_hostd_state_root}" \
   --compose-mode skip \
-  --poll-interval-sec 1 >/tmp/naim-phase-k-local.log 2>&1 &
+  --poll-interval-sec 1 \
+  --skills-factory-listen-port "${local_skills_port}" \
+  --skip-systemctl >/tmp/naim-phase-k-local.log 2>&1 &
 local_controller_pid="$!"
 wait_for_http "http://127.0.0.1:${local_http_port}/health"
 wait_for_command_match 80 "status=idle applied_generation=1" \

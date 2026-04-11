@@ -90,6 +90,7 @@ trap cleanup EXIT
 cmake -E remove_directory "${base}"
 
 controller_port="$(next_port)"
+skills_port="$(next_port)"
 run_log="/tmp/naim-phase-l-run.log"
 
 echo "phase-l-live: install controller"
@@ -109,7 +110,9 @@ echo "phase-l-live: start platform"
 NAIM_INSTALL_ROOT="${install_root}" \
   "${build_dir}/naim-node" run controller \
   --hostd-compose-mode skip \
-  --poll-interval-sec 1 >"${run_log}" 2>&1 &
+  --poll-interval-sec 1 \
+  --skills-factory-listen-port "${skills_port}" \
+  --skip-systemctl >"${run_log}" 2>&1 &
 controller_pid="$!"
 
 wait_for_http "http://127.0.0.1:${controller_port}/health"

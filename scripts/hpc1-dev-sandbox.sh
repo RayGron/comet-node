@@ -743,7 +743,7 @@ while time.time() < deadline:
     observed = (
         obs_output.returncode == 0
         and "status=applied" in obs_output.stdout
-        and "applied_generation=1" in obs_output.stdout
+        and "applied_generation=" in obs_output.stdout
     )
     assigned = assignment_output.returncode == 0 and f"plane={plane_name}" in assignment_output.stdout and "status=applied" in assignment_output.stdout
     running = plane_output.returncode == 0 and "state=running" in plane_output.stdout

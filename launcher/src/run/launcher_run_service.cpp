@@ -126,6 +126,9 @@ int LauncherRunService::RunController(
                         : DefaultInternalListenHost());
   options.controller_upstream =
       command_line.FindFlagValue("--controller-upstream").value_or("");
+  options.skills_factory_listen_port = LauncherCommandLine::ParseIntValue(
+      command_line.FindFlagValue("--skills-factory-listen-port"),
+      options.skills_factory_listen_port);
   options.compose_mode =
       command_line.FindFlagValue("--compose-mode")
           .value_or(loaded_config && loaded_config->hostd.compose_mode.has_value()

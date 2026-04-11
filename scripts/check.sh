@@ -157,6 +157,7 @@ cmake -E rm -f "${bad_state_root}"
 "${build_dir}/naim-node" version | grep -F 'naim-node 0.1.0' >/dev/null
 "${build_dir}/naim-node" doctor controller | grep -F 'controller_binary=yes' >/dev/null
 default_http_port="$("${script_dir}/naim-devtool.sh" free-port)"
+launcher_default_skills_port="$("${script_dir}/naim-devtool.sh" free-port)"
 launcher_install_output="$(NAIM_INSTALL_ROOT="${launcher_default_root}" \
 "${build_dir}/naim-node" install controller \
   --with-hostd \
@@ -174,7 +175,9 @@ NAIM_INSTALL_ROOT="${launcher_default_root}" \
 NAIM_INSTALL_ROOT="${launcher_default_root}" \
 "${build_dir}/naim-node" run controller \
   --listen-host 127.0.0.1 \
-  --compose-mode skip >/tmp/naim-node-default-run.log 2>&1 &
+  --compose-mode skip \
+  --skills-factory-listen-port "${launcher_default_skills_port}" \
+  --skip-systemctl >/tmp/naim-node-default-run.log 2>&1 &
 http_server_pid="$!"
 wait_for_http "http://127.0.0.1:${default_http_port}/health" 100 "/tmp/naim-node-default-run.log"
 for _ in $(seq 1 80); do

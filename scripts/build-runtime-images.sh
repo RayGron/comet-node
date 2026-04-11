@@ -44,6 +44,22 @@ webgateway_tag="${6:-naim/webgateway-runtime:dev}"
 controller_tag="${7:-naim/controller:dev}"
 hostd_tag="${8:-naim/hostd:dev}"
 
+build_dir="$("${script_dir}/print-build-dir.sh")"
+mkdir -p "${repo_root}/var"
+image_context="$(mktemp -d "${repo_root}/var/runtime-image-context.XXXXXX")"
+cleanup_image_context() {
+  rm -rf "${image_context}" 2>/dev/null || sudo -n rm -rf "${image_context}" 2>/dev/null || true
+}
+trap cleanup_image_context EXIT
+
+mkdir -p "${image_context}/build/linux/x64/bin"
+cp -R "${repo_root}/runtime" "${image_context}/runtime"
+for binary in naim-controller naim-hostd naim-inferctl naim-workerd naim-skillsd naim-webgatewayd; do
+  cp "${build_dir}/${binary}" "${image_context}/build/linux/x64/${binary}"
+done
+cp "${build_dir}/bin/llama-server" "${image_context}/build/linux/x64/bin/llama-server"
+cp "${build_dir}/bin/rpc-server" "${image_context}/build/linux/x64/bin/rpc-server"
+
 build_web_ui_image() {
   local temp_root
   mkdir -p "${repo_root}/var"
@@ -86,45 +102,45 @@ EOF
 
 echo "building ${base_tag}"
 "${docker_cmd[@]}" build \
-  -f "${repo_root}/runtime/base/Dockerfile" \
+  -f "${image_context}/runtime/base/Dockerfile" \
   -t "${base_tag}" \
-  "${repo_root}"
+  "${image_context}"
 
 echo "building ${controller_tag}"
 "${docker_cmd[@]}" build \
-  -f "${repo_root}/runtime/controller/Dockerfile" \
+  -f "${image_context}/runtime/controller/Dockerfile" \
   -t "${controller_tag}" \
-  "${repo_root}"
+  "${image_context}"
 
 echo "building ${hostd_tag}"
 "${docker_cmd[@]}" build \
-  -f "${repo_root}/runtime/hostd/Dockerfile" \
+  -f "${image_context}/runtime/hostd/Dockerfile" \
   -t "${hostd_tag}" \
-  "${repo_root}"
+  "${image_context}"
 
 echo "building ${infer_tag}"
 "${docker_cmd[@]}" build \
-  -f "${repo_root}/runtime/infer/Dockerfile" \
+  -f "${image_context}/runtime/infer/Dockerfile" \
   -t "${infer_tag}" \
-  "${repo_root}"
+  "${image_context}"
 
 echo "building ${worker_tag}"
 "${docker_cmd[@]}" build \
-  -f "${repo_root}/runtime/worker/Dockerfile" \
+  -f "${image_context}/runtime/worker/Dockerfile" \
   -t "${worker_tag}" \
-  "${repo_root}"
+  "${image_context}"
 
 echo "building ${skills_tag}"
 "${docker_cmd[@]}" build \
-  -f "${repo_root}/runtime/skills/Dockerfile" \
+  -f "${image_context}/runtime/skills/Dockerfile" \
   -t "${skills_tag}" \
-  "${repo_root}"
+  "${image_context}"
 
 echo "building ${webgateway_tag}"
 "${docker_cmd[@]}" build \
-  -f "${repo_root}/runtime/browsing/Dockerfile" \
+  -f "${image_context}/runtime/browsing/Dockerfile" \
   -t "${webgateway_tag}" \
-  "${repo_root}"
+  "${image_context}"
 
 if [[ "${skip_web_ui}" != "yes" ]]; then
   echo "building ${web_ui_tag}"

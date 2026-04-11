@@ -19,15 +19,15 @@
 #include <unistd.h>
 #endif
 
-#include "comet/core/platform_compat.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/core/platform_compat.h"
+#include "naim/state/sqlite_store.h"
 #include "model/model_library_node_placement.h"
 
 using nlohmann::json;
 
 namespace {
 
-constexpr std::string_view kJobMetadataPrefix = ".comet-model-job-";
+constexpr std::string_view kJobMetadataPrefix = ".naim-model-job-";
 constexpr std::string_view kJobMetadataSuffix = ".json";
 constexpr std::array<std::string_view, 5> kKnownGgufQuantizations = {
     "FP16",
@@ -78,7 +78,7 @@ bool ShouldScanDefaultModelRoots(const std::string& db_path) {
 }
 
 bool IsDownloadJobComplete(
-    const comet::ModelLibraryDownloadJobRecord& job) {
+    const naim::ModelLibraryDownloadJobRecord& job) {
   if (job.status != "completed") {
     return false;
   }
@@ -114,7 +114,7 @@ std::uintmax_t ExistingDownloadBytesForTarget(
 }
 
 std::uintmax_t ExistingDownloadBytesForJob(
-    const comet::ModelLibraryDownloadJobRecord& job) {
+    const naim::ModelLibraryDownloadJobRecord& job) {
   std::uintmax_t total = 0;
   for (const auto& target_path_text : job.target_paths) {
     total += ExistingDownloadBytesForTarget(std::filesystem::path(target_path_text));
@@ -133,7 +133,7 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
   ResumePersistentJobs(db_path);
   const auto roots = DiscoverRoots(db_path);
   const auto entries = ScanEntries(db_path);
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto worker_path = store.LoadControllerSetting("skills_factory_worker_model_path");
   std::map<std::string, ModelLibraryNodeSummary> node_summaries;
@@ -229,7 +229,7 @@ HttpResponse ModelLibraryService::SetSkillsFactoryWorker(
         {});
   }
 
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   store.UpsertControllerSetting("skills_factory_worker_model_path", normalized_path);
   return support_.build_json_response(
@@ -333,7 +333,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
       body.value("format", detected_source_format));
   const std::vector<std::string> quantizations;
   const bool keep_base_gguf = true;
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   if (!target_node_name.empty()) {
     const auto host = store.LoadRegisteredHost(target_node_name);
@@ -596,7 +596,7 @@ HttpResponse ModelLibraryService::EnqueueQuantization(
         {});
   }
 
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   std::optional<ModelLibraryNodeSummary> source_node_summary;
   for (const auto& host : store.LoadRegisteredHosts()) {
@@ -881,7 +881,7 @@ HttpResponse ModelLibraryService::DeleteDownloadJob(
     }
   }
   ClearStopRequest(*job_id);
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   RemoveDownloadJobMetadata(*job);
   store.DeleteModelLibraryDownloadJob(*job_id);
@@ -984,7 +984,7 @@ std::string ModelLibraryService::NormalizePathString(
 
 bool ModelLibraryService::IsUsableAbsoluteHostPath(const std::string& value) {
   return !value.empty() && value.front() == '/' &&
-         value.rfind("/comet/", 0) != 0;
+         value.rfind("/naim/", 0) != 0;
 }
 
 std::string ModelLibraryService::FilenameFromUrl(
@@ -1027,8 +1027,8 @@ std::optional<std::uintmax_t> ModelLibraryService::ProbeContentLength(
     const std::string& source_url) const {
   const std::string temp_headers =
       (std::filesystem::temp_directory_path() /
-       ("comet-model-head-" +
-        std::to_string(comet::platform::CurrentProcessId()) + "-" +
+       ("naim-model-head-" +
+        std::to_string(naim::platform::CurrentProcessId()) + "-" +
         std::to_string(state_->job_counter.fetch_add(1)) + ".txt"))
           .string();
   const std::string command =
@@ -1213,7 +1213,7 @@ std::string ModelLibraryService::BuildQuantizedDisplayName(
 
 std::vector<std::string> ModelLibraryService::DiscoverRoots(
     const std::string& db_path) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   const auto desired_states = store.LoadDesiredStates();
   const auto jobs = store.LoadModelLibraryDownloadJobs();
   std::set<std::string> roots;
@@ -1233,7 +1233,7 @@ std::vector<std::string> ModelLibraryService::DiscoverRoots(
       }
     }
   }
-  if (const char* env_value = std::getenv("COMET_NODE_MODEL_LIBRARY_ROOTS");
+  if (const char* env_value = std::getenv("NAIM_NODE_MODEL_LIBRARY_ROOTS");
       env_value != nullptr && *env_value != '\0') {
     std::string current;
     for (char ch : std::string(env_value)) {
@@ -1376,7 +1376,7 @@ void ModelLibraryService::RemoveDownloadJobMetadata(
 
 void ModelLibraryService::RecoverPersistentJobsFromMetadata(
     const std::string& db_path) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   std::set<std::string> existing_job_ids;
   for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
@@ -1508,7 +1508,7 @@ void ModelLibraryService::RecoverPersistentJobsFromMetadata(
 
 std::map<std::string, std::vector<std::string>>
 ModelLibraryService::BuildReferenceMap(const std::string& db_path) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   const auto desired_states = store.LoadDesiredStates();
   std::map<std::string, std::vector<std::string>> references;
   for (const auto& desired_state : desired_states) {
@@ -1579,7 +1579,7 @@ void ModelLibraryService::ResumePersistentJobs(const std::string& db_path) const
     state_->resumed_db_paths.insert(db_path);
   }
   RecoverPersistentJobsFromMetadata(db_path);
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
     if (job.status == "queued" || job.status == "running") {
@@ -1614,7 +1614,7 @@ std::optional<ModelLibraryService::ModelLibraryDownloadJob>
 ModelLibraryService::LoadDownloadJob(
     const std::string& db_path,
     const std::string& job_id) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   return store.LoadModelLibraryDownloadJob(job_id);
 }
@@ -1623,7 +1623,7 @@ void ModelLibraryService::UpdateJob(
     const std::string& db_path,
     const std::string& job_id,
     const std::function<void(ModelLibraryDownloadJob&)>& update) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   auto job = store.LoadModelLibraryDownloadJob(job_id);
   if (!job.has_value()) {
@@ -1673,7 +1673,7 @@ std::vector<ModelLibraryService::ModelLibraryEntry>
 ModelLibraryService::ScanEntries(const std::string& db_path) const {
   const auto roots = DiscoverRoots(db_path);
   const auto reference_map = BuildReferenceMap(db_path);
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   PendingDownloadState pending_downloads;
   for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
@@ -2045,7 +2045,7 @@ void ModelLibraryService::StartDownloadJob(
       service.state_->active_job_ids.erase(job_id);
     };
     try {
-      comet::ControllerStore store(db_path);
+      naim::ControllerStore store(db_path);
       store.Initialize();
       auto snapshot = store.LoadModelLibraryDownloadJob(job_id);
       if (!snapshot.has_value()) {

@@ -3,7 +3,7 @@
 #include "observation/hostd_observation_service.h"
 #include "state_apply/hostd_assignment_service.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdCliCommandDispatcher::HostdCliCommandDispatcher(
     const HostdAssignmentService& assignment_service,
@@ -13,7 +13,7 @@ HostdCliCommandDispatcher::HostdCliCommandDispatcher(
 
 bool HostdCliCommandDispatcher::Dispatch(
     const HostdCommandLine& command_line,
-    const CometNodeConfig& node_config,
+    const NaimNodeConfig& node_config,
     const std::string& node_name) const {
   return DispatchShowDemoOps(command_line, node_config, node_name) ||
          DispatchShowStateOps(command_line, node_config, node_name) ||
@@ -26,7 +26,7 @@ bool HostdCliCommandDispatcher::Dispatch(
 
 bool HostdCliCommandDispatcher::DispatchShowDemoOps(
     const HostdCommandLine& command_line,
-    const CometNodeConfig& node_config,
+    const NaimNodeConfig& node_config,
     const std::string& node_name) const {
   if (command_line.command() != "show-demo-ops") {
     return false;
@@ -42,7 +42,7 @@ bool HostdCliCommandDispatcher::DispatchShowDemoOps(
 
 bool HostdCliCommandDispatcher::DispatchShowStateOps(
     const HostdCommandLine& command_line,
-    const CometNodeConfig& node_config,
+    const NaimNodeConfig& node_config,
     const std::string& node_name) const {
   if (command_line.command() != "show-state-ops") {
     return false;
@@ -83,7 +83,7 @@ bool HostdCliCommandDispatcher::DispatchShowRuntimeStatus(
 
 bool HostdCliCommandDispatcher::DispatchReportObservedState(
     const HostdCommandLine& command_line,
-    const CometNodeConfig& node_config,
+    const NaimNodeConfig& node_config,
     const std::string& node_name) const {
   if (command_line.command() != "report-observed-state") {
     return false;
@@ -104,7 +104,7 @@ bool HostdCliCommandDispatcher::DispatchReportObservedState(
 
 bool HostdCliCommandDispatcher::DispatchApplyStateOps(
     const HostdCommandLine& command_line,
-    const CometNodeConfig& node_config,
+    const NaimNodeConfig& node_config,
     const std::string& node_name) const {
   if (command_line.command() != "apply-state-ops") {
     return false;
@@ -124,7 +124,7 @@ bool HostdCliCommandDispatcher::DispatchApplyStateOps(
 
 bool HostdCliCommandDispatcher::DispatchApplyNextAssignment(
     const HostdCommandLine& command_line,
-    const CometNodeConfig& node_config,
+    const NaimNodeConfig& node_config,
     const std::string& node_name) const {
   if (command_line.command() != "apply-next-assignment") {
     return false;
@@ -145,4 +145,4 @@ bool HostdCliCommandDispatcher::DispatchApplyNextAssignment(
   return true;
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

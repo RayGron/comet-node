@@ -4,7 +4,7 @@
 #include <fstream>
 #include <stdexcept>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 void HostdFileSupport::WriteTextFile(
     const std::string& path,
@@ -39,4 +39,4 @@ void HostdFileSupport::EnsureParentDirectory(const std::string& path) const {
   }
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -20,7 +20,7 @@
 #include <sys/statvfs.h>
 #endif
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 namespace fs = std::filesystem;
 
@@ -316,10 +316,10 @@ std::optional<std::array<double, 3>> ReadLoadAverage() {
 
 }  // namespace
 
-comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
-    const comet::DesiredState& state,
+naim::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
+    const naim::DesiredState& state,
     const std::string& node_name,
-    const std::vector<comet::RuntimeProcessStatus>& instance_statuses) const {
+    const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const {
   auto split_csv_row = [this](const std::string& line) {
     std::vector<std::string> result;
     std::stringstream stream(line);
@@ -331,7 +331,7 @@ comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
   };
 
   auto populate_gpu_processes_from_nvidia_smi =
-      [&](comet::GpuTelemetrySnapshot* snapshot) {
+      [&](naim::GpuTelemetrySnapshot* snapshot) {
         if (snapshot == nullptr) {
           return;
         }
@@ -385,7 +385,7 @@ comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
             if (device.gpu_device != gpu_it->second) {
               continue;
             }
-            comet::GpuProcessTelemetry process;
+            naim::GpuProcessTelemetry process;
             process.pid = pid;
             process.used_vram_mb = used_vram_mb;
             const auto owner_it = pid_to_instance_name.find(pid);
@@ -398,7 +398,7 @@ comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
         }
       };
 
-  auto try_collect_gpu_telemetry_with_nvml = [&]() -> std::optional<comet::GpuTelemetrySnapshot> {
+  auto try_collect_gpu_telemetry_with_nvml = [&]() -> std::optional<naim::GpuTelemetrySnapshot> {
 #if defined(_WIN32)
     (void)state;
     (void)node_name;
@@ -446,7 +446,7 @@ comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
       return std::nullopt;
     }
 
-    comet::GpuTelemetrySnapshot snapshot;
+    naim::GpuTelemetrySnapshot snapshot;
     snapshot.degraded = false;
     snapshot.source = "nvml";
     unsigned int device_count = 0;
@@ -466,7 +466,7 @@ comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
           get_utilization(handle, &utilization) != kNvmlSuccess) {
         continue;
       }
-      comet::GpuDeviceTelemetry device;
+      naim::GpuDeviceTelemetry device;
       device.gpu_device = std::to_string(index);
       device.total_vram_mb = static_cast<int>(memory.total / (1024 * 1024));
       device.used_vram_mb = static_cast<int>(memory.used / (1024 * 1024));
@@ -488,7 +488,7 @@ comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
   };
 
   auto try_collect_gpu_telemetry_with_nvidia_smi =
-      [&]() -> std::optional<comet::GpuTelemetrySnapshot> {
+      [&]() -> std::optional<naim::GpuTelemetrySnapshot> {
         (void)state;
         (void)node_name;
         const std::string output = command_support_.RunCommandCapture(
@@ -498,7 +498,7 @@ comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
           return std::nullopt;
         }
 
-        comet::GpuTelemetrySnapshot snapshot;
+        naim::GpuTelemetrySnapshot snapshot;
         snapshot.degraded = true;
         snapshot.source = "nvidia-smi";
         std::istringstream input(output);
@@ -509,7 +509,7 @@ comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
             continue;
           }
           try {
-            comet::GpuDeviceTelemetry device;
+            naim::GpuDeviceTelemetry device;
             device.gpu_device = columns[0];
             device.total_vram_mb = std::stoi(columns[1]);
             device.used_vram_mb = std::stoi(columns[2]);
@@ -530,12 +530,12 @@ comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
       };
 
   const bool disable_nvml =
-      std::getenv("COMET_DISABLE_NVML") != nullptr &&
-      std::string(std::getenv("COMET_DISABLE_NVML")) != "0";
+      std::getenv("NAIM_DISABLE_NVML") != nullptr &&
+      std::string(std::getenv("NAIM_DISABLE_NVML")) != "0";
   if (!disable_nvml) {
     if (const auto nvml_snapshot = try_collect_gpu_telemetry_with_nvml();
         nvml_snapshot.has_value()) {
-      comet::GpuTelemetrySnapshot snapshot = *nvml_snapshot;
+      naim::GpuTelemetrySnapshot snapshot = *nvml_snapshot;
       populate_gpu_processes_from_nvidia_smi(&snapshot);
       snapshot.contract_version = 1;
       snapshot.collected_at = CurrentTimestampString();
@@ -544,12 +544,12 @@ comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
   }
   if (const auto smi_snapshot = try_collect_gpu_telemetry_with_nvidia_smi();
       smi_snapshot.has_value()) {
-    comet::GpuTelemetrySnapshot snapshot = *smi_snapshot;
+    naim::GpuTelemetrySnapshot snapshot = *smi_snapshot;
     snapshot.contract_version = 1;
     snapshot.collected_at = CurrentTimestampString();
     return snapshot;
   }
-  comet::GpuTelemetrySnapshot snapshot;
+  naim::GpuTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
   snapshot.degraded = true;
   snapshot.source = "unavailable";
@@ -557,10 +557,10 @@ comet::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
   return snapshot;
 }
 
-comet::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
-    const comet::DesiredState& state,
+naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
+    const naim::DesiredState& state,
     const std::string& node_name) const {
-  comet::DiskTelemetrySnapshot snapshot;
+  naim::DiskTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
 #if defined(_WIN32)
   snapshot.source = "filesystem::space";
@@ -632,7 +632,7 @@ comet::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry
       continue;
     }
 
-    comet::DiskTelemetryRecord record;
+    naim::DiskTelemetryRecord record;
     record.disk_name = disk.name;
     record.plane_name = disk.plane_name;
     record.node_name = disk.node_name;
@@ -764,10 +764,10 @@ comet::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry
   return snapshot;
 }
 
-comet::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemetry(
+naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemetry(
     const std::string& node_name,
     const std::string& storage_root) const {
-  comet::DiskTelemetryRecord record;
+  naim::DiskTelemetryRecord record;
   record.disk_name = "storage-root";
   record.node_name = node_name;
   record.mount_point = storage_root;
@@ -889,8 +889,8 @@ comet::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTeleme
   return record;
 }
 
-comet::CpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectCpuTelemetry() const {
-  comet::CpuTelemetrySnapshot snapshot;
+naim::CpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectCpuTelemetry() const {
+  naim::CpuTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
   snapshot.source = "procfs";
   snapshot.collected_at = CurrentTimestampString();
@@ -958,8 +958,8 @@ comet::CpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectCpuTelemetry()
   return snapshot;
 }
 
-comet::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTelemetry() const {
-  comet::NetworkTelemetrySnapshot snapshot;
+naim::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTelemetry() const {
+  naim::NetworkTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
   snapshot.source = "sysfs";
   snapshot.collected_at = CurrentTimestampString();
@@ -975,7 +975,7 @@ comet::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTel
     if (!entry.is_directory() && !entry.is_symlink()) {
       continue;
     }
-    comet::NetworkInterfaceTelemetry interface;
+    naim::NetworkInterfaceTelemetry interface;
     interface.interface_name = entry.path().filename().string();
     interface.oper_state =
         ReadTrimmedFile(entry.path() / "operstate").value_or(std::string{"unknown"});
@@ -998,4 +998,4 @@ comet::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTel
   return snapshot;
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

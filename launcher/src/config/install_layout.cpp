@@ -2,12 +2,12 @@
 
 #include <cstdlib>
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 std::optional<fs::path> InstallLayoutResolver::InstallRootOverride() const {
-  const char* value = std::getenv("COMET_INSTALL_ROOT");
+  const char* value = std::getenv("NAIM_INSTALL_ROOT");
   if (value == nullptr || *value == '\0') {
     return std::nullopt;
   }
@@ -23,7 +23,7 @@ InstallLayout InstallLayoutResolver::DefaultInstallLayout() const {
         *root / "etc/systemd/system",
     };
   }
-  if (!comet::platform::HasElevatedPrivileges()) {
+  if (!naim::platform::HasElevatedPrivileges()) {
     const fs::path home = std::getenv("HOME") != nullptr ? fs::path(std::getenv("HOME"))
                                                          : fs::current_path();
     return InstallLayout{
@@ -61,4 +61,4 @@ bool InstallLayoutResolver::IsUserServiceLayout(const InstallLayout& layout) con
   return rendered.find(".config/systemd/user") != std::string::npos;
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

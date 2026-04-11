@@ -12,7 +12,7 @@
 #include "interaction/interaction_request_identity_support.h"
 #include "skills/plane_skills_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 using nlohmann::json;
 
@@ -37,12 +37,12 @@ std::optional<InteractionValidationError> InteractionConversationService::Prepar
 
   const std::string plane_name =
       resolution.status_payload.value("plane_name", std::string{});
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
-  std::optional<comet::InteractionSessionRecord> session;
-  std::vector<comet::InteractionMessageRecord> stored_records;
-  std::vector<comet::InteractionSummaryRecord> summary_records;
+  std::optional<naim::InteractionSessionRecord> session;
+  std::vector<naim::InteractionMessageRecord> stored_records;
+  std::vector<naim::InteractionSummaryRecord> summary_records;
   std::vector<json> stored_messages;
 
   if (context->requested_session_id.has_value()) {
@@ -167,7 +167,7 @@ std::optional<InteractionValidationError> InteractionConversationService::Persis
       resolution.status_payload.value("plane_name", std::string{});
   const std::string now = ControllerTimeSupport::UtcNowSqlTimestamp();
 
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   auto session = store.LoadInteractionSessionForOwner(
@@ -176,9 +176,9 @@ std::optional<InteractionValidationError> InteractionConversationService::Persis
       context->owner_kind,
       context->owner_user_id);
 
-  std::vector<comet::InteractionMessageRecord> message_records =
+  std::vector<naim::InteractionMessageRecord> message_records =
       session.has_value() ? store.LoadInteractionMessages(session->session_id)
-                          : std::vector<comet::InteractionMessageRecord>{};
+                          : std::vector<naim::InteractionMessageRecord>{};
 
   const json usage{
       {"prompt_tokens", result.total_prompt_tokens},
@@ -219,7 +219,7 @@ std::optional<InteractionValidationError> InteractionConversationService::Persis
       std::max(1, resolution.desired_state.inference.max_model_len),
       context->payload.value("messages", json::array()));
 
-  comet::InteractionSessionRecord updated;
+  naim::InteractionSessionRecord updated;
   updated.session_id = context->conversation_session_id;
   updated.plane_name = plane_name;
   updated.owner_kind = context->owner_kind;
@@ -265,7 +265,7 @@ nlohmann::json InteractionConversationService::BuildSessionsListPayload(
     const std::string& plane_name,
     int user_id) const {
   const InteractionConversationPayloadBuilder payload_builder;
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   json sessions = json::array();
   for (const auto& session : store.LoadInteractionSessionsForUser(plane_name, user_id)) {
@@ -287,7 +287,7 @@ std::optional<nlohmann::json> InteractionConversationService::BuildSessionDetail
     int user_id,
     const std::string& session_id) const {
   const InteractionConversationPayloadBuilder payload_builder;
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto session =
       store.LoadInteractionSessionForOwner(plane_name, session_id, "user", user_id);
@@ -312,7 +312,7 @@ bool InteractionConversationService::DeleteSession(
     const std::string& plane_name,
     int user_id,
     const std::string& session_id) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto session =
       store.LoadInteractionSessionForOwner(plane_name, session_id, "user", user_id);
@@ -331,4 +331,4 @@ bool InteractionConversationService::DeleteSession(
   return true;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

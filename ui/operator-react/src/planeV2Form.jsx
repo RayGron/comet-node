@@ -292,7 +292,7 @@ export function buildNewPlaneFormState() {
     inferNode: "",
     inferStorageEnabled: false,
     inferStorageSizeGb: 12,
-    inferStorageMountPath: "/comet/private",
+    inferStorageMountPath: "/naim/private",
     workerImage: "",
     workerStartType: "command",
     workerStartValue: "",
@@ -303,7 +303,7 @@ export function buildNewPlaneFormState() {
     workerAssignments: [],
     workerStorageEnabled: false,
     workerStorageSizeGb: 2,
-    workerStorageMountPath: "/comet/private",
+    workerStorageMountPath: "/naim/private",
     appEnabled: false,
     appImage: "",
     appStartType: "script",
@@ -316,7 +316,7 @@ export function buildNewPlaneFormState() {
     appVolumeName: "private-data",
     appVolumeType: "persistent",
     appVolumeSizeGb: 8,
-    appVolumeMountPath: "/comet/private",
+    appVolumeMountPath: "/naim/private",
     appVolumeAccess: "rw",
     placementMode: "auto",
     shareMode: "exclusive",
@@ -637,7 +637,7 @@ export function buildDesiredStateV2FromForm(form) {
     if (form.inferStorageEnabled) {
       desiredState.infer.storage = {
         size_gb: parseNumber(form.inferStorageSizeGb, 8),
-        mount_path: form.inferStorageMountPath.trim() || "/comet/private",
+        mount_path: form.inferStorageMountPath.trim() || "/naim/private",
       };
     }
   }
@@ -690,7 +690,7 @@ export function buildDesiredStateV2FromForm(form) {
     if (form.workerStorageEnabled) {
       desiredState.worker.storage = {
         size_gb: parseNumber(form.workerStorageSizeGb, 24),
-        mount_path: form.workerStorageMountPath.trim() || "/comet/private",
+        mount_path: form.workerStorageMountPath.trim() || "/naim/private",
       };
     }
   }
@@ -723,7 +723,7 @@ export function buildDesiredStateV2FromForm(form) {
           name: form.appVolumeName.trim() || "private-data",
           type: form.appVolumeType,
           size_gb: parseNumber(form.appVolumeSizeGb, 8),
-          mount_path: form.appVolumeMountPath.trim() || "/comet/private",
+          mount_path: form.appVolumeMountPath.trim() || "/naim/private",
           access: form.appVolumeAccess,
         },
       ];

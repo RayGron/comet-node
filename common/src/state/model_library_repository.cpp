@@ -1,12 +1,12 @@
-#include "comet/state/model_library_repository.h"
+#include "naim/state/model_library_repository.h"
 
-#include "comet/state/sqlite_statement.h"
-#include "comet/state/sqlite_store_support.h"
+#include "naim/state/sqlite_statement.h"
+#include "naim/state/sqlite_store_support.h"
 
 #include <cstdint>
 #include <nlohmann/json.hpp>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -189,4 +189,4 @@ ModelLibraryRepository::ReadModelLibraryDownloadJob(sqlite3_stmt* statement) {
   return job;
 }
 
-}  // namespace comet
+}  // namespace naim

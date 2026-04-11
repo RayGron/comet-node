@@ -12,26 +12,26 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-comet::DiskSpec BuildSharedDisk() {
-  comet::DiskSpec disk;
+naim::DiskSpec BuildSharedDisk() {
+  naim::DiskSpec disk;
   disk.name = "shared";
   disk.plane_name = "plane-a";
   disk.node_name = "node-a";
-  disk.kind = comet::DiskKind::PlaneShared;
-  disk.host_path = "/var/lib/comet/disks/plane-a/shared";
+  disk.kind = naim::DiskKind::PlaneShared;
+  disk.host_path = "/var/lib/naim/disks/plane-a/shared";
   disk.container_path = "/workspace/shared";
   return disk;
 }
 
-comet::DesiredState BuildState() {
-  comet::DesiredState state;
+naim::DesiredState BuildState() {
+  naim::DesiredState state;
   state.plane_name = "plane-a";
   state.control_root = "/workspace/shared/control/plane-a";
   state.disks.push_back(BuildSharedDisk());
 
-  comet::InstanceSpec infer;
+  naim::InstanceSpec infer;
   infer.name = "infer-a";
-  infer.role = comet::InstanceRole::Infer;
+  infer.role = naim::InstanceRole::Infer;
   infer.node_name = "node-a";
   state.instances.push_back(infer);
   return state;
@@ -41,11 +41,11 @@ comet::DesiredState BuildState() {
 
 int main() {
   try {
-    const comet::hostd::HostdDesiredStatePathSupport support;
+    const naim::hostd::HostdDesiredStatePathSupport support;
 
     {
       auto state = BuildState();
-      state.disks.front().host_path = "/var/lib/comet/disks/plane-a/shared";
+      state.disks.front().host_path = "/var/lib/naim/disks/plane-a/shared";
       const auto rebased =
           support.RebaseStateForRuntimeRoot(state, "/mnt/storage", "/sandbox/runtime");
       Expect(
@@ -58,7 +58,7 @@ int main() {
       const auto control_path = support.ControlFilePathForNode(BuildState(), "node-a", "file.json");
       Expect(control_path.has_value(), "ControlFilePathForNode should resolve");
       Expect(
-          *control_path == "/var/lib/comet/disks/plane-a/shared/control/plane-a/file.json",
+          *control_path == "/var/lib/naim/disks/plane-a/shared/control/plane-a/file.json",
           "ControlFilePathForNode should map into shared disk control root");
     }
 
@@ -67,7 +67,7 @@ int main() {
       Expect(runtime_status.has_value(), "RuntimeStatusPathForNode should resolve");
       Expect(
           *runtime_status ==
-              "/var/lib/comet/disks/plane-a/shared/control/plane-a/infer/infer-a/runtime-status.json",
+              "/var/lib/naim/disks/plane-a/shared/control/plane-a/infer/infer-a/runtime-status.json",
           "RuntimeStatusPathForNode should prefer infer runtime status file");
     }
 
@@ -77,7 +77,7 @@ int main() {
           "/workspace/shared/models/gguf/model.gguf",
           "models/fallback.gguf");
       Expect(
-          shared_path == "/var/lib/comet/disks/plane-a/shared/models/gguf/model.gguf",
+          shared_path == "/var/lib/naim/disks/plane-a/shared/models/gguf/model.gguf",
           "SharedDiskHostPathForContainerPath should preserve relative path");
     }
 

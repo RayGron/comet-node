@@ -36,8 +36,8 @@ void Touch(const std::filesystem::path& path, const std::string& contents = {}) 
   output << contents;
 }
 
-comet::DesiredState BuildDesiredState(const std::string& plane_name) {
-  comet::DesiredState state;
+naim::DesiredState BuildDesiredState(const std::string& plane_name) {
+  naim::DesiredState state;
   state.plane_name = plane_name;
   return state;
 }
@@ -48,7 +48,7 @@ int main() {
   try {
     namespace fs = std::filesystem;
     const fs::path temp_root =
-        fs::temp_directory_path() / "comet-hostd-repo-root-support-tests";
+        fs::temp_directory_path() / "naim-hostd-repo-root-support-tests";
     std::error_code cleanup_error;
     fs::remove_all(temp_root, cleanup_error);
 
@@ -67,8 +67,8 @@ int main() {
 
     {
       CurrentPathGuard guard(build_root);
-      const comet::hostd::HostdRepoRootSupport support;
-      const auto repo = support.DetectCometRepoRoot();
+      const naim::hostd::HostdRepoRootSupport support;
+      const auto repo = support.DetectNaimRepoRoot();
       Expect(repo.has_value(), "repo root should be detected from split builds/repos layout");
       Expect(repo->lexically_normal() == repo_root.lexically_normal(),
              "detected repo root should match repos/naim-node");

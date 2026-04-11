@@ -13,7 +13,7 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestDecodesChunkedBody() {
-  const comet::controller::InteractionUpstreamEventParser parser;
+  const naim::controller::InteractionUpstreamEventParser parser;
   std::string encoded = "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
   std::string decoded;
   bool stream_finished = false;
@@ -26,7 +26,7 @@ void TestDecodesChunkedBody() {
 }
 
 void TestExtractsUsageAndFinishReasonDefaults() {
-  const comet::controller::InteractionUpstreamEventParser parser;
+  const naim::controller::InteractionUpstreamEventParser parser;
   const nlohmann::json payload = {
       {"choices", nlohmann::json::array({nlohmann::json{{"finish_reason", "length"}}})},
   };
@@ -40,12 +40,12 @@ void TestExtractsUsageAndFinishReasonDefaults() {
 }
 
 void TestConsumesSseFrame() {
-  const comet::controller::InteractionUpstreamEventParser parser;
+  const naim::controller::InteractionUpstreamEventParser parser;
   std::string buffer =
       "event: delta\n"
       "data: {\"delta\":\"a\"}\n"
       "\n";
-  comet::controller::InteractionSseFrame frame;
+  naim::controller::InteractionSseFrame frame;
   Expect(parser.TryConsumeSseFrame(buffer, &frame), "parser should consume SSE frame");
   Expect(frame.event_name == "delta", "parser should parse event name");
   Expect(frame.data == "{\"delta\":\"a\"}", "parser should parse data payload");

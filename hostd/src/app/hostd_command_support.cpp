@@ -6,9 +6,9 @@
 #include <filesystem>
 #include <string>
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 std::string HostdCommandSupport::Trim(const std::string& value) const {
   std::size_t start = 0;
@@ -27,14 +27,14 @@ std::string HostdCommandSupport::Trim(const std::string& value) const {
 std::string HostdCommandSupport::RunCommandCapture(const std::string& command) const {
   std::array<char, 512> buffer{};
   std::string output;
-  FILE* pipe = comet::platform::OpenPipe(command.c_str(), "r");
+  FILE* pipe = naim::platform::OpenPipe(command.c_str(), "r");
   if (pipe == nullptr) {
     return output;
   }
   while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
     output.append(buffer.data());
   }
-  comet::platform::ClosePipe(pipe);
+  naim::platform::ClosePipe(pipe);
   return output;
 }
 
@@ -71,4 +71,4 @@ std::string HostdCommandSupport::ResolvedDockerCommand() const {
   return resolved;
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

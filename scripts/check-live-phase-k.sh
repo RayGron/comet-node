@@ -81,9 +81,9 @@ if [[ "${skip_build}" -eq 0 ]]; then
   "${script_dir}/build-target.sh" Debug
 fi
 
-remote_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
+remote_http_port="$("${script_dir}/naim-devtool.sh" free-port)"
 
-"${build_dir}/comet-controller" init-db --db "${remote_db_path}" >/dev/null
+"${build_dir}/naim-controller" init-db --db "${remote_db_path}" >/dev/null
 "${build_dir}/naim-node" install hostd \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
@@ -100,30 +100,30 @@ remote_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
   --node node-a \
   --address "http://127.0.0.1:29999" \
   --public-key "${remote_layout_state_root}/keys/hostd.pub.b64" >/dev/null
-"${build_dir}/comet-controller" apply-bundle \
+"${build_dir}/naim-controller" apply-bundle \
   --bundle "${PWD}/config/demo-plane" \
   --db "${remote_db_path}" \
   --artifacts-root "${remote_artifacts_root}" >/dev/null
-"${build_dir}/comet-controller" serve \
+"${build_dir}/naim-controller" serve \
   --db "${remote_db_path}" \
   --listen-host 127.0.0.1 \
-  --listen-port "${remote_http_port}" >/tmp/comet-phase-k-remote.log 2>&1 &
+  --listen-port "${remote_http_port}" >/tmp/naim-phase-k-remote.log 2>&1 &
 remote_controller_pid="$!"
 wait_for_http "http://127.0.0.1:${remote_http_port}/health"
-"${build_dir}/comet-hostd" apply-next-assignment \
+"${build_dir}/naim-hostd" apply-next-assignment \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --runtime-root "${remote_runtime_root}" \
   --state-root "${remote_state_root}" \
   --host-private-key "${remote_layout_state_root}/keys/hostd.key.b64" \
   --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" report-observed-state \
+"${build_dir}/naim-hostd" report-observed-state \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --state-root "${remote_state_root}" \
   --host-private-key "${remote_layout_state_root}/keys/hostd.key.b64" >/dev/null
-"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${remote_db_path}" --node node-a | grep -F 'status=idle applied_generation=1' >/dev/null
+"${build_dir}/naim-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
+"${build_dir}/naim-controller" show-host-observations --db "${remote_db_path}" --node node-a | grep -F 'status=idle applied_generation=1' >/dev/null
 curl -fsS "http://127.0.0.1:${remote_http_port}/api/v1/hostd/hosts?node=node-a" | grep -F '"session_state":"connected"' >/dev/null
 "${build_dir}/naim-node" install hostd \
   --controller "http://127.0.0.1:${remote_http_port}" \
@@ -133,12 +133,12 @@ curl -fsS "http://127.0.0.1:${remote_http_port}/api/v1/hostd/hosts?node=node-a" 
   --log-root "${remote_rotated_layout_log_root}" \
   --systemd-dir "${remote_rotated_layout_systemd_dir}" \
   --skip-systemctl >/dev/null
-"${build_dir}/comet-controller" rotate-hostd-key \
+"${build_dir}/naim-controller" rotate-hostd-key \
   --db "${remote_db_path}" \
   --node node-a \
   --public-key "${remote_rotated_layout_state_root}/keys/hostd.pub.b64" >/dev/null
-"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"session_state": "rotation-pending"' >/dev/null
-if "${build_dir}/comet-hostd" report-observed-state \
+"${build_dir}/naim-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"session_state": "rotation-pending"' >/dev/null
+if "${build_dir}/naim-hostd" report-observed-state \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --state-root "${remote_state_root}" \
@@ -146,15 +146,15 @@ if "${build_dir}/comet-hostd" report-observed-state \
   echo "phase-k-live: old host key unexpectedly authenticated after rotation" >&2
   exit 1
 fi
-"${build_dir}/comet-hostd" report-observed-state \
+"${build_dir}/naim-hostd" report-observed-state \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --state-root "${remote_state_root}" \
   --host-private-key "${remote_rotated_layout_state_root}/keys/hostd.key.b64" >/dev/null
-"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
-"${build_dir}/comet-controller" revoke-hostd --db "${remote_db_path}" --node node-a >/dev/null
-"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"registration_state": "revoked"' >/dev/null
-if "${build_dir}/comet-hostd" report-observed-state \
+"${build_dir}/naim-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
+"${build_dir}/naim-controller" revoke-hostd --db "${remote_db_path}" --node node-a >/dev/null
+"${build_dir}/naim-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"registration_state": "revoked"' >/dev/null
+if "${build_dir}/naim-hostd" report-observed-state \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --state-root "${remote_state_root}" \
@@ -166,7 +166,7 @@ kill "${remote_controller_pid}" >/dev/null 2>&1 || true
 wait "${remote_controller_pid}" >/dev/null 2>&1 || true
 remote_controller_pid=""
 
-local_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
+local_http_port="$("${script_dir}/naim-devtool.sh" free-port)"
 
 "${build_dir}/naim-node" install controller \
   --with-hostd \
@@ -180,7 +180,7 @@ local_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
 "${build_dir}/naim-node" service verify controller-hostd \
   --systemd-dir "${local_layout_systemd_dir}" \
   --skip-systemctl >/dev/null
-"${build_dir}/comet-controller" apply-bundle \
+"${build_dir}/naim-controller" apply-bundle \
   --bundle "${PWD}/config/demo-plane" \
   --db "${local_db_path}" \
   --artifacts-root "${local_artifacts_root}" >/dev/null
@@ -194,12 +194,12 @@ local_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
   --runtime-root "${local_runtime_root}" \
   --state-root "${local_hostd_state_root}" \
   --compose-mode skip \
-  --poll-interval-sec 1 >/tmp/comet-phase-k-local.log 2>&1 &
+  --poll-interval-sec 1 >/tmp/naim-phase-k-local.log 2>&1 &
 local_controller_pid="$!"
 wait_for_http "http://127.0.0.1:${local_http_port}/health"
 wait_for_command_match 80 "status=idle applied_generation=1" \
-  "${build_dir}/comet-controller" show-host-observations --db "${local_db_path}" --node node-a
-"${build_dir}/comet-controller" show-hostd-hosts --db "${local_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
+  "${build_dir}/naim-controller" show-host-observations --db "${local_db_path}" --node node-a
+"${build_dir}/naim-controller" show-hostd-hosts --db "${local_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
 curl -fsS "http://127.0.0.1:${local_http_port}/api/v1/hostd/hosts?node=node-a" | grep -F '"session_state":"connected"' >/dev/null
 kill "${local_controller_pid}" >/dev/null 2>&1 || true
 wait "${local_controller_pid}" >/dev/null 2>&1 || true

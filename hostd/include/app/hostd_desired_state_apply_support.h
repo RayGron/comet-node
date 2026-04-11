@@ -16,9 +16,9 @@
 #include "app/hostd_post_deploy_support.h"
 #include "backend/hostd_backend.h"
 #include "cli/hostd_command_line.h"
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdDesiredStateApplySupport final {
  public:
@@ -35,7 +35,7 @@ class HostdDesiredStateApplySupport final {
       const HostdBootstrapModelSupport& bootstrap_model_support);
 
   void ApplyDesiredNodeState(
-      const comet::DesiredState& desired_node_state,
+      const naim::DesiredState& desired_node_state,
       const std::string& artifacts_root,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root,
@@ -49,22 +49,22 @@ class HostdDesiredStateApplySupport final {
 
  private:
   static std::string CurrentHostPlatform();
-  static const comet::NodeInventory* FindNodeInventory(
-      const comet::DesiredState& desired_node_state,
+  static const naim::NodeInventory* FindNodeInventory(
+      const naim::DesiredState& desired_node_state,
       const std::string& node_name);
-  static bool NodeHasInferInstance(const comet::DesiredState& state);
-  static comet::NodeComposePlan RequireNodeComposePlan(
-      const comet::DesiredState& state,
+  static bool NodeHasInferInstance(const naim::DesiredState& state);
+  static naim::NodeComposePlan RequireNodeComposePlan(
+      const naim::DesiredState& state,
       const std::string& node_name);
   static bool NodeUsesManagedRuntimeServices(
-      const comet::DesiredState& desired_node_state,
+      const naim::DesiredState& desired_node_state,
       const std::string& node_name);
   static bool NodeUsesGpuRuntime(
-      const comet::DesiredState& desired_node_state,
+      const naim::DesiredState& desired_node_state,
       const std::string& node_name);
 
   void ValidateDesiredNodeStateForCurrentHost(
-      const comet::DesiredState& desired_node_state,
+      const naim::DesiredState& desired_node_state,
       ComposeMode compose_mode) const;
 
   const HostdDesiredStatePathSupport& path_support_;
@@ -77,4 +77,4 @@ class HostdDesiredStateApplySupport final {
   const HostdBootstrapModelSupport& bootstrap_model_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <string>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
 struct ModelLibraryNodeSummary {
   std::string node_name;
@@ -21,7 +21,7 @@ struct ModelLibraryNodeSummary {
 class ModelLibraryNodePlacement final {
  public:
   static ModelLibraryNodeSummary BuildSummary(
-      const comet::RegisteredHostRecord& host);
+      const naim::RegisteredHostRecord& host);
   static bool AllowsModelPlacementRole(
       const std::string& derived_role,
       bool quantization_required);

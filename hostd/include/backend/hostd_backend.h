@@ -5,29 +5,29 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdBackend {
  public:
   virtual ~HostdBackend() = default;
 
-  virtual std::optional<comet::HostAssignment> ClaimNextHostAssignment(
+  virtual std::optional<naim::HostAssignment> ClaimNextHostAssignment(
       const std::string& node_name) = 0;
   virtual bool TransitionClaimedHostAssignment(
       int assignment_id,
-      comet::HostAssignmentStatus status,
+      naim::HostAssignmentStatus status,
       const std::string& status_message) = 0;
   virtual bool UpdateHostAssignmentProgress(
       int assignment_id,
       const nlohmann::json& progress) = 0;
-  virtual void UpsertHostObservation(const comet::HostObservation& observation) = 0;
-  virtual void AppendEvent(const comet::EventRecord& event) = 0;
-  virtual void UpsertDiskRuntimeState(const comet::DiskRuntimeState& state) = 0;
-  virtual std::optional<comet::DiskRuntimeState> LoadDiskRuntimeState(
+  virtual void UpsertHostObservation(const naim::HostObservation& observation) = 0;
+  virtual void AppendEvent(const naim::EventRecord& event) = 0;
+  virtual void UpsertDiskRuntimeState(const naim::DiskRuntimeState& state) = 0;
+  virtual std::optional<naim::DiskRuntimeState> LoadDiskRuntimeState(
       const std::string& disk_name,
       const std::string& node_name) = 0;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

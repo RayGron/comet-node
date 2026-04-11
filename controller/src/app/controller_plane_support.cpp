@@ -3,7 +3,7 @@
 #include "app/controller_composition_support.h"
 #include <memory>
 
-namespace comet::controller::plane_support {
+namespace naim::controller::plane_support {
 
 ControllerPrintService CreateControllerPrintService(
     const ControllerRuntimeSupportService& runtime_support_service) {
@@ -31,7 +31,7 @@ PlaneMutationService CreatePlaneMutationService(
     PlaneMutationService::MakePlaneServiceFn make_plane_service) {
   return PlaneMutationService({
       [&](const std::string& db_path,
-          const comet::DesiredState& desired_state,
+          const naim::DesiredState& desired_state,
           const std::string& artifacts_root,
           const std::string& source_label) {
         return bundle_cli_service.ApplyDesiredState(
@@ -80,7 +80,7 @@ PlaneService CreatePlaneService(
 HostRegistryService CreateHostRegistryService(const std::string& db_path) {
   return HostRegistryService(
       db_path,
-      [](comet::ControllerStore& store,
+      [](naim::ControllerStore& store,
          const std::string& event_type,
          const std::string& message,
          const nlohmann::json& payload,
@@ -101,4 +101,4 @@ HostRegistryService CreateHostRegistryService(const std::string& db_path) {
       });
 }
 
-}  // namespace comet::controller::plane_support
+}  // namespace naim::controller::plane_support

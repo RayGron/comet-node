@@ -1,6 +1,6 @@
 #include "scheduler/scheduler_domain_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 ControllerSchedulerDomainSupport::ControllerSchedulerDomainSupport(
     const ControllerRuntimeSupportService& runtime_support_service,
@@ -19,31 +19,31 @@ std::string ControllerSchedulerDomainSupport::HealthFromAge(
   return runtime_support_service_.HealthFromAge(age_seconds, stale_after_seconds);
 }
 
-std::optional<comet::RuntimeStatus> ControllerSchedulerDomainSupport::ParseRuntimeStatus(
-    const comet::HostObservation& observation) const {
+std::optional<naim::RuntimeStatus> ControllerSchedulerDomainSupport::ParseRuntimeStatus(
+    const naim::HostObservation& observation) const {
   return runtime_support_service_.ParseRuntimeStatus(observation);
 }
 
-std::optional<comet::GpuTelemetrySnapshot> ControllerSchedulerDomainSupport::ParseGpuTelemetry(
-    const comet::HostObservation& observation) const {
+std::optional<naim::GpuTelemetrySnapshot> ControllerSchedulerDomainSupport::ParseGpuTelemetry(
+    const naim::HostObservation& observation) const {
   return runtime_support_service_.ParseGpuTelemetry(observation);
 }
 
-std::map<std::string, comet::NodeAvailabilityOverride>
+std::map<std::string, naim::NodeAvailabilityOverride>
 ControllerSchedulerDomainSupport::BuildAvailabilityOverrideMap(
-    const std::vector<comet::NodeAvailabilityOverride>& availability_overrides) const {
+    const std::vector<naim::NodeAvailabilityOverride>& availability_overrides) const {
   return runtime_support_service_.BuildAvailabilityOverrideMap(availability_overrides);
 }
 
-comet::NodeAvailability ControllerSchedulerDomainSupport::ResolveNodeAvailability(
-    const std::map<std::string, comet::NodeAvailabilityOverride>& availability_overrides,
+naim::NodeAvailability ControllerSchedulerDomainSupport::ResolveNodeAvailability(
+    const std::map<std::string, naim::NodeAvailabilityOverride>& availability_overrides,
     const std::string& node_name) const {
   return runtime_support_service_.ResolveNodeAvailability(availability_overrides, node_name);
 }
 
 bool ControllerSchedulerDomainSupport::IsNodeSchedulable(
-    comet::NodeAvailability availability) const {
-  return availability == comet::NodeAvailability::Active;
+    naim::NodeAvailability availability) const {
+  return availability == naim::NodeAvailability::Active;
 }
 
 std::optional<long long> ControllerSchedulerDomainSupport::TimestampAgeSeconds(
@@ -52,7 +52,7 @@ std::optional<long long> ControllerSchedulerDomainSupport::TimestampAgeSeconds(
 }
 
 std::optional<std::string> ControllerSchedulerDomainSupport::ObservedSchedulingGateReason(
-    const std::vector<comet::HostObservation>& observations,
+    const std::vector<naim::HostObservation>& observations,
     const std::string& node_name,
     int stale_after_seconds) const {
   return plane_realization_service_.ObservedSchedulingGateReason(
@@ -61,4 +61,4 @@ std::optional<std::string> ControllerSchedulerDomainSupport::ObservedSchedulingG
       stale_after_seconds);
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

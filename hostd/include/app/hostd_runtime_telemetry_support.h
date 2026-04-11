@@ -7,14 +7,14 @@
 
 #include "app/hostd_command_support.h"
 #include "app/hostd_desired_state_path_support.h"
-#include "comet/runtime/runtime_status.h"
-#include "comet/state/models.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdRuntimeTelemetrySupport final {
  public:
-  std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
+  std::vector<naim::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
       const std::string& state_root,
       const std::string& node_name,
       const std::optional<std::string>& plane_name = std::nullopt) const;
@@ -27,21 +27,21 @@ class HostdRuntimeTelemetrySupport final {
       const std::vector<std::string>& service_names) const;
 
   bool VerifyEvictionAssignment(
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       const std::string& node_name,
       const std::string& state_root,
       const std::string& tagged_message,
       const std::map<std::string, int>& expected_victim_host_pids) const;
 
-  void ResolveInstanceHostPids(std::vector<comet::RuntimeProcessStatus>* statuses) const;
+  void ResolveInstanceHostPids(std::vector<naim::RuntimeProcessStatus>* statuses) const;
 
  private:
   std::optional<std::string> WorkerRuntimeStatusPathForInstance(
-      const comet::DesiredState& state,
-      const comet::InstanceSpec& instance) const;
-  comet::RuntimeProcessStatus ToProcessStatus(
-      comet::RuntimeStatus status,
-      const comet::InstanceSpec& instance) const;
+      const naim::DesiredState& state,
+      const naim::InstanceSpec& instance) const;
+  naim::RuntimeProcessStatus ToProcessStatus(
+      naim::RuntimeStatus status,
+      const naim::InstanceSpec& instance) const;
   std::optional<std::string> ParseTaggedValue(
       const std::string& text,
       const std::string& key) const;
@@ -55,4 +55,4 @@ class HostdRuntimeTelemetrySupport final {
   HostdDesiredStatePathSupport path_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

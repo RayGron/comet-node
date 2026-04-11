@@ -4,7 +4,7 @@
 
 #include "web/web_ui_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 ControllerCli::ControllerCli(
     const ControllerCommandLine& command_line,
@@ -258,7 +258,7 @@ std::optional<int> ControllerCli::TryRun() const {
     return assignment_orchestration_service_.SetNodeAvailability(
         command_line_.db().value_or("var/controller.sqlite"),
         *requested_node_name,
-        comet::ParseNodeAvailability(*requested_availability),
+        naim::ParseNodeAvailability(*requested_availability),
         command_line_.message());
   }
 
@@ -357,4 +357,4 @@ int ControllerCli::MissingRequired(const char* option_name) const {
   return 1;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

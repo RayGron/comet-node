@@ -7,7 +7,7 @@
 #include "interaction/interaction_request_contract_support.h"
 #include "interaction/interaction_stream_http_error_response_builder.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 InteractionStreamHttpRequestPreparationService::
     InteractionStreamHttpRequestPreparationService(
@@ -47,7 +47,7 @@ InteractionStreamHttpRequestPreparationService::Prepare(
   InteractionConversationPrincipal principal;
 
   try {
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto authenticated =
         setup.resolution.desired_state.protected_plane
@@ -167,4 +167,4 @@ int InteractionStreamHttpRequestPreparationService::RequestContextErrorStatusCod
   return 400;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

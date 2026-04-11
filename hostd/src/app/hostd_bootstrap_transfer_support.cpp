@@ -14,9 +14,9 @@
 
 #include <sodium.h>
 
-#include "comet/security/crypto_utils.h"
+#include "naim/security/crypto_utils.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 namespace fs = std::filesystem;
 
@@ -300,7 +300,7 @@ std::string HostdBootstrapTransferSupport::NormalizeLowercase(std::string value)
 }
 
 std::string HostdBootstrapTransferSupport::ComputeFileSha256Hex(const std::string& path) const {
-  comet::InitializeCrypto();
+  naim::InitializeCrypto();
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
     throw std::runtime_error("failed to open file for sha256: " + path);
@@ -353,4 +353,4 @@ void HostdBootstrapTransferSupport::PublishAssignmentProgress(
           bytes_total));
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

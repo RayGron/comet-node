@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -119,12 +119,12 @@ std::string RenderComposeYaml(
     const std::string& controller_upstream) {
   std::ostringstream out;
   out << "services:\n";
-  out << "  comet-web-ui:\n";
+  out << "  naim-web-ui:\n";
   out << "    image: " << image << "\n";
-  out << "    container_name: comet-web-ui\n";
+  out << "    container_name: naim-web-ui\n";
   out << "    restart: unless-stopped\n";
   out << "    environment:\n";
-  out << "      COMET_CONTROLLER_UPSTREAM: " << controller_upstream << "\n";
+  out << "      NAIM_CONTROLLER_UPSTREAM: " << controller_upstream << "\n";
   out << "    security_opt:\n";
   out << "      - apparmor=unconfined\n";
   out << "    ports:\n";
@@ -141,7 +141,7 @@ bool ComposeRunning(const std::string& web_ui_root) {
   }
   const std::string command =
       ResolvedDockerCommand() + " compose -f " + ShellQuote(compose_path) +
-      " ps --services --status running | grep -Fx 'comet-web-ui' >/dev/null 2>&1";
+      " ps --services --status running | grep -Fx 'naim-web-ui' >/dev/null 2>&1";
   return std::system(command.c_str()) == 0;
 }
 
@@ -159,11 +159,11 @@ std::string WebUiService::DefaultWebUiRoot() {
 }
 
 std::string WebUiService::DefaultWebUiImage() {
-  return "comet/web-ui:dev";
+  return "naim/web-ui:dev";
 }
 
 std::string WebUiService::DefaultControllerUpstream() {
-  if (const char* upstream = std::getenv("COMET_CONTROLLER_INTERNAL_UPSTREAM");
+  if (const char* upstream = std::getenv("NAIM_CONTROLLER_INTERNAL_UPSTREAM");
       upstream != nullptr && *upstream != '\0') {
     return upstream;
   }
@@ -219,12 +219,12 @@ int WebUiService::Ensure(
   }
   SaveStateJson(web_ui_root, state);
 
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   event_sink_(
       store,
       "ensured",
-      "materialized comet-web-ui sidecar",
+      "materialized naim-web-ui sidecar",
       json{
           {"web_ui_root", web_ui_root},
           {"listen_port", listen_port},
@@ -285,12 +285,12 @@ int WebUiService::Stop(
   state["status"] = "stopped";
   SaveStateJson(web_ui_root, state);
 
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   event_sink_(
       store,
       "stopped",
-      "stopped comet-web-ui sidecar",
+      "stopped naim-web-ui sidecar",
       json{
           {"web_ui_root", web_ui_root},
           {"compose_mode", compose_mode == WebUiComposeMode::Exec ? "exec" : "skip"},
@@ -304,4 +304,4 @@ int WebUiService::Stop(
   return 0;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

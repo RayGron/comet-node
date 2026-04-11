@@ -10,7 +10,7 @@
 - Plane-local binding metadata stays plane-scoped:
   - `enabled`
   - `session_ids[]`
-  - `comet_links[]`
+  - `naim_links[]`
 
 ## Controller APIs
 

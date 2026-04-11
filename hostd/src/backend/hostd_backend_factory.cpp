@@ -15,7 +15,7 @@ std::string DefaultDbPath() {
 
 }  // namespace
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdBackendFactory::HostdBackendFactory(const IHttpHostdBackendSupport& support)
     : support_(support) {}
@@ -50,4 +50,4 @@ std::unique_ptr<HostdBackend> HostdBackendFactory::CreateBackend(
   return std::make_unique<LocalDbHostdBackend>(db_path.value_or(DefaultDbPath()));
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

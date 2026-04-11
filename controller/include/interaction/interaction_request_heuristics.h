@@ -5,7 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionRequestHeuristics {
  public:
@@ -24,4 +24,4 @@ class InteractionRequestHeuristics {
       const std::vector<std::string>& needles) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

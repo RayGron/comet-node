@@ -1,6 +1,6 @@
 #include "app/hostd_bootstrap_model_support_factory.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdBootstrapModelSupportFactory::HostdBootstrapModelSupportFactory(
     const HostdDesiredStatePathSupport& path_support,
@@ -24,4 +24,4 @@ HostdBootstrapModelSupport HostdBootstrapModelSupportFactory::Create() const {
       reporting_support_);
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

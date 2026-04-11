@@ -7,7 +7,7 @@
 
 #include "backend/http_hostd_backend_support.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdAppControllerSupport final : public IHttpHostdBackendSupport {
  public:
@@ -18,13 +18,13 @@ class HostdAppControllerSupport final : public IHttpHostdBackendSupport {
       const std::string& path,
       const nlohmann::json& payload,
       const std::map<std::string, std::string>& headers = {}) const override;
-  comet::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) const override;
+  naim::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) const override;
   nlohmann::json BuildHostObservationPayload(
-      const comet::HostObservation& observation) const override;
+      const naim::HostObservation& observation) const override;
   nlohmann::json BuildDiskRuntimeStatePayload(
-      const comet::DiskRuntimeState& state) const override;
-  comet::DiskRuntimeState ParseDiskRuntimeStatePayload(
+      const naim::DiskRuntimeState& state) const override;
+  naim::DiskRuntimeState ParseDiskRuntimeStatePayload(
       const nlohmann::json& payload) const override;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

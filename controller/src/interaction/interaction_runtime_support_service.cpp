@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string InteractionRuntimeSupportService::NormalizeInteractionHost(
     const std::string& host) const {
@@ -32,9 +32,9 @@ InteractionRuntimeSupportService::ParseInteractionTarget(
 }
 
 std::optional<std::string> InteractionRuntimeSupportService::FindInferInstanceName(
-    const comet::DesiredState& desired_state) const {
+    const naim::DesiredState& desired_state) const {
   for (const auto& instance : desired_state.instances) {
-    if (instance.role == comet::InstanceRole::Infer &&
+    if (instance.role == naim::InstanceRole::Infer &&
         instance.plane_name == desired_state.plane_name) {
       return instance.name;
     }
@@ -43,10 +43,10 @@ std::optional<std::string> InteractionRuntimeSupportService::FindInferInstanceNa
 }
 
 std::vector<std::string> InteractionRuntimeSupportService::FindWorkerInstanceNames(
-    const comet::DesiredState& desired_state) const {
+    const naim::DesiredState& desired_state) const {
   std::vector<std::string> names;
   for (const auto& instance : desired_state.instances) {
-    if (instance.role == comet::InstanceRole::Worker &&
+    if (instance.role == naim::InstanceRole::Worker &&
         instance.plane_name == desired_state.plane_name) {
       names.push_back(instance.name);
     }
@@ -54,9 +54,9 @@ std::vector<std::string> InteractionRuntimeSupportService::FindWorkerInstanceNam
   return names;
 }
 
-std::optional<comet::RuntimeProcessStatus>
+std::optional<naim::RuntimeProcessStatus>
 InteractionRuntimeSupportService::FindInstanceRuntimeStatus(
-    const std::vector<comet::RuntimeProcessStatus>& statuses,
+    const std::vector<naim::RuntimeProcessStatus>& statuses,
     const std::string& instance_name) const {
   for (const auto& status : statuses) {
     if (status.instance_name == instance_name) {
@@ -80,12 +80,12 @@ bool InteractionRuntimeSupportService::ProbeControllerTargetOk(
   }
 }
 
-std::optional<comet::RuntimeStatus>
+std::optional<naim::RuntimeStatus>
 InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
-    const comet::DesiredState& desired_state,
-    const comet::HostObservation& observation,
-    const std::function<std::vector<comet::RuntimeProcessStatus>(
-        const comet::HostObservation&)>& parse_instance_runtime_statuses) const {
+    const naim::DesiredState& desired_state,
+    const naim::HostObservation& observation,
+    const std::function<std::vector<naim::RuntimeProcessStatus>(
+        const naim::HostObservation&)>& parse_instance_runtime_statuses) const {
   const auto infer_instance_name = FindInferInstanceName(desired_state);
   if (!infer_instance_name.has_value()) {
     return std::nullopt;
@@ -98,11 +98,11 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
     return std::nullopt;
   }
 
-  comet::RuntimeStatus runtime;
+  naim::RuntimeStatus runtime;
   if (!observation.runtime_status_json.empty()) {
     try {
       const auto parsed =
-          comet::DeserializeRuntimeStatusJson(observation.runtime_status_json);
+          naim::DeserializeRuntimeStatusJson(observation.runtime_status_json);
       if (parsed.plane_name == desired_state.plane_name &&
           parsed.instance_name == *infer_instance_name) {
         runtime = parsed;
@@ -185,18 +185,18 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
 }
 
 int InteractionRuntimeSupportService::CountReadyWorkerMembers(
-    comet::ControllerStore& store,
-    const comet::DesiredState& desired_state,
-    const std::function<std::vector<comet::RuntimeProcessStatus>(
-        const comet::HostObservation&)>& parse_instance_runtime_statuses) const {
+    naim::ControllerStore& store,
+    const naim::DesiredState& desired_state,
+    const std::function<std::vector<naim::RuntimeProcessStatus>(
+        const naim::HostObservation&)>& parse_instance_runtime_statuses) const {
   int ready_workers = 0;
   for (const auto& worker_name : FindWorkerInstanceNames(desired_state)) {
     const auto instance_it = std::find_if(
         desired_state.instances.begin(),
         desired_state.instances.end(),
-        [&](const comet::InstanceSpec& instance) {
+        [&](const naim::InstanceSpec& instance) {
           return instance.name == worker_name &&
-                 instance.role == comet::InstanceRole::Worker;
+                 instance.role == naim::InstanceRole::Worker;
         });
     if (instance_it == desired_state.instances.end() ||
         instance_it->node_name.empty()) {
@@ -216,4 +216,4 @@ int InteractionRuntimeSupportService::CountReadyWorkerMembers(
   return ready_workers;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -13,7 +13,7 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestExtractsLastUserMessage() {
-  const comet::controller::InteractionRequestHeuristics heuristics;
+  const naim::controller::InteractionRequestHeuristics heuristics;
   const nlohmann::json payload = {
       {"messages",
        nlohmann::json::array(
@@ -29,7 +29,7 @@ void TestExtractsLastUserMessage() {
 }
 
 void TestDetectsLongFormRequest() {
-  const comet::controller::InteractionRequestHeuristics heuristics;
+  const naim::controller::InteractionRequestHeuristics heuristics;
   Expect(
       heuristics.LooksLikeLongFormTaskRequest(
           "Please write a detailed analysis of the entire repository architecture."),
@@ -42,7 +42,7 @@ void TestDetectsLongFormRequest() {
 }
 
 void TestDetectsRepositoryAnalysisRequest() {
-  const comet::controller::InteractionRequestHeuristics heuristics;
+  const naim::controller::InteractionRequestHeuristics heuristics;
   Expect(
       heuristics.LooksLikeRepositoryAnalysisRequest(
           "Analyze the repository and explain the project architecture with file references."),
@@ -55,7 +55,7 @@ void TestDetectsRepositoryAnalysisRequest() {
 }
 
 void TestCanonicalizesResponseMode() {
-  const comet::controller::InteractionRequestHeuristics heuristics;
+  const naim::controller::InteractionRequestHeuristics heuristics;
   Expect(
       heuristics.CanonicalResponseMode("Very-Long") == "very_long",
       "heuristics should lowercase and underscore response modes");

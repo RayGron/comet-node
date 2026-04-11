@@ -8,10 +8,10 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/security/crypto_utils.h"
-#include "comet/runtime/runtime_status.h"
+#include "naim/security/crypto_utils.h"
+#include "naim/runtime/runtime_status.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -52,8 +52,8 @@ json ParseCapabilitiesJson(const std::string& capabilities_json) {
 }
 
 HostInventorySummary BuildInventorySummary(
-    const comet::RegisteredHostRecord& host,
-    const std::optional<comet::HostObservation>& observation) {
+    const naim::RegisteredHostRecord& host,
+    const std::optional<naim::HostObservation>& observation) {
   HostInventorySummary summary;
   const json capabilities = ParseCapabilitiesJson(host.capabilities_json);
   if (capabilities.contains("storage_root") && capabilities["storage_root"].is_string()) {
@@ -62,14 +62,14 @@ HostInventorySummary BuildInventorySummary(
   if (observation.has_value()) {
     if (!observation->gpu_telemetry_json.empty()) {
       summary.gpu_count = static_cast<int>(
-          comet::DeserializeGpuTelemetryJson(observation->gpu_telemetry_json).devices.size());
+          naim::DeserializeGpuTelemetryJson(observation->gpu_telemetry_json).devices.size());
     }
     if (!observation->cpu_telemetry_json.empty()) {
       summary.total_memory_bytes =
-          comet::DeserializeCpuTelemetryJson(observation->cpu_telemetry_json).total_memory_bytes;
+          naim::DeserializeCpuTelemetryJson(observation->cpu_telemetry_json).total_memory_bytes;
     }
     if (!observation->disk_telemetry_json.empty()) {
-      const auto disk = comet::DeserializeDiskTelemetryJson(observation->disk_telemetry_json);
+      const auto disk = naim::DeserializeDiskTelemetryJson(observation->disk_telemetry_json);
       for (const auto& item : disk.items) {
         if (item.disk_name == "storage-root" ||
             (!summary.storage_root.empty() && item.mount_point == summary.storage_root)) {
@@ -124,10 +124,10 @@ HostRegistryService::HostRegistryService(
 
 json HostRegistryService::BuildPayload(
     const std::optional<std::string>& node_name) const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   const auto observations = store.LoadHostObservations(node_name);
-  std::map<std::string, comet::HostObservation> observation_by_node;
+  std::map<std::string, naim::HostObservation> observation_by_node;
   for (const auto& observation : observations) {
     observation_by_node[observation.node_name] = observation;
   }
@@ -135,10 +135,10 @@ json HostRegistryService::BuildPayload(
   json items = json::array();
   for (const auto& host : store.LoadRegisteredHosts(node_name)) {
     const auto observation_it = observation_by_node.find(host.node_name);
-    const std::optional<comet::HostObservation> observation =
+    const std::optional<naim::HostObservation> observation =
         observation_it == observation_by_node.end()
             ? std::nullopt
-            : std::optional<comet::HostObservation>(observation_it->second);
+            : std::optional<naim::HostObservation>(observation_it->second);
     const auto inventory = BuildInventorySummary(host, observation);
     const auto [derived_role, role_reason] =
         host.derived_role.empty() ? DeriveRole(inventory)
@@ -177,7 +177,7 @@ json HostRegistryService::BuildPayload(
         {"host_public_key_fingerprint",
          host.public_key_base64.empty()
              ? json(nullptr)
-             : json(comet::ComputeKeyFingerprintHex(host.public_key_base64))},
+             : json(naim::ComputeKeyFingerprintHex(host.public_key_base64))},
         {"status_message",
          host.status_message.empty() ? json(nullptr) : json(host.status_message)},
         {"last_session_at",
@@ -207,7 +207,7 @@ json HostRegistryService::BuildPayload(
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path_},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
       {"items", items},
@@ -222,7 +222,7 @@ int HostRegistryService::ShowHosts(const std::optional<std::string>& node_name) 
 int HostRegistryService::RevokeHost(
     const std::string& node_name,
     const std::optional<std::string>& status_message) const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
 
   auto host = store.LoadRegisteredHost(node_name);
@@ -256,7 +256,7 @@ int HostRegistryService::RotateHostKey(
     const std::string& node_name,
     const std::string& public_key_base64,
     const std::optional<std::string>& status_message) const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
 
   auto host = store.LoadRegisteredHost(node_name);
@@ -267,7 +267,7 @@ int HostRegistryService::RotateHostKey(
   const std::string previous_fingerprint =
       host->public_key_base64.empty()
           ? std::string{}
-          : comet::ComputeKeyFingerprintHex(host->public_key_base64);
+          : naim::ComputeKeyFingerprintHex(host->public_key_base64);
   host->public_key_base64 = TrimWhitespace(public_key_base64);
   host->registration_state = "registered";
   host->session_state = "rotation-pending";
@@ -284,15 +284,15 @@ int HostRegistryService::RotateHostKey(
       json{
           {"previous_fingerprint",
            previous_fingerprint.empty() ? json(nullptr) : json(previous_fingerprint)},
-          {"next_fingerprint", comet::ComputeKeyFingerprintHex(host->public_key_base64)},
+          {"next_fingerprint", naim::ComputeKeyFingerprintHex(host->public_key_base64)},
       },
       node_name,
       "info");
 
   std::cout << "host key rotated: " << node_name
-            << " fingerprint=" << comet::ComputeKeyFingerprintHex(host->public_key_base64)
+            << " fingerprint=" << naim::ComputeKeyFingerprintHex(host->public_key_base64)
             << "\n";
   return 0;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

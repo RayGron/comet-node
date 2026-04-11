@@ -10,7 +10,7 @@
 
 using nlohmann::json;
 
-namespace comet::controller {
+namespace naim::controller {
 
 InteractionHttpExecutorFactory::InteractionHttpExecutorFactory(
     const ::InteractionHttpSupport& support)
@@ -18,32 +18,32 @@ InteractionHttpExecutorFactory::InteractionHttpExecutorFactory(
 
 InteractionPlaneResolver InteractionHttpExecutorFactory::MakePlaneResolver() const {
   return InteractionPlaneResolver(
-      [&](const comet::DesiredState& desired_state) {
+      [&](const naim::DesiredState& desired_state) {
         return support_.FindInferInstanceName(desired_state);
       },
-      [&](const comet::HostObservation& observation) {
+      [&](const naim::HostObservation& observation) {
         return support_.ParseInstanceRuntimeStatuses(observation);
       },
-      [&](const comet::HostObservation& observation,
+      [&](const naim::HostObservation& observation,
           const std::string& plane_name) {
         return support_.ObservationMatchesPlane(observation, plane_name);
       },
-      [&](const comet::DesiredState& desired_state,
-          const comet::HostObservation& observation) {
+      [&](const naim::DesiredState& desired_state,
+          const naim::HostObservation& observation) {
         return support_.BuildPlaneScopedRuntimeStatus(desired_state, observation);
       },
       [&](const std::string& gateway_listen, int fallback_port) {
         return support_.ParseInteractionTarget(gateway_listen, fallback_port);
       },
-      [&](comet::ControllerStore& store,
-          const comet::DesiredState& desired_state) {
+      [&](naim::ControllerStore& store,
+          const naim::DesiredState& desired_state) {
         return support_.CountReadyWorkerMembers(store, desired_state);
       },
       [&](const std::optional<ControllerEndpointTarget>& target,
           const std::string& path) {
         return support_.ProbeControllerTargetOk(target, path);
       },
-      [&](const comet::DesiredState& desired_state,
+      [&](const naim::DesiredState& desired_state,
           const std::string& node_name) {
         return support_.DescribeUnsupportedControllerLocalRuntime(
             desired_state, node_name);
@@ -73,7 +73,7 @@ InteractionSessionExecutor InteractionHttpExecutorFactory::MakeSessionExecutor()
             "/v1/chat/completions",
             body,
             {{"Accept", "application/json"},
-             {"X-Comet-Request-Id", request_id}});
+             {"X-Naim-Request-Id", request_id}});
         return InteractionUpstreamResponse{
             response.status_code,
             response.body,
@@ -149,7 +149,7 @@ InteractionHttpExecutorFactory::MakeStreamSegmentExecutor() const {
             "/v1/chat/completions",
             body,
             {{"Accept", "application/json"},
-             {"X-Comet-Request-Id", request_id}});
+             {"X-Naim-Request-Id", request_id}});
         return InteractionUpstreamResponse{
             response.status_code,
             response.body,
@@ -201,7 +201,7 @@ InteractionProxyExecutor InteractionHttpExecutorFactory::MakeProxyExecutor(
             path,
             body,
             {{"Accept", "application/json"},
-             {"X-Comet-Request-Id", request_id}});
+             {"X-Naim-Request-Id", request_id}});
         return InteractionUpstreamResponse{
             response.status_code,
             response.body,
@@ -257,4 +257,4 @@ InteractionHttpExecutorFactory::MakeStreamSessionExecutor() const {
       });
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -6,7 +6,7 @@
 
 #include "interaction/interaction_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionContinuationPayloadBuilder final {
  public:
@@ -18,4 +18,4 @@ class InteractionContinuationPayloadBuilder final {
       int total_completion_tokens) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

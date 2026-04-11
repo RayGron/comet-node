@@ -2,7 +2,7 @@
 
 #include "app/controller_http_service_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 InteractionHttpService ControllerHttpComponentFactory::CreateInteractionHttpService() const {
   return http_service_support::CreateInteractionHttpService(
@@ -52,4 +52,4 @@ const ControllerRequestSupport& ControllerHttpComponentFactory::RequestSupport()
   return request_support;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

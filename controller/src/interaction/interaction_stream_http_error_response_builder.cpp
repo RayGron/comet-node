@@ -3,7 +3,7 @@
 #include "app/controller_composition_support.h"
 #include "interaction/interaction_request_contract_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 ::HttpResponse InteractionStreamHttpErrorResponseBuilder::Build(
     int status_code,
@@ -37,4 +37,4 @@ namespace comet::controller {
           request_id));
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

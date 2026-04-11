@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <thread>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 namespace fs = std::filesystem;
 
@@ -48,9 +48,9 @@ void HostdBootstrapModelSupport::PublishAssignmentProgress(
 }
 
 bool HostdBootstrapModelSupport::TryUseReferenceBootstrapModel(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name,
-    const comet::BootstrapModelSpec& bootstrap_model,
+    const naim::BootstrapModelSpec& bootstrap_model,
     HostdBackend* backend,
     const std::optional<int>& assignment_id) const {
   if (bootstrap_model.materialization_mode != "reference" ||
@@ -83,7 +83,7 @@ bool HostdBootstrapModelSupport::TryUseReferenceBootstrapModel(
 }
 
 bool HostdBootstrapModelSupport::TryUseSharedBootstrapFromOtherNode(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name,
     const std::vector<HostdBootstrapModelArtifact>& artifacts,
     const std::string& target_path,
@@ -180,7 +180,7 @@ std::optional<std::uintmax_t> HostdBootstrapModelSupport::ComputeAggregateExpect
 }
 
 void HostdBootstrapModelSupport::AcquireArtifactsIfNeeded(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name,
     const std::vector<HostdBootstrapModelArtifact>& artifacts,
     const std::optional<std::uintmax_t>& aggregate_total,
@@ -234,9 +234,9 @@ void HostdBootstrapModelSupport::AcquireArtifactsIfNeeded(
 }
 
 void HostdBootstrapModelSupport::VerifyBootstrapChecksumIfNeeded(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name,
-    const comet::BootstrapModelSpec& bootstrap_model,
+    const naim::BootstrapModelSpec& bootstrap_model,
     const std::vector<HostdBootstrapModelArtifact>& artifacts,
     const std::string& target_path,
     bool already_present,
@@ -270,14 +270,14 @@ void HostdBootstrapModelSupport::VerifyBootstrapChecksumIfNeeded(
 }
 
 bool HostdBootstrapModelSupport::HasBootstrapSource(
-    const comet::BootstrapModelSpec& bootstrap_model) {
+    const naim::BootstrapModelSpec& bootstrap_model) {
   return (bootstrap_model.local_path.has_value() && !bootstrap_model.local_path->empty()) ||
          (bootstrap_model.source_url.has_value() && !bootstrap_model.source_url->empty()) ||
          !bootstrap_model.source_urls.empty();
 }
 
 void HostdBootstrapModelSupport::BootstrapPlaneModelIfNeeded(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name,
     HostdBackend* backend,
     const std::optional<int>& assignment_id) const {
@@ -379,4 +379,4 @@ void HostdBootstrapModelSupport::BootstrapPlaneModelIfNeeded(
   active_model_support_.WriteBootstrapActiveModel(state, node_name, target_path);
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -10,10 +10,10 @@
 #include "app/hostd_file_support.h"
 #include "backend/hostd_backend.h"
 #include "cli/hostd_command_line.h"
-#include "comet/planning/execution_plan.h"
-#include "comet/state/models.h"
+#include "naim/planning/execution_plan.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdDesiredStateApplyPlanSupport final {
  public:
@@ -32,9 +32,9 @@ class HostdDesiredStateApplyPlanSupport final {
       const HostdFileSupport& file_support);
 
   void ApplyNodePlan(
-      const comet::NodeExecutionPlan& plan,
-      const comet::DesiredState& desired_node_state,
-      const comet::NodeComposePlan& compose_plan,
+      const naim::NodeExecutionPlan& plan,
+      const naim::DesiredState& desired_node_state,
+      const naim::NodeComposePlan& compose_plan,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root,
       ComposeMode compose_mode,
@@ -42,13 +42,13 @@ class HostdDesiredStateApplyPlanSupport final {
       const ProgressPublisher& publish_progress) const;
 
   std::size_t ExpectedRuntimeStatusCountForComposePlan(
-      const comet::NodeComposePlan& compose_plan) const;
+      const naim::NodeComposePlan& compose_plan) const;
 
-  static bool IsDesiredNodeStateEmpty(const comet::DesiredState& state);
+  static bool IsDesiredNodeStateEmpty(const naim::DesiredState& state);
 
  private:
   void PrintOperationApplied(
-      const comet::HostOperation& operation,
+      const naim::HostOperation& operation,
       const std::string& status) const;
   bool IsUnderRoot(
       const std::filesystem::path& path,
@@ -63,4 +63,4 @@ class HostdDesiredStateApplyPlanSupport final {
   const HostdFileSupport& file_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

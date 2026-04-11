@@ -1,22 +1,22 @@
-#include "comet/state/auth_repository.h"
-#include "comet/state/assignment_repository.h"
-#include "comet/state/controller_settings_repository.h"
-#include "comet/state/desired_state_repository.h"
-#include "comet/state/desired_state_sqlite_codec.h"
-#include "comet/state/disk_runtime_repository.h"
-#include "comet/state/event_repository.h"
-#include "comet/state/interaction_repository.h"
-#include "comet/state/model_library_repository.h"
-#include "comet/state/node_availability_repository.h"
-#include "comet/state/observation_repository.h"
-#include "comet/state/plane_repository.h"
-#include "comet/state/registered_host_repository.h"
-#include "comet/state/scheduler_repository.h"
-#include "comet/state/skills_factory_repository.h"
-#include "comet/state/sqlite_store.h"
-#include "comet/state/sqlite_store_schema.h"
-#include "comet/state/sqlite_store_support.h"
-#include "comet/state/state_json.h"
+#include "naim/state/auth_repository.h"
+#include "naim/state/assignment_repository.h"
+#include "naim/state/controller_settings_repository.h"
+#include "naim/state/desired_state_repository.h"
+#include "naim/state/desired_state_sqlite_codec.h"
+#include "naim/state/disk_runtime_repository.h"
+#include "naim/state/event_repository.h"
+#include "naim/state/interaction_repository.h"
+#include "naim/state/model_library_repository.h"
+#include "naim/state/node_availability_repository.h"
+#include "naim/state/observation_repository.h"
+#include "naim/state/plane_repository.h"
+#include "naim/state/registered_host_repository.h"
+#include "naim/state/scheduler_repository.h"
+#include "naim/state/skills_factory_repository.h"
+#include "naim/state/sqlite_store.h"
+#include "naim/state/sqlite_store_schema.h"
+#include "naim/state/sqlite_store_support.h"
+#include "naim/state/state_json.h"
 
 #include <array>
 #include <filesystem>
@@ -28,7 +28,7 @@
 
 #include <sqlite3.h>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -209,7 +209,7 @@ CREATE TABLE IF NOT EXISTS plane_skill_bindings (
     skill_id TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     session_ids_json TEXT NOT NULL DEFAULT '[]',
-    comet_links_json TEXT NOT NULL DEFAULT '[]',
+    naim_links_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (plane_name, skill_id),
@@ -1171,4 +1171,4 @@ const std::string& ControllerStore::db_path() const {
   return db_path_;
 }
 
-}  // namespace comet
+}  // namespace naim

@@ -13,8 +13,8 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestBuildAddsAssistantContextAndContinuationPrompt() {
-  const comet::controller::InteractionContinuationPayloadBuilder builder;
-  comet::controller::InteractionCompletionPolicy policy;
+  const naim::controller::InteractionContinuationPayloadBuilder builder;
+  naim::controller::InteractionCompletionPolicy policy;
   policy.max_total_completion_tokens = 800;
   policy.thinking_enabled = false;
 
@@ -38,8 +38,8 @@ void TestBuildAddsAssistantContextAndContinuationPrompt() {
 }
 
 void TestBuildDisablesThinkingForContinuationTurn() {
-  const comet::controller::InteractionContinuationPayloadBuilder builder;
-  comet::controller::InteractionCompletionPolicy policy;
+  const naim::controller::InteractionContinuationPayloadBuilder builder;
+  naim::controller::InteractionCompletionPolicy policy;
   policy.max_total_completion_tokens = 1000;
   policy.thinking_enabled = true;
 

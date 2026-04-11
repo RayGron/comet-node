@@ -13,7 +13,7 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestBuildEventFrameFormatsEventAndDataLines() {
-  const comet::controller::InteractionSseFrameBuilder builder;
+  const naim::controller::InteractionSseFrameBuilder builder;
   const std::string frame = builder.BuildEventFrame(
       "delta",
       nlohmann::json{{"request_id", "req-1"}, {"delta", "hello"}});
@@ -28,7 +28,7 @@ void TestBuildEventFrameFormatsEventAndDataLines() {
 }
 
 void TestBuildDoneFrameMatchesSseDoneSentinel() {
-  const comet::controller::InteractionSseFrameBuilder builder;
+  const naim::controller::InteractionSseFrameBuilder builder;
   Expect(
       builder.BuildDoneFrame() == "data: [DONE]\n\n",
       "done frame should match SSE done sentinel");

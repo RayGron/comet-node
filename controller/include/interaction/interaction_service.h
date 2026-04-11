@@ -6,7 +6,7 @@
 
 #include "interaction/interaction_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionRequestValidator {
  public:
@@ -338,22 +338,22 @@ class InteractionStreamSegmentExecutor {
 class InteractionPlaneResolver {
  public:
   using FindInferInstanceNameFn =
-      std::function<std::optional<std::string>(const comet::DesiredState&)>;
+      std::function<std::optional<std::string>(const naim::DesiredState&)>;
   using ParseInstanceRuntimeStatusesFn = std::function<
-      std::vector<comet::RuntimeProcessStatus>(const comet::HostObservation&)>;
+      std::vector<naim::RuntimeProcessStatus>(const naim::HostObservation&)>;
   using ObservationMatchesPlaneFn =
-      std::function<bool(const comet::HostObservation&, const std::string&)>;
+      std::function<bool(const naim::HostObservation&, const std::string&)>;
   using BuildPlaneScopedRuntimeStatusFn = std::function<
-      std::optional<comet::RuntimeStatus>(
-          const comet::DesiredState&, const comet::HostObservation&)>;
+      std::optional<naim::RuntimeStatus>(
+          const naim::DesiredState&, const naim::HostObservation&)>;
   using ParseInteractionTargetFn =
       std::function<std::optional<ControllerEndpointTarget>(const std::string&, int)>;
   using CountReadyWorkerMembersFn =
-      std::function<int(comet::ControllerStore&, const comet::DesiredState&)>;
+      std::function<int(naim::ControllerStore&, const naim::DesiredState&)>;
   using ProbeControllerTargetOkFn =
       std::function<bool(const std::optional<ControllerEndpointTarget>&, const std::string&)>;
   using DescribeUnsupportedControllerLocalRuntimeFn = std::function<
-      std::optional<std::string>(const comet::DesiredState&, const std::string&)>;
+      std::optional<std::string>(const naim::DesiredState&, const std::string&)>;
 
   InteractionPlaneResolver(
       FindInferInstanceNameFn find_infer_instance_name,
@@ -382,4 +382,4 @@ class InteractionPlaneResolver {
       describe_unsupported_controller_local_runtime_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

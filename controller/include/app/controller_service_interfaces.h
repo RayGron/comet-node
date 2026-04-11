@@ -6,20 +6,20 @@
 #include "infra/controller_action.h"
 #include "app/controller_command_line.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 enum class WebUiComposeMode;
 struct ControllerEndpointTarget;
 
-}  // namespace comet::controller
+}  // namespace naim::controller
 
-namespace comet {
+namespace naim {
 
 enum class NodeAvailability : int;
 
 }
 
-namespace comet::controller {
+namespace naim::controller {
 
 class IBundleCliService {
  public:
@@ -163,7 +163,7 @@ class IAssignmentOrchestrationService {
   virtual int SetNodeAvailability(
       const std::string& db_path,
       const std::string& node_name,
-      comet::NodeAvailability availability,
+      naim::NodeAvailability availability,
       const std::optional<std::string>& status_message) const = 0;
   virtual int RetryHostAssignment(
       const std::string& db_path,
@@ -212,4 +212,4 @@ class IControllerServeService {
       int listen_port) = 0;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -13,7 +13,7 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestSanitizesReasoningAndThinkBlocks() {
-  const comet::controller::InteractionTextPostProcessor processor;
+  const naim::controller::InteractionTextPostProcessor processor;
   const std::string text =
       "Thinking process:\ninternal\n\n<think>hidden</think>\n\nFinal answer.";
   Expect(
@@ -23,7 +23,7 @@ void TestSanitizesReasoningAndThinkBlocks() {
 }
 
 void TestRemovesCompletionMarkers() {
-  const comet::controller::InteractionTextPostProcessor processor;
+  const naim::controller::InteractionTextPostProcessor processor;
   bool marker_seen = false;
   const std::string cleaned = processor.RemoveCompletionMarkers(
       "part [[TASK_COMPLETE]] end [[TASK_COMPLETE]]",
@@ -35,8 +35,8 @@ void TestRemovesCompletionMarkers() {
 }
 
 void TestConsumesSplitCompletionMarker() {
-  const comet::controller::InteractionTextPostProcessor processor;
-  comet::controller::CompletionMarkerFilterState state;
+  const naim::controller::InteractionTextPostProcessor processor;
+  naim::controller::CompletionMarkerFilterState state;
   const std::string first = processor.ConsumeCompletionMarkerFilteredChunk(
       state,
       "hello [[TASK_",
@@ -54,7 +54,7 @@ void TestConsumesSplitCompletionMarker() {
 }
 
 void TestUtf8SafeSuffixAvoidsBrokenPrefix() {
-  const comet::controller::InteractionTextPostProcessor processor;
+  const naim::controller::InteractionTextPostProcessor processor;
   const std::string value = std::string("ab") + "\xD0\x96" + "cd";
   const std::string suffix = processor.Utf8SafeSuffix(value, 3);
   Expect(suffix == "cd", "processor should avoid starting inside utf8 continuation bytes");

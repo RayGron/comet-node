@@ -28,12 +28,12 @@ resolve_docker() {
 
 docker_cmd="$(resolve_docker)"
 
-base_tag="${1:-comet/base-runtime:dev}"
-infer_tag="${2:-comet/infer-runtime:dev}"
-worker_tag="${3:-comet/worker-runtime:dev}"
-web_ui_tag="${4:-comet/web-ui:dev}"
-skills_tag="${5:-comet/skills-runtime:dev}"
-webgateway_tag="${6:-comet/webgateway-runtime:dev}"
+base_tag="${1:-naim/base-runtime:dev}"
+infer_tag="${2:-naim/infer-runtime:dev}"
+worker_tag="${3:-naim/worker-runtime:dev}"
+web_ui_tag="${4:-naim/web-ui:dev}"
+skills_tag="${5:-naim/skills-runtime:dev}"
+webgateway_tag="${6:-naim/webgateway-runtime:dev}"
 
 build_web_ui_image() {
   local temp_root

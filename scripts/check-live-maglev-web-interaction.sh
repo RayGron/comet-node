@@ -19,7 +19,7 @@ done
 
 if [[ "${skip_build}" -eq 0 ]]; then
   "${script_dir}/configure-build.sh" "${host_os}" "${host_arch}" Debug >/dev/null
-  cmake --build "${build_dir}" --target comet-controller comet-webgatewayd -j 8 >/dev/null
+  cmake --build "${build_dir}" --target naim-controller naim-webgatewayd -j 8 >/dev/null
 fi
 
 command -v curl >/dev/null 2>&1 || {
@@ -190,7 +190,7 @@ with open(request_body_path, "w", encoding="utf-8") as output:
 PY
 
 echo "maglev-web-live: init controller db"
-"${build_dir}/comet-controller" init-db --db "${db_path}" >/dev/null
+"${build_dir}/naim-controller" init-db --db "${db_path}" >/dev/null
 python3 - "${db_path}" "${auth_token}" <<'PY'
 import sqlite3
 import sys
@@ -284,7 +284,7 @@ gateway_pid="$!"
 wait_for_http "http://127.0.0.1:${gateway_port}/health"
 
 echo "maglev-web-live: start controller"
-"${build_dir}/comet-controller" serve \
+"${build_dir}/naim-controller" serve \
   --db "${db_path}" \
   --artifacts-root "${artifacts_root}" \
   --listen-host 127.0.0.1 \
@@ -295,7 +295,7 @@ wait_for_http "http://127.0.0.1:${controller_port}/health"
 echo "maglev-web-live: create maglev via plane API"
 create_payload="$(
   curl -fsS -X POST \
-    -H "X-Comet-Session-Token: ${auth_token}" \
+    -H "X-Naim-Session-Token: ${auth_token}" \
     -H 'Content-Type: application/json' \
     --data-binary "@${request_body_path}" \
     "http://127.0.0.1:${controller_port}/api/v1/planes"
@@ -304,21 +304,21 @@ printf '%s' "${create_payload}" | grep -F '"status":"ok"' >/dev/null
 
 echo "maglev-web-live: start maglev"
 curl -fsS -X POST \
-  -H "X-Comet-Session-Token: ${auth_token}" \
+  -H "X-Naim-Session-Token: ${auth_token}" \
   "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/start" >/dev/null
 
 echo "maglev-web-live: start browsing runtime"
-COMET_PLANE_NAME="${plane_name}" \
-COMET_INSTANCE_NAME="webgateway-${plane_name}" \
-COMET_INSTANCE_ROLE="webgateway" \
-COMET_NODE_NAME="local-hostd" \
-COMET_CONTROL_ROOT="/comet/shared/control/${plane_name}" \
-COMET_CONTROLLER_URL="http://127.0.0.1:${controller_port}" \
-COMET_WEBGATEWAY_RUNTIME_STATUS_PATH="${browsing_status_path}" \
-COMET_WEBGATEWAY_STATE_ROOT="${browsing_state_root}" \
-COMET_WEBGATEWAY_PORT="${browsing_port}" \
-COMET_WEBGATEWAY_POLICY_JSON='{"browser_session_enabled":true,"rendered_browser_enabled":true,"allowed_domains":["example.com","openai.com","reddit.com","old.reddit.com","x.com","twitter.com"],"blocked_domains":["localhost","internal"],"max_search_results":5,"max_fetch_bytes":16384}' \
-  "${build_dir}/comet-webgatewayd" >"${browsing_log}" 2>&1 &
+NAIM_PLANE_NAME="${plane_name}" \
+NAIM_INSTANCE_NAME="webgateway-${plane_name}" \
+NAIM_INSTANCE_ROLE="webgateway" \
+NAIM_NODE_NAME="local-hostd" \
+NAIM_CONTROL_ROOT="/naim/shared/control/${plane_name}" \
+NAIM_CONTROLLER_URL="http://127.0.0.1:${controller_port}" \
+NAIM_WEBGATEWAY_RUNTIME_STATUS_PATH="${browsing_status_path}" \
+NAIM_WEBGATEWAY_STATE_ROOT="${browsing_state_root}" \
+NAIM_WEBGATEWAY_PORT="${browsing_port}" \
+NAIM_WEBGATEWAY_POLICY_JSON='{"browser_session_enabled":true,"rendered_browser_enabled":true,"allowed_domains":["example.com","openai.com","reddit.com","old.reddit.com","x.com","twitter.com"],"blocked_domains":["localhost","internal"],"max_search_results":5,"max_fetch_bytes":16384}' \
+  "${build_dir}/naim-webgatewayd" >"${browsing_log}" 2>&1 &
 browsing_pid="$!"
 wait_for_http "http://127.0.0.1:${browsing_port}/health"
 
@@ -328,7 +328,7 @@ ready="no"
 for _ in $(seq 1 60); do
   status_code="$(
     curl -sS -o "${status_path}" -w '%{http_code}' \
-      -H "X-Comet-Session-Token: ${auth_token}" \
+      -H "X-Naim-Session-Token: ${auth_token}" \
       "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/interaction/status"
   )"
   if [[ "${status_code}" == "200" ]]; then
@@ -441,7 +441,7 @@ PY
   for _ in $(seq 1 40); do
     status_code="$(
       curl -sS -o "${status_path}" -w '%{http_code}' \
-        -H "X-Comet-Session-Token: ${auth_token}" \
+        -H "X-Naim-Session-Token: ${auth_token}" \
         "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/interaction/status"
     )"
     if [[ "${status_code}" == "200" ]]; then
@@ -474,7 +474,7 @@ invoke_interaction() {
   local status_code
   status_code="$(
     curl -sS -o "${response_file}" -w '%{http_code}' -X POST \
-    -H "X-Comet-Session-Token: ${auth_token}" \
+    -H "X-Naim-Session-Token: ${auth_token}" \
     -H 'Content-Type: application/json' \
     --data-binary "@${request_file}" \
     "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/interaction/chat/completions"

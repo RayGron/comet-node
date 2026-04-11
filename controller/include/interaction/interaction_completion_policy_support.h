@@ -6,17 +6,17 @@
 
 #include "interaction/interaction_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionCompletionPolicySupport final {
  public:
   InteractionCompletionPolicy NormalizeConfiguredPolicy(
-      const comet::InteractionSettings::CompletionPolicy& configured_policy) const;
+      const naim::InteractionSettings::CompletionPolicy& configured_policy) const;
 
   InteractionCompletionPolicy DefaultChatPolicy() const;
 
   ResolvedInteractionPolicy ResolvePolicy(
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       const nlohmann::json& payload) const;
 
   std::string BuildRepositoryAnalysisInstruction() const;
@@ -41,4 +41,4 @@ class InteractionCompletionPolicySupport final {
       const InteractionSegmentSummary& summary) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

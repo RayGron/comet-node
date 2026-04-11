@@ -34,8 +34,8 @@ std::string CaptureStdout(const std::function<void()>& action) {
 int main() {
   try {
     namespace fs = std::filesystem;
-    const comet::hostd::HostdDesiredStatePathSupport path_support;
-    const comet::hostd::HostdDesiredStateDisplaySupport support(path_support);
+    const naim::hostd::HostdDesiredStatePathSupport path_support;
+    const naim::hostd::HostdDesiredStateDisplaySupport support(path_support);
 
     {
       const std::string output = CaptureStdout([&]() {
@@ -51,7 +51,7 @@ int main() {
 
     {
       const fs::path temp_root =
-          fs::temp_directory_path() / "comet-hostd-desired-state-display-support-tests";
+          fs::temp_directory_path() / "naim-hostd-desired-state-display-support-tests";
       std::error_code cleanup_error;
       fs::remove_all(temp_root, cleanup_error);
       fs::create_directories(temp_root);

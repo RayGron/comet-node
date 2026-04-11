@@ -6,7 +6,7 @@
 #include "scheduler/scheduler_domain_support.h"
 #include "scheduler/scheduler_execution_dependencies.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 SchedulerService ControllerSchedulerComponentFactory::CreateSchedulerService(
     const std::string& db_path,
@@ -130,4 +130,4 @@ ControllerSchedulerComponentFactory::SchedulerExecutionSupportInstance() const {
   return scheduler_execution_support;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

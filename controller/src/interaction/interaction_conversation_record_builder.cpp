@@ -2,7 +2,7 @@
 
 #include "interaction/interaction_conversation_payload_builder.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -10,9 +10,9 @@ using nlohmann::json;
 
 }  // namespace
 
-std::vector<comet::InteractionMessageRecord>
+std::vector<naim::InteractionMessageRecord>
 InteractionConversationRecordBuilder::AppendNewMessageRecords(
-    std::vector<comet::InteractionMessageRecord> existing,
+    std::vector<naim::InteractionMessageRecord> existing,
     const json& delta_messages,
     const std::string& assistant_text,
     const json& usage,
@@ -21,7 +21,7 @@ InteractionConversationRecordBuilder::AppendNewMessageRecords(
   int next_seq = existing.empty() ? 0 : existing.back().seq + 1;
   if (delta_messages.is_array()) {
     for (const auto& message : delta_messages) {
-      comet::InteractionMessageRecord record;
+      naim::InteractionMessageRecord record;
       record.session_id = existing.empty() ? "" : existing.front().session_id;
       record.seq = next_seq++;
       record.role = message.value("role", std::string{});
@@ -32,7 +32,7 @@ InteractionConversationRecordBuilder::AppendNewMessageRecords(
       existing.push_back(std::move(record));
     }
   }
-  comet::InteractionMessageRecord assistant_record;
+  naim::InteractionMessageRecord assistant_record;
   assistant_record.session_id = existing.empty() ? "" : existing.front().session_id;
   assistant_record.seq = next_seq;
   assistant_record.role = "assistant";
@@ -47,9 +47,9 @@ InteractionConversationRecordBuilder::AppendNewMessageRecords(
   return existing;
 }
 
-std::vector<comet::InteractionMessageRecord>
+std::vector<naim::InteractionMessageRecord>
 InteractionConversationRecordBuilder::AssignSessionId(
-    std::vector<comet::InteractionMessageRecord> records,
+    std::vector<naim::InteractionMessageRecord> records,
     const std::string& session_id) const {
   for (auto& record : records) {
     record.session_id = session_id;
@@ -58,7 +58,7 @@ InteractionConversationRecordBuilder::AssignSessionId(
 }
 
 std::vector<json> InteractionConversationRecordBuilder::MessagesForArchive(
-    const std::vector<comet::InteractionMessageRecord>& records) const {
+    const std::vector<naim::InteractionMessageRecord>& records) const {
   const InteractionConversationPayloadBuilder payload_builder;
   std::vector<json> messages;
   messages.reserve(records.size());
@@ -68,16 +68,16 @@ std::vector<json> InteractionConversationRecordBuilder::MessagesForArchive(
   return messages;
 }
 
-std::vector<comet::InteractionMessageRecord>
+std::vector<naim::InteractionMessageRecord>
 InteractionConversationRecordBuilder::BuildRestoredMessageRecords(
     const std::string& session_id,
     const json& messages_json,
     const std::string& created_at) const {
   const InteractionConversationPayloadBuilder payload_builder;
-  std::vector<comet::InteractionMessageRecord> messages;
+  std::vector<naim::InteractionMessageRecord> messages;
   int next_seq = 0;
   for (const auto& message : messages_json) {
-    comet::InteractionMessageRecord record;
+    naim::InteractionMessageRecord record;
     record.session_id = session_id;
     record.seq = next_seq++;
     record.role = message.value("role", std::string{});
@@ -90,15 +90,15 @@ InteractionConversationRecordBuilder::BuildRestoredMessageRecords(
   return messages;
 }
 
-std::vector<comet::InteractionSummaryRecord>
+std::vector<naim::InteractionSummaryRecord>
 InteractionConversationRecordBuilder::BuildRestoredSummaryRecords(
     const std::string& session_id,
     const json& summaries_json,
     const std::string& created_at) const {
   const InteractionConversationPayloadBuilder payload_builder;
-  std::vector<comet::InteractionSummaryRecord> summaries;
+  std::vector<naim::InteractionSummaryRecord> summaries;
   for (const auto& summary_json : summaries_json) {
-    comet::InteractionSummaryRecord summary;
+    naim::InteractionSummaryRecord summary;
     summary.session_id = session_id;
     summary.turn_range_start = summary_json.value("turn_range_start", 0);
     summary.turn_range_end = summary_json.value("turn_range_end", 0);
@@ -110,4 +110,4 @@ InteractionConversationRecordBuilder::BuildRestoredSummaryRecords(
   return summaries;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -5,8 +5,8 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 
 build_dir="${1:-${repo_root}/build/linux/x64}"
-image_tag="${2:-comet/webgateway-runtime:dev}"
-jobs="${COMET_BUILD_JOBS:-8}"
+image_tag="${2:-naim/webgateway-runtime:dev}"
+jobs="${NAIM_BUILD_JOBS:-8}"
 
 declare -a docker_cmd
 
@@ -55,7 +55,7 @@ copy_build_artifact() {
   fi
 }
 
-cmake --build "${build_dir}" --target comet-webgatewayd -j "${jobs}"
+cmake --build "${build_dir}" --target naim-webgatewayd -j "${jobs}"
 
 mkdir -p "${repo_root}/var"
 stage_root="$(mktemp -d "${repo_root}/var/webgateway-runtime-image.XXXXXX")"
@@ -65,7 +65,7 @@ mkdir -p "${stage_root}/runtime" "${stage_root}/build/linux/x64"
 cp -R "${repo_root}/runtime/browsing" "${stage_root}/runtime/"
 
 for artifact in \
-  comet-webgatewayd \
+  naim-webgatewayd \
   libcef.so \
   chrome-sandbox \
   chrome_100_percent.pak \

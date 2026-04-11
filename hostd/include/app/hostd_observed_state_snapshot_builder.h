@@ -9,9 +9,9 @@
 #include "app/hostd_local_state_repository.h"
 #include "app/hostd_runtime_telemetry_support.h"
 #include "app/hostd_system_telemetry_collector.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdObservedStateSnapshotBuilder final {
  public:
@@ -21,11 +21,11 @@ class HostdObservedStateSnapshotBuilder final {
       const HostdRuntimeTelemetrySupport& runtime_telemetry_support,
       const HostdSystemTelemetryCollector& system_telemetry_collector);
 
-  comet::HostObservation BuildObservedStateSnapshot(
+  naim::HostObservation BuildObservedStateSnapshot(
       const std::string& node_name,
       const std::string& storage_root,
       const std::string& state_root,
-      comet::HostObservationStatus status,
+      naim::HostObservationStatus status,
       const std::string& status_message,
       const std::optional<int>& assignment_id = std::nullopt) const;
 
@@ -36,4 +36,4 @@ class HostdObservedStateSnapshotBuilder final {
   const HostdSystemTelemetryCollector& system_telemetry_collector_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

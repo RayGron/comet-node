@@ -16,20 +16,20 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-class RecordingHostdBackend final : public comet::hostd::HostdBackend {
+class RecordingHostdBackend final : public naim::hostd::HostdBackend {
  public:
   std::optional<int> updated_assignment_id;
   nlohmann::json updated_progress = nlohmann::json::object();
-  std::vector<comet::EventRecord> events;
+  std::vector<naim::EventRecord> events;
 
-  std::optional<comet::HostAssignment> ClaimNextHostAssignment(
+  std::optional<naim::HostAssignment> ClaimNextHostAssignment(
       const std::string&) override {
     return std::nullopt;
   }
 
   bool TransitionClaimedHostAssignment(
       int,
-      comet::HostAssignmentStatus,
+      naim::HostAssignmentStatus,
       const std::string&) override {
     return false;
   }
@@ -42,15 +42,15 @@ class RecordingHostdBackend final : public comet::hostd::HostdBackend {
     return true;
   }
 
-  void UpsertHostObservation(const comet::HostObservation&) override {}
+  void UpsertHostObservation(const naim::HostObservation&) override {}
 
-  void AppendEvent(const comet::EventRecord& event) override {
+  void AppendEvent(const naim::EventRecord& event) override {
     events.push_back(event);
   }
 
-  void UpsertDiskRuntimeState(const comet::DiskRuntimeState&) override {}
+  void UpsertDiskRuntimeState(const naim::DiskRuntimeState&) override {}
 
-  std::optional<comet::DiskRuntimeState> LoadDiskRuntimeState(
+  std::optional<naim::DiskRuntimeState> LoadDiskRuntimeState(
       const std::string&,
       const std::string&) override {
     return std::nullopt;
@@ -63,7 +63,7 @@ int main() {
   try {
     namespace fs = std::filesystem;
 
-    const comet::hostd::HostdReportingSupport support;
+    const naim::hostd::HostdReportingSupport support;
 
     {
       const auto payload = support.BuildAssignmentProgressPayload(
@@ -134,7 +134,7 @@ int main() {
 
     {
       const fs::path temp_root =
-          fs::temp_directory_path() / "comet-hostd-reporting-support-tests";
+          fs::temp_directory_path() / "naim-hostd-reporting-support-tests";
       std::error_code cleanup_error;
       fs::remove_all(temp_root, cleanup_error);
       fs::create_directories(temp_root);
@@ -143,7 +143,7 @@ int main() {
           "node-a",
           temp_root.string(),
           temp_root.string(),
-          comet::HostObservationStatus::Applied,
+          naim::HostObservationStatus::Applied,
           "stable",
           17);
       Expect(observation.node_name == "node-a", "observation should keep node name");

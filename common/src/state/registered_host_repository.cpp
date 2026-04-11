@@ -1,11 +1,11 @@
-#include "comet/state/registered_host_repository.h"
+#include "naim/state/registered_host_repository.h"
 
 #include <string>
 
-#include "comet/state/sqlite_statement.h"
-#include "comet/state/sqlite_store_support.h"
+#include "naim/state/sqlite_statement.h"
+#include "naim/state/sqlite_store_support.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -197,4 +197,4 @@ std::vector<RegisteredHostRecord> RegisteredHostRepository::LoadRegisteredHosts(
   return hosts;
 }
 
-}  // namespace comet
+}  // namespace naim

@@ -23,10 +23,10 @@ std::string MakeTempDbPath(const std::string& stem) {
   return path.string();
 }
 
-comet::controller::PlaneInteractionResolution BuildReadyResolution(
+naim::controller::PlaneInteractionResolution BuildReadyResolution(
     const std::string& plane_name,
     bool protected_plane = false) {
-  comet::controller::PlaneInteractionResolution resolution;
+  naim::controller::PlaneInteractionResolution resolution;
   resolution.desired_state.plane_name = plane_name;
   resolution.desired_state.protected_plane = protected_plane;
   resolution.status_payload = {
@@ -37,7 +37,7 @@ comet::controller::PlaneInteractionResolution BuildReadyResolution(
       {"served_model_name", "demo-served"},
       {"active_model_id", "demo-model"},
   };
-  resolution.target = comet::controller::ControllerEndpointTarget{
+  resolution.target = naim::controller::ControllerEndpointTarget{
       "http://127.0.0.1:8080",
       "127.0.0.1",
       8080,
@@ -48,19 +48,19 @@ comet::controller::PlaneInteractionResolution BuildReadyResolution(
 
 void TestPrepareBuildsSetupForReadyUnprotectedPlane() {
   const std::string db_path = MakeTempDbPath("interaction-stream-http-prepare");
-  const comet::controller::InteractionStreamRequestResolver resolver(
+  const naim::controller::InteractionStreamRequestResolver resolver(
       [](const std::string&, const std::string& plane_name) {
         return BuildReadyResolution(plane_name);
       },
-      [](const comet::controller::PlaneInteractionResolution&,
-         comet::controller::InteractionRequestContext*) {
-        return std::optional<comet::controller::InteractionValidationError>{};
+      [](const naim::controller::PlaneInteractionResolution&,
+         naim::controller::InteractionRequestContext*) {
+        return std::optional<naim::controller::InteractionValidationError>{};
       });
-  const comet::controller::InteractionStreamHttpRequestPreparationService service(
+  const naim::controller::InteractionStreamHttpRequestPreparationService service(
       resolver,
-      [](const comet::controller::PlaneInteractionResolution&,
-         comet::controller::InteractionRequestContext*) {
-        return std::optional<comet::controller::InteractionValidationError>{};
+      [](const naim::controller::PlaneInteractionResolution&,
+         naim::controller::InteractionRequestContext*) {
+        return std::optional<naim::controller::InteractionValidationError>{};
       });
   AuthSupportService auth_support;
   HttpRequest request;
@@ -88,19 +88,19 @@ void TestPrepareBuildsSetupForReadyUnprotectedPlane() {
 void TestPrepareRejectsUnauthorizedProtectedPlane() {
   const std::string db_path =
       MakeTempDbPath("interaction-stream-http-prepare-protected");
-  const comet::controller::InteractionStreamRequestResolver resolver(
+  const naim::controller::InteractionStreamRequestResolver resolver(
       [](const std::string&, const std::string& plane_name) {
         return BuildReadyResolution(plane_name, true);
       },
-      [](const comet::controller::PlaneInteractionResolution&,
-         comet::controller::InteractionRequestContext*) {
-        return std::optional<comet::controller::InteractionValidationError>{};
+      [](const naim::controller::PlaneInteractionResolution&,
+         naim::controller::InteractionRequestContext*) {
+        return std::optional<naim::controller::InteractionValidationError>{};
       });
-  const comet::controller::InteractionStreamHttpRequestPreparationService service(
+  const naim::controller::InteractionStreamHttpRequestPreparationService service(
       resolver,
-      [](const comet::controller::PlaneInteractionResolution&,
-         comet::controller::InteractionRequestContext*) {
-        return std::optional<comet::controller::InteractionValidationError>{};
+      [](const naim::controller::PlaneInteractionResolution&,
+         naim::controller::InteractionRequestContext*) {
+        return std::optional<naim::controller::InteractionValidationError>{};
       });
   AuthSupportService auth_support;
   HttpRequest request;

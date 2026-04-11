@@ -24,17 +24,17 @@
 #include "app/hostd_reporting_support.h"
 #include "backend/hostd_backend.h"
 #include "cli/hostd_command_line.h"
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 #include "state_apply/hostd_assignment_service.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
  public:
   HostdAppAssignmentSupport();
 
-  comet::DesiredState RebaseStateForRuntimeRoot(
-      comet::DesiredState state,
+  naim::DesiredState RebaseStateForRuntimeRoot(
+      naim::DesiredState state,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root) const override;
   nlohmann::json BuildAssignmentProgressPayload(
@@ -51,23 +51,23 @@ class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
   std::vector<std::string> ParseTaggedCsv(
       const std::string& tagged_message,
       const std::string& tag) const override;
-  comet::HostObservation BuildObservedStateSnapshot(
+  naim::HostObservation BuildObservedStateSnapshot(
       const std::string& node_name,
       const std::string& storage_root,
       const std::string& state_root,
-      comet::HostObservationStatus status,
+      naim::HostObservationStatus status,
       const std::string& status_message,
       const std::optional<int>& assignment_id = std::nullopt) const override;
   std::map<std::string, int> CaptureServiceHostPids(
       const std::vector<std::string>& service_names) const override;
   bool VerifyEvictionAssignment(
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       const std::string& node_name,
       const std::string& state_root,
       const std::string& tagged_message,
       const std::map<std::string, int>& expected_victim_host_pids) const override;
   void ApplyDesiredNodeState(
-      const comet::DesiredState& desired_node_state,
+      const naim::DesiredState& desired_node_state,
       const std::string& artifacts_root,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root,
@@ -121,4 +121,4 @@ class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
   HostdAppObservationSupport observation_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

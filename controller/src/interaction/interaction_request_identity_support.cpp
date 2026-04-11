@@ -3,7 +3,7 @@
 #include <chrono>
 #include <stdexcept>
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string InteractionRequestIdentitySupport::GenerateRequestId() const {
   static std::atomic<unsigned long long> counter{0};
@@ -28,4 +28,4 @@ std::string InteractionRequestIdentitySupport::GenerateTimestampedId(
          std::to_string(++(*counter));
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

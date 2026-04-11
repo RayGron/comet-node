@@ -1,8 +1,8 @@
 #include "plane/plane_mutation_service.h"
 
-#include "comet/state/state_json.h"
+#include "naim/state/state_json.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 PlaneMutationService::PlaneMutationService(Deps deps) : deps_(std::move(deps)) {}
 
@@ -15,7 +15,7 @@ ControllerActionResult PlaneMutationService::ExecuteUpsertPlaneStateAction(
   return RunControllerActionResult(
       "upsert-plane-state",
       [&]() {
-        const auto desired_state = comet::DeserializeDesiredStateJson(desired_state_json);
+        const auto desired_state = naim::DeserializeDesiredStateJson(desired_state_json);
         if (expected_plane_name.has_value() &&
             desired_state.plane_name != *expected_plane_name) {
           throw std::runtime_error(
@@ -57,4 +57,4 @@ ControllerActionResult PlaneMutationService::ExecuteDeletePlaneAction(
       [&]() { return plane_service.DeletePlane(plane_name); });
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

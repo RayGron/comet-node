@@ -5,12 +5,12 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/state/sqlite_store.h"
-#include "comet/state/state_json.h"
+#include "naim/state/sqlite_store.h"
+#include "naim/state/state_json.h"
 
 using nlohmann::json;
 
-namespace comet::controller {
+namespace naim::controller {
 
 ReadModelService::ReadModelService() = default;
 
@@ -19,7 +19,7 @@ ReadModelService::ReadModelService(
     : runtime_support_service_(std::move(runtime_support_service)) {}
 
 json ReadModelService::BuildEventPayloadItem(
-    const comet::EventRecord& event) const {
+    const naim::EventRecord& event) const {
   json payload = json::object();
   if (!event.payload_json.empty()) {
     try {
@@ -54,13 +54,13 @@ json ReadModelService::BuildEventPayloadItem(
 json ReadModelService::BuildHostAssignmentsPayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   json assignments = json::array();
   for (const auto& assignment : store.LoadHostAssignments(node_name)) {
-    const comet::DesiredState desired_node_state =
-        comet::DeserializeDesiredStateJson(assignment.desired_state_json);
+    const naim::DesiredState desired_node_state =
+        naim::DeserializeDesiredStateJson(assignment.desired_state_json);
     assignments.push_back(json{
         {"id", assignment.id},
         {"node_name", assignment.node_name},
@@ -69,7 +69,7 @@ json ReadModelService::BuildHostAssignmentsPayload(
         {"attempt_count", assignment.attempt_count},
         {"max_attempts", assignment.max_attempts},
         {"assignment_type", assignment.assignment_type},
-        {"status", comet::ToString(assignment.status)},
+        {"status", naim::ToString(assignment.status)},
         {"status_message", assignment.status_message},
         {"progress",
          (!assignment.progress_json.empty() && assignment.progress_json != "{}")
@@ -81,7 +81,7 @@ json ReadModelService::BuildHostAssignmentsPayload(
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
       {"assignments", assignments},
@@ -93,7 +93,7 @@ json ReadModelService::BuildHostObservationsPayload(
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name,
     int stale_after_seconds) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto observations =
       plane_name.has_value()
@@ -131,7 +131,7 @@ json ReadModelService::BuildHostObservationsPayload(
         runtime_support_service_.ParseNetworkTelemetry(observation);
 
     const auto build_runtime_status_payload =
-        [&](const std::optional<comet::RuntimeStatus>& status) -> json {
+        [&](const std::optional<naim::RuntimeStatus>& status) -> json {
       if (!status.has_value()) {
         return json{
             {"contract_version", 1},
@@ -142,12 +142,12 @@ json ReadModelService::BuildHostObservationsPayload(
       return json{
           {"contract_version", 1},
           {"available", true},
-          {"runtime", json::parse(comet::SerializeRuntimeStatusJson(*status))},
+          {"runtime", json::parse(naim::SerializeRuntimeStatusJson(*status))},
       };
     };
 
     const auto build_instance_runtime_payload =
-        [&](const std::vector<comet::RuntimeProcessStatus>& statuses) -> json {
+        [&](const std::vector<naim::RuntimeProcessStatus>& statuses) -> json {
       int ready_count = 0;
       int gpu_bound_count = 0;
       int running_count = 0;
@@ -175,12 +175,12 @@ json ReadModelService::BuildHostObservationsPayload(
           {"items",
            statuses.empty()
                ? json::array()
-               : json::parse(comet::SerializeRuntimeStatusListJson(statuses))},
+               : json::parse(naim::SerializeRuntimeStatusListJson(statuses))},
       };
     };
 
     const auto build_gpu_telemetry_payload =
-        [&](const std::optional<comet::GpuTelemetrySnapshot>& snapshot) -> json {
+        [&](const std::optional<naim::GpuTelemetrySnapshot>& snapshot) -> json {
       if (!snapshot.has_value()) {
         return json{
             {"contract_version", 1},
@@ -258,12 +258,12 @@ json ReadModelService::BuildHostObservationsPayload(
                {"hottest_temperature_c", hottest_temperature_c},
            }},
           {"devices",
-           json::parse(comet::SerializeGpuTelemetryJson(*snapshot)).at("devices")},
+           json::parse(naim::SerializeGpuTelemetryJson(*snapshot)).at("devices")},
       };
     };
 
     const auto build_disk_telemetry_payload =
-        [&](const std::optional<comet::DiskTelemetrySnapshot>& snapshot) -> json {
+        [&](const std::optional<naim::DiskTelemetrySnapshot>& snapshot) -> json {
       if (!snapshot.has_value()) {
         return json{
             {"contract_version", 1},
@@ -362,12 +362,12 @@ json ReadModelService::BuildHostObservationsPayload(
                {"io_error_counter_count", io_error_counter_count},
            }},
           {"items",
-           json::parse(comet::SerializeDiskTelemetryJson(*snapshot)).at("items")},
+           json::parse(naim::SerializeDiskTelemetryJson(*snapshot)).at("items")},
       };
     };
 
     const auto build_network_telemetry_payload =
-        [&](const std::optional<comet::NetworkTelemetrySnapshot>& snapshot) -> json {
+        [&](const std::optional<naim::NetworkTelemetrySnapshot>& snapshot) -> json {
       if (!snapshot.has_value()) {
         return json{
             {"contract_version", 1},
@@ -420,13 +420,13 @@ json ReadModelService::BuildHostObservationsPayload(
                {"tx_bytes", tx_bytes},
            }},
           {"interfaces",
-           json::parse(comet::SerializeNetworkTelemetryJson(*snapshot)).at(
+           json::parse(naim::SerializeNetworkTelemetryJson(*snapshot)).at(
                "interfaces")},
       };
     };
 
     const auto build_cpu_telemetry_payload =
-        [&](const std::optional<comet::CpuTelemetrySnapshot>& snapshot) -> json {
+        [&](const std::optional<naim::CpuTelemetrySnapshot>& snapshot) -> json {
       if (!snapshot.has_value()) {
         return json{
             {"contract_version", 1},
@@ -475,7 +475,7 @@ json ReadModelService::BuildHostObservationsPayload(
                {"available_memory_bytes", snapshot->available_memory_bytes},
                {"used_memory_bytes", snapshot->used_memory_bytes},
            }},
-          {"snapshot", json::parse(comet::SerializeCpuTelemetryJson(*snapshot))},
+          {"snapshot", json::parse(naim::SerializeCpuTelemetryJson(*snapshot))},
       };
     };
 
@@ -484,7 +484,7 @@ json ReadModelService::BuildHostObservationsPayload(
         {"plane_name",
          observation.plane_name.empty() ? json(nullptr)
                                         : json(observation.plane_name)},
-        {"status", comet::ToString(observation.status)},
+        {"status", naim::ToString(observation.status)},
         {"status_message", observation.status_message},
         {"heartbeat_at", observation.heartbeat_at},
     };
@@ -505,7 +505,7 @@ json ReadModelService::BuildHostObservationsPayload(
 
     if (observed_state.has_value()) {
       entry["observed_state"] =
-          json::parse(comet::SerializeDesiredStateJson(*observed_state));
+          json::parse(naim::SerializeDesiredStateJson(*observed_state));
     } else {
       entry["observed_state"] = nullptr;
     }
@@ -522,7 +522,7 @@ json ReadModelService::BuildHostObservationsPayload(
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
@@ -535,7 +535,7 @@ json ReadModelService::BuildHostHealthPayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     int stale_after_seconds) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto desired_state = store.LoadDesiredState();
   const auto observations = store.LoadHostObservations(node_name);
@@ -543,7 +543,7 @@ json ReadModelService::BuildHostHealthPayload(
       runtime_support_service_.BuildAvailabilityOverrideMap(
           store.LoadNodeAvailabilityOverrides(node_name));
 
-  std::map<std::string, comet::HostObservation> observation_by_node;
+  std::map<std::string, naim::HostObservation> observation_by_node;
   for (const auto& observation : observations) {
     observation_by_node.emplace(observation.node_name, observation);
   }
@@ -575,7 +575,7 @@ json ReadModelService::BuildHostHealthPayload(
     json item{
         {"node_name", current_node_name},
         {"availability",
-         comet::ToString(
+         naim::ToString(
              runtime_support_service_.ResolveNodeAvailability(
                  availability_override_map,
                  current_node_name))},
@@ -595,7 +595,7 @@ json ReadModelService::BuildHostHealthPayload(
     const std::string health =
         runtime_support_service_.HealthFromAge(age_seconds, stale_after_seconds);
     item["health"] = health;
-    item["status"] = comet::ToString(observation_it->second.status);
+    item["status"] = naim::ToString(observation_it->second.status);
     item["age_seconds"] =
         age_seconds.has_value() ? json(*age_seconds) : json(nullptr);
     item["heartbeat_at"] = observation_it->second.heartbeat_at;
@@ -628,7 +628,7 @@ json ReadModelService::BuildHostHealthPayload(
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
       {"stale_after_seconds", stale_after_seconds},
@@ -646,14 +646,14 @@ json ReadModelService::BuildDiskStatePayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto desired_state = plane_name.has_value()
                                  ? store.LoadDesiredState(*plane_name)
                                  : store.LoadDesiredState();
 
   json payload{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
@@ -670,7 +670,7 @@ json ReadModelService::BuildDiskStatePayload(
   const auto runtime_states =
       desired_state.has_value()
           ? store.LoadDiskRuntimeStates(desired_state->plane_name, node_name)
-          : std::vector<comet::DiskRuntimeState>{};
+          : std::vector<naim::DiskRuntimeState>{};
   const auto observations =
       plane_name.has_value()
           ? plane_observation_matcher_.FilterHostObservationsForPlane(
@@ -681,13 +681,13 @@ json ReadModelService::BuildDiskStatePayload(
   payload["desired_generation"] =
       desired_generation.has_value() ? json(*desired_generation) : json(nullptr);
 
-  std::map<std::string, comet::DiskRuntimeState> runtime_by_key;
+  std::map<std::string, naim::DiskRuntimeState> runtime_by_key;
   for (const auto& runtime_state : runtime_states) {
     runtime_by_key.emplace(
         runtime_state.disk_name + "@" + runtime_state.node_name,
         runtime_state);
   }
-  std::map<std::string, comet::DiskTelemetryRecord> telemetry_by_key;
+  std::map<std::string, naim::DiskTelemetryRecord> telemetry_by_key;
   for (const auto& observation : observations) {
     const auto disk_telemetry =
         runtime_support_service_.ParseDiskTelemetry(observation);
@@ -706,7 +706,7 @@ json ReadModelService::BuildDiskStatePayload(
     }
     json item{
         {"disk_name", disk.name},
-        {"kind", comet::ToString(disk.kind)},
+        {"kind", naim::ToString(disk.kind)},
         {"plane_name", disk.plane_name},
         {"owner_name", disk.owner_name},
         {"node_name", disk.node_name},
@@ -832,7 +832,7 @@ json ReadModelService::BuildEventsPayload(
     const std::optional<std::string>& worker_name,
     const std::optional<std::string>& category,
     int limit) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   json items = json::array();
@@ -846,7 +846,7 @@ json ReadModelService::BuildEventsPayload(
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
@@ -861,7 +861,7 @@ json ReadModelService::BuildEventsPayload(
 json ReadModelService::BuildNodeAvailabilityPayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto overrides = store.LoadNodeAvailabilityOverrides(node_name);
 
@@ -869,7 +869,7 @@ json ReadModelService::BuildNodeAvailabilityPayload(
   for (const auto& override_record : overrides) {
     items.push_back(json{
         {"node_name", override_record.node_name},
-        {"availability", comet::ToString(override_record.availability)},
+        {"availability", naim::ToString(override_record.availability)},
         {"status_message",
          override_record.status_message.empty()
              ? json(nullptr)
@@ -882,11 +882,11 @@ json ReadModelService::BuildNodeAvailabilityPayload(
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
       {"items", items},
   };
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

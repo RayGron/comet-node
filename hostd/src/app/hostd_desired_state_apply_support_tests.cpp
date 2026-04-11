@@ -19,10 +19,10 @@
 #include "app/hostd_local_state_repository.h"
 #include "app/hostd_post_deploy_support.h"
 #include "app/hostd_reporting_support.h"
-#include "comet/planning/execution_plan.h"
-#include "comet/planning/planner.h"
-#include "comet/state/demo_state.h"
-#include "comet/state/state_json.h"
+#include "naim/planning/execution_plan.h"
+#include "naim/planning/planner.h"
+#include "naim/state/demo_state.h"
+#include "naim/state/state_json.h"
 
 namespace {
 
@@ -38,36 +38,36 @@ int main() {
   try {
     namespace fs = std::filesystem;
 
-    const comet::hostd::HostdCommandSupport command_support;
-    const comet::hostd::HostdDesiredStatePathSupport path_support;
-    const comet::hostd::HostdRuntimeTelemetrySupport runtime_telemetry_support;
-    const comet::hostd::HostdLocalStatePathSupport local_state_path_support;
-    const comet::hostd::HostdLocalStateRepository local_state_repository(local_state_path_support);
-    const comet::hostd::HostdLocalRuntimeStateSupport local_runtime_state_support(
+    const naim::hostd::HostdCommandSupport command_support;
+    const naim::hostd::HostdDesiredStatePathSupport path_support;
+    const naim::hostd::HostdRuntimeTelemetrySupport runtime_telemetry_support;
+    const naim::hostd::HostdLocalStatePathSupport local_state_path_support;
+    const naim::hostd::HostdLocalStateRepository local_state_repository(local_state_path_support);
+    const naim::hostd::HostdLocalRuntimeStateSupport local_runtime_state_support(
         path_support,
         local_state_repository,
         runtime_telemetry_support);
-    const comet::hostd::HostdFileSupport file_support;
-    const comet::hostd::HostdReportingSupport reporting_support;
-    const comet::hostd::HostdComposeRuntimeSupport compose_support(command_support);
-    const comet::hostd::HostdDesiredStateDisplaySupport display_support(path_support);
-    const comet::hostd::HostdDiskRuntimeSupport disk_support(
+    const naim::hostd::HostdFileSupport file_support;
+    const naim::hostd::HostdReportingSupport reporting_support;
+    const naim::hostd::HostdComposeRuntimeSupport compose_support(command_support);
+    const naim::hostd::HostdDesiredStateDisplaySupport display_support(path_support);
+    const naim::hostd::HostdDiskRuntimeSupport disk_support(
         command_support,
         path_support,
         file_support);
-    const comet::hostd::HostdDesiredStateApplyPlanSupport apply_plan_support(
+    const naim::hostd::HostdDesiredStateApplyPlanSupport apply_plan_support(
         command_support,
         compose_support,
         disk_support,
         file_support);
-    const comet::hostd::HostdPostDeploySupport post_deploy_support(command_support);
-    const comet::hostd::HostdBootstrapModelSupportFactory bootstrap_support_factory(
+    const naim::hostd::HostdPostDeploySupport post_deploy_support(command_support);
+    const naim::hostd::HostdBootstrapModelSupportFactory bootstrap_support_factory(
         path_support,
         command_support,
         file_support,
         reporting_support);
     const auto bootstrap_support = bootstrap_support_factory.Create();
-    const comet::hostd::HostdDesiredStateApplySupport support(
+    const naim::hostd::HostdDesiredStateApplySupport support(
         path_support,
         display_support,
         apply_plan_support,
@@ -78,7 +78,7 @@ int main() {
         bootstrap_support);
 
     const fs::path temp_root =
-        fs::temp_directory_path() / "comet-hostd-desired-state-apply-support-tests";
+        fs::temp_directory_path() / "naim-hostd-desired-state-apply-support-tests";
     std::error_code cleanup_error;
     fs::remove_all(temp_root, cleanup_error);
     fs::create_directories(temp_root);
@@ -88,19 +88,19 @@ int main() {
     const std::string state_root = (temp_root / "state").string();
     const std::string artifacts_root = (temp_root / "artifacts").string();
 
-    const comet::DesiredState full_state =
+    const naim::DesiredState full_state =
         path_support.RebaseStateForRuntimeRoot(
-            comet::BuildDemoState(),
+            naim::BuildDemoState(),
             storage_root,
             runtime_root);
-    const comet::DesiredState node_state = comet::SliceDesiredStateForNode(full_state, "node-a");
+    const naim::DesiredState node_state = naim::SliceDesiredStateForNode(full_state, "node-a");
     const std::string node_name = "node-a";
     const std::string plane_name = node_state.plane_name;
-    const auto compose_plan = comet::FindNodeComposePlan(node_state, node_name);
+    const auto compose_plan = naim::FindNodeComposePlan(node_state, node_name);
     Expect(compose_plan.has_value(), "demo node should have a compose plan");
     const auto execution_plans =
-        comet::BuildNodeExecutionPlans(std::nullopt, node_state, artifacts_root);
-    std::optional<comet::NodeExecutionPlan> execution_plan;
+        naim::BuildNodeExecutionPlans(std::nullopt, node_state, artifacts_root);
+    std::optional<naim::NodeExecutionPlan> execution_plan;
     for (const auto& plan : execution_plans) {
       if (plan.node_name == node_name) {
         execution_plan = plan;
@@ -115,7 +115,7 @@ int main() {
         *compose_plan,
         storage_root,
         runtime_root,
-        comet::hostd::ComposeMode::Skip,
+        naim::hostd::ComposeMode::Skip,
         nullptr,
         {});
 
@@ -139,7 +139,7 @@ int main() {
         storage_root,
         runtime_root,
         state_root,
-        comet::hostd::ComposeMode::Skip,
+        naim::hostd::ComposeMode::Skip,
         "test-apply-support",
         7,
         42,

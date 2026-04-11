@@ -1,11 +1,11 @@
-#include "comet/state/desired_state_sqlite_codec.h"
+#include "naim/state/desired_state_sqlite_codec.h"
 
 #include <stdexcept>
 #include <utility>
 
 #include <nlohmann/json.hpp>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -450,4 +450,4 @@ InstanceRole DesiredStateSqliteCodec::ParseInstanceRole(const std::string& value
   throw std::runtime_error("unknown instance role '" + value + "'");
 }
 
-}  // namespace comet
+}  // namespace naim

@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerComponentDefaults final {
  public:
@@ -22,4 +22,4 @@ class ControllerComponentDefaults final {
   int VerificationTimeoutSeconds() const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

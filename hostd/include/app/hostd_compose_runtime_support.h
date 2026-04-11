@@ -7,9 +7,9 @@
 #include "app/hostd_command_support.h"
 #include "app/hostd_repo_root_support.h"
 #include "cli/hostd_command_line.h"
-#include "comet/planning/execution_plan.h"
+#include "naim/planning/execution_plan.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdComposeRuntimeSupport final {
  public:
@@ -17,7 +17,7 @@ class HostdComposeRuntimeSupport final {
 
   std::string PlaneMeshNetworkName(const std::string& plane_name) const;
   void EnsureComposeMeshNetworkAvailable(
-      const comet::NodeComposePlan& compose_plan,
+      const naim::NodeComposePlan& compose_plan,
       ComposeMode compose_mode) const;
   void RemoveComposeMeshNetworkIfUnused(
       const std::string& plane_name,
@@ -27,7 +27,7 @@ class HostdComposeRuntimeSupport final {
       const std::string& subcommand,
       ComposeMode compose_mode) const;
   void EnsureComposeImagesAvailable(
-      const comet::NodeComposePlan& compose_plan,
+      const naim::NodeComposePlan& compose_plan,
       ComposeMode compose_mode) const;
 
  private:
@@ -39,7 +39,7 @@ class HostdComposeRuntimeSupport final {
   void EnsureLocalRuntimeBinary(
       const std::filesystem::path& repo_root,
       const std::string& image) const;
-  void BuildCometRuntimeImage(
+  void BuildNaimRuntimeImage(
       const std::filesystem::path& repo_root,
       const std::string& image) const;
   void EnsureRuntimeImageAvailable(const std::string& image) const;
@@ -48,4 +48,4 @@ class HostdComposeRuntimeSupport final {
   HostdRepoRootSupport repo_root_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -19,11 +19,11 @@
 #include <utility>
 
 #include "host/host_assignment_reconciliation_service.h"
-#include "comet/state/state_json.h"
+#include "naim/state/state_json.h"
 
 using nlohmann::json;
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -40,7 +40,7 @@ struct NodeDemandSummary {
 };
 
 ObservedPlaneRuntimeSummary SummarizeObservedPlaneRuntime(
-    const comet::HostObservation& observation,
+    const naim::HostObservation& observation,
     const std::string& node_name,
     const std::optional<std::string>& plane_name) {
   if (observation.observed_state_json.empty()) {
@@ -48,7 +48,7 @@ ObservedPlaneRuntimeSummary SummarizeObservedPlaneRuntime(
   }
   try {
     const auto observed_state =
-        comet::DeserializeDesiredStateJson(observation.observed_state_json);
+        naim::DeserializeDesiredStateJson(observation.observed_state_json);
     const std::string target_plane =
         plane_name.has_value() ? *plane_name : observed_state.plane_name;
     if (target_plane.empty()) {
@@ -78,10 +78,10 @@ ObservedPlaneRuntimeSummary SummarizeObservedPlaneRuntime(
 NodeDemandSummary SummarizeNodeDemand(
     const std::string& node_name,
     const std::optional<std::string>& plane_name,
-    const comet::DesiredState& desired_state,
-    const std::vector<comet::DesiredState>& desired_states) {
+    const naim::DesiredState& desired_state,
+    const std::vector<naim::DesiredState>& desired_states) {
   NodeDemandSummary summary;
-  const auto accumulate = [&](const comet::DesiredState& state) {
+  const auto accumulate = [&](const naim::DesiredState& state) {
     for (const auto& instance : state.instances) {
       if (instance.node_name == node_name) {
         ++summary.desired_instance_count;
@@ -107,9 +107,9 @@ NodeDemandSummary SummarizeNodeDemand(
   return summary;
 }
 
-std::map<std::string, comet::HostAssignment> BuildLatestPlaneAssignmentsByNode(
-    const std::vector<comet::HostAssignment>& assignments) {
-  std::map<std::string, comet::HostAssignment> latest_by_node;
+std::map<std::string, naim::HostAssignment> BuildLatestPlaneAssignmentsByNode(
+    const std::vector<naim::HostAssignment>& assignments) {
+  std::map<std::string, naim::HostAssignment> latest_by_node;
   for (const auto& assignment : assignments) {
     auto it = latest_by_node.find(assignment.node_name);
     if (it == latest_by_node.end() || assignment.id >= it->second.id) {
@@ -120,10 +120,10 @@ std::map<std::string, comet::HostAssignment> BuildLatestPlaneAssignmentsByNode(
 }
 
 int ComputeEffectivePlaneAppliedGeneration(
-    const comet::PlaneRecord& plane,
-    const std::optional<comet::DesiredState>& desired_state,
+    const naim::PlaneRecord& plane,
+    const std::optional<naim::DesiredState>& desired_state,
     const std::optional<int>& desired_generation,
-    const std::vector<comet::HostObservation>& observations) {
+    const std::vector<naim::HostObservation>& observations) {
   if (!desired_state.has_value() || !desired_generation.has_value()) {
     return plane.applied_generation;
   }
@@ -134,7 +134,7 @@ int ComputeEffectivePlaneAppliedGeneration(
     const auto observation = std::find_if(
         observations.begin(),
         observations.end(),
-        [&](const comet::HostObservation& candidate) {
+        [&](const naim::HostObservation& candidate) {
           return candidate.node_name == node.name;
         });
     if (observation == observations.end()) {
@@ -142,7 +142,7 @@ int ComputeEffectivePlaneAppliedGeneration(
     }
     if (!observation->applied_generation.has_value() ||
         *observation->applied_generation < *desired_generation ||
-        observation->status == comet::HostObservationStatus::Failed) {
+        observation->status == naim::HostObservationStatus::Failed) {
       return plane.applied_generation;
     }
   }
@@ -255,8 +255,8 @@ std::optional<std::string> PickLatestTimestamp(
 }
 
 std::optional<std::string> LatestHostHeartbeatAt(
-    const comet::RegisteredHostRecord& host,
-    const std::vector<comet::HostObservation>& observations) {
+    const naim::RegisteredHostRecord& host,
+    const std::vector<naim::HostObservation>& observations) {
   std::optional<std::string> latest =
       host.last_heartbeat_at.empty() ? std::nullopt
                                      : std::optional<std::string>(host.last_heartbeat_at);
@@ -268,8 +268,8 @@ std::optional<std::string> LatestHostHeartbeatAt(
   return latest;
 }
 
-std::optional<comet::RuntimeStatus> SelectPlaneRuntimeStatus(
-    const std::optional<comet::RuntimeStatus>& runtime_status,
+std::optional<naim::RuntimeStatus> SelectPlaneRuntimeStatus(
+    const std::optional<naim::RuntimeStatus>& runtime_status,
     const std::optional<std::string>& plane_name) {
   if (!runtime_status.has_value() || !plane_name.has_value()) {
     return runtime_status;
@@ -284,8 +284,8 @@ std::optional<comet::RuntimeStatus> SelectPlaneRuntimeStatus(
 json BuildControllerSelfServicePayload() {
   const ControllerRuntimeSupportService runtime_support_service;
   const std::string checked_at = runtime_support_service.UtcNowSqlTimestamp();
-  const std::string admin_upstream = EnvValue("COMET_CONTROLLER_ADMIN_UPSTREAM");
-  const std::string internal_upstream = EnvValue("COMET_CONTROLLER_INTERNAL_UPSTREAM");
+  const std::string admin_upstream = EnvValue("NAIM_CONTROLLER_ADMIN_UPSTREAM");
+  const std::string internal_upstream = EnvValue("NAIM_CONTROLLER_INTERNAL_UPSTREAM");
 
   std::string health = "healthy";
   std::string state = "running";
@@ -298,7 +298,7 @@ json BuildControllerSelfServicePayload() {
           return;
         }
         const auto probe = ProbeLocalJsonHealth(upstream, "/health");
-        const bool target_healthy = ProbeLooksHealthy(probe, "comet-controller");
+        const bool target_healthy = ProbeLooksHealthy(probe, "naim-controller");
         targets.push_back(BuildServiceTargetPayload(
             label,
             upstream,
@@ -330,7 +330,7 @@ json BuildControllerSelfServicePayload() {
 json BuildSkillsFactorySelfServicePayload() {
   const std::optional<std::string> upstream =
       [&]() -> std::optional<std::string> {
-    const std::string value = EnvValue("COMET_SKILLS_FACTORY_UPSTREAM");
+    const std::string value = EnvValue("NAIM_SKILLS_FACTORY_UPSTREAM");
     return value.empty() ? std::nullopt : std::optional<std::string>(value);
   }();
 
@@ -348,7 +348,7 @@ json BuildSkillsFactorySelfServicePayload() {
   }
 
   const auto probe = ProbeLocalJsonHealth(upstream, "/health");
-  const bool healthy = ProbeLooksHealthy(probe, "comet-skills-factory");
+  const bool healthy = ProbeLooksHealthy(probe, "naim-skills-factory");
   return json{
       {"id", "skills-factory"},
       {"label", "Skills Factory"},
@@ -369,11 +369,11 @@ json BuildSkillsFactorySelfServicePayload() {
 }
 
 json BuildHostdSelfServicePayload(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     int stale_after_seconds) {
   const ControllerRuntimeSupportService runtime_support_service;
   const std::string node_name = [&]() {
-    const std::string configured = EnvValue("COMET_HOSTD_NODE_NAME");
+    const std::string configured = EnvValue("NAIM_HOSTD_NODE_NAME");
     return configured.empty() ? std::string("local-hostd") : configured;
   }();
 
@@ -441,7 +441,7 @@ json BuildHostdSelfServicePayload(
 json BuildWebUiSelfServicePayload() {
   const ControllerRuntimeSupportService runtime_support_service;
   const std::string web_ui_root = [&]() {
-    const std::string configured = EnvValue("COMET_WEB_UI_ROOT");
+    const std::string configured = EnvValue("NAIM_WEB_UI_ROOT");
     return configured.empty() ? WebUiService::DefaultWebUiRoot() : configured;
   }();
   const std::filesystem::path state_path =
@@ -539,7 +539,7 @@ json BuildWebUiSelfServicePayload() {
 }
 
 json BuildSelfServicesPayload(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     int stale_after_seconds) {
   json items = json::array();
   items.push_back(BuildControllerSelfServicePayload());
@@ -639,7 +639,7 @@ nlohmann::json DashboardService::BuildPayload(
       db_path,
       stale_after_seconds,
       plane_name);
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const HostAssignmentReconciliationService reconciliation_service;
   const auto recent_events =
@@ -649,7 +649,7 @@ nlohmann::json DashboardService::BuildPayload(
                              : store.LoadRolloutActions();
 
   json payload{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"stale_after_seconds", stale_after_seconds},
       {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
@@ -694,12 +694,12 @@ nlohmann::json DashboardService::BuildPayload(
     return payload;
   }
 
-  std::map<std::string, comet::HostObservation> observation_by_node;
+  std::map<std::string, naim::HostObservation> observation_by_node;
   for (const auto& observation : view.observations) {
     observation_by_node.emplace(observation.node_name, observation);
   }
   int effective_plane_applied_generation = 0;
-  std::optional<comet::PlaneRecord> dashboard_plane_record;
+  std::optional<naim::PlaneRecord> dashboard_plane_record;
   for (const auto& plane : view.planes) {
     if (plane.name != view.desired_state->plane_name) {
       continue;
@@ -800,7 +800,7 @@ nlohmann::json DashboardService::BuildPayload(
 }
 
 DashboardService::RuntimeFallback DashboardService::DetermineRuntimeFallback(
-    const comet::HostObservation& observation,
+    const naim::HostObservation& observation,
     const std::string& node_name,
     const std::optional<std::string>& plane_name,
     const std::optional<std::string>& plane_state,
@@ -853,7 +853,7 @@ DashboardService::RuntimeFallback DashboardService::DetermineRuntimeFallback(
 }
 
 json DashboardService::BuildBootstrapModelPayload(
-    const std::optional<comet::BootstrapModelSpec>& bootstrap_model) {
+    const std::optional<naim::BootstrapModelSpec>& bootstrap_model) {
   if (!bootstrap_model.has_value()) {
     return nullptr;
   }
@@ -881,13 +881,13 @@ json DashboardService::BuildBootstrapModelPayload(
 }
 
 json DashboardService::BuildPlanePayload(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const std::optional<int>& desired_generation,
-    const std::optional<comet::PlaneRecord>& plane_record,
+    const std::optional<naim::PlaneRecord>& plane_record,
     int effective_plane_applied_generation) {
   return json{
       {"plane_name", desired_state.plane_name},
-      {"plane_mode", comet::ToString(desired_state.plane_mode)},
+      {"plane_mode", naim::ToString(desired_state.plane_mode)},
       {"state",
        plane_record.has_value() ? json(plane_record->state) : json(nullptr)},
       {"desired_generation",
@@ -911,8 +911,8 @@ json DashboardService::BuildPlanePayload(
 }
 
 json DashboardService::BuildPlanesPayload(
-    const std::vector<comet::PlaneRecord>& planes,
-    const std::vector<comet::DesiredState>& desired_states,
+    const std::vector<naim::PlaneRecord>& planes,
+    const std::vector<naim::DesiredState>& desired_states,
     const std::string& selected_plane_name,
     int effective_plane_applied_generation) {
   json plane_items = json::array();
@@ -920,7 +920,7 @@ json DashboardService::BuildPlanesPayload(
     const auto desired_state_it = std::find_if(
         desired_states.begin(),
         desired_states.end(),
-        [&](const comet::DesiredState& candidate) {
+        [&](const naim::DesiredState& candidate) {
           return candidate.plane_name == plane.name;
         });
     const int plane_applied_generation =
@@ -930,7 +930,7 @@ json DashboardService::BuildPlanesPayload(
         {"plane_name", plane.name},
         {"plane_mode",
          desired_state_it != desired_states.end()
-             ? json(comet::ToString(desired_state_it->plane_mode))
+             ? json(naim::ToString(desired_state_it->plane_mode))
              : json(plane.plane_mode)},
         {"state", plane.state},
         {"generation", plane.generation},
@@ -955,7 +955,7 @@ json DashboardService::BuildPlanesPayload(
 }
 
 json DashboardService::BuildAssignmentsPayload(
-    const std::map<std::string, comet::HostAssignment>& latest_assignments_by_node) {
+    const std::map<std::string, naim::HostAssignment>& latest_assignments_by_node) {
   int pending_assignments = 0;
   int claimed_assignments = 0;
   int applied_assignments = 0;
@@ -965,23 +965,23 @@ json DashboardService::BuildAssignmentsPayload(
   for (const auto& [node_name, assignment] : latest_assignments_by_node) {
     (void)node_name;
     switch (assignment.status) {
-      case comet::HostAssignmentStatus::Pending:
+      case naim::HostAssignmentStatus::Pending:
         ++pending_assignments;
         break;
-      case comet::HostAssignmentStatus::Claimed:
+      case naim::HostAssignmentStatus::Claimed:
         ++claimed_assignments;
         break;
-      case comet::HostAssignmentStatus::Applied:
+      case naim::HostAssignmentStatus::Applied:
         ++applied_assignments;
         break;
-      case comet::HostAssignmentStatus::Failed:
+      case naim::HostAssignmentStatus::Failed:
         ++failed_assignments;
         break;
       default:
         break;
     }
-    if ((assignment.status == comet::HostAssignmentStatus::Pending ||
-         assignment.status == comet::HostAssignmentStatus::Claimed) &&
+    if ((assignment.status == naim::HostAssignmentStatus::Pending ||
+         assignment.status == naim::HostAssignmentStatus::Claimed) &&
         !assignment.progress_json.empty() &&
         assignment.progress_json != "{}" &&
         assignment.id > latest_progress_assignment_id) {
@@ -996,14 +996,14 @@ json DashboardService::BuildAssignmentsPayload(
     assignment_nodes.push_back(json{
         {"node_name", assignment.node_name},
         {"latest_assignment_id", assignment.id},
-        {"latest_status", comet::ToString(assignment.status)},
+        {"latest_status", naim::ToString(assignment.status)},
         {"latest_progress",
          (!assignment.progress_json.empty() && assignment.progress_json != "{}")
              ? json::parse(assignment.progress_json)
              : json(nullptr)},
-        {"pending", assignment.status == comet::HostAssignmentStatus::Pending ? 1 : 0},
-        {"claimed", assignment.status == comet::HostAssignmentStatus::Claimed ? 1 : 0},
-        {"failed", assignment.status == comet::HostAssignmentStatus::Failed ? 1 : 0},
+        {"pending", assignment.status == naim::HostAssignmentStatus::Pending ? 1 : 0},
+        {"claimed", assignment.status == naim::HostAssignmentStatus::Claimed ? 1 : 0},
+        {"failed", assignment.status == naim::HostAssignmentStatus::Failed ? 1 : 0},
     });
   }
 
@@ -1019,7 +1019,7 @@ json DashboardService::BuildAssignmentsPayload(
 }
 
 json DashboardService::BuildRolloutPayload(
-    const std::vector<comet::RolloutActionRecord>& rollout_actions,
+    const std::vector<naim::RolloutActionRecord>& rollout_actions,
     const std::string& loop_state,
     const std::string& loop_reason) {
   int pending_rollout = 0;
@@ -1028,11 +1028,11 @@ json DashboardService::BuildRolloutPayload(
   std::set<std::string> rollout_workers;
   for (const auto& action : rollout_actions) {
     rollout_workers.insert(action.worker_name);
-    if (action.status == comet::RolloutActionStatus::Pending) {
+    if (action.status == naim::RolloutActionStatus::Pending) {
       ++pending_rollout;
-    } else if (action.status == comet::RolloutActionStatus::Acknowledged) {
+    } else if (action.status == naim::RolloutActionStatus::Acknowledged) {
       ++acknowledged_rollout;
-    } else if (action.status == comet::RolloutActionStatus::ReadyToRetry) {
+    } else if (action.status == naim::RolloutActionStatus::ReadyToRetry) {
       ++ready_rollout;
     }
   }
@@ -1064,8 +1064,8 @@ json DashboardService::BuildRuntimePayload(
 }
 
 json DashboardService::BuildRecentEventsPayload(
-    const std::vector<comet::EventRecord>& recent_events,
-    const std::function<json(const comet::EventRecord&)>& build_event_payload) {
+    const std::vector<naim::EventRecord>& recent_events,
+    const std::function<json(const naim::EventRecord&)>& build_event_payload) {
   json recent_items = json::array();
   for (const auto& event : recent_events) {
     recent_items.push_back(build_event_payload(event));
@@ -1074,7 +1074,7 @@ json DashboardService::BuildRecentEventsPayload(
 }
 
 std::optional<std::string> DashboardService::ResolveSelectedPlaneState(
-    const std::vector<comet::PlaneRecord>& planes,
+    const std::vector<naim::PlaneRecord>& planes,
     const std::optional<std::string>& plane_name) {
   if (!plane_name.has_value()) {
     return std::nullopt;
@@ -1087,11 +1087,11 @@ std::optional<std::string> DashboardService::ResolveSelectedPlaneState(
   return std::nullopt;
 }
 
-std::map<std::string, comet::NodeInventory> DashboardService::BuildDashboardNodes(
+std::map<std::string, naim::NodeInventory> DashboardService::BuildDashboardNodes(
     const std::optional<std::string>& plane_name,
-    const comet::DesiredState& desired_state,
-    const std::vector<comet::DesiredState>& desired_states) {
-  std::map<std::string, comet::NodeInventory> dashboard_nodes;
+    const naim::DesiredState& desired_state,
+    const std::vector<naim::DesiredState>& desired_states) {
+  std::map<std::string, naim::NodeInventory> dashboard_nodes;
   if (plane_name.has_value()) {
     for (const auto& node : desired_state.nodes) {
       dashboard_nodes.emplace(node.name, node);
@@ -1108,12 +1108,12 @@ std::map<std::string, comet::NodeInventory> DashboardService::BuildDashboardNode
 }
 
 DashboardService::NodesPayload DashboardService::BuildNodesPayload(
-    const std::map<std::string, comet::NodeInventory>& dashboard_nodes,
-    const std::map<std::string, comet::HostObservation>& observation_by_node,
-    const std::map<std::string, comet::NodeAvailabilityOverride>&
+    const std::map<std::string, naim::NodeInventory>& dashboard_nodes,
+    const std::map<std::string, naim::HostObservation>& observation_by_node,
+    const std::map<std::string, naim::NodeAvailabilityOverride>&
         availability_override_map,
-    const comet::DesiredState& desired_state,
-    const std::vector<comet::DesiredState>& desired_states,
+    const naim::DesiredState& desired_state,
+    const std::vector<naim::DesiredState>& desired_states,
     const std::optional<std::string>& plane_name,
     const std::optional<std::string>& selected_plane_state,
     int desired_generation,
@@ -1123,13 +1123,13 @@ DashboardService::NodesPayload DashboardService::BuildNodesPayload(
     const std::function<std::string(
         const std::optional<long long>&,
         int)>& health_from_age,
-    const std::function<comet::NodeAvailability(
-        const std::map<std::string, comet::NodeAvailabilityOverride>&,
+    const std::function<naim::NodeAvailability(
+        const std::map<std::string, naim::NodeAvailabilityOverride>&,
         const std::string&)>& resolve_node_availability,
-    const std::function<std::optional<comet::RuntimeStatus>(
-        const comet::HostObservation&)>& parse_runtime_status,
-    const std::function<std::optional<comet::GpuTelemetrySnapshot>(
-        const comet::HostObservation&)>& parse_gpu_telemetry) {
+    const std::function<std::optional<naim::RuntimeStatus>(
+        const naim::HostObservation&)>& parse_runtime_status,
+    const std::function<std::optional<naim::GpuTelemetrySnapshot>(
+        const naim::HostObservation&)>& parse_gpu_telemetry) {
   NodesPayload payload;
   for (const auto& [dashboard_node_name, node] : dashboard_nodes) {
     (void)dashboard_node_name;
@@ -1139,7 +1139,7 @@ DashboardService::NodesPayload DashboardService::BuildNodesPayload(
     json item{
         {"node_name", node.name},
         {"availability",
-         comet::ToString(resolve_node_availability(availability_override_map, node.name))},
+         naim::ToString(resolve_node_availability(availability_override_map, node.name))},
         {"plane_count", static_cast<int>(demand.plane_names.size())},
         {"planes", json(demand.plane_names)},
         {"desired_instance_count", demand.desired_instance_count},
@@ -1160,7 +1160,7 @@ DashboardService::NodesPayload DashboardService::BuildNodesPayload(
     const auto age_seconds =
         heartbeat_age_seconds(observation_it->second.heartbeat_at);
     item["health"] = health_from_age(age_seconds, stale_after_seconds);
-    item["status"] = comet::ToString(observation_it->second.status);
+    item["status"] = naim::ToString(observation_it->second.status);
     item["heartbeat_at"] = observation_it->second.heartbeat_at;
     item["applied_generation"] =
         observation_it->second.applied_generation.has_value()
@@ -1233,14 +1233,14 @@ DashboardService::NodesPayload DashboardService::BuildNodesPayload(
 
 void DashboardService::BuildAssignmentAlerts(
     AlertSummary* alerts,
-    const std::map<std::string, comet::HostAssignment>&
+    const std::map<std::string, naim::HostAssignment>&
         latest_assignments_by_node) {
   if (alerts == nullptr) {
     return;
   }
   for (const auto& [node_name, assignment] : latest_assignments_by_node) {
     (void)node_name;
-    if (assignment.status == comet::HostAssignmentStatus::Failed) {
+    if (assignment.status == naim::HostAssignmentStatus::Failed) {
       alerts->Push(
           "critical",
           "failed-assignment",
@@ -1250,8 +1250,8 @@ void DashboardService::BuildAssignmentAlerts(
           std::nullopt,
           assignment.id);
     } else if (
-        assignment.status == comet::HostAssignmentStatus::Pending ||
-        assignment.status == comet::HostAssignmentStatus::Claimed) {
+        assignment.status == naim::HostAssignmentStatus::Pending ||
+        assignment.status == naim::HostAssignmentStatus::Claimed) {
       alerts->Push(
           "booting",
           "assignment-in-flight",
@@ -1266,11 +1266,11 @@ void DashboardService::BuildAssignmentAlerts(
 
 void DashboardService::BuildNodeAlerts(
     AlertSummary* alerts,
-    const std::map<std::string, comet::NodeInventory>& dashboard_nodes,
-    const std::map<std::string, comet::HostObservation>& observation_by_node,
-    const std::map<std::string, comet::NodeAvailabilityOverride>&
+    const std::map<std::string, naim::NodeInventory>& dashboard_nodes,
+    const std::map<std::string, naim::HostObservation>& observation_by_node,
+    const std::map<std::string, naim::NodeAvailabilityOverride>&
         availability_override_map,
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const std::optional<std::string>& plane_name,
     const std::optional<std::string>& selected_plane_state,
     int desired_generation,
@@ -1280,13 +1280,13 @@ void DashboardService::BuildNodeAlerts(
     const std::function<std::string(
         const std::optional<long long>&,
         int)>& health_from_age,
-    const std::function<comet::NodeAvailability(
-        const std::map<std::string, comet::NodeAvailabilityOverride>&,
+    const std::function<naim::NodeAvailability(
+        const std::map<std::string, naim::NodeAvailabilityOverride>&,
         const std::string&)>& resolve_node_availability,
-    const std::function<std::optional<comet::RuntimeStatus>(
-        const comet::HostObservation&)>& parse_runtime_status,
-    const std::function<std::optional<comet::GpuTelemetrySnapshot>(
-        const comet::HostObservation&)>& parse_gpu_telemetry) {
+    const std::function<std::optional<naim::RuntimeStatus>(
+        const naim::HostObservation&)>& parse_runtime_status,
+    const std::function<std::optional<naim::GpuTelemetrySnapshot>(
+        const naim::HostObservation&)>& parse_gpu_telemetry) {
   if (alerts == nullptr) {
     return;
   }
@@ -1319,7 +1319,7 @@ void DashboardService::BuildNodeAlerts(
 
     const auto availability =
         resolve_node_availability(availability_override_map, node_name);
-    if (availability != comet::NodeAvailability::Active) {
+    if (availability != naim::NodeAvailability::Active) {
       alerts->Push(
           "warning",
           "node-availability",
@@ -1388,7 +1388,7 @@ void DashboardService::BuildNodeAlerts(
 
 void DashboardService::BuildRolloutAlerts(
     AlertSummary* alerts,
-    const std::vector<comet::RolloutActionRecord>& rollout_actions) {
+    const std::vector<naim::RolloutActionRecord>& rollout_actions) {
   if (alerts == nullptr) {
     return;
   }
@@ -1407,7 +1407,7 @@ void DashboardService::BuildRolloutAlerts(
 
 void DashboardService::BuildRecentEventAlerts(
     AlertSummary* alerts,
-    const std::vector<comet::EventRecord>& recent_events) {
+    const std::vector<naim::EventRecord>& recent_events) {
   if (alerts == nullptr) {
     return;
   }
@@ -1432,4 +1432,4 @@ void DashboardService::BuildRecentEventAlerts(
   }
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

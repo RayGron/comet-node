@@ -7,20 +7,20 @@
 
 #include "interaction/interaction_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionBrowsingService final {
  public:
   static constexpr const char* kSystemInstructionPayloadKey =
-      "_comet_browsing_system_instruction";
+      "_naim_browsing_system_instruction";
   static constexpr const char* kSummaryPayloadKey =
-      "_comet_browsing_summary";
+      "_naim_browsing_summary";
   static constexpr const char* kWebGatewayContextPayloadKey =
-      "_comet_webgateway_context";
+      "_naim_webgateway_context";
   static constexpr const char* kWebGatewayPolicyPayloadKey =
-      "_comet_webgateway_policy";
+      "_naim_webgateway_policy";
   static constexpr const char* kWebGatewayReviewPayloadKey =
-      "_comet_webgateway_review";
+      "_naim_webgateway_review";
 
   std::optional<InteractionValidationError> ResolveInteractionBrowsing(
       const PlaneInteractionResolution& resolution,
@@ -49,4 +49,4 @@ class InteractionBrowsingService final {
       InteractionRequestContext* context) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

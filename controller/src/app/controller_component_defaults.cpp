@@ -2,9 +2,9 @@
 
 #include <filesystem>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string ControllerComponentDefaults::DefaultArtifactsRoot() const {
   return (std::filesystem::path("var") / "artifacts").string();
@@ -14,7 +14,7 @@ std::string ControllerComponentDefaults::ResolvePlaneArtifactsRoot(
     const std::string& db_path,
     const std::string& plane_name,
     const std::string& fallback_artifacts_root) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto plane = store.LoadPlane(plane_name);
   if (plane.has_value() && !plane->artifacts_root.empty()) {
@@ -51,4 +51,4 @@ int ControllerComponentDefaults::VerificationTimeoutSeconds() const {
   return 45;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

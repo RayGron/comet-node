@@ -6,7 +6,7 @@
 #include "cli/hostd_command_line.h"
 #include "config/node_config_loader.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 struct HostdCliCommonRequest {
   std::string node_name;
@@ -45,18 +45,18 @@ class HostdCliRequestResolutionSupport final {
 
   HostdCliCommonRequest ResolveCommonRequest(
       const HostdCommandLine& command_line,
-      const CometNodeConfig& node_config,
+      const NaimNodeConfig& node_config,
       const std::string& node_name) const;
 
   HostdCliStateOpsRequest ResolveStateOpsRequest(
       const HostdCommandLine& command_line,
-      const CometNodeConfig& node_config,
+      const NaimNodeConfig& node_config,
       const std::string& node_name) const;
 
   HostdCliAssignmentRequest ResolveAssignmentRequest(
       const HostdCommandLine& command_line,
-      const CometNodeConfig& node_config,
+      const NaimNodeConfig& node_config,
       const std::string& node_name) const;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

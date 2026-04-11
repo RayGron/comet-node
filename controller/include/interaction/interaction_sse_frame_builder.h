@@ -4,7 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionSseFrameBuilder final {
  public:
@@ -15,4 +15,4 @@ class InteractionSseFrameBuilder final {
   std::string BuildDoneFrame() const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

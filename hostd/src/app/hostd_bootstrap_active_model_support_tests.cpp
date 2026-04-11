@@ -24,31 +24,31 @@ std::string ReadFile(const std::filesystem::path& path) {
       std::istreambuf_iterator<char>());
 }
 
-comet::DesiredState BuildState(const std::string& shared_root) {
-  comet::DesiredState state;
+naim::DesiredState BuildState(const std::string& shared_root) {
+  naim::DesiredState state;
   state.plane_name = "plane-a";
   state.control_root = "/workspace/shared/control/plane-a";
 
-  comet::DiskSpec disk;
+  naim::DiskSpec disk;
   disk.name = "plane-a-shared";
   disk.plane_name = "plane-a";
   disk.node_name = "node-a";
-  disk.kind = comet::DiskKind::PlaneShared;
+  disk.kind = naim::DiskKind::PlaneShared;
   disk.host_path = shared_root;
   disk.container_path = "/workspace/shared";
   state.disks.push_back(disk);
 
-  comet::NodeInventory node;
+  naim::NodeInventory node;
   node.name = "node-a";
   state.nodes.push_back(node);
 
-  comet::InstanceSpec infer;
+  naim::InstanceSpec infer;
   infer.name = "infer-a";
-  infer.role = comet::InstanceRole::Infer;
+  infer.role = naim::InstanceRole::Infer;
   infer.node_name = "node-a";
   state.instances.push_back(infer);
 
-  comet::BootstrapModelSpec bootstrap_model;
+  naim::BootstrapModelSpec bootstrap_model;
   bootstrap_model.model_id = "model-a";
   state.bootstrap_model = bootstrap_model;
   return state;
@@ -60,16 +60,16 @@ int main() {
   try {
     namespace fs = std::filesystem;
 
-    const comet::hostd::HostdDesiredStatePathSupport path_support;
-    const comet::hostd::HostdFileSupport file_support;
-    const comet::hostd::HostdBootstrapModelArtifactSupport artifact_support(path_support);
-    const comet::hostd::HostdBootstrapActiveModelSupport support(
+    const naim::hostd::HostdDesiredStatePathSupport path_support;
+    const naim::hostd::HostdFileSupport file_support;
+    const naim::hostd::HostdBootstrapModelArtifactSupport artifact_support(path_support);
+    const naim::hostd::HostdBootstrapActiveModelSupport support(
         path_support,
         file_support,
         artifact_support);
 
     const fs::path temp_root =
-        fs::temp_directory_path() / "comet-hostd-bootstrap-active-model-support-tests";
+        fs::temp_directory_path() / "naim-hostd-bootstrap-active-model-support-tests";
     std::error_code cleanup_error;
     fs::remove_all(temp_root, cleanup_error);
     fs::create_directories(temp_root / "shared");

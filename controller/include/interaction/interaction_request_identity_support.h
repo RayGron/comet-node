@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionRequestIdentitySupport final {
  public:
@@ -17,4 +17,4 @@ class InteractionRequestIdentitySupport final {
       std::atomic<unsigned long long>* counter) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

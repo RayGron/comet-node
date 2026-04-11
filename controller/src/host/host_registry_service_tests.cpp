@@ -5,8 +5,8 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/runtime/runtime_status.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/state/sqlite_store.h"
 #include "host/host_registry_service.h"
 
 namespace fs = std::filesystem;
@@ -21,7 +21,7 @@ void Expect(bool condition, const std::string& message) {
 }
 
 std::string MakeTempDbPath(const std::string& test_name) {
-  const fs::path root = fs::temp_directory_path() / "comet-host-registry-tests" / test_name;
+  const fs::path root = fs::temp_directory_path() / "naim-host-registry-tests" / test_name;
   std::error_code error;
   fs::remove_all(root, error);
   fs::create_directories(root);
@@ -29,10 +29,10 @@ std::string MakeTempDbPath(const std::string& test_name) {
 }
 
 void SeedHost(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& node_name,
     const std::string& storage_root) {
-  comet::RegisteredHostRecord host;
+  naim::RegisteredHostRecord host;
   host.node_name = node_name;
   host.registration_state = "registered";
   host.onboarding_state = "completed";
@@ -44,23 +44,23 @@ void SeedHost(
 }
 
 void SeedObservation(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& node_name,
     const std::string& storage_root,
     int gpu_count,
     std::uint64_t total_memory_bytes,
     std::uint64_t storage_total_bytes,
     std::uint64_t storage_free_bytes) {
-  comet::HostObservation observation;
+  naim::HostObservation observation;
   observation.node_name = node_name;
-  observation.status = comet::HostObservationStatus::Idle;
+  observation.status = naim::HostObservationStatus::Idle;
   observation.heartbeat_at = "2026-04-09 11:30:00";
 
-  comet::GpuTelemetrySnapshot gpu;
+  naim::GpuTelemetrySnapshot gpu;
   gpu.source = "test";
   gpu.collected_at = observation.heartbeat_at;
   for (int index = 0; index < gpu_count; ++index) {
-    gpu.devices.push_back(comet::GpuDeviceTelemetry{
+    gpu.devices.push_back(naim::GpuDeviceTelemetry{
         std::to_string(index),
         24576,
         0,
@@ -71,20 +71,20 @@ void SeedObservation(
         {},
     });
   }
-  observation.gpu_telemetry_json = comet::SerializeGpuTelemetryJson(gpu);
+  observation.gpu_telemetry_json = naim::SerializeGpuTelemetryJson(gpu);
 
-  comet::CpuTelemetrySnapshot cpu;
+  naim::CpuTelemetrySnapshot cpu;
   cpu.source = "test";
   cpu.collected_at = observation.heartbeat_at;
   cpu.total_memory_bytes = total_memory_bytes;
   cpu.available_memory_bytes = total_memory_bytes;
   cpu.used_memory_bytes = 0;
-  observation.cpu_telemetry_json = comet::SerializeCpuTelemetryJson(cpu);
+  observation.cpu_telemetry_json = naim::SerializeCpuTelemetryJson(cpu);
 
-  comet::DiskTelemetrySnapshot disk;
+  naim::DiskTelemetrySnapshot disk;
   disk.source = "test";
   disk.collected_at = observation.heartbeat_at;
-  comet::DiskTelemetryRecord record;
+  naim::DiskTelemetryRecord record;
   record.disk_name = "storage-root";
   record.node_name = node_name;
   record.mount_point = storage_root;
@@ -94,7 +94,7 @@ void SeedObservation(
                           ? storage_total_bytes - storage_free_bytes
                           : 0;
   disk.items.push_back(record);
-  observation.disk_telemetry_json = comet::SerializeDiskTelemetryJson(disk);
+  observation.disk_telemetry_json = naim::SerializeDiskTelemetryJson(disk);
 
   store.UpsertHostObservation(observation);
 }
@@ -105,7 +105,7 @@ json LoadSingleHostPayload(
     std::uint64_t total_memory_bytes,
     std::uint64_t storage_total_bytes) {
   const std::string db_path = MakeTempDbPath(test_name);
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   SeedHost(store, test_name, "/srv/" + test_name);
   SeedObservation(
@@ -117,9 +117,9 @@ json LoadSingleHostPayload(
       storage_total_bytes,
       storage_total_bytes / 2);
 
-  const comet::controller::HostRegistryService service(
+  const naim::controller::HostRegistryService service(
       db_path,
-      [](comet::ControllerStore&,
+      [](naim::ControllerStore&,
          const std::string&,
          const std::string&,
          const json&,

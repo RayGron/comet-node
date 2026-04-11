@@ -5,9 +5,9 @@
 #include <stdexcept>
 
 #include "app/hostd_runtime_telemetry_support.h"
-#include "comet/planning/planner.h"
+#include "naim/planning/planner.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdDesiredStateApplySupport::HostdDesiredStateApplySupport(
     const HostdDesiredStatePathSupport& path_support,
@@ -28,7 +28,7 @@ HostdDesiredStateApplySupport::HostdDesiredStateApplySupport(
       bootstrap_model_support_(bootstrap_model_support) {}
 
 void HostdDesiredStateApplySupport::ApplyDesiredNodeState(
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     const std::string& artifacts_root,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
@@ -53,7 +53,7 @@ void HostdDesiredStateApplySupport::ApplyDesiredNodeState(
           node_name,
           plane_name);
   const auto execution_plan = HostdDesiredStateDisplaySupport::ResolveNodeExecutionPlan(
-      comet::BuildNodeExecutionPlans(current_local_state, desired_node_state, artifacts_root),
+      naim::BuildNodeExecutionPlans(current_local_state, desired_node_state, artifacts_root),
       current_local_state,
       desired_node_state,
       node_name,
@@ -252,8 +252,8 @@ std::string HostdDesiredStateApplySupport::CurrentHostPlatform() {
 #endif
 }
 
-const comet::NodeInventory* HostdDesiredStateApplySupport::FindNodeInventory(
-    const comet::DesiredState& desired_node_state,
+const naim::NodeInventory* HostdDesiredStateApplySupport::FindNodeInventory(
+    const naim::DesiredState& desired_node_state,
     const std::string& node_name) {
   for (const auto& node : desired_node_state.nodes) {
     if (node.name == node_name) {
@@ -263,19 +263,19 @@ const comet::NodeInventory* HostdDesiredStateApplySupport::FindNodeInventory(
   return nullptr;
 }
 
-bool HostdDesiredStateApplySupport::NodeHasInferInstance(const comet::DesiredState& state) {
+bool HostdDesiredStateApplySupport::NodeHasInferInstance(const naim::DesiredState& state) {
   for (const auto& instance : state.instances) {
-    if (instance.role == comet::InstanceRole::Infer) {
+    if (instance.role == naim::InstanceRole::Infer) {
       return true;
     }
   }
   return false;
 }
 
-comet::NodeComposePlan HostdDesiredStateApplySupport::RequireNodeComposePlan(
-    const comet::DesiredState& state,
+naim::NodeComposePlan HostdDesiredStateApplySupport::RequireNodeComposePlan(
+    const naim::DesiredState& state,
     const std::string& node_name) {
-  const auto plan = comet::FindNodeComposePlan(state, node_name);
+  const auto plan = naim::FindNodeComposePlan(state, node_name);
   if (!plan.has_value()) {
     throw std::runtime_error("node '" + node_name + "' not found in compose plan");
   }
@@ -283,7 +283,7 @@ comet::NodeComposePlan HostdDesiredStateApplySupport::RequireNodeComposePlan(
 }
 
 bool HostdDesiredStateApplySupport::NodeUsesManagedRuntimeServices(
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     const std::string& node_name) {
   for (const auto& instance : desired_node_state.instances) {
     if (instance.node_name == node_name) {
@@ -294,7 +294,7 @@ bool HostdDesiredStateApplySupport::NodeUsesManagedRuntimeServices(
 }
 
 bool HostdDesiredStateApplySupport::NodeUsesGpuRuntime(
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     const std::string& node_name) {
   for (const auto& runtime_gpu_node : desired_node_state.runtime_gpu_nodes) {
     if (runtime_gpu_node.enabled && runtime_gpu_node.node_name == node_name) {
@@ -303,7 +303,7 @@ bool HostdDesiredStateApplySupport::NodeUsesGpuRuntime(
   }
   for (const auto& instance : desired_node_state.instances) {
     if (instance.node_name == node_name &&
-        (instance.role == comet::InstanceRole::Worker ||
+        (instance.role == naim::InstanceRole::Worker ||
          (instance.gpu_device.has_value() && !instance.gpu_device->empty()))) {
       return true;
     }
@@ -316,7 +316,7 @@ bool HostdDesiredStateApplySupport::NodeUsesGpuRuntime(
 }
 
 void HostdDesiredStateApplySupport::ValidateDesiredNodeStateForCurrentHost(
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     ComposeMode compose_mode) const {
   if (compose_mode != ComposeMode::Exec) {
     return;
@@ -343,4 +343,4 @@ void HostdDesiredStateApplySupport::ValidateDesiredNodeStateForCurrentHost(
   }
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

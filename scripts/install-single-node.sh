@@ -102,13 +102,13 @@ wait_for_http() {
   return 1
 }
 
-stop_existing_comet_processes() {
-  echo "[install-single-node] stopping existing comet services and stray processes"
+stop_existing_naim_processes() {
+  echo "[install-single-node] stopping existing naim services and stray processes"
   run_as_root systemctl stop naim-node-controller.service naim-node-hostd.service >/dev/null 2>&1 || true
 
   local patterns=(
     "/naim-node run controller"
-    "/comet-controller serve"
+    "/naim-controller serve"
     "/naim-node run hostd"
   )
   local pattern
@@ -267,7 +267,7 @@ ensure_operator_ui_deps_if_needed() {
   run_as_invoking_user bash -lc "cd '${ui_root}' && npm ci"
 }
 
-config_summary="$("${repo_root}/scripts/comet-devtool.sh" config-summary --config "${repo_root}/config/naim-node-config.json")"
+config_summary="$("${repo_root}/scripts/naim-devtool.sh" config-summary --config "${repo_root}/config/naim-node-config.json")"
 storage_root="$(printf '%s\n' "${config_summary}" | sed -n '1p')"
 model_cache_root="$(printf '%s\n' "${config_summary}" | sed -n '2p')"
 
@@ -295,7 +295,7 @@ if [[ ! -x "${launcher_binary}" ]]; then
   exit 1
 fi
 
-stop_existing_comet_processes
+stop_existing_naim_processes
 prepare_runtime_storage_root
 
 install_args=(

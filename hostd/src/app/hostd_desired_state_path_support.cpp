@@ -2,9 +2,9 @@
 
 #include <filesystem>
 
-#include "comet/runtime/infer_runtime_config.h"
+#include "naim/runtime/infer_runtime_config.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 bool HostdDesiredStatePathSupport::HasPathPrefix(
     const std::filesystem::path& path,
@@ -58,8 +58,8 @@ std::string HostdDesiredStatePathSupport::RebaseManagedPath(
   return rebased.string();
 }
 
-comet::DesiredState HostdDesiredStatePathSupport::RebaseStateForRuntimeRoot(
-    comet::DesiredState state,
+naim::DesiredState HostdDesiredStatePathSupport::RebaseStateForRuntimeRoot(
+    naim::DesiredState state,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root) const {
   if (!runtime_root.has_value() &&
@@ -72,17 +72,17 @@ comet::DesiredState HostdDesiredStatePathSupport::RebaseStateForRuntimeRoot(
         disk.host_path,
         storage_root,
         runtime_root,
-        comet::IsNodeLocalDiskKind(disk.kind) ? std::optional<std::string>(disk.node_name)
+        naim::IsNodeLocalDiskKind(disk.kind) ? std::optional<std::string>(disk.node_name)
                                               : std::nullopt);
   }
   return state;
 }
 
-const comet::DiskSpec* HostdDesiredStatePathSupport::FindSharedDiskForNode(
-    const comet::DesiredState& state,
+const naim::DiskSpec* HostdDesiredStatePathSupport::FindSharedDiskForNode(
+    const naim::DesiredState& state,
     const std::string& node_name) const {
   for (const auto& disk : state.disks) {
-    if (disk.node_name == node_name && disk.kind == comet::DiskKind::PlaneShared) {
+    if (disk.node_name == node_name && disk.kind == naim::DiskKind::PlaneShared) {
       return &disk;
     }
   }
@@ -90,7 +90,7 @@ const comet::DiskSpec* HostdDesiredStatePathSupport::FindSharedDiskForNode(
 }
 
 std::optional<std::string> HostdDesiredStatePathSupport::ControlFilePathForNode(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name,
     const std::string& file_name) const {
   const auto* shared_disk = FindSharedDiskForNode(state, node_name);
@@ -124,16 +124,16 @@ std::optional<std::string> HostdDesiredStatePathSupport::ControlFilePathForNode(
 }
 
 std::optional<std::string> HostdDesiredStatePathSupport::InferRuntimeConfigPathForNode(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name) const {
   return ControlFilePathForNode(state, node_name, "infer-runtime.json");
 }
 
-const comet::InstanceSpec* HostdDesiredStatePathSupport::PrimaryInferInstanceForNode(
-    const comet::DesiredState& state,
+const naim::InstanceSpec* HostdDesiredStatePathSupport::PrimaryInferInstanceForNode(
+    const naim::DesiredState& state,
     const std::string& node_name) const {
   for (const auto& instance : state.instances) {
-    if (instance.role == comet::InstanceRole::Infer && instance.node_name == node_name) {
+    if (instance.role == naim::InstanceRole::Infer && instance.node_name == node_name) {
       return &instance;
     }
   }
@@ -141,19 +141,19 @@ const comet::InstanceSpec* HostdDesiredStatePathSupport::PrimaryInferInstanceFor
 }
 
 std::optional<std::string> HostdDesiredStatePathSupport::InferRuntimeStatusPathForInstance(
-    const comet::DesiredState& state,
-    const comet::InstanceSpec& infer_instance) const {
-  if (infer_instance.role != comet::InstanceRole::Infer || infer_instance.name.empty()) {
+    const naim::DesiredState& state,
+    const naim::InstanceSpec& infer_instance) const {
+  if (infer_instance.role != naim::InstanceRole::Infer || infer_instance.name.empty()) {
     return std::nullopt;
   }
   return ControlFilePathForNode(
       state,
       infer_instance.node_name,
-      comet::InferRuntimeStatusRelativePath(infer_instance.name));
+      naim::InferRuntimeStatusRelativePath(infer_instance.name));
 }
 
 std::optional<std::string> HostdDesiredStatePathSupport::RuntimeStatusPathForNode(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name) const {
   if (const auto* infer = PrimaryInferInstanceForNode(state, node_name); infer != nullptr) {
     return InferRuntimeStatusPathForInstance(state, *infer);
@@ -162,7 +162,7 @@ std::optional<std::string> HostdDesiredStatePathSupport::RuntimeStatusPathForNod
 }
 
 std::string HostdDesiredStatePathSupport::SharedDiskHostPathForContainerPath(
-    const comet::DiskSpec& shared_disk,
+    const naim::DiskSpec& shared_disk,
     const std::string& container_path,
     const std::string& fallback_relative_path) const {
   const std::filesystem::path shared_container_path(shared_disk.container_path);
@@ -185,4 +185,4 @@ std::string HostdDesiredStatePathSupport::SharedDiskHostPathForContainerPath(
   return (std::filesystem::path(shared_disk.host_path) / relative_path).string();
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

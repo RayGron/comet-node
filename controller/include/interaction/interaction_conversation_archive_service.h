@@ -7,16 +7,16 @@
 
 #include "interaction/interaction_service.h"
 
-namespace comet {
+namespace naim {
 class ControllerStore;
 }
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionConversationArchiveService final {
  public:
   std::optional<InteractionValidationError> RestoreArchivedSession(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       const std::string& plane_name,
       const std::string& session_id,
       const std::string& owner_kind,
@@ -44,4 +44,4 @@ class InteractionConversationArchiveService final {
       const std::string& contents) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

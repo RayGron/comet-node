@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 std::string HostdLocalStatePathSupport::LocalPlaneRoot(
     const std::string& state_root,
@@ -60,4 +60,4 @@ std::vector<std::string> HostdLocalStatePathSupport::ListLocalPlaneNames(
   return result;
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

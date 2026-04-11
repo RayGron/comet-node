@@ -10,10 +10,10 @@
 #include "scheduler/scheduler_view_service.h"
 #include "read_model/state_aggregate_loader.h"
 
-#include "comet/state/models.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ReadModelCliService : public IReadModelCliService {
  public:
@@ -67,4 +67,4 @@ class ReadModelCliService : public IReadModelCliService {
   int verification_stable_samples_required_ = 3;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -1,13 +1,13 @@
-#include "comet/state/sqlite_store_schema.h"
+#include "naim/state/sqlite_store_schema.h"
 
 #include <string>
 #include <vector>
 
-#include "comet/state/sqlite_statement.h"
-#include "comet/state/sqlite_store_support.h"
-#include "comet/state/state_json.h"
+#include "naim/state/sqlite_statement.h"
+#include "naim/state/sqlite_store_support.h"
+#include "naim/state/state_json.h"
 
-namespace comet::sqlite_store_schema {
+namespace naim::sqlite_store_schema {
 
 namespace {
 
@@ -499,4 +499,4 @@ void InitializeSchema(
       "hidden INTEGER NOT NULL DEFAULT 0");
 }
 
-}  // namespace comet::sqlite_store_schema
+}  // namespace naim::sqlite_store_schema

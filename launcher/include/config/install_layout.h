@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <optional>
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 namespace fs = std::filesystem;
 
@@ -26,4 +26,4 @@ class InstallLayoutResolver {
   bool IsUserServiceLayout(const InstallLayout& layout) const;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

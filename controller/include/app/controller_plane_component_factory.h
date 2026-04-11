@@ -2,7 +2,7 @@
 
 #include "app/controller_main_includes.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerComponentDefaults;
 
@@ -40,4 +40,4 @@ class ControllerPlaneComponentFactory final {
   const SkillsFactoryService& SkillsFactoryServiceInstance() const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

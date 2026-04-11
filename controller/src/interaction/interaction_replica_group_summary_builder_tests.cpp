@@ -3,7 +3,7 @@
 #include <string>
 
 #include "interaction/interaction_replica_group_summary_builder.h"
-#include "comet/state/worker_group_topology.h"
+#include "naim/state/worker_group_topology.h"
 
 namespace {
 
@@ -13,15 +13,15 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-comet::DesiredState BuildHybridDesiredState() {
-  comet::DesiredState desired_state;
+naim::DesiredState BuildHybridDesiredState() {
+  naim::DesiredState desired_state;
   desired_state.plane_name = "hybrid-plane";
   desired_state.inference.runtime_engine = "vllm";
   desired_state.inference.distributed_backend = "native";
   desired_state.inference.data_parallel_mode = "on";
-  desired_state.inference.data_parallel_lb_mode = comet::kDataParallelLbModeHybrid;
+  desired_state.inference.data_parallel_lb_mode = naim::kDataParallelLbModeHybrid;
 
-  comet::WorkerGroupMemberSpec first;
+  naim::WorkerGroupMemberSpec first;
   first.name = "worker-a";
   first.node_name = "node-a";
   first.data_parallel_start_rank = 0;
@@ -30,12 +30,12 @@ comet::DesiredState BuildHybridDesiredState() {
   first.data_parallel_api_endpoint = true;
   first.enabled = true;
 
-  comet::WorkerGroupMemberSpec second = first;
+  naim::WorkerGroupMemberSpec second = first;
   second.name = "worker-b";
   second.node_name = "node-b";
   second.data_parallel_start_rank = 1;
 
-  comet::WorkerGroupMemberSpec third = first;
+  naim::WorkerGroupMemberSpec third = first;
   third.name = "worker-c";
   third.node_name = "node-b";
   third.data_parallel_start_rank = 1;
@@ -47,7 +47,7 @@ comet::DesiredState BuildHybridDesiredState() {
 
 void TestCountsExpectedHybridApiEndpoints() {
   const auto desired_state = BuildHybridDesiredState();
-  const comet::controller::InteractionReplicaGroupSummaryBuilder builder;
+  const naim::controller::InteractionReplicaGroupSummaryBuilder builder;
 
   Expect(
       builder.CountExpectedHybridApiEndpoints(desired_state) == 2,
@@ -58,16 +58,16 @@ void TestCountsExpectedHybridApiEndpoints() {
 
 void TestBuildsHybridReplicaSummary() {
   const auto desired_state = BuildHybridDesiredState();
-  const comet::controller::InteractionReplicaGroupSummaryBuilder builder;
+  const naim::controller::InteractionReplicaGroupSummaryBuilder builder;
 
   const auto summary = builder.Build(
       desired_state,
       {
-          comet::RuntimeProcessStatus{
+          naim::RuntimeProcessStatus{
               "worker-a", "worker", "node-a", "", "", "running", "", "", 11, 0, true},
-          comet::RuntimeProcessStatus{
+          naim::RuntimeProcessStatus{
               "worker-b", "worker", "node-b", "", "", "running", "", "", 12, 0, true},
-          comet::RuntimeProcessStatus{
+          naim::RuntimeProcessStatus{
               "worker-c", "worker", "node-b", "", "", "running", "", "", 13, 0, false},
       });
 

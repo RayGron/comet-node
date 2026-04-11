@@ -16,10 +16,10 @@
 #include <thread>
 
 #include "skills/plane_skills_service.h"
-#include "comet/runtime/model_adapter.h"
-#include "comet/state/worker_group_topology.h"
+#include "naim/runtime/model_adapter.h"
+#include "naim/state/worker_group_topology.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 nlohmann::json InteractionRequestValidator::ParsePayload(
     const std::string& body) const {
@@ -272,7 +272,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
     return {
         200,
         nlohmann::json{
-            {"id", "chatcmpl-comet-session"},
+            {"id", "chatcmpl-naim-session"},
             {"object", "chat.completion"},
             {"request_id", request_context.request_id},
             {"model", result.model},
@@ -296,7 +296,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
              skills_session_id.has_value()
                  ? nlohmann::json(*skills_session_id)
                  : nlohmann::json(nullptr)},
-            {"comet",
+            {"naim",
              request_contract_support.BuildInteractionContractMetadata(
                  resolution,
                  request_context.request_id,
@@ -315,7 +315,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
   return {
       200,
       nlohmann::json{
-          {"id", "chatcmpl-comet-session"},
+          {"id", "chatcmpl-naim-session"},
           {"object", "chat.completion"},
           {"request_id", request_context.request_id},
           {"model", result.model},
@@ -340,7 +340,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
            skills_session_id.has_value()
                ? nlohmann::json(*skills_session_id)
                : nlohmann::json(nullptr)},
-          {"comet",
+          {"naim",
            request_contract_support.BuildInteractionContractMetadata(
                resolution,
                request_context.request_id,
@@ -503,7 +503,7 @@ nlohmann::json InteractionStreamPresenter::BuildSessionCompleteEvent(
        skills_session_id.has_value()
            ? nlohmann::json(*skills_session_id)
            : nlohmann::json(nullptr)},
-      {"comet",
+      {"naim",
        request_contract_support.BuildInteractionContractMetadata(
            resolution,
            request_id,
@@ -542,7 +542,7 @@ nlohmann::json InteractionStreamPresenter::BuildCompleteEvent(
        skills_session_id.has_value()
            ? nlohmann::json(*skills_session_id)
            : nlohmann::json(nullptr)},
-      {"comet",
+      {"naim",
        request_contract_support.BuildInteractionContractMetadata(
            resolution,
            request_id,
@@ -597,7 +597,7 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
           original_payload);
   const InteractionCompletionPolicy& policy = resolved_policy.policy;
   const InteractionModelIdentityBuilder model_identity_builder;
-  const comet::runtime::ModelIdentity model_identity =
+  const naim::runtime::ModelIdentity model_identity =
       model_identity_builder.BuildRuntimePreferred(resolution);
   InteractionSessionResult result;
   result.session_id = request_context.conversation_session_id.empty()
@@ -649,7 +649,7 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
     const nlohmann::json usage = extract_interaction_usage_(upstream_payload);
     bool marker_seen_in_segment = false;
     const std::string clean_text = remove_completion_markers_(
-        comet::runtime::ModelAdapter::SanitizeVisibleText(
+        naim::runtime::ModelAdapter::SanitizeVisibleText(
             extract_interaction_text_(upstream_payload),
             model_identity),
         policy.completion_marker,
@@ -847,11 +847,11 @@ InteractionProxyResult InteractionProxyExecutor::Execute(
           upstream.status_code >= 500);
     }
 
-    upstream.headers["x-comet-request-id"] = request_id;
+    upstream.headers["x-naim-request-id"] = request_id;
     if (path == "/v1/models" && !upstream.body.empty()) {
       nlohmann::json payload = nlohmann::json::parse(upstream.body);
       payload["request_id"] = request_id;
-      payload["comet"] =
+      payload["naim"] =
           InteractionRequestContractSupport{}.BuildInteractionContractMetadata(
               resolution, request_id);
       return InteractionProxyResult{
@@ -1280,7 +1280,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
   const InteractionCompletionPolicy& policy = resolved_policy.policy;
   const InteractionModelIdentityBuilder model_identity_builder;
   const InteractionTextPostProcessor text_post_processor;
-  const comet::runtime::ModelIdentity model_identity =
+  const naim::runtime::ModelIdentity model_identity =
       model_identity_builder.BuildRuntimePreferred(resolution);
   const InteractionRuntimeTextSupport runtime_text_support;
   StreamedInteractionSegmentResult result;
@@ -1293,7 +1293,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
           bool assign_only = false) -> std::optional<StreamedInteractionSegmentResult> {
         bool marker_seen_in_fallback = false;
         const std::string fallback_text = text_post_processor.RemoveCompletionMarkers(
-            comet::runtime::ModelAdapter::SanitizeVisibleText(
+            naim::runtime::ModelAdapter::SanitizeVisibleText(
                 extract_interaction_text_(fallback_payload),
                 model_identity),
             policy.completion_marker,
@@ -1408,7 +1408,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
                 &marker_seen);
             filter_state.marker_seen = filter_state.marker_seen || marker_seen;
             visible_text = sanitize_interaction_text_(std::move(visible_text));
-            visible_text = comet::runtime::ModelAdapter::SanitizeVisibleText(
+            visible_text = naim::runtime::ModelAdapter::SanitizeVisibleText(
                 std::move(visible_text), model_identity);
             if (visible_text.empty()) {
               return;
@@ -1676,7 +1676,7 @@ InteractionPlaneResolver::InteractionPlaneResolver(
 PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     const std::string& db_path,
     const std::string& plane_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState(plane_name);
@@ -1702,7 +1702,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       infer_runtime_present = std::any_of(
           instance_statuses.begin(),
           instance_statuses.end(),
-          [&](const comet::RuntimeProcessStatus& status) {
+          [&](const naim::RuntimeProcessStatus& status) {
             return status.instance_name == *infer_instance_name_opt;
           });
     }
@@ -1721,7 +1721,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     }
     if (!resolution.runtime_status.has_value() && observation_matches_plane &&
         !resolution.observation->runtime_status_json.empty()) {
-      const auto observed_runtime = comet::DeserializeRuntimeStatusJson(
+      const auto observed_runtime = naim::DeserializeRuntimeStatusJson(
           resolution.observation->runtime_status_json);
       if (observed_runtime.plane_name == plane_name &&
           (!infer_instance_name_opt.has_value() ||
@@ -1736,7 +1736,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     }
   }
 
-  const bool llm_plane = desired_state->plane_mode == comet::PlaneMode::Llm;
+  const bool llm_plane = desired_state->plane_mode == naim::PlaneMode::Llm;
   const bool running_plane =
       resolution.plane_record.has_value() && resolution.plane_record->state == "running";
   const PlaneSkillsService skills_service;
@@ -1748,8 +1748,8 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const auto skills_instance = std::find_if(
       desired_state->instances.begin(),
       desired_state->instances.end(),
-      [](const comet::InstanceSpec& instance) {
-        return instance.role == comet::InstanceRole::Skills;
+      [](const naim::InstanceSpec& instance) {
+        return instance.role == naim::InstanceRole::Skills;
       });
   const PlaneBrowsingService browsing_service;
   const bool browsing_enabled = browsing_service.IsEnabled(*desired_state);
@@ -1760,21 +1760,21 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const auto browsing_instance = std::find_if(
       desired_state->instances.begin(),
       desired_state->instances.end(),
-      [](const comet::InstanceSpec& instance) {
-        return instance.role == comet::InstanceRole::Browsing;
+      [](const naim::InstanceSpec& instance) {
+        return instance.role == naim::InstanceRole::Browsing;
       });
   const bool data_parallel =
-      comet::DataParallelEnabled(desired_state->inference);
+      naim::DataParallelEnabled(desired_state->inference);
   const bool hybrid_data_parallel =
       data_parallel &&
-      desired_state->inference.data_parallel_lb_mode == comet::kDataParallelLbModeHybrid;
+      desired_state->inference.data_parallel_lb_mode == naim::kDataParallelLbModeHybrid;
   int expected_worker_members =
       std::max(0, desired_state->worker_group.expected_workers);
   int ready_worker_members = count_ready_worker_members_(store, *desired_state);
   int expected_replica_groups =
       resolution.runtime_status.has_value() && resolution.runtime_status->replica_groups_expected > 0
           ? resolution.runtime_status->replica_groups_expected
-          : comet::ExpectedReplicaGroupCount(
+          : naim::ExpectedReplicaGroupCount(
                 desired_state->inference,
                 desired_state->worker_group);
   if (ready_worker_members == 0 && resolution.runtime_status.has_value() &&
@@ -1824,7 +1824,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   }
 
   if (!resolution.runtime_status.has_value() && resolution.target.has_value()) {
-    comet::RuntimeStatus runtime;
+    naim::RuntimeStatus runtime;
     runtime.plane_name = desired_state->plane_name;
     runtime.control_root = desired_state->control_root;
     runtime.primary_infer_node = desired_state->inference.primary_infer_node;
@@ -1947,7 +1947,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     reason = "unsupported_local_runtime";
   } else if (!observation_ready) {
     reason = "no_observation";
-  } else if (resolution.observation->status == comet::HostObservationStatus::Failed) {
+  } else if (resolution.observation->status == naim::HostObservationStatus::Failed) {
     reason = "runtime_start_failed";
   } else if (!resolution.runtime_status.has_value()) {
     reason = "runtime_status_missing";
@@ -1981,7 +1981,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
 
   resolution.status_payload = nlohmann::json{
       {"plane_name", plane_name},
-      {"plane_mode", comet::ToString(desired_state->plane_mode)},
+      {"plane_mode", naim::ToString(desired_state->plane_mode)},
       {"interaction_enabled", llm_plane},
       {"skills_enabled", skills_enabled},
       {"skills_ready", skills_ready},
@@ -2224,7 +2224,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       {"runtime_status",
        resolution.runtime_status.has_value()
            ? nlohmann::json::parse(
-                 comet::SerializeRuntimeStatusJson(*resolution.runtime_status))
+                 naim::SerializeRuntimeStatusJson(*resolution.runtime_status))
            : nlohmann::json(nullptr)},
       {"failure_detail",
        reason == "unsupported_local_runtime"
@@ -2237,4 +2237,4 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   return resolution;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -37,7 +37,7 @@ cleanup() {
 trap cleanup EXIT
 
 next_port() {
-  "${script_dir}/comet-devtool.sh" free-port
+  "${script_dir}/naim-devtool.sh" free-port
 }
 
 wait_for_http() {
@@ -59,14 +59,14 @@ cmake -E remove_directory "${state_root}"
 cmake -E rm -f "${bad_state_root}"
 
 echo "phase-g-live: init db and apply bundle"
-"${build_dir}/comet-controller" init-db --db "${db_path}" >/dev/null
-"${build_dir}/comet-controller" apply-bundle \
+"${build_dir}/naim-controller" init-db --db "${db_path}" >/dev/null
+"${build_dir}/naim-controller" apply-bundle \
   --bundle "${PWD}/config/demo-plane" \
   --db "${db_path}" \
   --artifacts-root "${artifacts_root}" >/dev/null
 
 port="$(next_port)"
-"${build_dir}/comet-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${port}" >/tmp/comet-phase-g-serve.log 2>&1 &
+"${build_dir}/naim-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${port}" >/tmp/naim-phase-g-serve.log 2>&1 &
 http_server_pid="$!"
 wait_for_http "http://127.0.0.1:${port}/health"
 
@@ -75,28 +75,28 @@ curl -fsS "http://127.0.0.1:${port}/api/v1/events" | grep -F '"category":"bundle
 curl -fsS "http://127.0.0.1:${port}/api/v1/events" | grep -F '"event_type":"applied"' >/dev/null
 
 echo "phase-g-live: node apply and telemetry"
-"${build_dir}/comet-hostd" apply-state-ops \
+"${build_dir}/naim-hostd" apply-state-ops \
   --db "${db_path}" \
   --node node-a \
   --artifacts-root "${artifacts_root}" \
   --runtime-root "${runtime_root}" \
   --state-root "${state_root}" \
   --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" report-observed-state \
+"${build_dir}/naim-hostd" report-observed-state \
   --db "${db_path}" \
   --node node-a \
   --state-root "${state_root}" >/dev/null
 
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_telemetry_source=statvfs" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_read_bytes=" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_faults=" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "read_bytes=" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "fault_count=" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "network_telemetry_source=sysfs" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "telemetry_source=" >/dev/null
-"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-a | grep -F "read_bytes=" >/dev/null
-"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-a | grep -F "perf_counters=" >/dev/null
-"${build_dir}/comet-controller" show-events --db "${db_path}" --node node-a | grep -F "category=host-observation type=reported" >/dev/null
+"${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_telemetry_source=statvfs" >/dev/null
+"${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_read_bytes=" >/dev/null
+"${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_faults=" >/dev/null
+"${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "read_bytes=" >/dev/null
+"${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "fault_count=" >/dev/null
+"${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "network_telemetry_source=sysfs" >/dev/null
+"${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "telemetry_source=" >/dev/null
+"${build_dir}/naim-controller" show-disk-state --db "${db_path}" --node node-a | grep -F "read_bytes=" >/dev/null
+"${build_dir}/naim-controller" show-disk-state --db "${db_path}" --node node-a | grep -F "perf_counters=" >/dev/null
+"${build_dir}/naim-controller" show-events --db "${db_path}" --node node-a | grep -F "category=host-observation type=reported" >/dev/null
 
 curl -fsS "http://127.0.0.1:${port}/api/v1/host-observations?node=node-a" | grep -F '"gpu_telemetry"' >/dev/null
 curl -fsS "http://127.0.0.1:${port}/api/v1/host-observations?node=node-a" | grep -F '"disk_telemetry"' >/dev/null
@@ -108,27 +108,27 @@ curl -fsS "http://127.0.0.1:${port}/api/v1/disk-state?node=node-a" | grep -F '"p
 curl -fsS "http://127.0.0.1:${port}/api/v1/events?node=node-a" | grep -F '"category":"host-observation"' >/dev/null
 
 echo "phase-g-live: degraded gpu telemetry fallback"
-COMET_DISABLE_NVML=1 "${build_dir}/comet-hostd" report-observed-state \
+NAIM_DISABLE_NVML=1 "${build_dir}/naim-hostd" report-observed-state \
   --db "${db_path}" \
   --node node-a \
   --state-root "${state_root}" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "telemetry_degraded=yes" >/dev/null
+"${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "telemetry_degraded=yes" >/dev/null
 if command -v nvidia-smi >/dev/null 2>&1; then
-  "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "telemetry_source=nvidia-smi" >/dev/null
+  "${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "telemetry_source=nvidia-smi" >/dev/null
   curl -fsS "http://127.0.0.1:${port}/api/v1/host-observations?node=node-a" | grep -F '"source":"nvidia-smi"' >/dev/null
 else
-  "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "telemetry_source=unavailable" >/dev/null
+  "${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "telemetry_source=unavailable" >/dev/null
   curl -fsS "http://127.0.0.1:${port}/api/v1/host-observations?node=node-a" | grep -F '"source":"unavailable"' >/dev/null
 fi
 
 echo "phase-g-live: controller event emission"
 curl -fsS -X POST "http://127.0.0.1:${port}/api/v1/node-availability?node=node-a&availability=draining&message=phase-g-live" | grep -F '"action":"set-node-availability"' >/dev/null
-"${build_dir}/comet-controller" show-events --db "${db_path}" --node node-a | grep -F "category=node-availability type=updated" >/dev/null
+"${build_dir}/naim-controller" show-events --db "${db_path}" --node node-a | grep -F "category=node-availability type=updated" >/dev/null
 curl -fsS "http://127.0.0.1:${port}/api/v1/events?node=node-a&category=node-availability" | grep -F '"event_type":"updated"' >/dev/null
 
 echo "phase-g-live: failed assignment event"
 : > "${bad_state_root}"
-if "${build_dir}/comet-hostd" apply-next-assignment \
+if "${build_dir}/naim-hostd" apply-next-assignment \
   --db "${db_path}" \
   --node node-b \
   --runtime-root "${runtime_root}" \
@@ -138,7 +138,7 @@ if "${build_dir}/comet-hostd" apply-next-assignment \
   exit 1
 fi
 
-"${build_dir}/comet-controller" show-events --db "${db_path}" --node node-b | grep -F "category=host-assignment type=failed" >/dev/null
+"${build_dir}/naim-controller" show-events --db "${db_path}" --node node-b | grep -F "category=host-assignment type=failed" >/dev/null
 curl -fsS "http://127.0.0.1:${port}/api/v1/events?node=node-b" | grep -F '"category":"host-assignment"' >/dev/null
 curl -fsS "http://127.0.0.1:${port}/api/v1/events?node=node-b" | grep -F '"event_type":"failed"' >/dev/null
 

@@ -13,13 +13,13 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestBuildRuntimePreferredUsesRuntimeIdentity() {
-  const comet::controller::InteractionModelIdentityBuilder builder;
-  comet::controller::PlaneInteractionResolution resolution;
+  const naim::controller::InteractionModelIdentityBuilder builder;
+  naim::controller::PlaneInteractionResolution resolution;
   resolution.status_payload = {
       {"served_model_name", "status-served"},
       {"active_model_id", "status-active"},
   };
-  comet::RuntimeStatus runtime_status;
+  naim::RuntimeStatus runtime_status;
   runtime_status.active_served_model_name = "runtime-served";
   runtime_status.active_model_id = "runtime-active";
   runtime_status.cached_local_model_path = "/models/local.gguf";
@@ -38,13 +38,13 @@ void TestBuildRuntimePreferredUsesRuntimeIdentity() {
 }
 
 void TestBuildStatusPreferredPreservesStatusIdentity() {
-  const comet::controller::InteractionModelIdentityBuilder builder;
-  comet::controller::PlaneInteractionResolution resolution;
+  const naim::controller::InteractionModelIdentityBuilder builder;
+  naim::controller::PlaneInteractionResolution resolution;
   resolution.status_payload = {
       {"served_model_name", "status-served"},
       {"active_model_id", "status-active"},
   };
-  comet::RuntimeStatus runtime_status;
+  naim::RuntimeStatus runtime_status;
   runtime_status.active_served_model_name = "runtime-served";
   runtime_status.active_model_id = "runtime-active";
   resolution.runtime_status = runtime_status;
@@ -58,10 +58,10 @@ void TestBuildStatusPreferredPreservesStatusIdentity() {
 }
 
 void TestBuildStatusPreferredFallsBackToRuntimeWhenMissing() {
-  const comet::controller::InteractionModelIdentityBuilder builder;
-  comet::controller::PlaneInteractionResolution resolution;
+  const naim::controller::InteractionModelIdentityBuilder builder;
+  naim::controller::PlaneInteractionResolution resolution;
   resolution.status_payload = nlohmann::json::object();
-  comet::RuntimeStatus runtime_status;
+  naim::RuntimeStatus runtime_status;
   runtime_status.active_served_model_name = "runtime-served";
   runtime_status.active_model_id = "runtime-active";
   resolution.runtime_status = runtime_status;

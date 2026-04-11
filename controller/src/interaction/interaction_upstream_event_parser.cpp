@@ -5,7 +5,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string InteractionUpstreamEventParser::TrimCopy(
     const std::string& value) const {
@@ -149,4 +149,4 @@ bool InteractionUpstreamEventParser::TryConsumeSseFrame(
   return true;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

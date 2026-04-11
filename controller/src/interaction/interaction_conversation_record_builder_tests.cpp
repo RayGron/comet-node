@@ -15,9 +15,9 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestAppendsDeltaAndAssistantRecords() {
-  const comet::controller::InteractionConversationRecordBuilder builder;
-  std::vector<comet::InteractionMessageRecord> existing{
-      comet::InteractionMessageRecord{
+  const naim::controller::InteractionConversationRecordBuilder builder;
+  std::vector<naim::InteractionMessageRecord> existing{
+      naim::InteractionMessageRecord{
           "session-1",
           0,
           "user",
@@ -46,9 +46,9 @@ void TestAppendsDeltaAndAssistantRecords() {
 }
 
 void TestBuildsArchiveMessagesAndRestoresRecords() {
-  const comet::controller::InteractionConversationRecordBuilder builder;
-  const std::vector<comet::InteractionMessageRecord> records{
-      comet::InteractionMessageRecord{
+  const naim::controller::InteractionConversationRecordBuilder builder;
+  const std::vector<naim::InteractionMessageRecord> records{
+      naim::InteractionMessageRecord{
           "session-1",
           0,
           "assistant",
@@ -74,7 +74,7 @@ void TestBuildsArchiveMessagesAndRestoresRecords() {
 }
 
 void TestBuildsRestoredSummaryRecords() {
-  const comet::controller::InteractionConversationRecordBuilder builder;
+  const naim::controller::InteractionConversationRecordBuilder builder;
   const auto summaries = builder.BuildRestoredSummaryRecords(
       "session-3",
       json::array({json{

@@ -2,17 +2,17 @@
 
 #include <string_view>
 
-#include "comet/runtime/model_adapter.h"
+#include "naim/runtime/model_adapter.h"
 #include "interaction/interaction_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionModelIdentityBuilder final {
  public:
-  comet::runtime::ModelIdentity BuildRuntimePreferred(
+  naim::runtime::ModelIdentity BuildRuntimePreferred(
       const PlaneInteractionResolution& resolution) const;
 
-  comet::runtime::ModelIdentity BuildStatusPreferred(
+  naim::runtime::ModelIdentity BuildStatusPreferred(
       const PlaneInteractionResolution& resolution) const;
 
  private:
@@ -21,4 +21,4 @@ class InteractionModelIdentityBuilder final {
       std::string_view key) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -1,6 +1,6 @@
 #include "cli/hostd_cli_request_resolution_support.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdCliNodeStateRequest HostdCliRequestResolutionSupport::ResolveNodeStateRequest(
     const HostdCommandLine& command_line,
@@ -13,7 +13,7 @@ HostdCliNodeStateRequest HostdCliRequestResolutionSupport::ResolveNodeStateReque
 
 HostdCliCommonRequest HostdCliRequestResolutionSupport::ResolveCommonRequest(
     const HostdCommandLine& command_line,
-    const CometNodeConfig& node_config,
+    const NaimNodeConfig& node_config,
     const std::string& node_name) const {
   HostdCliCommonRequest request;
   const auto state_request = ResolveNodeStateRequest(command_line, node_name);
@@ -26,7 +26,7 @@ HostdCliCommonRequest HostdCliRequestResolutionSupport::ResolveCommonRequest(
 
 HostdCliStateOpsRequest HostdCliRequestResolutionSupport::ResolveStateOpsRequest(
     const HostdCommandLine& command_line,
-    const CometNodeConfig& node_config,
+    const NaimNodeConfig& node_config,
     const std::string& node_name) const {
   HostdCliStateOpsRequest request;
   request.common = ResolveCommonRequest(command_line, node_config, node_name);
@@ -40,7 +40,7 @@ HostdCliStateOpsRequest HostdCliRequestResolutionSupport::ResolveStateOpsRequest
 
 HostdCliAssignmentRequest HostdCliRequestResolutionSupport::ResolveAssignmentRequest(
     const HostdCommandLine& command_line,
-    const CometNodeConfig& node_config,
+    const NaimNodeConfig& node_config,
     const std::string& node_name) const {
   HostdCliAssignmentRequest request;
   request.common = ResolveCommonRequest(command_line, node_config, node_name);
@@ -54,4 +54,4 @@ HostdCliAssignmentRequest HostdCliRequestResolutionSupport::ResolveAssignmentReq
   return request;
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

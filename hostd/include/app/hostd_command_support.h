@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdCommandSupport final {
  public:
@@ -13,4 +13,4 @@ class HostdCommandSupport final {
   std::string ResolvedDockerCommand() const;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

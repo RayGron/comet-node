@@ -6,7 +6,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace comet::launcher {
+namespace naim::launcher {
 namespace {
 
 std::string Trim(const std::string& value) {
@@ -49,7 +49,7 @@ GeneratedConfigLoader::GeneratedConfigLoader(
     : install_layout_resolver_(install_layout_resolver) {}
 
 std::optional<fs::path> GeneratedConfigLoader::ResolveConfigPathFromEnvOrDefault() const {
-  const char* env = std::getenv("COMET_CONFIG");
+  const char* env = std::getenv("NAIM_CONFIG");
   if (env != nullptr && *env != '\0') {
     return fs::path(env);
   }
@@ -137,4 +137,4 @@ GeneratedConfig GeneratedConfigLoader::Load(const fs::path& path) const {
   return config;
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

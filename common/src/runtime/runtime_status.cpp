@@ -1,4 +1,4 @@
-#include "comet/runtime/runtime_status.h"
+#include "naim/runtime/runtime_status.h"
 
 #include <filesystem>
 #include <fstream>
@@ -6,7 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -571,4 +571,4 @@ void SaveRuntimeStatusJson(const RuntimeStatus& status, const std::string& path)
   RuntimeStatusFileStore().Save(status, path);
 }
 
-}  // namespace comet
+}  // namespace naim

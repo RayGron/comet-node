@@ -4,9 +4,9 @@
 #include <string>
 
 #include "backend/hostd_backend_factory.h"
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class IHostdObservationSupport {
  public:
@@ -14,11 +14,11 @@ class IHostdObservationSupport {
 
   virtual void ShowLocalState(const std::string& node_name, const std::string& state_root) const = 0;
   virtual void ShowRuntimeStatus(const std::string& node_name, const std::string& state_root) const = 0;
-  virtual comet::HostObservation BuildObservedStateSnapshot(
+  virtual naim::HostObservation BuildObservedStateSnapshot(
       const std::string& node_name,
       const std::string& storage_root,
       const std::string& state_root,
-      comet::HostObservationStatus status,
+      naim::HostObservationStatus status,
       const std::string& status_message,
       const std::optional<int>& assignment_id = std::nullopt) const = 0;
   virtual void AppendHostdEvent(
@@ -45,7 +45,7 @@ class HostdObservationService {
   void ShowRuntimeStatus(const std::string& node_name, const std::string& state_root) const;
   void ReportObservedState(
       HostdBackend& backend,
-      const comet::HostObservation& observation,
+      const naim::HostObservation& observation,
       const std::string& source_label) const;
   void ReportLocalObservedState(
       const std::optional<std::string>& db_path,
@@ -62,4 +62,4 @@ class HostdObservationService {
   const IHostdObservationSupport& support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -3,7 +3,7 @@
 #include <set>
 #include <utility>
 
-namespace comet::controller {
+namespace naim::controller {
 
 StateAggregateLoader::StateAggregateLoader(
     const SchedulerDomainService& scheduler_domain_service,
@@ -16,8 +16,8 @@ StateAggregateLoader::StateAggregateLoader(
       maximum_rebalance_iterations_(maximum_rebalance_iterations) {}
 
 SchedulerRuntimeView StateAggregateLoader::LoadSchedulerRuntimeView(
-    comet::ControllerStore& store,
-    const std::optional<comet::DesiredState>& desired_state) const {
+    naim::ControllerStore& store,
+    const std::optional<naim::DesiredState>& desired_state) const {
   SchedulerRuntimeView view;
   if (!desired_state.has_value()) {
     return view;
@@ -36,7 +36,7 @@ RolloutActionsViewData StateAggregateLoader::LoadRolloutActionsViewData(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   RolloutActionsViewData view;
@@ -87,7 +87,7 @@ RebalancePlanViewData StateAggregateLoader::LoadRebalancePlanViewData(
     const std::optional<std::string>& node_name,
     int stale_after_seconds,
     const std::optional<std::string>& plane_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   RebalancePlanViewData view;
@@ -112,7 +112,7 @@ RebalancePlanViewData StateAggregateLoader::LoadRebalancePlanViewData(
   const auto assignments =
       store.LoadHostAssignments(std::nullopt, std::nullopt, view.desired_state->plane_name);
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
-  const auto scheduling_report = comet::EvaluateSchedulingPolicy(*view.desired_state);
+  const auto scheduling_report = naim::EvaluateSchedulingPolicy(*view.desired_state);
   view.scheduler_runtime = LoadSchedulerRuntimeView(store, view.desired_state);
   const auto rollout_actions = store.LoadRolloutActions(view.desired_state->plane_name);
   const auto rollout_lifecycle =
@@ -161,7 +161,7 @@ StateAggregateViewData StateAggregateLoader::LoadStateAggregateViewData(
     const std::string& db_path,
     int stale_after_seconds,
     const std::optional<std::string>& plane_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   StateAggregateViewData view;
@@ -180,7 +180,7 @@ StateAggregateViewData StateAggregateLoader::LoadStateAggregateViewData(
   }
 
   view.disk_runtime_states = store.LoadDiskRuntimeStates(view.desired_state->plane_name);
-  view.scheduling_report = comet::EvaluateSchedulingPolicy(*view.desired_state);
+  view.scheduling_report = naim::EvaluateSchedulingPolicy(*view.desired_state);
   view.observations =
       plane_name.has_value()
           ? plane_observation_matcher_.FilterHostObservationsForPlane(
@@ -237,4 +237,4 @@ StateAggregateViewData StateAggregateLoader::LoadStateAggregateViewData(
   return view;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

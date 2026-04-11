@@ -13,7 +13,7 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestRequestIdsUseReqPrefixAndStayUnique() {
-  const comet::controller::InteractionRequestIdentitySupport support;
+  const naim::controller::InteractionRequestIdentitySupport support;
   const std::string first = support.GenerateRequestId();
   const std::string second = support.GenerateRequestId();
   Expect(first.rfind("req-", 0) == 0, "request id should use req- prefix");
@@ -23,7 +23,7 @@ void TestRequestIdsUseReqPrefixAndStayUnique() {
 }
 
 void TestSessionIdsUseSessPrefixAndStayUnique() {
-  const comet::controller::InteractionRequestIdentitySupport support;
+  const naim::controller::InteractionRequestIdentitySupport support;
   const std::string first = support.GenerateSessionId();
   const std::string second = support.GenerateSessionId();
   Expect(first.rfind("sess-", 0) == 0, "session id should use sess- prefix");

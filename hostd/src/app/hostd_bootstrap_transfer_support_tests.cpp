@@ -14,19 +14,19 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-class RecordingHostdBackend final : public comet::hostd::HostdBackend {
+class RecordingHostdBackend final : public naim::hostd::HostdBackend {
  public:
   std::optional<int> updated_assignment_id;
   nlohmann::json updated_progress = nlohmann::json::object();
 
-  std::optional<comet::HostAssignment> ClaimNextHostAssignment(
+  std::optional<naim::HostAssignment> ClaimNextHostAssignment(
       const std::string&) override {
     return std::nullopt;
   }
 
   bool TransitionClaimedHostAssignment(
       int,
-      comet::HostAssignmentStatus,
+      naim::HostAssignmentStatus,
       const std::string&) override {
     return false;
   }
@@ -39,10 +39,10 @@ class RecordingHostdBackend final : public comet::hostd::HostdBackend {
     return true;
   }
 
-  void UpsertHostObservation(const comet::HostObservation&) override {}
-  void AppendEvent(const comet::EventRecord&) override {}
-  void UpsertDiskRuntimeState(const comet::DiskRuntimeState&) override {}
-  std::optional<comet::DiskRuntimeState> LoadDiskRuntimeState(
+  void UpsertHostObservation(const naim::HostObservation&) override {}
+  void AppendEvent(const naim::EventRecord&) override {}
+  void UpsertDiskRuntimeState(const naim::DiskRuntimeState&) override {}
+  std::optional<naim::DiskRuntimeState> LoadDiskRuntimeState(
       const std::string&,
       const std::string&) override {
     return std::nullopt;
@@ -65,16 +65,16 @@ int main() {
   try {
     namespace fs = std::filesystem;
 
-    const comet::hostd::HostdCommandSupport command_support;
-    const comet::hostd::HostdFileSupport file_support;
-    const comet::hostd::HostdReportingSupport reporting_support;
-    const comet::hostd::HostdBootstrapTransferSupport support(
+    const naim::hostd::HostdCommandSupport command_support;
+    const naim::hostd::HostdFileSupport file_support;
+    const naim::hostd::HostdReportingSupport reporting_support;
+    const naim::hostd::HostdBootstrapTransferSupport support(
         command_support,
         file_support,
         reporting_support);
 
     const fs::path temp_root =
-        fs::temp_directory_path() / "comet-hostd-bootstrap-transfer-support-tests";
+        fs::temp_directory_path() / "naim-hostd-bootstrap-transfer-support-tests";
     std::error_code cleanup_error;
     fs::remove_all(temp_root, cleanup_error);
     fs::create_directories(temp_root);

@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdFileSupport final {
  public:
@@ -11,4 +11,4 @@ class HostdFileSupport final {
   void EnsureParentDirectory(const std::string& path) const;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

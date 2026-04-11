@@ -2,7 +2,7 @@
 
 #include <memory>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdAppControllerSupport;
 class HostdAppObservationSupport;
@@ -15,4 +15,4 @@ class HostdSupportComponentFactory final {
   std::unique_ptr<HostdAppAssignmentSupport> CreateAssignmentSupport() const;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

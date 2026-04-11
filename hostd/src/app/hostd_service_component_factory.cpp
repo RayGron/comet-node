@@ -7,7 +7,7 @@
 #include "observation/hostd_observation_service.h"
 #include "state_apply/hostd_assignment_service.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 std::unique_ptr<HostdBackendFactory> HostdServiceComponentFactory::CreateBackendFactory(
     const IHttpHostdBackendSupport& support) const {
@@ -37,4 +37,4 @@ std::unique_ptr<NodeConfigLoader> HostdServiceComponentFactory::CreateConfigLoad
   return std::make_unique<NodeConfigLoader>();
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

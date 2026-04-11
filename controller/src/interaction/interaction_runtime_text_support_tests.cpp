@@ -13,7 +13,7 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestTrimCopyRemovesOuterWhitespace() {
-  const comet::controller::InteractionRuntimeTextSupport support;
+  const naim::controller::InteractionRuntimeTextSupport support;
   Expect(
       support.TrimCopy(" \t  hello world \n") == "hello world",
       "trim copy should remove leading and trailing whitespace");
@@ -21,14 +21,14 @@ void TestTrimCopyRemovesOuterWhitespace() {
 }
 
 void TestIsBlankUsesTrimmedView() {
-  const comet::controller::InteractionRuntimeTextSupport support;
+  const naim::controller::InteractionRuntimeTextSupport support;
   Expect(support.IsBlank(" \t \n"), "is blank should treat whitespace as blank");
   Expect(!support.IsBlank(" value "), "is blank should keep non-empty values");
   std::cout << "ok: interaction-runtime-text-is-blank" << '\n';
 }
 
 void TestIsTimeoutLikeErrorMatchesCaseInsensitiveTimeouts() {
-  const comet::controller::InteractionRuntimeTextSupport support;
+  const naim::controller::InteractionRuntimeTextSupport support;
   Expect(
       support.IsTimeoutLikeError("Upstream TIMED OUT while waiting"),
       "timeout detector should match timed out messages");

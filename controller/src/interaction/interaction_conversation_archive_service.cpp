@@ -8,12 +8,12 @@
 #include <zstd.h>
 
 #include "app/controller_time_support.h"
-#include "comet/security/crypto_utils.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/security/crypto_utils.h"
+#include "naim/state/sqlite_store.h"
 #include "interaction/interaction_conversation_payload_builder.h"
 #include "interaction/interaction_conversation_record_builder.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -30,7 +30,7 @@ std::atomic<long long>
 
 std::optional<InteractionValidationError>
 InteractionConversationArchiveService::RestoreArchivedSession(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& plane_name,
     const std::string& session_id,
     const std::string& owner_kind,
@@ -52,7 +52,7 @@ InteractionConversationArchiveService::RestoreArchivedSession(
     const std::filesystem::path archive_path(archive->archive_path);
     const std::string compressed = ReadBinaryFile(archive_path);
     if (!archive->archive_sha256.empty() &&
-        comet::ComputeSha256Hex(compressed) != archive->archive_sha256) {
+        naim::ComputeSha256Hex(compressed) != archive->archive_sha256) {
       return InteractionValidationError{
           "session_restore_failed",
           "conversation archive checksum mismatch",
@@ -77,7 +77,7 @@ InteractionConversationArchiveService::RestoreArchivedSession(
       };
     }
 
-    comet::InteractionSessionRecord session;
+    naim::InteractionSessionRecord session;
     session.session_id = session_json.value("session_id", session_id);
     session.plane_name = session_json.value("plane_name", plane_name);
     session.owner_kind = session_json.value("owner_kind", owner_kind);
@@ -115,7 +115,7 @@ InteractionConversationArchiveService::RestoreArchivedSession(
         record_builder.BuildRestoredSummaryRecords(
             session.session_id, summaries_json, session.updated_at));
 
-    comet::InteractionArchiveRecord restored_archive = *archive;
+    naim::InteractionArchiveRecord restored_archive = *archive;
     restored_archive.restore_state = "restored";
     restored_archive.updated_at = session.updated_at;
     store.UpsertInteractionArchive(restored_archive);
@@ -146,7 +146,7 @@ void InteractionConversationArchiveService::MaybeArchiveInactiveSessions(
     return;
   }
 
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const std::string cutoff = SqlTimestampBeforeSeconds(kArchiveAgeSeconds);
   const auto sessions = store.LoadArchiveEligibleInteractionSessions(cutoff, 8);
@@ -189,10 +189,10 @@ void InteractionConversationArchiveService::MaybeArchiveInactiveSessions(
         (session.session_id + ".json.zst");
     const std::string compressed =
         CompressStringZstd(payload_builder.JsonString(archive_payload));
-    const std::string checksum = comet::ComputeSha256Hex(compressed);
+    const std::string checksum = naim::ComputeSha256Hex(compressed);
     WriteBinaryFile(archive_path, compressed);
 
-    comet::InteractionSessionRecord archived_session = session;
+    naim::InteractionSessionRecord archived_session = session;
     archived_session.state = "archived";
     archived_session.archived_at = UtcNowSqlTimestamp();
     archived_session.archive_path = archive_path.string();
@@ -206,7 +206,7 @@ void InteractionConversationArchiveService::MaybeArchiveInactiveSessions(
     }
     store.ReplaceInteractionMessages(session.session_id, {});
     store.ReplaceInteractionSummaries(session.session_id, {});
-    store.UpsertInteractionArchive(comet::InteractionArchiveRecord{
+    store.UpsertInteractionArchive(naim::InteractionArchiveRecord{
         session.session_id,
         session.plane_name,
         session.owner_kind,
@@ -302,4 +302,4 @@ void InteractionConversationArchiveService::WriteBinaryFile(
   }
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

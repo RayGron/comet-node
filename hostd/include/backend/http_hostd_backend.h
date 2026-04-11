@@ -6,7 +6,7 @@
 #include "backend/hostd_backend.h"
 #include "backend/http_hostd_backend_support.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HttpHostdBackend final : public HostdBackend {
  public:
@@ -19,19 +19,19 @@ class HttpHostdBackend final : public HostdBackend {
       std::string storage_root,
       const IHttpHostdBackendSupport& support);
 
-  std::optional<comet::HostAssignment> ClaimNextHostAssignment(
+  std::optional<naim::HostAssignment> ClaimNextHostAssignment(
       const std::string& node_name) override;
   bool TransitionClaimedHostAssignment(
       int assignment_id,
-      comet::HostAssignmentStatus status,
+      naim::HostAssignmentStatus status,
       const std::string& status_message) override;
   bool UpdateHostAssignmentProgress(
       int assignment_id,
       const nlohmann::json& progress) override;
-  void UpsertHostObservation(const comet::HostObservation& observation) override;
-  void AppendEvent(const comet::EventRecord& event) override;
-  void UpsertDiskRuntimeState(const comet::DiskRuntimeState& state) override;
-  std::optional<comet::DiskRuntimeState> LoadDiskRuntimeState(
+  void UpsertHostObservation(const naim::HostObservation& observation) override;
+  void AppendEvent(const naim::EventRecord& event) override;
+  void UpsertDiskRuntimeState(const naim::DiskRuntimeState& state) override;
+  std::optional<naim::DiskRuntimeState> LoadDiskRuntimeState(
       const std::string& disk_name,
       const std::string& node_name) override;
 
@@ -73,4 +73,4 @@ class HttpHostdBackend final : public HostdBackend {
   bool registration_attempted_ = false;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -1,6 +1,6 @@
-#include "comet/state/desired_state_v2_projector_support.h"
+#include "naim/state/desired_state_v2_projector_support.h"
 
-namespace comet {
+namespace naim {
 
 nlohmann::json DesiredStateV2ProjectorSupport::ProjectServiceStart(
     const InstanceSpec& instance,
@@ -44,7 +44,7 @@ nlohmann::json DesiredStateV2ProjectorSupport::ProjectServiceStorage(
                   : disk->kind == DiskKind::BrowsingPrivate
                       ? disk->size_gb == kDefaultWebGatewayPrivateDiskSizeGb
                       : disk->size_gb == kDefaultAppPrivateDiskSizeGb;
-  const bool default_mount = disk->container_path == "/comet/private";
+  const bool default_mount = disk->container_path == "/naim/private";
   if (default_size && default_mount) {
     return nullptr;
   }
@@ -69,10 +69,10 @@ nlohmann::json DesiredStateV2ProjectorSupport::ProjectAppVolumes(
 
 std::map<std::string, std::string> DesiredStateV2ProjectorSupport::ProjectCustomEnv(
     const InstanceSpec& instance,
-    bool strip_comet_env) {
+    bool strip_naim_env) {
   std::map<std::string, std::string> env;
   for (const auto& [key, value] : instance.environment) {
-    if (strip_comet_env && key.rfind("COMET_", 0) == 0) {
+    if (strip_naim_env && key.rfind("NAIM_", 0) == 0) {
       continue;
     }
     env[key] = value;
@@ -85,4 +85,4 @@ bool DesiredStateV2ProjectorSupport::IsDefaultWorkerImage(
   return image == kDefaultWorkerImage;
 }
 
-}  // namespace comet
+}  // namespace naim

@@ -10,7 +10,7 @@
 #include "app/hostd_reporting_support.h"
 #include "backend/hostd_backend.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdBootstrapTransferSupport final {
  public:
@@ -65,4 +65,4 @@ class HostdBootstrapTransferSupport final {
   const HostdReportingSupport& reporting_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

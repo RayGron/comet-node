@@ -4,11 +4,11 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 
-remote_host="${COMET_HPC1_HOST:-baal@195.168.22.186}"
-remote_port="${COMET_HPC1_PORT:-2222}"
-sandbox_name="${COMET_HPC1_SANDBOX_NAME:-naim-node-dev}"
-remote_base="${COMET_HPC1_SANDBOX_BASE:-/mnt/shared-storage/backups/baal/dev-sandboxes}"
-remote_root="${COMET_HPC1_SANDBOX_ROOT:-${remote_base}/${sandbox_name}}"
+remote_host="${NAIM_HPC1_HOST:-baal@195.168.22.186}"
+remote_port="${NAIM_HPC1_PORT:-2222}"
+sandbox_name="${NAIM_HPC1_SANDBOX_NAME:-naim-node-dev}"
+remote_base="${NAIM_HPC1_SANDBOX_BASE:-/mnt/shared-storage/backups/baal/dev-sandboxes}"
+remote_root="${NAIM_HPC1_SANDBOX_ROOT:-${remote_base}/${sandbox_name}}"
 remote_repo="${remote_root}/repo"
 remote_build_root="${remote_root}/build-root"
 remote_state_root="${remote_root}/state"
@@ -20,16 +20,16 @@ artifacts_root="${remote_state_root}/artifacts"
 runtime_root="${remote_state_root}/runtime"
 hostd_state_root="${remote_state_root}/hostd-state"
 
-controller_port="${COMET_HPC1_CONTROLLER_PORT:-28081}"
-skills_port="${COMET_HPC1_SKILLS_PORT:-28082}"
-web_ui_port="${COMET_HPC1_WEB_UI_PORT:-28083}"
+controller_port="${NAIM_HPC1_CONTROLLER_PORT:-28081}"
+skills_port="${NAIM_HPC1_SKILLS_PORT:-28082}"
+web_ui_port="${NAIM_HPC1_WEB_UI_PORT:-28083}"
 
-hostd_node="${COMET_HPC1_HOSTD_NODE:-local-hostd}"
-hostd_prepare_mode="${COMET_HPC1_HOSTD_PREPARE_MODE:-onboarding}"
-hostd_poll_interval_sec="${COMET_HPC1_HOSTD_POLL_INTERVAL_SEC:-2}"
-hostd_compose_mode="${COMET_HPC1_HOSTD_COMPOSE_MODE:-skip}"
-hostd_advertised_address="${COMET_HPC1_HOSTD_ADDRESS:-http://127.0.0.1:29999}"
-runtime_smoke_bundle="${COMET_HPC1_RUNTIME_SMOKE_BUNDLE:-config/v2-gpu-worker/desired-state.v2.json}"
+hostd_node="${NAIM_HPC1_HOSTD_NODE:-local-hostd}"
+hostd_prepare_mode="${NAIM_HPC1_HOSTD_PREPARE_MODE:-onboarding}"
+hostd_poll_interval_sec="${NAIM_HPC1_HOSTD_POLL_INTERVAL_SEC:-2}"
+hostd_compose_mode="${NAIM_HPC1_HOSTD_COMPOSE_MODE:-skip}"
+hostd_advertised_address="${NAIM_HPC1_HOSTD_ADDRESS:-http://127.0.0.1:29999}"
+runtime_smoke_bundle="${NAIM_HPC1_RUNTIME_SMOKE_BUNDLE:-config/v2-gpu-worker/desired-state.v2.json}"
 
 remote_hostd_install_root="${remote_root}/install/hostd"
 remote_hostd_config_path="${remote_hostd_install_root}/etc/naim-node/config.toml"
@@ -50,7 +50,7 @@ Commands:
   paths                         Show local/remote sandbox paths and ports
   setup                         Create the isolated hpc1 sandbox directories and metadata
   sync                          Sync the local repo into the remote sandbox checkout
-  build [targets...]            Sync and build remotely in an isolated COMET_BUILD_ROOT
+  build [targets...]            Sync and build remotely in an isolated NAIM_BUILD_ROOT
   controller-start              Start an isolated controller + skills-factory smoke on hpc1
   controller-stop               Stop the isolated controller + skills-factory smoke
   hostd-prepare                 Create sandbox hostd layout/config and register the sandbox host
@@ -61,20 +61,20 @@ Commands:
   shell                         Open an interactive shell inside the remote sandbox repo
 
 Environment overrides:
-  COMET_HPC1_HOST
-  COMET_HPC1_PORT
-  COMET_HPC1_SANDBOX_NAME
-  COMET_HPC1_SANDBOX_BASE
-  COMET_HPC1_SANDBOX_ROOT
-  COMET_HPC1_CONTROLLER_PORT
-  COMET_HPC1_SKILLS_PORT
-  COMET_HPC1_WEB_UI_PORT
-  COMET_HPC1_HOSTD_NODE
-  COMET_HPC1_HOSTD_PREPARE_MODE
-  COMET_HPC1_HOSTD_POLL_INTERVAL_SEC
-  COMET_HPC1_HOSTD_COMPOSE_MODE
-  COMET_HPC1_HOSTD_ADDRESS
-  COMET_HPC1_RUNTIME_SMOKE_BUNDLE
+  NAIM_HPC1_HOST
+  NAIM_HPC1_PORT
+  NAIM_HPC1_SANDBOX_NAME
+  NAIM_HPC1_SANDBOX_BASE
+  NAIM_HPC1_SANDBOX_ROOT
+  NAIM_HPC1_CONTROLLER_PORT
+  NAIM_HPC1_SKILLS_PORT
+  NAIM_HPC1_WEB_UI_PORT
+  NAIM_HPC1_HOSTD_NODE
+  NAIM_HPC1_HOSTD_PREPARE_MODE
+  NAIM_HPC1_HOSTD_POLL_INTERVAL_SEC
+  NAIM_HPC1_HOSTD_COMPOSE_MODE
+  NAIM_HPC1_HOSTD_ADDRESS
+  NAIM_HPC1_RUNTIME_SMOKE_BUNDLE
 EOF
 }
 
@@ -154,25 +154,25 @@ mkdir -p \
   "$remote_hostd_layout_systemd_dir"
 
 cat > "$remote_env_file" <<ENV
-export COMET_HPC1_SANDBOX_ROOT="$remote_root"
-export COMET_HPC1_REPO="$remote_repo"
-export COMET_BUILD_ROOT="$remote_build_root"
-export COMET_HPC1_STATE_ROOT="$remote_state_root"
-export COMET_HPC1_LOG_ROOT="$remote_logs_root"
-export COMET_HPC1_CONTROLLER_DB="$controller_db"
-export COMET_HPC1_ARTIFACTS_ROOT="$artifacts_root"
-export COMET_HPC1_RUNTIME_ROOT="$runtime_root"
-export COMET_HPC1_HOSTD_STATE_ROOT="$hostd_state_root"
-export COMET_HPC1_CONTROLLER_PORT="$controller_port"
-export COMET_HPC1_SKILLS_PORT="$skills_port"
-export COMET_HPC1_WEB_UI_PORT="$web_ui_port"
-export COMET_HPC1_HOSTD_NODE="$hostd_node"
-export COMET_HPC1_HOSTD_CONFIG="$remote_hostd_config_path"
-export COMET_HPC1_HOSTD_LAYOUT_STATE_ROOT="$remote_hostd_layout_state_root"
-export COMET_HPC1_HOSTD_LAYOUT_LOG_ROOT="$remote_hostd_layout_log_root"
-export COMET_HPC1_HOSTD_LAYOUT_SYSTEMD_DIR="$remote_hostd_layout_systemd_dir"
-export COMET_HPC1_HOSTD_POLL_INTERVAL_SEC="$hostd_poll_interval_sec"
-export COMET_HPC1_HOSTD_COMPOSE_MODE="$hostd_compose_mode"
+export NAIM_HPC1_SANDBOX_ROOT="$remote_root"
+export NAIM_HPC1_REPO="$remote_repo"
+export NAIM_BUILD_ROOT="$remote_build_root"
+export NAIM_HPC1_STATE_ROOT="$remote_state_root"
+export NAIM_HPC1_LOG_ROOT="$remote_logs_root"
+export NAIM_HPC1_CONTROLLER_DB="$controller_db"
+export NAIM_HPC1_ARTIFACTS_ROOT="$artifacts_root"
+export NAIM_HPC1_RUNTIME_ROOT="$runtime_root"
+export NAIM_HPC1_HOSTD_STATE_ROOT="$hostd_state_root"
+export NAIM_HPC1_CONTROLLER_PORT="$controller_port"
+export NAIM_HPC1_SKILLS_PORT="$skills_port"
+export NAIM_HPC1_WEB_UI_PORT="$web_ui_port"
+export NAIM_HPC1_HOSTD_NODE="$hostd_node"
+export NAIM_HPC1_HOSTD_CONFIG="$remote_hostd_config_path"
+export NAIM_HPC1_HOSTD_LAYOUT_STATE_ROOT="$remote_hostd_layout_state_root"
+export NAIM_HPC1_HOSTD_LAYOUT_LOG_ROOT="$remote_hostd_layout_log_root"
+export NAIM_HPC1_HOSTD_LAYOUT_SYSTEMD_DIR="$remote_hostd_layout_systemd_dir"
+export NAIM_HPC1_HOSTD_POLL_INTERVAL_SEC="$hostd_poll_interval_sec"
+export NAIM_HPC1_HOSTD_COMPOSE_MODE="$hostd_compose_mode"
 ENV
 
 cat > "$remote_root/README.txt" <<TXT
@@ -249,7 +249,7 @@ build_remote() {
 remote_repo="$1"
 remote_build_root="$2"
 cd "$remote_repo"
-COMET_BUILD_ROOT="$remote_build_root" ./scripts/build-target.sh linux x64 Debug
+NAIM_BUILD_ROOT="$remote_build_root" ./scripts/build-target.sh linux x64 Debug
 ' "${remote_repo}" "${remote_build_root}"
     return
   fi
@@ -259,8 +259,8 @@ remote_repo="$1"
 remote_build_root="$2"
 shift 2
 cd "$remote_repo"
-COMET_BUILD_ROOT="$remote_build_root" ./scripts/configure-build.sh linux x64 Debug >/dev/null
-build_dir="$(COMET_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
+NAIM_BUILD_ROOT="$remote_build_root" ./scripts/configure-build.sh linux x64 Debug >/dev/null
+build_dir="$(NAIM_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
 cmake --build "$build_dir" --target "$@"
 ' "${remote_repo}" "${remote_build_root}" "${targets[@]}"
 }
@@ -277,8 +277,8 @@ skills_port="$7"
 
 mkdir -p "$remote_logs_root" "$artifacts_root"
 cd "$remote_repo"
-build_dir="$(COMET_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
-controller_bin="$build_dir/comet-controller"
+build_dir="$(NAIM_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
+controller_bin="$build_dir/naim-controller"
 
 if [[ ! -x "$controller_bin" ]]; then
   echo "missing controller binary: $controller_bin" >&2
@@ -407,7 +407,7 @@ mkdir -p \
   "$hostd_state_root"
 
 cd "$remote_repo"
-build_dir="$(COMET_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
+build_dir="$(NAIM_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
 launcher_bin="$build_dir/naim-node"
 controller_url="http://127.0.0.1:$controller_port"
 onboarding_dir="$remote_root/onboarding"
@@ -549,9 +549,9 @@ controller_db="${12}"
 
 mkdir -p "$remote_logs_root"
 cd "$remote_repo"
-build_dir="$(COMET_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
+build_dir="$(NAIM_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
 launcher_bin="$build_dir/naim-node"
-controller_bin="$build_dir/comet-controller"
+controller_bin="$build_dir/naim-controller"
 pid_file="$remote_logs_root/hostd.pid"
 
 if [[ ! -x "$launcher_bin" ]] || [[ ! -x "$controller_bin" ]]; then
@@ -569,8 +569,8 @@ if [[ -f "$pid_file" ]]; then
 fi
 
 if [[ ! -f "$pid_file" ]]; then
-  COMET_CONFIG="$remote_hostd_config_path" \
-  COMET_NODE_CONFIG_PATH="$remote_repo/config/naim-node-config.json" \
+  NAIM_CONFIG="$remote_hostd_config_path" \
+  NAIM_NODE_CONFIG_PATH="$remote_repo/config/naim-node-config.json" \
     nohup "$launcher_bin" run hostd \
       --controller "http://127.0.0.1:$controller_port" \
       --node "$hostd_node" \
@@ -656,9 +656,9 @@ hostd_state_root="$7"
 bundle_arg="$8"
 
 cd "$remote_repo"
-build_dir="$(COMET_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
-controller_bin="$build_dir/comet-controller"
-hostd_bin="$build_dir/comet-hostd"
+build_dir="$(NAIM_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
+controller_bin="$build_dir/naim-controller"
+hostd_bin="$build_dir/naim-hostd"
 
 if [[ ! -x "$controller_bin" ]] || [[ ! -x "$hostd_bin" ]]; then
   echo "missing sandbox binaries; run ./scripts/hpc1-dev-sandbox.sh build first" >&2
@@ -838,16 +838,16 @@ for raw in sys.argv[1:]:
 PY
 
 cd "$remote_repo"
-build_dir="$(COMET_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64 2>/dev/null || true)"
-if [[ -n "${build_dir}" ]] && [[ -x "$build_dir/comet-controller" ]]; then
+build_dir="$(NAIM_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64 2>/dev/null || true)"
+if [[ -n "${build_dir}" ]] && [[ -x "$build_dir/naim-controller" ]]; then
   echo "--- host registry ---"
-  "$build_dir/comet-controller" show-hostd-hosts --db "$controller_db" --node "$hostd_node" || true
+  "$build_dir/naim-controller" show-hostd-hosts --db "$controller_db" --node "$hostd_node" || true
   echo "--- host observations ---"
-  "$build_dir/comet-controller" show-host-observations --db "$controller_db" --node "$hostd_node" || true
+  "$build_dir/naim-controller" show-host-observations --db "$controller_db" --node "$hostd_node" || true
 fi
-if [[ -n "${build_dir}" ]] && [[ -x "$build_dir/comet-hostd" ]]; then
+if [[ -n "${build_dir}" ]] && [[ -x "$build_dir/naim-hostd" ]]; then
   echo "--- local state ---"
-  "$build_dir/comet-hostd" show-local-state --node "$hostd_node" --state-root "$hostd_state_root" || true
+  "$build_dir/naim-hostd" show-local-state --node "$hostd_node" --state-root "$hostd_state_root" || true
 fi
 
 for log in "$remote_logs_root/controller.log" "$remote_logs_root/skills.log" "$remote_logs_root/hostd.log"; do

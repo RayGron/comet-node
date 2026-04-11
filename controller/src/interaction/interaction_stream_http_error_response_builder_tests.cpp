@@ -15,7 +15,7 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestBuildStandaloneErrorResponse() {
-  const comet::controller::InteractionStreamHttpErrorResponseBuilder builder;
+  const naim::controller::InteractionStreamHttpErrorResponseBuilder builder;
   const ::HttpResponse response = builder.Build(
       404,
       "req-1",
@@ -32,8 +32,8 @@ void TestBuildStandaloneErrorResponse() {
 }
 
 void TestBuildPlaneErrorResponse() {
-  const comet::controller::InteractionStreamHttpErrorResponseBuilder builder;
-  comet::controller::PlaneInteractionResolution resolution;
+  const naim::controller::InteractionStreamHttpErrorResponseBuilder builder;
+  naim::controller::PlaneInteractionResolution resolution;
   resolution.status_payload = {
       {"plane_name", "demo-plane"},
       {"served_model_name", "served"},

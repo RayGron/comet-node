@@ -3,9 +3,9 @@
 #include <stdexcept>
 #include <thread>
 
-#include "comet/state/state_json.h"
+#include "naim/state/state_json.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdLocalRuntimeStateSupport::HostdLocalRuntimeStateSupport(
     const HostdDesiredStatePathSupport& desired_state_path_support,
@@ -15,7 +15,7 @@ HostdLocalRuntimeStateSupport::HostdLocalRuntimeStateSupport(
       local_state_repository_(local_state_repository),
       runtime_telemetry_support_(runtime_telemetry_support) {}
 
-std::optional<comet::RuntimeStatus> HostdLocalRuntimeStateSupport::LoadLocalRuntimeStatus(
+std::optional<naim::RuntimeStatus> HostdLocalRuntimeStateSupport::LoadLocalRuntimeStatus(
     const std::string& state_root,
     const std::string& node_name,
     const std::optional<std::string>& plane_name) const {
@@ -30,7 +30,7 @@ std::optional<comet::RuntimeStatus> HostdLocalRuntimeStateSupport::LoadLocalRunt
     if (!runtime_status_path.has_value()) {
       return std::nullopt;
     }
-    return comet::LoadRuntimeStatusJson(*runtime_status_path);
+    return naim::LoadRuntimeStatusJson(*runtime_status_path);
   }
 
   for (const auto& local_state :
@@ -40,7 +40,7 @@ std::optional<comet::RuntimeStatus> HostdLocalRuntimeStateSupport::LoadLocalRunt
     if (!runtime_status_path.has_value()) {
       continue;
     }
-    const auto runtime_status = comet::LoadRuntimeStatusJson(*runtime_status_path);
+    const auto runtime_status = naim::LoadRuntimeStatusJson(*runtime_status_path);
     if (runtime_status.has_value()) {
       return runtime_status;
     }
@@ -68,7 +68,7 @@ void HostdLocalRuntimeStateSupport::WaitForLocalRuntimeStatus(
 }
 
 std::size_t HostdLocalRuntimeStateSupport::ExpectedRuntimeStatusCountForNode(
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     const std::string& node_name) const {
   std::size_t count = 0;
   for (const auto& instance : desired_node_state.instances) {
@@ -111,10 +111,10 @@ void HostdLocalRuntimeStateSupport::WaitForLocalInstanceRuntimeStatuses(
 }
 
 bool HostdLocalRuntimeStateSupport::InstanceProducesRuntimeStatus(
-    const comet::InstanceSpec& instance) {
-  return instance.role == comet::InstanceRole::Infer ||
-         instance.role == comet::InstanceRole::Worker ||
-         instance.role == comet::InstanceRole::Skills;
+    const naim::InstanceSpec& instance) {
+  return instance.role == naim::InstanceRole::Infer ||
+         instance.role == naim::InstanceRole::Worker ||
+         instance.role == naim::InstanceRole::Skills;
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

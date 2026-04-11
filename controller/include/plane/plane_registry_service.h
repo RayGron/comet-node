@@ -6,12 +6,12 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/models.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/state/sqlite_store.h"
 #include "plane/plane_lifecycle_support.h"
 #include "plane/plane_registry_query_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class PlaneRegistryService {
  public:
@@ -26,4 +26,4 @@ class PlaneRegistryService {
   std::shared_ptr<const PlaneRegistryQuerySupport> query_support_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -11,7 +11,7 @@
 #include "backend/hostd_backend.h"
 #include "observation/hostd_observation_service.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdAppObservationSupport final : public IHostdObservationSupport {
  public:
@@ -19,11 +19,11 @@ class HostdAppObservationSupport final : public IHostdObservationSupport {
 
   void ShowLocalState(const std::string& node_name, const std::string& state_root) const override;
   void ShowRuntimeStatus(const std::string& node_name, const std::string& state_root) const override;
-  comet::HostObservation BuildObservedStateSnapshot(
+  naim::HostObservation BuildObservedStateSnapshot(
       const std::string& node_name,
       const std::string& storage_root,
       const std::string& state_root,
-      comet::HostObservationStatus status,
+      naim::HostObservationStatus status,
       const std::string& status_message,
       const std::optional<int>& assignment_id = std::nullopt) const override;
   void AppendHostdEvent(
@@ -45,4 +45,4 @@ class HostdAppObservationSupport final : public IHostdObservationSupport {
   HostdReportingSupport reporting_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

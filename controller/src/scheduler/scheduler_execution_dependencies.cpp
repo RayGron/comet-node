@@ -1,6 +1,6 @@
 #include "scheduler/scheduler_execution_dependencies.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 ControllerSchedulerAssignmentQuerySupport::ControllerSchedulerAssignmentQuerySupport(
     const PlaneRealizationService& plane_realization_service,
@@ -8,16 +8,16 @@ ControllerSchedulerAssignmentQuerySupport::ControllerSchedulerAssignmentQuerySup
     : plane_realization_service_(plane_realization_service),
       default_artifacts_root_(std::move(default_artifacts_root)) {}
 
-std::optional<comet::HostAssignment>
+std::optional<naim::HostAssignment>
 ControllerSchedulerAssignmentQuerySupport::FindLatestHostAssignmentForNode(
-    const std::vector<comet::HostAssignment>& assignments,
+    const std::vector<naim::HostAssignment>& assignments,
     const std::string& node_name) const {
   return plane_realization_service_.FindLatestHostAssignmentForNode(assignments, node_name);
 }
 
-std::optional<comet::HostAssignment>
+std::optional<naim::HostAssignment>
 ControllerSchedulerAssignmentQuerySupport::FindLatestHostAssignmentForPlane(
-    const std::vector<comet::HostAssignment>& assignments,
+    const std::vector<naim::HostAssignment>& assignments,
     const std::string& plane_name) const {
   return plane_realization_service_.FindLatestHostAssignmentForPlane(assignments, plane_name);
 }
@@ -30,22 +30,22 @@ ControllerSchedulerVerificationSupport::ControllerSchedulerVerificationSupport(
     const ControllerRuntimeSupportService& runtime_support_service)
     : runtime_support_service_(runtime_support_service) {}
 
-std::optional<comet::HostObservation>
+std::optional<naim::HostObservation>
 ControllerSchedulerVerificationSupport::FindHostObservationForNode(
-    const std::vector<comet::HostObservation>& observations,
+    const std::vector<naim::HostObservation>& observations,
     const std::string& node_name) const {
   return runtime_support_service_.FindHostObservationForNode(observations, node_name);
 }
 
-std::vector<comet::RuntimeProcessStatus>
+std::vector<naim::RuntimeProcessStatus>
 ControllerSchedulerVerificationSupport::ParseInstanceRuntimeStatuses(
-    const comet::HostObservation& observation) const {
+    const naim::HostObservation& observation) const {
   return runtime_support_service_.ParseInstanceRuntimeStatuses(observation);
 }
 
-std::optional<comet::GpuTelemetrySnapshot>
+std::optional<naim::GpuTelemetrySnapshot>
 ControllerSchedulerVerificationSupport::ParseGpuTelemetry(
-    const comet::HostObservation& observation) const {
+    const naim::HostObservation& observation) const {
   return runtime_support_service_.ParseGpuTelemetry(observation);
 }
 
@@ -58,4 +58,4 @@ std::string ControllerSchedulerVerificationSupport::UtcNowSqlTimestamp() const {
   return runtime_support_service_.UtcNowSqlTimestamp();
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

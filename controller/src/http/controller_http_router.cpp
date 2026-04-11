@@ -8,11 +8,11 @@
 #include "interaction/interaction_request_contract_support.h"
 #include "interaction/interaction_request_identity_support.h"
 #include "interaction/interaction_service.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
 using nlohmann::json;
 
-namespace comet::controller {
+namespace naim::controller {
 namespace {
 
 std::string LowercaseCopy(const std::string& value) {
@@ -170,7 +170,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       PlaneInteractionResolution resolution =
           interaction_service_.ResolvePlane(db_path_, plane_name);
       if (resolution.desired_state.protected_plane) {
-        comet::ControllerStore store(db_path_);
+        naim::ControllerStore store(db_path_);
         store.Initialize();
         if (!auth_support_
                  .AuthenticateProtectedPlaneRequest(store, request, plane_name)
@@ -184,7 +184,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       }
       json payload = resolution.status_payload;
       payload["request_id"] = request_id;
-      payload["comet"] =
+      payload["naim"] =
           request_contract_support.BuildInteractionContractMetadata(
               resolution, request_id);
       return deps_.build_json_response(
@@ -243,7 +243,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       const PlaneInteractionResolution resolution =
           interaction_service_.ResolvePlane(db_path_, plane_name);
       if (resolution.desired_state.protected_plane) {
-        comet::ControllerStore store(db_path_);
+        naim::ControllerStore store(db_path_);
         store.Initialize();
         if (!auth_support_
                  .AuthenticateProtectedPlaneRequest(store, request, plane_name)
@@ -303,7 +303,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
     try {
       const PlaneInteractionResolution resolution =
           interaction_service_.ResolvePlane(db_path_, plane_name);
-      comet::ControllerStore store(db_path_);
+      naim::ControllerStore store(db_path_);
       store.Initialize();
       const auto authenticated =
           resolution.desired_state.protected_plane
@@ -322,7 +322,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
           db_path_, plane_name, authenticated->first.id);
       json response = payload;
       response["request_id"] = request_id;
-      response["comet"] =
+      response["naim"] =
           request_contract_support.BuildInteractionContractMetadata(
               resolution, request_id);
       return deps_.build_json_response(
@@ -373,7 +373,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
     try {
       const PlaneInteractionResolution resolution =
           interaction_service_.ResolvePlane(db_path_, plane_name);
-      comet::ControllerStore store(db_path_);
+      naim::ControllerStore store(db_path_);
       store.Initialize();
       const auto authenticated =
           resolution.desired_state.protected_plane
@@ -405,7 +405,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
                 {"plane_name", plane_name},
                 {"session_id", session_id},
                 {"status", "deleted"},
-                {"comet",
+                {"naim",
                  request_contract_support.BuildInteractionContractMetadata(
                      resolution, request_id)},
             },
@@ -422,7 +422,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       }
       json response = *payload;
       response["request_id"] = request_id;
-      response["comet"] = request_contract_support.BuildInteractionContractMetadata(
+      response["naim"] = request_contract_support.BuildInteractionContractMetadata(
           resolution, request_id, session_id);
       return deps_.build_json_response(
           200,
@@ -478,7 +478,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
     try {
       const PlaneInteractionResolution resolution =
           interaction_service_.ResolvePlane(db_path_, plane_name);
-      comet::ControllerStore store(db_path_);
+      naim::ControllerStore store(db_path_);
       store.Initialize();
       const auto build_plane_error =
           [&](int status_code,
@@ -673,7 +673,7 @@ HttpResponse ControllerHttpRouter::HandleRequest(
     }
     if (!interaction_request && !skills_request && !browsing_request) {
       try {
-        comet::ControllerStore store(db_path_);
+        naim::ControllerStore store(db_path_);
         store.Initialize();
         if (!auth_support_
                  .AuthenticateControllerUserSession(store, request)
@@ -695,7 +695,7 @@ HttpResponse ControllerHttpRouter::HandleRequest(
       }
     } else if (skills_request || browsing_request) {
       try {
-        comet::ControllerStore store(db_path_);
+        naim::ControllerStore store(db_path_);
         store.Initialize();
         const auto plane_name = skills_request
                                     ? ExtractPlaneFeatureRequestName(request.path, "/skills")
@@ -786,4 +786,4 @@ HttpResponse ControllerHttpRouter::HandleRequest(
       {});
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

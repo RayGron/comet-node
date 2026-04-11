@@ -4,7 +4,7 @@
 
 #include "app/hostd_repo_root_support.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdComposeRuntimeSupport::HostdComposeRuntimeSupport(
     const HostdCommandSupport& command_support)
@@ -12,7 +12,7 @@ HostdComposeRuntimeSupport::HostdComposeRuntimeSupport(
 
 std::string HostdComposeRuntimeSupport::PlaneMeshNetworkName(
     const std::string& plane_name) const {
-  return "comet-" + plane_name + "-mesh";
+  return "naim-" + plane_name + "-mesh";
 }
 
 bool HostdComposeRuntimeSupport::ComposeProjectHasContainers(
@@ -25,7 +25,7 @@ bool HostdComposeRuntimeSupport::ComposeProjectHasContainers(
 }
 
 void HostdComposeRuntimeSupport::EnsureComposeMeshNetworkAvailable(
-    const comet::NodeComposePlan& compose_plan,
+    const naim::NodeComposePlan& compose_plan,
     ComposeMode compose_mode) const {
   if (compose_mode != ComposeMode::Exec) {
     return;
@@ -107,11 +107,11 @@ bool HostdComposeRuntimeSupport::DockerImageExists(const std::string& image) con
 bool HostdComposeRuntimeSupport::LocalRuntimeBinaryExists(
     const std::filesystem::path& repo_root,
     const std::string& image) const {
-  if (image == "comet/infer-runtime:dev") {
-    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "comet-inferctl");
+  if (image == "naim/infer-runtime:dev") {
+    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "naim-inferctl");
   }
-  if (image == "comet/worker-runtime:dev") {
-    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "comet-workerd");
+  if (image == "naim/worker-runtime:dev") {
+    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "naim-workerd");
   }
   return true;
 }
@@ -134,7 +134,7 @@ void HostdComposeRuntimeSupport::EnsureLocalRuntimeBinary(
       " && " + command_support_.ShellQuote(build_script.string()) + " linux x64 Debug";
   if (!command_support_.RunCommandOk(command)) {
     throw std::runtime_error(
-        "failed to auto-build local comet binaries required for " + image);
+        "failed to auto-build local naim binaries required for " + image);
   }
 
   if (!LocalRuntimeBinaryExists(repo_root, image)) {
@@ -143,7 +143,7 @@ void HostdComposeRuntimeSupport::EnsureLocalRuntimeBinary(
   }
 }
 
-void HostdComposeRuntimeSupport::BuildCometRuntimeImage(
+void HostdComposeRuntimeSupport::BuildNaimRuntimeImage(
     const std::filesystem::path& repo_root,
     const std::string& image) const {
   const std::string repo_root_quoted = command_support_.ShellQuote(repo_root.string());
@@ -153,9 +153,9 @@ void HostdComposeRuntimeSupport::BuildCometRuntimeImage(
     const std::string command =
         docker + " build -f " +
         command_support_.ShellQuote((repo_root / "runtime" / "base" / "Dockerfile").string()) +
-        " -t " + command_support_.ShellQuote("comet/base-runtime:dev") + " " + repo_root_quoted;
+        " -t " + command_support_.ShellQuote("naim/base-runtime:dev") + " " + repo_root_quoted;
     if (!command_support_.RunCommandOk(command)) {
-      throw std::runtime_error("failed to auto-build comet/base-runtime:dev");
+      throw std::runtime_error("failed to auto-build naim/base-runtime:dev");
     }
   };
 
@@ -169,27 +169,27 @@ void HostdComposeRuntimeSupport::BuildCometRuntimeImage(
     }
   };
 
-  if (image == "comet/base-runtime:dev") {
+  if (image == "naim/base-runtime:dev") {
     build_base();
     return;
   }
-  if (image == "comet/infer-runtime:dev") {
-    if (!DockerImageExists("comet/base-runtime:dev")) {
+  if (image == "naim/infer-runtime:dev") {
+    if (!DockerImageExists("naim/base-runtime:dev")) {
       build_base();
     }
     EnsureLocalRuntimeBinary(repo_root, image);
     build_runtime("runtime/infer/Dockerfile", image);
     return;
   }
-  if (image == "comet/worker-runtime:dev") {
-    if (!DockerImageExists("comet/base-runtime:dev")) {
+  if (image == "naim/worker-runtime:dev") {
+    if (!DockerImageExists("naim/base-runtime:dev")) {
       build_base();
     }
     EnsureLocalRuntimeBinary(repo_root, image);
     build_runtime("runtime/worker/Dockerfile", image);
     return;
   }
-  if (image == "comet/web-ui:dev") {
+  if (image == "naim/web-ui:dev") {
     const std::string command =
         docker + " build -f " +
         command_support_.ShellQuote((repo_root / "runtime" / "web-ui" / "Dockerfile").string()) +
@@ -212,9 +212,9 @@ void HostdComposeRuntimeSupport::EnsureRuntimeImageAvailable(const std::string& 
     return;
   }
 
-  if (image.rfind("comet/", 0) == 0 && image.ends_with(":dev")) {
-    if (const auto repo_root = repo_root_support_.DetectCometRepoRoot(); repo_root.has_value()) {
-      BuildCometRuntimeImage(*repo_root, image);
+  if (image.rfind("naim/", 0) == 0 && image.ends_with(":dev")) {
+    if (const auto repo_root = repo_root_support_.DetectNaimRepoRoot(); repo_root.has_value()) {
+      BuildNaimRuntimeImage(*repo_root, image);
       if (DockerImageExists(image)) {
         ensured_images.insert(image);
         return;
@@ -235,7 +235,7 @@ void HostdComposeRuntimeSupport::EnsureRuntimeImageAvailable(const std::string& 
 }
 
 void HostdComposeRuntimeSupport::EnsureComposeImagesAvailable(
-    const comet::NodeComposePlan& compose_plan,
+    const naim::NodeComposePlan& compose_plan,
     ComposeMode compose_mode) const {
   if (compose_mode != ComposeMode::Exec) {
     return;
@@ -251,4 +251,4 @@ void HostdComposeRuntimeSupport::EnsureComposeImagesAvailable(
   }
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -7,7 +7,7 @@
 #include "interaction/interaction_service.h"
 #include "interaction/interaction_stream_http_request_preparation_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionHttpExecutorFactory final {
  public:
@@ -32,4 +32,4 @@ class InteractionHttpExecutorFactory final {
   const ::InteractionHttpSupport& support_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

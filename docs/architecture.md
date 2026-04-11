@@ -2,22 +2,22 @@
 
 `naim-node` now sits inside a two-part product architecture:
 
-- `comet` is the control point and operator-facing management surface
+- `naim` is the control point and operator-facing management surface
 - `naim-node` is the managed host agent package that realizes work on connected nodes
 
 This repository contains the current implementation of both sides:
 
-- `comet-controller` is the current implementation of the `comet` control point
-- `comet-hostd` is the current implementation of the `naim-node` host agent
+- `naim-controller` is the current implementation of the `naim` control point
+- `naim-hostd` is the current implementation of the `naim-node` host agent
 - `naim-node` is the launcher that can install and run either role, including a co-located setup
 
 The default remote-host pattern is no longer "controller reaches directly into every host". The
-canonical deployment model is that `naim-node` dials out to `comet`, which allows managed nodes to
+canonical deployment model is that `naim-node` dials out to `naim`, which allows managed nodes to
 live behind NAT, firewalls, or dynamic addressing without requiring a permanent public IP.
 
 ## Product Split
 
-`comet` owns:
+`naim` owns:
 
 - node onboarding and registry
 - desired state, plane lifecycle, scheduling, and reconciliation
@@ -30,20 +30,20 @@ live behind NAT, firewalls, or dynamic addressing without requiring a permanent 
 - local inventory scans for CPU, RAM, disk, GPU, and runtime posture
 - local realization of compose artifacts, runtime configs, disks, and containers
 - node-local telemetry and observed-state reporting
-- the secure outbound connection back to `comet`
+- the secure outbound connection back to `naim`
 
 ## Node Onboarding And Roles
 
 Managed node lifecycle:
 
-1. the operator adds a node in `comet`
-2. `comet` generates a random onboarding key for that node
+1. the operator adds a node in `naim`
+2. `naim` generates a random onboarding key for that node
 3. the operator starts `naim-node` with that key in its local configuration
-4. `naim-node` authenticates and opens the outbound channel to `comet`
+4. `naim-node` authenticates and opens the outbound channel to `naim`
 5. if TLS/SSL already protects that channel, no extra stream-encryption layer is required
 6. otherwise the host-agent channel must apply its own stream encryption
 7. the node is scanned on connect and rescanned every hour
-8. `comet` derives the node role from the latest observed inventory and may change that role after
+8. `naim` derives the node role from the latest observed inventory and may change that role after
    later rescans
 
 Canonical role rules:
@@ -64,7 +64,7 @@ role-dependent placement until later scans show a matching inventory.
 
 ### Model Library
 
-Model import and quantization are `comet` workflows, but they are realized on connected
+Model import and quantization are `naim` workflows, but they are realized on connected
 `naim-node` hosts.
 
 Current architectural contract:
@@ -74,7 +74,7 @@ Current architectural contract:
 - without quantization, eligible targets may be either `Storage` or `Worker`
 - with quantization, eligible targets must be `Worker`
 - when quantization is requested, the same `Worker` both stores and quantizes the model
-- the node list shown in `comet` must expose role, capacity, telemetry, and current plane
+- the node list shown in `naim` must expose role, capacity, telemetry, and current plane
   participation so that placement is explainable
 
 ### Plane Placement
@@ -104,7 +104,7 @@ The main architecture seam is:
 
 The interaction seam remains controller-owned:
 
-`client request -> comet controller session lookup/restore -> prompt reconstruction -> runtime inference -> controller persistence + response shaping`
+`client request -> naim controller session lookup/restore -> prompt reconstruction -> runtime inference -> controller persistence + response shaping`
 
 Runtime containers are still materialized from controller-rendered artifacts and node-local runtime
 configs, but the networked node registry is now a first-class architectural layer between
@@ -114,9 +114,9 @@ controller policy and runtime execution.
 
 The architecture must support all of these as normal cases:
 
-- remote `comet` with many outbound-connected `naim-node` agents
+- remote `naim` with many outbound-connected `naim-node` agents
 - mixed clusters where some nodes are `Storage` and others are `Worker`
-- a co-located install where `comet` and `naim-node` run on the same machine
+- a co-located install where `naim` and `naim-node` run on the same machine
 
 In the co-located case, the machine participates in the node registry like any other managed node.
 Co-location is a supported deployment shape, not a special debug-only shortcut.

@@ -8,7 +8,7 @@
 
 #include "app/hostd_repo_root_support.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 using nlohmann::json;
 
@@ -18,10 +18,10 @@ HostdPostDeploySupport::HostdPostDeploySupport(
       local_state_path_support_() {}
 
 bool HostdPostDeploySupport::NodeHasAppInstance(
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     const std::string& node_name) const {
   for (const auto& instance : desired_node_state.instances) {
-    if (instance.node_name == node_name && instance.role == comet::InstanceRole::App) {
+    if (instance.node_name == node_name && instance.role == naim::InstanceRole::App) {
       return true;
     }
   }
@@ -29,7 +29,7 @@ bool HostdPostDeploySupport::NodeHasAppInstance(
 }
 
 bool HostdPostDeploySupport::ShouldRunForNode(
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     const std::string& node_name) const {
   if (!desired_node_state.post_deploy_script.has_value() ||
       desired_node_state.post_deploy_script->empty()) {
@@ -89,7 +89,7 @@ void HostdPostDeploySupport::PublishProgress(
 }
 
 void HostdPostDeploySupport::RunIfNeeded(
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     const std::string& node_name,
     const std::string& artifacts_root,
     const std::string& storage_root,
@@ -133,22 +133,22 @@ void HostdPostDeploySupport::RunIfNeeded(
 
   std::ostringstream command;
   command << "cd " << command_support_.ShellQuote(script_path->parent_path().string()) << " && "
-          << "COMET_PLANE_NAME="
+          << "NAIM_PLANE_NAME="
           << command_support_.ShellQuote(desired_node_state.plane_name) << " "
-          << "COMET_NODE_NAME=" << command_support_.ShellQuote(node_name) << " "
-          << "COMET_ARTIFACTS_ROOT=" << command_support_.ShellQuote(artifacts_root) << " "
-          << "COMET_STORAGE_ROOT=" << command_support_.ShellQuote(storage_root) << " "
-          << "COMET_STATE_ROOT=" << command_support_.ShellQuote(state_root) << " "
-          << "COMET_RUNTIME_ROOT="
+          << "NAIM_NODE_NAME=" << command_support_.ShellQuote(node_name) << " "
+          << "NAIM_ARTIFACTS_ROOT=" << command_support_.ShellQuote(artifacts_root) << " "
+          << "NAIM_STORAGE_ROOT=" << command_support_.ShellQuote(storage_root) << " "
+          << "NAIM_STATE_ROOT=" << command_support_.ShellQuote(state_root) << " "
+          << "NAIM_RUNTIME_ROOT="
           << command_support_.ShellQuote(
                  runtime_root.has_value() ? *runtime_root : std::string()) << " "
-          << "COMET_POST_DEPLOY_LOG=" << command_support_.ShellQuote(log_path) << " "
-          << "COMET_DESIRED_GENERATION="
+          << "NAIM_POST_DEPLOY_LOG=" << command_support_.ShellQuote(log_path) << " "
+          << "NAIM_DESIRED_GENERATION="
           << command_support_.ShellQuote(
                  desired_generation.has_value() ? std::to_string(*desired_generation)
                                                 : std::string())
           << " "
-          << "COMET_ASSIGNMENT_ID="
+          << "NAIM_ASSIGNMENT_ID="
           << command_support_.ShellQuote(
                  assignment_id.has_value() ? std::to_string(*assignment_id) : std::string())
           << " "
@@ -164,4 +164,4 @@ void HostdPostDeploySupport::RunIfNeeded(
   }
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -6,21 +6,21 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "comet/state/desired_state_placement_resolver.h"
-#include "comet/state/worker_group_topology.h"
+#include "naim/state/desired_state_placement_resolver.h"
+#include "naim/state/worker_group_topology.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 void DesiredStatePolicyService::ApplyRegisteredHostExecutionModes(
-    comet::ControllerStore& store,
-    comet::DesiredState* desired_state) const {
+    naim::ControllerStore& store,
+    naim::DesiredState* desired_state) const {
   if (desired_state == nullptr) {
     return;
   }
   for (auto& node : desired_state->nodes) {
     if (const auto host = store.LoadRegisteredHost(node.name); host.has_value() &&
         !host->execution_mode.empty()) {
-      node.execution_mode = comet::ParseHostExecutionMode(host->execution_mode);
+      node.execution_mode = naim::ParseHostExecutionMode(host->execution_mode);
     }
   }
 }
@@ -37,8 +37,8 @@ std::string DesiredStatePolicyService::CurrentControllerPlatform() const {
 #endif
 }
 
-const comet::NodeInventory* DesiredStatePolicyService::FindPlaneNodeInventory(
-    const comet::DesiredState& desired_state,
+const naim::NodeInventory* DesiredStatePolicyService::FindPlaneNodeInventory(
+    const naim::DesiredState& desired_state,
     const std::string& node_name) const {
   for (const auto& node : desired_state.nodes) {
     if (node.name == node_name) {
@@ -49,7 +49,7 @@ const comet::NodeInventory* DesiredStatePolicyService::FindPlaneNodeInventory(
 }
 
 bool DesiredStatePolicyService::PlaneNodeUsesGpuRuntime(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const std::string& node_name) const {
   for (const auto& runtime_gpu_node : desired_state.runtime_gpu_nodes) {
     if (runtime_gpu_node.enabled && runtime_gpu_node.node_name == node_name) {
@@ -58,7 +58,7 @@ bool DesiredStatePolicyService::PlaneNodeUsesGpuRuntime(
   }
   for (const auto& instance : desired_state.instances) {
     if (instance.node_name == node_name &&
-        (instance.role == comet::InstanceRole::Worker ||
+        (instance.role == naim::InstanceRole::Worker ||
          (instance.gpu_device.has_value() && !instance.gpu_device->empty()))) {
       return true;
     }
@@ -72,7 +72,7 @@ bool DesiredStatePolicyService::PlaneNodeUsesGpuRuntime(
 
 std::optional<std::string>
 DesiredStatePolicyService::DescribeUnsupportedControllerLocalRuntime(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const std::string& node_name) const {
   if (node_name != "local-hostd" && node_name != "controller-local") {
     return std::nullopt;
@@ -95,16 +95,16 @@ DesiredStatePolicyService::DescribeUnsupportedControllerLocalRuntime(
 }
 
 void DesiredStatePolicyService::ValidateDesiredStateForControllerAdmission(
-    comet::ControllerStore& store,
-    const comet::DesiredState& desired_state) const {
-  const comet::DesiredStatePlacementResolver placement_resolver(desired_state);
+    naim::ControllerStore& store,
+    const naim::DesiredState& desired_state) const {
+  const naim::DesiredStatePlacementResolver placement_resolver(desired_state);
   if (const auto placement_node_name = placement_resolver.PrimaryNodeName();
       placement_node_name.has_value()) {
     const auto host = store.LoadRegisteredHost(*placement_node_name);
     if (!host.has_value()) {
       throw std::invalid_argument(
           "placement.primary_node '" + *placement_node_name +
-          "' is not registered in comet");
+          "' is not registered in naim");
     }
     if (host->registration_state != "registered") {
       throw std::invalid_argument(
@@ -132,24 +132,24 @@ void DesiredStatePolicyService::ValidateDesiredStateForControllerAdmission(
 }
 
 bool DesiredStatePolicyService::NodeAllowsInstanceRole(
-    comet::HostExecutionMode execution_mode,
-    comet::InstanceRole role) const {
+    naim::HostExecutionMode execution_mode,
+    naim::InstanceRole role) const {
   switch (execution_mode) {
-    case comet::HostExecutionMode::InferOnly:
-      return role == comet::InstanceRole::Infer ||
-             role == comet::InstanceRole::App ||
-             role == comet::InstanceRole::Skills;
-    case comet::HostExecutionMode::WorkerOnly:
-      return role == comet::InstanceRole::Worker;
-    case comet::HostExecutionMode::Mixed:
+    case naim::HostExecutionMode::InferOnly:
+      return role == naim::InstanceRole::Infer ||
+             role == naim::InstanceRole::App ||
+             role == naim::InstanceRole::Skills;
+    case naim::HostExecutionMode::WorkerOnly:
+      return role == naim::InstanceRole::Worker;
+    case naim::HostExecutionMode::Mixed:
       return true;
   }
   return true;
 }
 
 void DesiredStatePolicyService::ValidateDesiredStateExecutionModes(
-    const comet::DesiredState& desired_state) const {
-  std::map<std::string, comet::HostExecutionMode> node_modes;
+    const naim::DesiredState& desired_state) const {
+  std::map<std::string, naim::HostExecutionMode> node_modes;
   for (const auto& node : desired_state.nodes) {
     node_modes[node.name] = node.execution_mode;
   }
@@ -161,15 +161,15 @@ void DesiredStatePolicyService::ValidateDesiredStateExecutionModes(
     if (!NodeAllowsInstanceRole(node_it->second, instance.role)) {
       throw std::invalid_argument(
           "instance '" + instance.name + "' role '" +
-          comet::ToString(instance.role) + "' is not allowed on node '" +
+          naim::ToString(instance.role) + "' is not allowed on node '" +
           instance.node_name + "' execution_mode='" +
-          comet::ToString(node_it->second) + "'");
+          naim::ToString(node_it->second) + "'");
     }
   }
 }
 
 std::string DesiredStatePolicyService::EffectiveWorkerSelectionPolicy(
-    const comet::DesiredState& state) const {
+    const naim::DesiredState& state) const {
   if (!state.worker_group.worker_selection_policy.empty()) {
     return state.worker_group.worker_selection_policy;
   }
@@ -189,10 +189,10 @@ int DesiredStatePolicyService::AutoPlacementPolicyRank(
 }
 
 int DesiredStatePolicyService::ScoreAutoPlacementCandidate(
-    const comet::NodeInventory& node,
+    const naim::NodeInventory& node,
     const std::string& gpu_device,
     const PlacementUsage& usage,
-    const comet::InferenceRuntimeSettings& inference,
+    const naim::InferenceRuntimeSettings& inference,
     int observed_free_vram_mb,
     int observed_utilization_pct,
     const std::optional<std::string>& preferred_node_name,
@@ -226,15 +226,15 @@ int DesiredStatePolicyService::ScoreAutoPlacementCandidate(
 }
 
 bool DesiredStatePolicyService::HybridGpuAlreadyAssigned(
-    const comet::DesiredState& desired_state,
-    const comet::InstanceSpec& current_worker,
+    const naim::DesiredState& desired_state,
+    const naim::InstanceSpec& current_worker,
     const std::string& node_name,
     const std::string& gpu_device) const {
-  if (!comet::HybridDataParallelEnabled(desired_state.inference)) {
+  if (!naim::HybridDataParallelEnabled(desired_state.inference)) {
     return false;
   }
   for (const auto& instance : desired_state.instances) {
-    if (instance.role != comet::InstanceRole::Worker) {
+    if (instance.role != naim::InstanceRole::Worker) {
       continue;
     }
     if (instance.name == current_worker.name || instance.node_name != node_name ||
@@ -249,14 +249,14 @@ bool DesiredStatePolicyService::HybridGpuAlreadyAssigned(
 }
 
 bool DesiredStatePolicyService::UsesLlamaRpcRuntime(
-    const comet::DesiredState& desired_state) const {
+    const naim::DesiredState& desired_state) const {
   return desired_state.inference.runtime_engine == "llama.cpp" &&
          desired_state.inference.distributed_backend == "llama_rpc";
 }
 
 std::string DesiredStatePolicyService::InferInstanceNameForWorker(
-    const comet::InstanceSpec& instance) const {
-  const auto it = instance.environment.find("COMET_INFER_INSTANCE_NAME");
+    const naim::InstanceSpec& instance) const {
+  const auto it = instance.environment.find("NAIM_INFER_INSTANCE_NAME");
   if (it == instance.environment.end()) {
     return {};
   }
@@ -265,7 +265,7 @@ std::string DesiredStatePolicyService::InferInstanceNameForWorker(
 
 void DesiredStatePolicyService::ReservePlacement(
     std::map<std::pair<std::string, std::string>, PlacementUsage>* placement_usage,
-    const comet::InstanceSpec& worker) const {
+    const naim::InstanceSpec& worker) const {
   if (placement_usage == nullptr || !worker.gpu_device.has_value() ||
       worker.gpu_device->empty()) {
     return;
@@ -275,19 +275,19 @@ void DesiredStatePolicyService::ReservePlacement(
   usage.allocated_memory_mb += worker.memory_cap_mb.value_or(0);
 }
 
-const comet::InstanceSpec* DesiredStatePolicyService::FindInferInstance(
-    const comet::DesiredState& desired_state) const {
+const naim::InstanceSpec* DesiredStatePolicyService::FindInferInstance(
+    const naim::DesiredState& desired_state) const {
   const auto it = std::find_if(
       desired_state.instances.begin(),
       desired_state.instances.end(),
-      [](const comet::InstanceSpec& instance) {
-        return instance.role == comet::InstanceRole::Infer;
+      [](const naim::InstanceSpec& instance) {
+        return instance.role == naim::InstanceRole::Infer;
       });
   return it == desired_state.instances.end() ? nullptr : &*it;
 }
 
 void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
-    comet::DesiredState* desired_state) const {
+    naim::DesiredState* desired_state) const {
   if (desired_state == nullptr) {
     return;
   }
@@ -297,12 +297,12 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
   desired_state->worker_group.members.clear();
 
   for (auto& instance : desired_state->instances) {
-    if (instance.role != comet::InstanceRole::Worker) {
+    if (instance.role != naim::InstanceRole::Worker) {
       continue;
     }
 
     desired_state->runtime_gpu_nodes.push_back(
-        comet::RuntimeGpuNode{
+        naim::RuntimeGpuNode{
             instance.name,
             instance.node_name,
             instance.gpu_device.value_or(""),
@@ -315,20 +315,20 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
             true,
         });
 
-    comet::WorkerGroupMemberSpec member;
+    naim::WorkerGroupMemberSpec member;
     member.name = instance.name;
     member.infer_instance_name = InferInstanceNameForWorker(instance);
     member.node_name = instance.node_name;
     member.gpu_device = instance.gpu_device.value_or("");
     if (use_llama_rpc) {
       const int rpc_port =
-          comet::StableLlamaRpcWorkerPort(desired_state->plane_name, instance.name);
-      instance.environment["COMET_WORKER_RPC_PORT"] = std::to_string(rpc_port);
-      instance.environment["COMET_WORKER_RPC_HOST"] = "0.0.0.0";
-      instance.environment["COMET_WORKER_RPC_ENDPOINT"] =
+          naim::StableLlamaRpcWorkerPort(desired_state->plane_name, instance.name);
+      instance.environment["NAIM_WORKER_RPC_PORT"] = std::to_string(rpc_port);
+      instance.environment["NAIM_WORKER_RPC_HOST"] = "0.0.0.0";
+      instance.environment["NAIM_WORKER_RPC_ENDPOINT"] =
           instance.name + ":" + std::to_string(rpc_port);
       member.rpc_port = rpc_port;
-    } else if (const auto rpc_port_it = instance.environment.find("COMET_WORKER_RPC_PORT");
+    } else if (const auto rpc_port_it = instance.environment.find("NAIM_WORKER_RPC_PORT");
                rpc_port_it != instance.environment.end() && !rpc_port_it->second.empty()) {
       member.rpc_port = std::stoi(rpc_port_it->second);
     }
@@ -343,9 +343,9 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
   }
 
   if (desired_state->worker_group.expected_workers <= 0) {
-    desired_state->worker_group.expected_workers = comet::DefaultWorkersPerReplica(
+    desired_state->worker_group.expected_workers = naim::DefaultWorkersPerReplica(
         desired_state->inference,
-        comet::EligibleWorkerMemberCount(desired_state->worker_group));
+        naim::EligibleWorkerMemberCount(desired_state->worker_group));
   }
   if (desired_state->worker_group.infer_instance_name.empty()) {
     if (const auto* infer = FindInferInstance(*desired_state); infer != nullptr) {
@@ -403,19 +403,19 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
     }
     return;
   }
-  comet::ValidateReplicaPacking(desired_state->inference, desired_state->worker_group);
-  comet::AssignReplicaTopology(desired_state->inference, &desired_state->worker_group);
+  naim::ValidateReplicaPacking(desired_state->inference, desired_state->worker_group);
+  naim::AssignReplicaTopology(desired_state->inference, &desired_state->worker_group);
 }
 
 void DesiredStatePolicyService::ApplyObservedHostGpuInventory(
-    comet::ControllerStore& store,
-    comet::DesiredState* desired_state) const {
+    naim::ControllerStore& store,
+    naim::DesiredState* desired_state) const {
   if (desired_state == nullptr) {
     return;
   }
 
   const auto observations = store.LoadHostObservations();
-  std::map<std::string, comet::GpuTelemetrySnapshot> telemetry_by_node;
+  std::map<std::string, naim::GpuTelemetrySnapshot> telemetry_by_node;
   for (const auto& observation : observations) {
     if (const auto telemetry = runtime_support_.ParseGpuTelemetry(observation);
         telemetry.has_value()) {
@@ -445,11 +445,11 @@ void DesiredStatePolicyService::ApplyObservedHostGpuInventory(
 
 std::optional<DesiredStatePolicyService::AutoPlacementDecision>
 DesiredStatePolicyService::SelectAutoPlacement(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const std::map<std::pair<std::string, std::string>, PlacementUsage>& placement_usage,
     const std::map<std::pair<std::string, std::string>, std::pair<int, int>>&
         observed_gpu_headroom,
-    const comet::InstanceSpec& worker,
+    const naim::InstanceSpec& worker,
     const std::optional<std::string>& requested_node_name,
     const std::optional<std::string>& requested_gpu_device) const {
   std::optional<AutoPlacementDecision> best;
@@ -512,7 +512,7 @@ DesiredStatePolicyService::SelectAutoPlacement(
       candidate.idle_target = usage.allocated_fraction <= 1e-9;
       candidate.upgrade_to_exclusive =
           candidate.idle_target &&
-          (worker.share_mode != comet::GpuShareMode::Exclusive ||
+          (worker.share_mode != naim::GpuShareMode::Exclusive ||
            worker.gpu_fraction < 1.0 - 1e-9);
       candidate.allocated_fraction = usage.allocated_fraction;
       candidate.allocated_memory_mb = usage.allocated_memory_mb;
@@ -559,8 +559,8 @@ DesiredStatePolicyService::SelectAutoPlacement(
 }
 
 void DesiredStatePolicyService::ResolveDesiredStateDynamicPlacements(
-    comet::ControllerStore& store,
-    comet::DesiredState* desired_state) const {
+    naim::ControllerStore& store,
+    naim::DesiredState* desired_state) const {
   if (desired_state == nullptr) {
     return;
   }
@@ -585,19 +585,19 @@ void DesiredStatePolicyService::ResolveDesiredStateDynamicPlacements(
 
   std::map<std::pair<std::string, std::string>, PlacementUsage> placement_usage;
   for (const auto& instance : desired_state->instances) {
-    if (instance.role == comet::InstanceRole::Worker) {
+    if (instance.role == naim::InstanceRole::Worker) {
       ReservePlacement(&placement_usage, instance);
     }
   }
 
   for (auto& instance : desired_state->instances) {
-    if (instance.role != comet::InstanceRole::Worker) {
+    if (instance.role != naim::InstanceRole::Worker) {
       continue;
     }
 
     const bool has_gpu_device =
         instance.gpu_device.has_value() && !instance.gpu_device->empty();
-    if (instance.placement_mode == comet::PlacementMode::Manual && !has_gpu_device) {
+    if (instance.placement_mode == naim::PlacementMode::Manual && !has_gpu_device) {
       throw std::runtime_error(
           "worker '" + instance.name +
           "' uses placement_mode=manual but does not specify gpu_device");
@@ -632,23 +632,23 @@ void DesiredStatePolicyService::ResolveDesiredStateDynamicPlacements(
     instance.node_name = placement->node_name;
     instance.gpu_device = placement->gpu_device;
     if (placement->upgrade_to_exclusive) {
-      instance.share_mode = comet::GpuShareMode::Exclusive;
+      instance.share_mode = naim::GpuShareMode::Exclusive;
       instance.gpu_fraction = 1.0;
     }
-    instance.environment["COMET_NODE_NAME"] = instance.node_name;
-    instance.environment["COMET_GPU_DEVICE"] = *instance.gpu_device;
-    instance.labels["comet.node"] = instance.node_name;
-    instance.labels["comet.placement"] = "auto";
-    instance.labels["comet.placement.mode"] = comet::ToString(instance.placement_mode);
-    instance.labels["comet.placement.action"] =
+    instance.environment["NAIM_NODE_NAME"] = instance.node_name;
+    instance.environment["NAIM_GPU_DEVICE"] = *instance.gpu_device;
+    instance.labels["naim.node"] = instance.node_name;
+    instance.labels["naim.placement"] = "auto";
+    instance.labels["naim.placement.mode"] = naim::ToString(instance.placement_mode);
+    instance.labels["naim.placement.action"] =
         placement->upgrade_to_exclusive ? "upgrade-to-exclusive" : "auto-assign";
-    instance.labels["comet.placement.score"] = std::to_string(placement->score);
+    instance.labels["naim.placement.score"] = std::to_string(placement->score);
     if (!requested_node_name.has_value()) {
-      instance.labels.erase("comet.requested.node");
+      instance.labels.erase("naim.requested.node");
     } else {
-      instance.labels["comet.requested.node"] = *requested_node_name;
+      instance.labels["naim.requested.node"] = *requested_node_name;
     }
-    instance.labels.erase("comet.requested.gpu");
+    instance.labels.erase("naim.requested.gpu");
 
     ReservePlacement(&placement_usage, instance);
   }
@@ -656,4 +656,4 @@ void DesiredStatePolicyService::ResolveDesiredStateDynamicPlacements(
   RefreshDerivedWorkerMetadata(desired_state);
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

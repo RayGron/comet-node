@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdReportingSupport::HostdReportingSupport()
     : system_telemetry_collector_(),
@@ -69,7 +69,7 @@ void HostdReportingSupport::AppendHostdEvent(
     const std::optional<int>& assignment_id,
     const std::optional<int>& rollout_action_id,
     const std::string& severity) const {
-  backend.AppendEvent(comet::EventRecord{
+  backend.AppendEvent(naim::EventRecord{
       0,
       plane_name,
       node_name,
@@ -97,7 +97,7 @@ std::map<std::string, int> HostdReportingSupport::CaptureServiceHostPids(
 }
 
 bool HostdReportingSupport::VerifyEvictionAssignment(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const std::string& node_name,
     const std::string& state_root,
     const std::string& tagged_message,
@@ -110,11 +110,11 @@ bool HostdReportingSupport::VerifyEvictionAssignment(
       expected_victim_host_pids);
 }
 
-comet::HostObservation HostdReportingSupport::BuildObservedStateSnapshot(
+naim::HostObservation HostdReportingSupport::BuildObservedStateSnapshot(
     const std::string& node_name,
     const std::string& storage_root,
     const std::string& state_root,
-    comet::HostObservationStatus status,
+    naim::HostObservationStatus status,
     const std::string& status_message,
     const std::optional<int>& assignment_id) const {
   return observed_state_snapshot_builder_.BuildObservedStateSnapshot(
@@ -131,4 +131,4 @@ std::string HostdReportingSupport::SerializeEventPayload(
   return payload.dump();
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

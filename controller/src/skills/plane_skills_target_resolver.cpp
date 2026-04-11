@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -64,4 +64,4 @@ std::string PlaneSkillsTargetResolver::NormalizeSkillPathSuffix(
   return "/v1/skills/" + path_suffix;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

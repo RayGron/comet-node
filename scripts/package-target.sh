@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/build-context.sh"
 
-comet_resolve_target_context "${script_dir}" "$@"
+naim_resolve_target_context "${script_dir}" "$@"
 
 "${script_dir}/build-target.sh" "${TARGET_OS}" "${TARGET_ARCH}" Release
 
@@ -17,12 +17,12 @@ declare -a artifacts=()
 for candidate in \
   "${BUILD_DIR}/naim-node" \
   "${BUILD_DIR}/naim-node.exe" \
-  "${BUILD_DIR}/comet-controller" \
-  "${BUILD_DIR}/comet-controller.exe" \
-  "${BUILD_DIR}/comet-hostd" \
-  "${BUILD_DIR}/comet-hostd.exe" \
-  "${BUILD_DIR}/libcomet-common.a" \
-  "${BUILD_DIR}/comet-common.lib"; do
+  "${BUILD_DIR}/naim-controller" \
+  "${BUILD_DIR}/naim-controller.exe" \
+  "${BUILD_DIR}/naim-hostd" \
+  "${BUILD_DIR}/naim-hostd.exe" \
+  "${BUILD_DIR}/libnaim-common.a" \
+  "${BUILD_DIR}/naim-common.lib"; do
   if [[ -f "${candidate}" ]]; then
     artifacts+=("$(basename "${candidate}")")
   fi

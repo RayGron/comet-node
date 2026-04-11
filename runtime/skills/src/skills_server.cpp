@@ -10,7 +10,7 @@
 #include "http/controller_http_server_support.h"
 #include "infra/controller_network_manager.h"
 
-namespace comet::skills {
+namespace naim::skills {
 
 namespace {
 
@@ -42,7 +42,7 @@ int SkillsServer::Run() {
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
 
-  listen_fd_ = comet::controller::ControllerNetworkManager::CreateListenSocket(
+  listen_fd_ = naim::controller::ControllerNetworkManager::CreateListenSocket(
       config_.listen_host,
       config_.port);
   WriteRuntimeStatus("running", true);
@@ -53,42 +53,42 @@ int SkillsServer::Run() {
   } catch (...) {
     WriteRuntimeStatus("stopped", false);
     SetReadyFile(false);
-    comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
-    listen_fd_ = comet::platform::kInvalidSocket;
+    naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
+    listen_fd_ = naim::platform::kInvalidSocket;
     throw;
   }
 
   WriteRuntimeStatus("stopped", false);
   SetReadyFile(false);
-  comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
-  listen_fd_ = comet::platform::kInvalidSocket;
+  naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
+  listen_fd_ = naim::platform::kInvalidSocket;
   return 0;
 }
 
 void SkillsServer::RequestStop() {
   const bool was_requested = stop_requested_.exchange(true);
-  if (!was_requested && comet::platform::IsSocketValid(listen_fd_)) {
+  if (!was_requested && naim::platform::IsSocketValid(listen_fd_)) {
     WriteRuntimeStatus("stopping", false);
     SetReadyFile(false);
-    comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
+    naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
   }
 }
 
 void SkillsServer::AcceptLoop() {
   while (!stop_requested_.load()) {
     const auto client_fd = accept(listen_fd_, nullptr, nullptr);
-    if (!comet::platform::IsSocketValid(client_fd)) {
-      if (stop_requested_.load() || comet::platform::LastSocketErrorWasInterrupted()) {
+    if (!naim::platform::IsSocketValid(client_fd)) {
+      if (stop_requested_.load() || naim::platform::LastSocketErrorWasInterrupted()) {
         continue;
       }
       throw std::runtime_error(
-          "accept failed: " + comet::controller::ControllerNetworkManager::SocketErrorMessage());
+          "accept failed: " + naim::controller::ControllerNetworkManager::SocketErrorMessage());
     }
     std::thread(&SkillsServer::HandleClient, this, client_fd).detach();
   }
 }
 
-void SkillsServer::HandleClient(comet::platform::SocketHandle client_fd) {
+void SkillsServer::HandleClient(naim::platform::SocketHandle client_fd) {
   std::string request_data;
   std::array<char, 8192> buffer{};
   std::size_t expected_request_bytes = 0;
@@ -100,7 +100,7 @@ void SkillsServer::HandleClient(comet::platform::SocketHandle client_fd) {
     request_data.append(buffer.data(), static_cast<std::size_t>(read_count));
     if (expected_request_bytes == 0) {
       expected_request_bytes =
-          comet::controller::ControllerHttpServerSupport::ExpectedRequestBytes(request_data);
+          naim::controller::ControllerHttpServerSupport::ExpectedRequestBytes(request_data);
     }
     if (expected_request_bytes != 0 && request_data.size() >= expected_request_bytes) {
       break;
@@ -110,25 +110,25 @@ void SkillsServer::HandleClient(comet::platform::SocketHandle client_fd) {
   if (!request_data.empty()) {
     try {
       const HttpRequest request =
-          comet::controller::ControllerHttpServerSupport::ParseHttpRequest(request_data);
-      comet::controller::ControllerNetworkManager::SendHttpResponse(
+          naim::controller::ControllerHttpServerSupport::ParseHttpRequest(request_data);
+      naim::controller::ControllerNetworkManager::SendHttpResponse(
           client_fd,
           HandleRequest(request));
     } catch (const ApiError& error) {
-      comet::controller::ControllerNetworkManager::SendHttpResponse(
+      naim::controller::ControllerNetworkManager::SendHttpResponse(
           client_fd,
           BuildJsonResponse(
               error.status(),
               nlohmann::json{{"error", error.code()}, {"message", error.message()}}));
     } catch (const std::exception& error) {
-      comet::controller::ControllerNetworkManager::SendHttpResponse(
+      naim::controller::ControllerNetworkManager::SendHttpResponse(
           client_fd,
           BuildJsonResponse(
               500,
               nlohmann::json{{"error", "internal_error"}, {"message", error.what()}}));
     }
   }
-  comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+  naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
 }
 
 HttpResponse SkillsServer::HandleRequest(const HttpRequest& request) {
@@ -240,7 +240,7 @@ HttpResponse SkillsServer::BuildJsonResponse(int status_code, const nlohmann::js
 }
 
 void SkillsServer::WriteRuntimeStatus(const std::string& phase, bool ready) const {
-  comet::RuntimeStatus status;
+  naim::RuntimeStatus status;
   status.plane_name = config_.plane_name;
   status.control_root = config_.control_root;
   status.controller_url = config_.controller_url;
@@ -271,4 +271,4 @@ void SkillsServer::SetReadyFile(bool ready) const {
   std::filesystem::remove(config_.ready_path, error);
 }
 
-}  // namespace comet::skills
+}  // namespace naim::skills

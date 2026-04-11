@@ -1,23 +1,23 @@
 #include "plane/plane_registry_query_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 ControllerPlaneRegistryQuerySupport::ControllerPlaneRegistryQuerySupport(
     const ControllerRuntimeSupportService& runtime_support_service)
     : runtime_support_service_(runtime_support_service) {}
 
-std::vector<comet::HostObservation>
+std::vector<naim::HostObservation>
 ControllerPlaneRegistryQuerySupport::FilterHostObservationsForPlane(
-    const std::vector<comet::HostObservation>& observations,
+    const std::vector<naim::HostObservation>& observations,
     const std::string& plane_name) const {
   return plane_observation_matcher_.FilterHostObservationsForPlane(observations, plane_name);
 }
 
 int ControllerPlaneRegistryQuerySupport::ComputeEffectiveAppliedGeneration(
-    const comet::PlaneRecord& plane,
-    const std::optional<comet::DesiredState>& desired_state,
+    const naim::PlaneRecord& plane,
+    const std::optional<naim::DesiredState>& desired_state,
     const std::optional<int>& desired_generation,
-    const std::vector<comet::HostObservation>& observations) const {
+    const std::vector<naim::HostObservation>& observations) const {
   if (!desired_state.has_value() || !desired_generation.has_value()) {
     return plane.applied_generation;
   }
@@ -32,17 +32,17 @@ int ControllerPlaneRegistryQuerySupport::ComputeEffectiveAppliedGeneration(
     }
     if (!observation->applied_generation.has_value() ||
         *observation->applied_generation < *desired_generation ||
-        observation->status == comet::HostObservationStatus::Failed) {
+        observation->status == naim::HostObservationStatus::Failed) {
       return plane.applied_generation;
     }
   }
   return *desired_generation;
 }
 
-std::map<std::string, comet::HostAssignment>
+std::map<std::string, naim::HostAssignment>
 ControllerPlaneRegistryQuerySupport::BuildLatestAssignmentsByNode(
-    const std::vector<comet::HostAssignment>& assignments) const {
-  std::map<std::string, comet::HostAssignment> latest_by_node;
+    const std::vector<naim::HostAssignment>& assignments) const {
+  std::map<std::string, naim::HostAssignment> latest_by_node;
   for (const auto& assignment : assignments) {
     auto it = latest_by_node.find(assignment.node_name);
     if (it == latest_by_node.end() || assignment.id >= it->second.id) {
@@ -52,4 +52,4 @@ ControllerPlaneRegistryQuerySupport::BuildLatestAssignmentsByNode(
   return latest_by_node;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -11,9 +11,9 @@
 #include "app/hostd_file_support.h"
 #include "app/hostd_reporting_support.h"
 #include "backend/hostd_backend.h"
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdBootstrapModelSupport final {
  public:
@@ -25,7 +25,7 @@ class HostdBootstrapModelSupport final {
       const HostdReportingSupport& reporting_support);
 
   void BootstrapPlaneModelIfNeeded(
-      const comet::DesiredState& state,
+      const naim::DesiredState& state,
       const std::string& node_name,
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const;
@@ -43,13 +43,13 @@ class HostdBootstrapModelSupport final {
       const std::optional<std::uintmax_t>& bytes_done = std::nullopt,
       const std::optional<std::uintmax_t>& bytes_total = std::nullopt) const;
   bool TryUseReferenceBootstrapModel(
-      const comet::DesiredState& state,
+      const naim::DesiredState& state,
       const std::string& node_name,
-      const comet::BootstrapModelSpec& bootstrap_model,
+      const naim::BootstrapModelSpec& bootstrap_model,
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const;
   bool TryUseSharedBootstrapFromOtherNode(
-      const comet::DesiredState& state,
+      const naim::DesiredState& state,
       const std::string& node_name,
       const std::vector<HostdBootstrapModelArtifact>& artifacts,
       const std::string& target_path,
@@ -62,7 +62,7 @@ class HostdBootstrapModelSupport final {
       const std::vector<HostdBootstrapModelArtifact>& artifacts,
       bool& already_present) const;
   void AcquireArtifactsIfNeeded(
-      const comet::DesiredState& state,
+      const naim::DesiredState& state,
       const std::string& node_name,
       const std::vector<HostdBootstrapModelArtifact>& artifacts,
       const std::optional<std::uintmax_t>& aggregate_total,
@@ -70,15 +70,15 @@ class HostdBootstrapModelSupport final {
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const;
   void VerifyBootstrapChecksumIfNeeded(
-      const comet::DesiredState& state,
+      const naim::DesiredState& state,
       const std::string& node_name,
-      const comet::BootstrapModelSpec& bootstrap_model,
+      const naim::BootstrapModelSpec& bootstrap_model,
       const std::vector<HostdBootstrapModelArtifact>& artifacts,
       const std::string& target_path,
       bool already_present,
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const;
-  static bool HasBootstrapSource(const comet::BootstrapModelSpec& bootstrap_model);
+  static bool HasBootstrapSource(const naim::BootstrapModelSpec& bootstrap_model);
 
   const HostdBootstrapModelArtifactSupport& artifact_support_;
   const HostdBootstrapActiveModelSupport& active_model_support_;
@@ -87,4 +87,4 @@ class HostdBootstrapModelSupport final {
   const HostdReportingSupport& reporting_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

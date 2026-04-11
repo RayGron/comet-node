@@ -10,7 +10,7 @@
 
 class AuthSupportService;
 
-namespace comet::controller {
+namespace naim::controller {
 
 struct InteractionStreamHttpRequestPreparationResult {
   std::optional<::HttpResponse> error_response;
@@ -42,4 +42,4 @@ class InteractionStreamHttpRequestPreparationService final {
   ResolveRequestContextFn resolve_request_context_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

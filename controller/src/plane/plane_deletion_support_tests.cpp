@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 #include "host/host_assignment_reconciliation_service.h"
 #include "plane/controller_state_service.h"
 #include "plane/plane_lifecycle_support.h"
@@ -21,28 +21,28 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-comet::DesiredState BuildDesiredState(
+naim::DesiredState BuildDesiredState(
     const std::string& plane_name,
     const std::vector<std::string>& node_names = {}) {
-  comet::DesiredState state;
+  naim::DesiredState state;
   state.plane_name = plane_name;
-  state.plane_mode = comet::PlaneMode::Llm;
+  state.plane_mode = naim::PlaneMode::Llm;
   state.control_root = "/tmp/" + plane_name;
   for (const auto& node_name : node_names) {
-    comet::NodeInventory node;
+    naim::NodeInventory node;
     node.name = node_name;
     state.nodes.push_back(node);
   }
   return state;
 }
 
-comet::HostAssignment BuildHostAssignment(
+naim::HostAssignment BuildHostAssignment(
     const std::string& plane_name,
     const std::string& node_name,
     int desired_generation,
-    comet::HostAssignmentStatus status,
+    naim::HostAssignmentStatus status,
     const std::string& assignment_type = "apply-node-state") {
-  comet::HostAssignment assignment;
+  naim::HostAssignment assignment;
   assignment.node_name = node_name;
   assignment.plane_name = plane_name;
   assignment.desired_generation = desired_generation;
@@ -50,16 +50,16 @@ comet::HostAssignment BuildHostAssignment(
   assignment.desired_state_json = "{}";
   assignment.artifacts_root = "/tmp/artifacts";
   assignment.status = status;
-  assignment.attempt_count = status == comet::HostAssignmentStatus::Claimed ? 1 : 0;
+  assignment.attempt_count = status == naim::HostAssignmentStatus::Claimed ? 1 : 0;
   return assignment;
 }
 
-comet::HostObservation BuildHostObservation(
+naim::HostObservation BuildHostObservation(
     const std::string& plane_name,
     const std::string& node_name,
     int applied_generation,
-    comet::HostObservationStatus status = comet::HostObservationStatus::Applied) {
-  comet::HostObservation observation;
+    naim::HostObservationStatus status = naim::HostObservationStatus::Applied) {
+  naim::HostObservation observation;
   observation.node_name = node_name;
   observation.plane_name = plane_name;
   observation.applied_generation = applied_generation;
@@ -68,58 +68,58 @@ comet::HostObservation BuildHostObservation(
 }
 
 class TestPlaneStatePresentationSupport final
-    : public comet::controller::PlaneStatePresentationSupport {
+    : public naim::controller::PlaneStatePresentationSupport {
  public:
   std::string FormatTimestamp(const std::string& value) const override { return value; }
 
-  void PrintStateSummary(const comet::DesiredState&) const override {}
+  void PrintStateSummary(const naim::DesiredState&) const override {}
 };
 
-class TestPlaneLifecycleSupport final : public comet::controller::PlaneLifecycleSupport {
+class TestPlaneLifecycleSupport final : public naim::controller::PlaneLifecycleSupport {
  public:
   void PrepareDesiredState(
-      comet::ControllerStore&,
-      comet::DesiredState*) const override {}
+      naim::ControllerStore&,
+      naim::DesiredState*) const override {}
 
   void AppendPlaneEvent(
-      comet::ControllerStore&,
+      naim::ControllerStore&,
       const std::string&,
       const std::string&,
       const nlohmann::json&,
       const std::string&) const override {}
 
   bool CanFinalizeDeletedPlane(
-      comet::ControllerStore&,
+      naim::ControllerStore&,
       const std::string&) const override {
     return true;
   }
 
-  std::optional<comet::HostAssignment> FindLatestHostAssignmentForPlane(
-      const std::vector<comet::HostAssignment>&,
+  std::optional<naim::HostAssignment> FindLatestHostAssignmentForPlane(
+      const std::vector<naim::HostAssignment>&,
       const std::string&) const override {
     return std::nullopt;
   }
 
-  std::vector<comet::HostAssignment> BuildStartAssignments(
-      const comet::DesiredState&,
+  std::vector<naim::HostAssignment> BuildStartAssignments(
+      const naim::DesiredState&,
       const std::string&,
       int,
-      const std::vector<comet::NodeAvailabilityOverride>&,
-      const std::vector<comet::HostObservation>&,
-      const comet::SchedulingPolicyReport&) const override {
+      const std::vector<naim::NodeAvailabilityOverride>&,
+      const std::vector<naim::HostObservation>&,
+      const naim::SchedulingPolicyReport&) const override {
     return {};
   }
 
-  std::vector<comet::HostAssignment> BuildStopAssignments(
-      const comet::DesiredState&,
+  std::vector<naim::HostAssignment> BuildStopAssignments(
+      const naim::DesiredState&,
       int,
       const std::string&,
-      const std::vector<comet::NodeAvailabilityOverride>&) const override {
+      const std::vector<naim::NodeAvailabilityOverride>&) const override {
     return {};
   }
 
-  std::vector<comet::HostAssignment> BuildDeleteAssignments(
-      const comet::DesiredState&,
+  std::vector<naim::HostAssignment> BuildDeleteAssignments(
+      const naim::DesiredState&,
       int,
       const std::string&) const override {
     return {};
@@ -128,11 +128,11 @@ class TestPlaneLifecycleSupport final : public comet::controller::PlaneLifecycle
   std::string DefaultArtifactsRoot() const override { return "/tmp/artifacts"; }
 };
 
-comet::controller::PlaneService BuildPlaneService(const std::string& db_path) {
+naim::controller::PlaneService BuildPlaneService(const std::string& db_path) {
   auto state_presentation_support =
       std::make_shared<TestPlaneStatePresentationSupport>();
   auto lifecycle_support = std::make_shared<TestPlaneLifecycleSupport>();
-  return comet::controller::PlaneService(
+  return naim::controller::PlaneService(
       db_path,
       std::move(state_presentation_support),
       std::move(lifecycle_support));
@@ -142,20 +142,20 @@ comet::controller::PlaneService BuildPlaneService(const std::string& db_path) {
 
 int main() {
   try {
-    const fs::path db_path = fs::temp_directory_path() / "comet-plane-deletion-tests.sqlite";
+    const fs::path db_path = fs::temp_directory_path() / "naim-plane-deletion-tests.sqlite";
     std::error_code error;
     fs::remove(db_path, error);
 
     {
-      comet::ControllerStore store(db_path.string());
+      naim::ControllerStore store(db_path.string());
       store.Initialize();
       store.ReplaceDesiredState(BuildDesiredState("plane-a"), 7);
       Expect(store.UpdatePlaneState("plane-a", "deleting"), "plane-a should enter deleting");
 
-      comet::controller::ControllerStateService state_service(
-          comet::controller::ControllerStateService::Deps{
-              [](comet::ControllerStore&, const std::string&) { return true; },
-              [](comet::ControllerStore&,
+      naim::controller::ControllerStateService state_service(
+          naim::controller::ControllerStateService::Deps{
+              [](naim::ControllerStore&, const std::string&) { return true; },
+              [](naim::ControllerStore&,
                  const std::string&,
                  const std::string&,
                  const std::string&,
@@ -168,7 +168,7 @@ int main() {
     }
 
     {
-      comet::ControllerStore store(db_path.string());
+      naim::ControllerStore store(db_path.string());
       store.Initialize();
       store.ReplaceDesiredState(BuildDesiredState("plane-b"), 8);
       Expect(store.UpdatePlaneState("plane-b", "deleting"), "plane-b should enter deleting");
@@ -185,9 +185,9 @@ int main() {
     }
 
     {
-      comet::ControllerStore store(db_path.string());
+      naim::ControllerStore store(db_path.string());
       store.Initialize();
-      const comet::controller::HostAssignmentReconciliationService reconciliation_service;
+      const naim::controller::HostAssignmentReconciliationService reconciliation_service;
 
       store.ReplaceDesiredState(BuildDesiredState("plane-c", {"node-c"}), 4);
       Expect(
@@ -199,7 +199,7 @@ int main() {
               "plane-c",
               "node-c",
               4,
-              comet::HostAssignmentStatus::Claimed)});
+              naim::HostAssignmentStatus::Claimed)});
 
       const auto result = reconciliation_service.Reconcile(store, "plane-c");
       const auto assignment = store.LoadHostAssignments(
@@ -208,14 +208,14 @@ int main() {
       Expect(result.superseded == 0, "controller should not supersede converged assignment");
       Expect(assignment.size() == 1, "plane-c should have one assignment");
       Expect(
-          assignment.front().status == comet::HostAssignmentStatus::Applied,
+          assignment.front().status == naim::HostAssignmentStatus::Applied,
           "plane-c claimed assignment should become applied");
     }
 
     {
-      comet::ControllerStore store(db_path.string());
+      naim::ControllerStore store(db_path.string());
       store.Initialize();
-      const comet::controller::HostAssignmentReconciliationService reconciliation_service;
+      const naim::controller::HostAssignmentReconciliationService reconciliation_service;
 
       store.ReplaceDesiredState(BuildDesiredState("plane-d", {"node-d"}), 6);
       store.ReplaceHostAssignments(
@@ -223,12 +223,12 @@ int main() {
                "plane-d",
                "node-d",
                5,
-               comet::HostAssignmentStatus::Claimed),
+               naim::HostAssignmentStatus::Claimed),
            BuildHostAssignment(
                "plane-d",
                "node-d",
                6,
-               comet::HostAssignmentStatus::Pending)});
+               naim::HostAssignmentStatus::Pending)});
 
       const auto result = reconciliation_service.Reconcile(store, "plane-d");
       const auto assignments = store.LoadHostAssignments(
@@ -237,17 +237,17 @@ int main() {
       Expect(result.applied == 0, "controller should not mark replaced assignment applied");
       Expect(assignments.size() == 2, "plane-d should have two assignments");
       Expect(
-          assignments.front().status == comet::HostAssignmentStatus::Superseded,
+          assignments.front().status == naim::HostAssignmentStatus::Superseded,
           "older claimed assignment should be superseded");
       Expect(
-          assignments.back().status == comet::HostAssignmentStatus::Pending,
+          assignments.back().status == naim::HostAssignmentStatus::Pending,
           "newest assignment should remain pending");
     }
 
     {
-      comet::ControllerStore store(db_path.string());
+      naim::ControllerStore store(db_path.string());
       store.Initialize();
-      const comet::controller::HostAssignmentReconciliationService reconciliation_service;
+      const naim::controller::HostAssignmentReconciliationService reconciliation_service;
 
       store.ReplaceDesiredState(BuildDesiredState("plane-e", {"node-e"}), 5);
       Expect(
@@ -259,7 +259,7 @@ int main() {
               "plane-e",
               "node-e",
               5,
-              comet::HostAssignmentStatus::Claimed)});
+              naim::HostAssignmentStatus::Claimed)});
 
       const auto result = reconciliation_service.Reconcile(store, "plane-e");
       const auto assignment = store.LoadHostAssignments(
@@ -267,7 +267,7 @@ int main() {
       Expect(result.Total() == 0, "controller should not reconcile unconverged assignment");
       Expect(assignment.size() == 1, "plane-e should have one assignment");
       Expect(
-          assignment.front().status == comet::HostAssignmentStatus::Claimed,
+          assignment.front().status == naim::HostAssignmentStatus::Claimed,
           "unconverged assignment should remain claimed");
     }
 

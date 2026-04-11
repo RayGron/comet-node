@@ -1,6 +1,6 @@
 #include "app/hostd_app_observation_support.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdAppObservationSupport::HostdAppObservationSupport()
     : path_support_(),
@@ -19,11 +19,11 @@ void HostdAppObservationSupport::ShowRuntimeStatus(
   display_support_.ShowRuntimeStatus(node_name, state_root);
 }
 
-comet::HostObservation HostdAppObservationSupport::BuildObservedStateSnapshot(
+naim::HostObservation HostdAppObservationSupport::BuildObservedStateSnapshot(
     const std::string& node_name,
     const std::string& storage_root,
     const std::string& state_root,
-    comet::HostObservationStatus status,
+    naim::HostObservationStatus status,
     const std::string& status_message,
     const std::optional<int>& assignment_id) const {
   return reporting_support_.BuildObservedStateSnapshot(
@@ -61,4 +61,4 @@ void HostdAppObservationSupport::AppendHostdEvent(
       severity);
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -9,20 +9,20 @@
 #include "app/hostd_local_state_path_support.h"
 #include "app/hostd_repo_root_support.h"
 #include "backend/hostd_backend.h"
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdPostDeploySupport final {
  public:
   explicit HostdPostDeploySupport(const HostdCommandSupport& command_support);
 
   bool ShouldRunForNode(
-      const comet::DesiredState& desired_node_state,
+      const naim::DesiredState& desired_node_state,
       const std::string& node_name) const;
 
   void RunIfNeeded(
-      const comet::DesiredState& desired_node_state,
+      const naim::DesiredState& desired_node_state,
       const std::string& node_name,
       const std::string& artifacts_root,
       const std::string& storage_root,
@@ -34,7 +34,7 @@ class HostdPostDeploySupport final {
 
  private:
   bool NodeHasAppInstance(
-      const comet::DesiredState& desired_node_state,
+      const naim::DesiredState& desired_node_state,
       const std::string& node_name) const;
   std::string TailTextFile(const std::string& path, std::size_t max_bytes = 4096) const;
   nlohmann::json BuildProgressPayload(
@@ -54,4 +54,4 @@ class HostdPostDeploySupport final {
   HostdRepoRootSupport repo_root_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -2,13 +2,13 @@
 
 #include "interaction/interaction_request_contract_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
-comet::runtime::ModelIdentity
+naim::runtime::ModelIdentity
 InteractionModelIdentityBuilder::BuildRuntimePreferred(
     const PlaneInteractionResolution& resolution) const {
   const InteractionRequestContractSupport request_contract_support;
-  comet::runtime::ModelIdentity identity;
+  naim::runtime::ModelIdentity identity;
   identity.model_id =
       request_contract_support.ResolveInteractionActiveModelId(resolution);
   identity.served_model_name =
@@ -24,10 +24,10 @@ InteractionModelIdentityBuilder::BuildRuntimePreferred(
   return identity;
 }
 
-comet::runtime::ModelIdentity
+naim::runtime::ModelIdentity
 InteractionModelIdentityBuilder::BuildStatusPreferred(
     const PlaneInteractionResolution& resolution) const {
-  comet::runtime::ModelIdentity identity;
+  naim::runtime::ModelIdentity identity;
   identity.model_id =
       ReadJsonStringOrEmpty(resolution.status_payload, "active_model_id");
   identity.served_model_name =
@@ -60,4 +60,4 @@ std::string InteractionModelIdentityBuilder::ReadJsonStringOrEmpty(
   return found->get<std::string>();
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

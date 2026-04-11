@@ -2,7 +2,7 @@
 
 #include "app/controller_main_includes.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerHttpComponentFactory final {
  public:
@@ -20,4 +20,4 @@ class ControllerHttpComponentFactory final {
   const ControllerRequestSupport& RequestSupport() const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

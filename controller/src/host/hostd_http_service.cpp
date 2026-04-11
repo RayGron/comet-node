@@ -8,9 +8,9 @@
 
 #include "infra/controller_action.h"
 
-#include "comet/security/crypto_utils.h"
-#include "comet/state/models.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/security/crypto_utils.h"
+#include "naim/state/models.h"
+#include "naim/state/sqlite_store.h"
 
 using nlohmann::json;
 
@@ -62,7 +62,7 @@ std::string BuildHostResponseAad(
          std::to_string(sequence_number);
 }
 
-json BuildAssignmentPayloadItem(const comet::HostAssignment& assignment) {
+json BuildAssignmentPayloadItem(const naim::HostAssignment& assignment) {
   json progress = nullptr;
   if (!assignment.progress_json.empty() && assignment.progress_json != "{}") {
     progress = json::parse(assignment.progress_json);
@@ -77,14 +77,14 @@ json BuildAssignmentPayloadItem(const comet::HostAssignment& assignment) {
       {"assignment_type", assignment.assignment_type},
       {"desired_state_json", assignment.desired_state_json},
       {"artifacts_root", assignment.artifacts_root},
-      {"status", comet::ToString(assignment.status)},
+      {"status", naim::ToString(assignment.status)},
       {"status_message", assignment.status_message},
       {"progress", progress},
   };
 }
 
-comet::HostObservation ParseHostObservationPayload(const json& payload) {
-  comet::HostObservation observation;
+naim::HostObservation ParseHostObservationPayload(const json& payload) {
+  naim::HostObservation observation;
   observation.node_name = payload.value("node_name", std::string{});
   observation.plane_name = payload.value("plane_name", std::string{});
   if (payload.contains("applied_generation") &&
@@ -95,7 +95,7 @@ comet::HostObservation ParseHostObservationPayload(const json& payload) {
       !payload.at("last_assignment_id").is_null()) {
     observation.last_assignment_id = payload.at("last_assignment_id").get<int>();
   }
-  observation.status = comet::ParseHostObservationStatus(
+  observation.status = naim::ParseHostObservationStatus(
       payload.value("status", std::string("idle")));
   observation.status_message = payload.value("status_message", std::string{});
   observation.observed_state_json =
@@ -125,8 +125,8 @@ json ParseCapabilitiesJson(const std::string& capabilities_json) {
 }
 
 HostInventorySummary BuildInventorySummary(
-    const comet::RegisteredHostRecord& host,
-    const comet::HostObservation& observation) {
+    const naim::RegisteredHostRecord& host,
+    const naim::HostObservation& observation) {
   HostInventorySummary summary;
   const json capabilities = ParseCapabilitiesJson(host.capabilities_json);
   if (capabilities.contains("storage_root") && capabilities["storage_root"].is_string()) {
@@ -134,14 +134,14 @@ HostInventorySummary BuildInventorySummary(
   }
   if (!observation.gpu_telemetry_json.empty()) {
     summary.gpu_count = static_cast<int>(
-        comet::DeserializeGpuTelemetryJson(observation.gpu_telemetry_json).devices.size());
+        naim::DeserializeGpuTelemetryJson(observation.gpu_telemetry_json).devices.size());
   }
   if (!observation.cpu_telemetry_json.empty()) {
     summary.total_memory_bytes =
-        comet::DeserializeCpuTelemetryJson(observation.cpu_telemetry_json).total_memory_bytes;
+        naim::DeserializeCpuTelemetryJson(observation.cpu_telemetry_json).total_memory_bytes;
   }
   if (!observation.disk_telemetry_json.empty()) {
-    const auto disks = comet::DeserializeDiskTelemetryJson(observation.disk_telemetry_json);
+    const auto disks = naim::DeserializeDiskTelemetryJson(observation.disk_telemetry_json);
     for (const auto& item : disks.items) {
       if (item.disk_name == "storage-root" ||
           (!summary.storage_root.empty() && item.mount_point == summary.storage_root)) {
@@ -204,7 +204,7 @@ json MergeCapabilities(
   return capabilities;
 }
 
-json BuildDiskRuntimeStatePayloadItem(const comet::DiskRuntimeState& state) {
+json BuildDiskRuntimeStatePayloadItem(const naim::DiskRuntimeState& state) {
   return json{
       {"disk_name", state.disk_name},
       {"plane_name", state.plane_name},
@@ -222,8 +222,8 @@ json BuildDiskRuntimeStatePayloadItem(const comet::DiskRuntimeState& state) {
   };
 }
 
-comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const json& payload) {
-  comet::DiskRuntimeState state;
+naim::DiskRuntimeState ParseDiskRuntimeStatePayload(const json& payload) {
+  naim::DiskRuntimeState state;
   state.disk_name = payload.value("disk_name", std::string{});
   state.plane_name = payload.value("plane_name", std::string{});
   state.node_name = payload.value("node_name", std::string{});
@@ -239,9 +239,9 @@ comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const json& payload) {
   return state;
 }
 
-std::map<std::string, comet::HostAssignment> BuildLatestPlaneAssignmentsByNode(
-    const std::vector<comet::HostAssignment>& assignments) {
-  std::map<std::string, comet::HostAssignment> latest;
+std::map<std::string, naim::HostAssignment> BuildLatestPlaneAssignmentsByNode(
+    const std::vector<naim::HostAssignment>& assignments) {
+  std::map<std::string, naim::HostAssignment> latest;
   for (const auto& assignment : assignments) {
     auto it = latest.find(assignment.node_name);
     if (it == latest.end() || it->second.id < assignment.id) {
@@ -309,7 +309,7 @@ class HostdRequestContext {
     store_.Initialize();
   }
 
-  comet::ControllerStore& store() { return store_; }
+  naim::ControllerStore& store() { return store_; }
 
   HttpResponse Json(
       int status_code,
@@ -318,14 +318,14 @@ class HostdRequestContext {
     return support_.build_json_response(status_code, payload, headers);
   }
 
-  std::optional<comet::RegisteredHostRecord> Authenticate(
+  std::optional<naim::RegisteredHostRecord> Authenticate(
       const HttpRequest& request,
       const std::optional<std::string>& expected_node_name = std::nullopt) {
-    const auto token_it = request.headers.find("x-comet-host-session");
+    const auto token_it = request.headers.find("x-naim-host-session");
     if (token_it == request.headers.end() || token_it->second.empty()) {
       return std::nullopt;
     }
-    const auto node_name_it = request.headers.find("x-comet-host-node");
+    const auto node_name_it = request.headers.find("x-naim-host-node");
     if (node_name_it == request.headers.end() || node_name_it->second.empty()) {
       return std::nullopt;
     }
@@ -354,7 +354,7 @@ class HostdRequestContext {
 
   json ParseEncryptedBody(
       const HttpRequest& request,
-      comet::RegisteredHostRecord* host,
+      naim::RegisteredHostRecord* host,
       const std::string& message_type) {
     const json body = ParseJsonBody(request);
     if (!body.value("encrypted", false)) {
@@ -365,11 +365,11 @@ class HostdRequestContext {
     if (sequence_number <= host->session_host_sequence) {
       throw std::runtime_error("stale or replayed host session request");
     }
-    const comet::EncryptedEnvelope envelope{
+    const naim::EncryptedEnvelope envelope{
         body.value("nonce", std::string{}),
         body.value("ciphertext", std::string{}),
     };
-    const std::string decrypted = comet::DecryptEnvelopeBase64(
+    const std::string decrypted = naim::DecryptEnvelopeBase64(
         envelope,
         host->session_token,
         BuildHostRequestAad(message_type, host->node_name, sequence_number));
@@ -383,7 +383,7 @@ class HostdRequestContext {
   }
 
   HttpResponse EncryptedResponse(
-      comet::RegisteredHostRecord* host,
+      naim::RegisteredHostRecord* host,
       const std::string& message_type,
       const json& payload) {
     if (const auto latest = store_.LoadRegisteredHost(host->node_name);
@@ -392,7 +392,7 @@ class HostdRequestContext {
     }
     host->session_controller_sequence += 1;
     store_.UpsertRegisteredHost(*host);
-    const comet::EncryptedEnvelope envelope = comet::EncryptEnvelopeBase64(
+    const naim::EncryptedEnvelope envelope = naim::EncryptEnvelopeBase64(
         payload.dump(),
         host->session_token,
         BuildHostResponseAad(
@@ -407,8 +407,8 @@ class HostdRequestContext {
         });
   }
 
-  comet::controller::HostRegistryService MakeHostRegistryService() const {
-    return comet::controller::HostRegistryService(
+  naim::controller::HostRegistryService MakeHostRegistryService() const {
+    return naim::controller::HostRegistryService(
         db_path_, support_.host_registry_event_sink());
   }
 
@@ -427,7 +427,7 @@ class HostdRequestContext {
  private:
   const HostdHttpSupport& support_;
   std::string db_path_;
-  comet::ControllerStore store_;
+  naim::ControllerStore store_;
 };
 
 }  // namespace
@@ -456,7 +456,7 @@ HttpResponse HostdHttpService::HandleRegister(
           json{{"status", "not_found"},
                {"message", "host node is not provisioned"}});
     }
-    comet::RegisteredHostRecord host = *current;
+    naim::RegisteredHostRecord host = *current;
     const std::string onboarding_key = body.value("onboarding_key", std::string{});
     if (host.onboarding_key_hash.empty()) {
       return context.Json(
@@ -465,7 +465,7 @@ HttpResponse HostdHttpService::HandleRegister(
                {"message", "host node does not accept onboarding registration"}});
     }
     if (onboarding_key.empty() ||
-        comet::ComputeSha256Hex(onboarding_key) != host.onboarding_key_hash) {
+        naim::ComputeSha256Hex(onboarding_key) != host.onboarding_key_hash) {
       return context.Json(
           403,
           json{{"status", "forbidden"},
@@ -485,7 +485,7 @@ HttpResponse HostdHttpService::HandleRegister(
     host.execution_mode = body.value(
         "execution_mode",
         host.execution_mode.empty() ? std::string("mixed") : host.execution_mode);
-    comet::ParseHostExecutionMode(host.execution_mode);
+    naim::ParseHostExecutionMode(host.execution_mode);
     host.registration_state = body.value(
         "registration_state",
         std::string("registered"));
@@ -509,7 +509,7 @@ HttpResponse HostdHttpService::HandleRegister(
         "info");
     return context.Json(
         200,
-        json{{"service", "comet-controller"},
+        json{{"service", "naim-controller"},
              {"node_name", node_name},
              {"registration_state", host.registration_state},
              {"controller_public_key_fingerprint",
@@ -546,13 +546,13 @@ HttpResponse HostdHttpService::HandleHosts(
             json{{"status", "conflict"},
                  {"message", "host node already exists"}});
       }
-      const std::string onboarding_key = comet::RandomTokenBase64(24);
-      comet::RegisteredHostRecord host;
+      const std::string onboarding_key = naim::RandomTokenBase64(24);
+      naim::RegisteredHostRecord host;
       host.node_name = node_name;
       host.transport_mode = "out";
       host.execution_mode = "mixed";
       host.registration_state = "provisioned";
-      host.onboarding_key_hash = comet::ComputeSha256Hex(onboarding_key);
+      host.onboarding_key_hash = naim::ComputeSha256Hex(onboarding_key);
       host.onboarding_state = "pending";
       host.derived_role = "ineligible";
       host.role_reason = "awaiting first inventory scan";
@@ -567,7 +567,7 @@ HttpResponse HostdHttpService::HandleHosts(
           "info");
       return context.Json(
           200,
-          json{{"service", "comet-controller"},
+          json{{"service", "naim-controller"},
                {"node_name", node_name},
                {"onboarding_key", onboarding_key},
                {"onboarding_state", host.onboarding_state}});
@@ -613,11 +613,11 @@ HttpResponse HostdHttpService::HandleHostPath(
               ? std::make_optional(body["message"].get<std::string>())
               : std::nullopt;
       const auto service =
-          comet::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
+          naim::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
       return support_.build_json_response(
           200,
-          comet::controller::BuildControllerActionPayload(
-              comet::controller::RunControllerActionResult(
+          naim::controller::BuildControllerActionPayload(
+              naim::controller::RunControllerActionResult(
                   "revoke-hostd",
                   [&]() { return service.RevokeHost(node_name, message); })),
           {});
@@ -654,11 +654,11 @@ HttpResponse HostdHttpService::HandleHostPath(
               ? std::make_optional(body["message"].get<std::string>())
               : std::nullopt;
       const auto service =
-          comet::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
+          naim::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
       return support_.build_json_response(
           200,
-          comet::controller::BuildControllerActionPayload(
-              comet::controller::RunControllerActionResult(
+          naim::controller::BuildControllerActionPayload(
+              naim::controller::RunControllerActionResult(
                   "rotate-hostd-key",
                   [&]() {
                     return service.RotateHostKey(
@@ -718,7 +718,7 @@ HttpResponse HostdHttpService::HandleSessionOpen(
     }
     const std::string signed_message =
         "hostd-session-open\n" + node_name + "\n" + timestamp + "\n" + nonce;
-    if (!comet::VerifyDetachedBase64(
+    if (!naim::VerifyDetachedBase64(
             signed_message, signature, current->public_key_base64)) {
       return context.Json(
           403,
@@ -727,7 +727,7 @@ HttpResponse HostdHttpService::HandleSessionOpen(
     }
     current->session_state = "connected";
     current->last_session_at = support_.utc_now_sql_timestamp();
-    current->session_token = comet::RandomTokenBase64(32);
+    current->session_token = naim::RandomTokenBase64(32);
     current->session_expires_at = support_.sql_timestamp_after_seconds(600);
     current->session_host_sequence = 0;
     current->session_controller_sequence = 0;
@@ -743,7 +743,7 @@ HttpResponse HostdHttpService::HandleSessionOpen(
     return context.Json(
         200,
         json{
-            {"service", "comet-controller"},
+            {"service", "naim-controller"},
             {"node_name", node_name},
             {"session_state", current->session_state},
             {"last_session_at", current->last_session_at},
@@ -799,7 +799,7 @@ HttpResponse HostdHttpService::HandleSessionHeartbeat(
         &current,
         "session/heartbeat",
         json{
-            {"service", "comet-controller"},
+            {"service", "naim-controller"},
             {"node_name", node_name},
             {"session_state", current.session_state},
             {"last_heartbeat_at", current.last_heartbeat_at},
@@ -823,7 +823,7 @@ HttpResponse HostdHttpService::HandleNextAssignment(
   try {
     HostdRequestContext context(support_, db_path);
     std::optional<std::string> node_name = FindQueryStringValue(request, "node");
-    std::optional<comet::RegisteredHostRecord> authenticated;
+    std::optional<naim::RegisteredHostRecord> authenticated;
     bool encrypted_request = false;
     if (request.method == "POST") {
       authenticated = context.Authenticate(request);
@@ -860,7 +860,7 @@ HttpResponse HostdHttpService::HandleNextAssignment(
     }
     const auto assignment = context.store().ClaimNextHostAssignment(*node_name);
     const json payload{
-        {"service", "comet-controller"},
+        {"service", "naim-controller"},
         {"node_name", *node_name},
         {"assignment",
          assignment.has_value() ? BuildAssignmentPayloadItem(*assignment)
@@ -924,13 +924,13 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
       return context.EncryptedResponse(
           &host,
           "assignments/" + std::to_string(assignment_id) + "/progress",
-          json{{"service", "comet-controller"},
+          json{{"service", "naim-controller"},
                {"updated", updated},
                {"assignment_id", assignment_id}});
     }
     if (action == "applied") {
       const bool updated = context.store().TransitionClaimedHostAssignment(
-          assignment_id, comet::HostAssignmentStatus::Applied, status_message);
+          assignment_id, naim::HostAssignmentStatus::Applied, status_message);
       if (updated && assignment->assignment_type == "apply-node-state") {
         const auto plane_assignments = context.store().LoadHostAssignments(
             std::nullopt, std::nullopt, assignment->plane_name);
@@ -945,8 +945,8 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
                   candidate.desired_generation != assignment->desired_generation) {
                 return true;
               }
-              return candidate.status == comet::HostAssignmentStatus::Applied ||
-                     candidate.status == comet::HostAssignmentStatus::Superseded;
+              return candidate.status == naim::HostAssignmentStatus::Applied ||
+                     candidate.status == naim::HostAssignmentStatus::Superseded;
             });
         if (converged_generation) {
           context.store().UpdatePlaneAppliedGeneration(
@@ -956,7 +956,7 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
       return context.EncryptedResponse(
           &host,
           "assignments/" + std::to_string(assignment_id) + "/applied",
-          json{{"service", "comet-controller"},
+          json{{"service", "naim-controller"},
                {"updated", updated},
                {"assignment_id", assignment_id}});
     }
@@ -965,16 +965,16 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
       const bool updated = retry
                                ? context.store().TransitionClaimedHostAssignment(
                                      assignment_id,
-                                     comet::HostAssignmentStatus::Pending,
+                                     naim::HostAssignmentStatus::Pending,
                                      status_message)
                                : context.store().TransitionClaimedHostAssignment(
                                      assignment_id,
-                                     comet::HostAssignmentStatus::Failed,
+                                     naim::HostAssignmentStatus::Failed,
                                      status_message);
       return context.EncryptedResponse(
           &host,
           "assignments/" + std::to_string(assignment_id) + "/failed",
-          json{{"service", "comet-controller"},
+          json{{"service", "naim-controller"},
                {"updated", updated},
                {"assignment_id", assignment_id},
                {"retry", retry}});
@@ -1038,7 +1038,7 @@ HttpResponse HostdHttpService::HandleObservations(
     return context.EncryptedResponse(
         &host,
         "observations/upsert",
-        json{{"service", "comet-controller"},
+        json{{"service", "naim-controller"},
              {"node_name", observation.node_name},
              {"updated", true}});
   } catch (const std::exception& error) {
@@ -1075,7 +1075,7 @@ HttpResponse HostdHttpService::HandleEvents(
           json{{"status", "forbidden"},
                {"message", "node mismatch for event append"}});
     }
-    context.store().AppendEvent(comet::EventRecord{
+    context.store().AppendEvent(naim::EventRecord{
         0,
         body.value("plane_name", std::string{}),
         body.value("node_name", std::string{}),
@@ -1097,7 +1097,7 @@ HttpResponse HostdHttpService::HandleEvents(
     return context.EncryptedResponse(
         &host,
         "events/append",
-        json{{"service", "comet-controller"}, {"appended", true}});
+        json{{"service", "naim-controller"}, {"appended", true}});
   } catch (const std::exception& error) {
     return support_.build_json_response(
         500,
@@ -1134,7 +1134,7 @@ HttpResponse HostdHttpService::HandleDiskRuntimeState(
           context.store().LoadDiskRuntimeState(*disk_name, *node_name);
       return context.Json(
           200,
-          json{{"service", "comet-controller"},
+          json{{"service", "naim-controller"},
                {"runtime_state",
                 runtime_state.has_value()
                     ? BuildDiskRuntimeStatePayloadItem(*runtime_state)
@@ -1169,7 +1169,7 @@ HttpResponse HostdHttpService::HandleDiskRuntimeState(
       return context.EncryptedResponse(
           &host,
           "disk-runtime-state/upsert",
-          json{{"service", "comet-controller"},
+          json{{"service", "naim-controller"},
                {"updated", true},
                {"disk_name", runtime_state.disk_name}});
     }
@@ -1222,7 +1222,7 @@ HttpResponse HostdHttpService::HandleDiskRuntimeStateLoad(
         &host,
         "disk-runtime-state/load",
         json{
-            {"service", "comet-controller"},
+            {"service", "naim-controller"},
             {"runtime_state",
              runtime_state.has_value()
                  ? BuildDiskRuntimeStatePayloadItem(*runtime_state)

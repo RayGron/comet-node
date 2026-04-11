@@ -16,9 +16,9 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestBuildsPromptMessagesWithSummaryAndTail() {
-  const comet::controller::InteractionConversationPayloadBuilder builder;
-  const std::vector<comet::InteractionSummaryRecord> summaries{
-      comet::InteractionSummaryRecord{
+  const naim::controller::InteractionConversationPayloadBuilder builder;
+  const std::vector<naim::InteractionSummaryRecord> summaries{
+      naim::InteractionSummaryRecord{
           1,
           "session-1",
           0,
@@ -51,7 +51,7 @@ void TestBuildsPromptMessagesWithSummaryAndTail() {
 }
 
 void TestBuildsSummaryRecordsForLargeHistory() {
-  const comet::controller::InteractionConversationPayloadBuilder builder;
+  const naim::controller::InteractionConversationPayloadBuilder builder;
   std::vector<json> messages;
   for (int index = 0; index < 10; ++index) {
     messages.push_back(json{
@@ -82,8 +82,8 @@ void TestBuildsSummaryRecordsForLargeHistory() {
 }
 
 void TestBuildsSessionPayloads() {
-  const comet::controller::InteractionConversationPayloadBuilder builder;
-  comet::InteractionSessionRecord session;
+  const naim::controller::InteractionConversationPayloadBuilder builder;
+  naim::InteractionSessionRecord session;
   session.session_id = "session-1";
   session.plane_name = "plane-a";
   session.state = "active";
@@ -101,8 +101,8 @@ void TestBuildsSessionPayloads() {
   Expect(summary_payload.at("applied_skill_ids").size() == 1,
          "session summary should expose applied skill ids");
 
-  const std::vector<comet::InteractionMessageRecord> messages{
-      comet::InteractionMessageRecord{
+  const std::vector<naim::InteractionMessageRecord> messages{
+      naim::InteractionMessageRecord{
           "session-1",
           0,
           "assistant",

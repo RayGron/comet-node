@@ -2,7 +2,7 @@
 
 #include <sstream>
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string InteractionSseFrameBuilder::BuildEventFrame(
     const std::string& event_name,
@@ -25,4 +25,4 @@ std::string InteractionSseFrameBuilder::BuildDoneFrame() const {
   return "data: [DONE]\n\n";
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -13,7 +13,7 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestSanitizesInvalidUtf8Sequences() {
-  const comet::controller::InteractionUtf8PayloadSanitizer sanitizer;
+  const naim::controller::InteractionUtf8PayloadSanitizer sanitizer;
   const std::string invalid = std::string("ok ") + char(0xC3) + "x";
   const std::string sanitized = sanitizer.SanitizeString(invalid);
   Expect(sanitized == "ok ?x", "invalid UTF-8 bytes should be replaced with '?'");
@@ -21,7 +21,7 @@ void TestSanitizesInvalidUtf8Sequences() {
 }
 
 void TestSanitizesNestedJsonKeysAndValues() {
-  const comet::controller::InteractionUtf8PayloadSanitizer sanitizer;
+  const naim::controller::InteractionUtf8PayloadSanitizer sanitizer;
   nlohmann::json payload = {
       {std::string("ke") + char(0xFF) + "y",
        nlohmann::json::array(

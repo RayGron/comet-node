@@ -9,7 +9,7 @@
 
 #include "interaction/interaction_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionRequestContractSupport final {
  public:
@@ -65,4 +65,4 @@ class InteractionRequestContractSupport final {
   nlohmann::json DefaultBrowsingSummary() const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -6,7 +6,7 @@
 #include "cli/hostd_cli_request_resolution_support.h"
 #include "config/node_config_loader.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdObservationService;
 class HostdAssignmentService;
@@ -19,17 +19,17 @@ class HostdCliCommandDispatcher final {
 
   bool Dispatch(
       const HostdCommandLine& command_line,
-      const CometNodeConfig& node_config,
+      const NaimNodeConfig& node_config,
       const std::string& node_name) const;
 
  private:
   bool DispatchShowDemoOps(
       const HostdCommandLine& command_line,
-      const CometNodeConfig& node_config,
+      const NaimNodeConfig& node_config,
       const std::string& node_name) const;
   bool DispatchShowStateOps(
       const HostdCommandLine& command_line,
-      const CometNodeConfig& node_config,
+      const NaimNodeConfig& node_config,
       const std::string& node_name) const;
   bool DispatchShowLocalState(
       const HostdCommandLine& command_line,
@@ -39,15 +39,15 @@ class HostdCliCommandDispatcher final {
       const std::string& node_name) const;
   bool DispatchReportObservedState(
       const HostdCommandLine& command_line,
-      const CometNodeConfig& node_config,
+      const NaimNodeConfig& node_config,
       const std::string& node_name) const;
   bool DispatchApplyStateOps(
       const HostdCommandLine& command_line,
-      const CometNodeConfig& node_config,
+      const NaimNodeConfig& node_config,
       const std::string& node_name) const;
   bool DispatchApplyNextAssignment(
       const HostdCommandLine& command_line,
-      const CometNodeConfig& node_config,
+      const NaimNodeConfig& node_config,
       const std::string& node_name) const;
 
   const HostdAssignmentService& assignment_service_;
@@ -55,4 +55,4 @@ class HostdCliCommandDispatcher final {
   HostdCliRequestResolutionSupport resolution_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -10,11 +10,11 @@
 #include <stdexcept>
 #include <vector>
 
-#include "comet/core/platform_compat.h"
-#include "comet/security/crypto_utils.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/core/platform_compat.h"
+#include "naim/security/crypto_utils.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 namespace {
 
@@ -133,11 +133,11 @@ void LauncherInstallService::InstallController(
   }
 
   {
-    comet::ControllerStore store(
+    naim::ControllerStore store(
         (options.layout.state_root / "controller.sqlite").string());
     store.Initialize();
     if (options.with_hostd) {
-      comet::RegisteredHostRecord host;
+      naim::RegisteredHostRecord host;
       host.node_name = options.node_name;
       host.advertised_address =
           "http://127.0.0.1:" + std::to_string(options.listen_port);
@@ -366,9 +366,9 @@ std::string LauncherInstallService::RenderConfigToml(
     out << "local_hostd_enabled = " << (controller->with_hostd ? "true" : "false") << "\n";
     out << "controller_private_key = \"" << controller_private_key.string() << "\"\n";
     out << "controller_public_key = \"" << controller_public_key.string() << "\"\n";
-    out << "web_ui_image = \"comet/web-ui:dev\"\n";
-    out << "worker_image = \"comet/worker-runtime:dev\"\n";
-    out << "infer_image = \"comet/infer-runtime:dev\"\n\n";
+    out << "web_ui_image = \"naim/web-ui:dev\"\n";
+    out << "worker_image = \"naim/worker-runtime:dev\"\n";
+    out << "infer_image = \"naim/infer-runtime:dev\"\n\n";
   }
   if (hostd != nullptr) {
     out << "[hostd]\n";
@@ -397,7 +397,7 @@ std::string LauncherInstallService::RenderControllerUnit(
   const bool user_service = install_layout_resolver_.IsUserServiceLayout(options.layout);
   std::ostringstream out;
   out << "[Unit]\n";
-  out << "Description=Comet Node Controller\n";
+  out << "Description=Naim Node Controller\n";
   out << "After=network-online.target";
   if (!user_service) {
     out << " docker.service";
@@ -425,10 +425,10 @@ std::string LauncherInstallService::RenderControllerUnit(
   out << "\n";
   out << "Restart=always\n";
   out << "RestartSec=2\n";
-  out << "Environment=COMET_CONFIG=" << config_path.string() << "\n";
-  out << "Environment=COMET_SERVICE_MODE=1\n";
-  out << "Environment=COMET_CONTROLLER_INTERNAL_HOST=" << options.internal_listen_host << "\n";
-  out << "Environment=COMET_CONTROLLER_INTERNAL_UPSTREAM=http://"
+  out << "Environment=NAIM_CONFIG=" << config_path.string() << "\n";
+  out << "Environment=NAIM_SERVICE_MODE=1\n";
+  out << "Environment=NAIM_CONTROLLER_INTERNAL_HOST=" << options.internal_listen_host << "\n";
+  out << "Environment=NAIM_CONTROLLER_INTERNAL_UPSTREAM=http://"
       << options.internal_listen_host << ":" << options.listen_port << "\n\n";
   out << "[Install]\n";
   out << "WantedBy=" << (user_service ? "default.target" : "multi-user.target") << "\n";
@@ -441,7 +441,7 @@ std::string LauncherInstallService::RenderHostdUnit(
   const bool user_service = install_layout_resolver_.IsUserServiceLayout(options.layout);
   std::ostringstream out;
   out << "[Unit]\n";
-  out << "Description=Comet Node Host Agent\n";
+  out << "Description=Naim Node Host Agent\n";
   out << "After=network-online.target";
   if (!user_service) {
     out << " docker.service";
@@ -468,8 +468,8 @@ std::string LauncherInstallService::RenderHostdUnit(
   out << "\n";
   out << "Restart=always\n";
   out << "RestartSec=2\n";
-  out << "Environment=COMET_CONFIG=" << config_path.string() << "\n";
-  out << "Environment=COMET_SERVICE_MODE=1\n\n";
+  out << "Environment=NAIM_CONFIG=" << config_path.string() << "\n";
+  out << "Environment=NAIM_SERVICE_MODE=1\n\n";
   out << "[Install]\n";
   out << "WantedBy=" << (user_service ? "default.target" : "multi-user.target") << "\n";
   return out.str();
@@ -529,7 +529,7 @@ void LauncherInstallService::MaybeRunSystemctl(
   for (const std::string& action : actions) {
     std::ostringstream command;
     command << "systemctl";
-    if (!comet::platform::HasElevatedPrivileges()) {
+    if (!naim::platform::HasElevatedPrivileges()) {
       command << " --user";
     }
     command << " " << action;
@@ -552,7 +552,7 @@ void LauncherInstallService::EnsureKeypair(
     return;
   }
   std::filesystem::create_directories(private_key_path.parent_path());
-  const auto keypair = comet::GenerateSigningKeypair();
+  const auto keypair = naim::GenerateSigningKeypair();
   WriteTextFile(private_key_path, keypair.private_key_base64 + "\n");
   WriteTextFile(public_key_path, keypair.public_key_base64 + "\n");
   std::filesystem::permissions(
@@ -563,7 +563,7 @@ void LauncherInstallService::EnsureKeypair(
 
 std::string LauncherInstallService::ComputePublicKeyFingerprint(
     const std::filesystem::path& public_key_path) const {
-  return comet::ComputeKeyFingerprintHex(Trim(ReadTextFile(public_key_path)));
+  return naim::ComputeKeyFingerprintHex(Trim(ReadTextFile(public_key_path)));
 }
 
 std::string LauncherInstallService::ReadTextFile(
@@ -615,4 +615,4 @@ std::string LauncherInstallService::ShellEscape(const std::string& value) const 
   return escaped;
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

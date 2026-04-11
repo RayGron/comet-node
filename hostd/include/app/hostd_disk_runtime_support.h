@@ -9,10 +9,10 @@
 #include "app/hostd_desired_state_path_support.h"
 #include "app/hostd_file_support.h"
 #include "backend/hostd_backend.h"
-#include "comet/planning/execution_plan.h"
-#include "comet/state/models.h"
+#include "naim/planning/execution_plan.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdDiskRuntimeSupport final {
  public:
@@ -21,37 +21,37 @@ class HostdDiskRuntimeSupport final {
       const HostdDesiredStatePathSupport& path_support,
       const HostdFileSupport& file_support);
 
-  std::optional<comet::DiskSpec> FindDiskInStateByKey(
-      const std::optional<comet::DesiredState>& state,
+  std::optional<naim::DiskSpec> FindDiskInStateByKey(
+      const std::optional<naim::DesiredState>& state,
       const std::string& disk_key) const;
   std::pair<std::string, std::string> SplitDiskKey(const std::string& disk_key) const;
 
-  comet::DiskRuntimeState EnsureDesiredDiskRuntimeState(
-      const comet::DiskSpec& disk,
+  naim::DiskRuntimeState EnsureDesiredDiskRuntimeState(
+      const naim::DiskSpec& disk,
       const std::string& disk_key,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root) const;
 
   void PersistDiskRuntimeStateForDesiredDisks(
       HostdBackend* backend,
-      const comet::DesiredState& desired_node_state,
+      const naim::DesiredState& desired_node_state,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root,
       const std::string& status_message) const;
 
   void EnsureDesiredDisksReady(
       HostdBackend* backend,
-      const comet::DesiredState& desired_node_state,
+      const naim::DesiredState& desired_node_state,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root) const;
 
   void PersistDiskRuntimeStateForRemovedDisks(
       HostdBackend* backend,
-      const std::optional<comet::DesiredState>& previous_state,
-      const comet::NodeExecutionPlan& execution_plan) const;
+      const std::optional<naim::DesiredState>& previous_state,
+      const naim::NodeExecutionPlan& execution_plan) const;
 
  void RemoveRealDiskMount(
-      const comet::DiskRuntimeState& runtime_state,
+      const naim::DiskRuntimeState& runtime_state,
       const std::optional<std::string>& runtime_root) const;
 
  private:
@@ -60,7 +60,7 @@ class HostdDiskRuntimeSupport final {
       const std::optional<std::string>& runtime_root) const;
   std::string SanitizeDiskPathComponent(const std::string& value) const;
   std::string ManagedDiskImagePath(
-      const comet::DiskSpec& disk,
+      const naim::DiskSpec& disk,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root) const;
   void EnsureDiskDirectory(const std::string& path, const std::string& disk_key) const;
@@ -78,16 +78,16 @@ class HostdDiskRuntimeSupport final {
   std::optional<std::string> CurrentMountSource(const std::string& mount_point) const;
   void CreateSparseImageFile(const std::string& image_path, int size_gb) const;
   bool IsSharedManagedDiskImagePath(const std::string& image_path) const;
-  comet::DiskRuntimeState BuildDiskRuntimeState(
-      const comet::DiskSpec& disk,
+  naim::DiskRuntimeState BuildDiskRuntimeState(
+      const naim::DiskSpec& disk,
       const std::string& runtime_state,
       const std::string& status_message) const;
-  comet::DiskRuntimeState EnsureRealDiskMount(
-      const comet::DiskSpec& disk,
+  naim::DiskRuntimeState EnsureRealDiskMount(
+      const naim::DiskSpec& disk,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root) const;
-  comet::DiskRuntimeState InspectRealDiskRuntime(
-      const comet::DiskSpec& disk,
+  naim::DiskRuntimeState InspectRealDiskRuntime(
+      const naim::DiskSpec& disk,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root) const;
 
@@ -96,4 +96,4 @@ class HostdDiskRuntimeSupport final {
   const HostdFileSupport& file_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -6,9 +6,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionConversationPayloadBuilder final {
  public:
@@ -23,18 +23,18 @@ class InteractionConversationPayloadBuilder final {
   int EstimateTokensForJson(const nlohmann::json& value) const;
 
   std::vector<nlohmann::json> MessageRecordsToJson(
-      const std::vector<comet::InteractionMessageRecord>& records) const;
+      const std::vector<naim::InteractionMessageRecord>& records) const;
 
   std::size_t CommonPrefixLength(
       const std::vector<nlohmann::json>& stored_messages,
       const nlohmann::json& incoming_messages) const;
 
   nlohmann::json BuildPromptMessages(
-      const std::vector<comet::InteractionSummaryRecord>& summaries,
+      const std::vector<naim::InteractionSummaryRecord>& summaries,
       const std::vector<nlohmann::json>& stored_messages,
       const nlohmann::json& delta_messages) const;
 
-  std::vector<comet::InteractionSummaryRecord> BuildSummaryRecords(
+  std::vector<naim::InteractionSummaryRecord> BuildSummaryRecords(
       const std::string& session_id,
       const std::vector<nlohmann::json>& all_messages,
       const nlohmann::json& context_state,
@@ -43,15 +43,15 @@ class InteractionConversationPayloadBuilder final {
       const nlohmann::json& prompt_messages) const;
 
   nlohmann::json BuildSessionSummaryPayload(
-      const comet::InteractionSessionRecord& session,
+      const naim::InteractionSessionRecord& session,
       std::size_t message_count,
       std::size_t summary_count) const;
 
   nlohmann::json BuildSessionMessagesPayload(
-      const std::vector<comet::InteractionMessageRecord>& messages) const;
+      const std::vector<naim::InteractionMessageRecord>& messages) const;
 
   nlohmann::json BuildSessionSummariesPayload(
-      const std::vector<comet::InteractionSummaryRecord>& summaries) const;
+      const std::vector<naim::InteractionSummaryRecord>& summaries) const;
 
  private:
   std::string TrimCopy(const std::string& value) const;
@@ -75,7 +75,7 @@ class InteractionConversationPayloadBuilder final {
       int turn_range_end) const;
 
   std::string BuildSummarySystemInstruction(
-      const std::vector<comet::InteractionSummaryRecord>& summaries) const;
+      const std::vector<naim::InteractionSummaryRecord>& summaries) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

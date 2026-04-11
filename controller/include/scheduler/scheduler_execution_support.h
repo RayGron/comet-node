@@ -8,10 +8,10 @@
 #include "scheduler/scheduler_execution_dependencies.h"
 #include "scheduler/scheduler_service.h"
 
-#include "comet/runtime/runtime_status.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 struct SchedulerExecutionVerificationConfig {
   int verification_timeout_seconds = 0;
@@ -25,55 +25,55 @@ class SchedulerExecutionSupport {
       std::shared_ptr<const SchedulerVerificationSupport> verification_support,
       SchedulerExecutionVerificationConfig verification_config);
 
-  std::optional<comet::RolloutActionRecord> FindPriorRolloutActionForWorker(
-      const std::vector<comet::RolloutActionRecord>& actions,
-      const comet::RolloutActionRecord& action,
+  std::optional<naim::RolloutActionRecord> FindPriorRolloutActionForWorker(
+      const std::vector<naim::RolloutActionRecord>& actions,
+      const naim::RolloutActionRecord& action,
       const std::string& requested_action_name) const;
 
   void MaterializeRetryPlacementAction(
-      comet::DesiredState* state,
-      const comet::RolloutActionRecord& action,
+      naim::DesiredState* state,
+      const naim::RolloutActionRecord& action,
       const std::vector<std::string>& victim_worker_names) const;
 
-  std::vector<comet::HostAssignment> BuildEvictionAssignmentsForAction(
-      const comet::DesiredState& desired_state,
+  std::vector<naim::HostAssignment> BuildEvictionAssignmentsForAction(
+      const naim::DesiredState& desired_state,
       int desired_generation,
-      const comet::RolloutActionRecord& action,
-      const std::vector<comet::HostAssignment>& existing_assignments) const;
+      const naim::RolloutActionRecord& action,
+      const std::vector<naim::HostAssignment>& existing_assignments) const;
 
   bool AreRolloutEvictionAssignmentsApplied(
-      const std::vector<comet::HostAssignment>& assignments,
+      const std::vector<naim::HostAssignment>& assignments,
       int action_id) const;
 
   void MaterializeRebalancePlanEntry(
-      comet::DesiredState* state,
+      naim::DesiredState* state,
       const RebalancePlanEntry& entry) const;
 
   SchedulerVerificationResult EvaluateSchedulerActionVerification(
-      const comet::SchedulerPlaneRuntime& plane_runtime,
-      const std::vector<comet::HostObservation>& observations) const;
+      const naim::SchedulerPlaneRuntime& plane_runtime,
+      const std::vector<naim::HostObservation>& observations) const;
 
   void MarkWorkerMoveVerified(
-      comet::ControllerStore* store,
-      const comet::SchedulerPlaneRuntime& plane_runtime) const;
+      naim::ControllerStore* store,
+      const naim::SchedulerPlaneRuntime& plane_runtime) const;
 
   void MarkWorkersEvicted(
-      comet::ControllerStore* store,
+      naim::ControllerStore* store,
       const std::string& plane_name,
       const std::vector<std::string>& worker_names) const;
 
  private:
   void RemoveWorkerFromDesiredState(
-      comet::DesiredState* state,
+      naim::DesiredState* state,
       const std::string& worker_name) const;
 
-  const comet::RuntimeProcessStatus* FindInstanceRuntimeStatus(
-      const std::vector<comet::RuntimeProcessStatus>& statuses,
+  const naim::RuntimeProcessStatus* FindInstanceRuntimeStatus(
+      const std::vector<naim::RuntimeProcessStatus>& statuses,
       const std::string& instance_name,
       const std::string& gpu_device) const;
 
   bool TelemetryShowsOwnedProcess(
-      const std::optional<comet::GpuTelemetrySnapshot>& telemetry,
+      const std::optional<naim::GpuTelemetrySnapshot>& telemetry,
       const std::string& gpu_device,
       const std::string& instance_name) const;
 
@@ -82,4 +82,4 @@ class SchedulerExecutionSupport {
   SchedulerExecutionVerificationConfig verification_config_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

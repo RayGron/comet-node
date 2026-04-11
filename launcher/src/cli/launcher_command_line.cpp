@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 LauncherCommandLine LauncherCommandLine::FromArgv(int argc, char** argv) {
   return LauncherCommandLine(
@@ -78,4 +78,4 @@ int LauncherCommandLine::ParseIntValue(
   return std::stoi(*value);
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

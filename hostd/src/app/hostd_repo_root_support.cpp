@@ -4,11 +4,11 @@
 #include <string>
 #include <vector>
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
-bool HostdRepoRootSupport::LooksLikeCometRepoRoot(const std::filesystem::path& path) {
+bool HostdRepoRootSupport::LooksLikeNaimRepoRoot(const std::filesystem::path& path) {
   std::error_code error;
   return std::filesystem::exists(path / "scripts" / "build-runtime-images.sh", error) && !error &&
          std::filesystem::exists(path / "runtime" / "base" / "Dockerfile", error) && !error;
@@ -17,7 +17,7 @@ bool HostdRepoRootSupport::LooksLikeCometRepoRoot(const std::filesystem::path& p
 std::optional<std::filesystem::path> HostdRepoRootSupport::FindRepoRootFromPath(
     std::filesystem::path current) {
   while (!current.empty()) {
-    if (LooksLikeCometRepoRoot(current)) {
+    if (LooksLikeNaimRepoRoot(current)) {
       return current;
     }
     const auto parent = current.parent_path();
@@ -33,7 +33,7 @@ std::optional<std::filesystem::path> HostdRepoRootSupport::FindRepoRootInSibling
     std::filesystem::path current) {
   while (!current.empty()) {
     const auto candidate = current / "repos" / "naim-node";
-    if (LooksLikeCometRepoRoot(candidate)) {
+    if (LooksLikeNaimRepoRoot(candidate)) {
       return candidate;
     }
     const auto parent = current.parent_path();
@@ -45,7 +45,7 @@ std::optional<std::filesystem::path> HostdRepoRootSupport::FindRepoRootInSibling
   return std::nullopt;
 }
 
-std::optional<std::filesystem::path> HostdRepoRootSupport::DetectCometRepoRootNear(
+std::optional<std::filesystem::path> HostdRepoRootSupport::DetectNaimRepoRootNear(
     const std::filesystem::path& start) {
   if (const auto from_path = FindRepoRootFromPath(start); from_path.has_value()) {
     return from_path;
@@ -61,24 +61,24 @@ std::string HostdRepoRootSupport::StripBundlePrefixIfPresent(const std::string& 
   return value;
 }
 
-std::optional<std::filesystem::path> HostdRepoRootSupport::DetectCometRepoRoot() const {
+std::optional<std::filesystem::path> HostdRepoRootSupport::DetectNaimRepoRoot() const {
   try {
-    if (const auto from_cwd = DetectCometRepoRootNear(std::filesystem::current_path());
+    if (const auto from_cwd = DetectNaimRepoRootNear(std::filesystem::current_path());
         from_cwd.has_value()) {
       return from_cwd;
     }
   } catch (...) {
   }
 
-  const std::string executable_path = comet::platform::ExecutablePath();
+  const std::string executable_path = naim::platform::ExecutablePath();
   if (executable_path.empty()) {
     return std::nullopt;
   }
-  return DetectCometRepoRootNear(std::filesystem::path(executable_path).parent_path());
+  return DetectNaimRepoRootNear(std::filesystem::path(executable_path).parent_path());
 }
 
 std::optional<std::filesystem::path> HostdRepoRootSupport::ResolvePlaneOwnedPath(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& relative_path,
     const std::string& artifacts_root) const {
   const std::string normalized_path = StripBundlePrefixIfPresent(relative_path);
@@ -105,9 +105,9 @@ std::optional<std::filesystem::path> HostdRepoRootSupport::ResolvePlaneOwnedPath
     candidates.push_back(std::filesystem::path(artifacts_root) / state.plane_name / input);
   }
 
-  if (const auto comet_repo_root = DetectCometRepoRoot(); comet_repo_root.has_value()) {
-    candidates.push_back(*comet_repo_root / input);
-    candidates.push_back(comet_repo_root->parent_path() / state.plane_name / input);
+  if (const auto naim_repo_root = DetectNaimRepoRoot(); naim_repo_root.has_value()) {
+    candidates.push_back(*naim_repo_root / input);
+    candidates.push_back(naim_repo_root->parent_path() / state.plane_name / input);
   }
 
   for (const auto& candidate : candidates) {
@@ -119,4 +119,4 @@ std::optional<std::filesystem::path> HostdRepoRootSupport::ResolvePlaneOwnedPath
   return std::nullopt;
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

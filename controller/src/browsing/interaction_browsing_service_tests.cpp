@@ -8,7 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include "browsing/interaction_browsing_service.h"
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
 namespace {
 
@@ -24,9 +24,9 @@ class FixedResolveServer {
  public:
   explicit FixedResolveServer(json resolve_response)
       : resolve_response_(std::move(resolve_response)) {
-    comet::platform::EnsureSocketsInitialized();
+    naim::platform::EnsureSocketsInitialized();
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (!comet::platform::IsSocketValid(listen_fd_)) {
+    if (!naim::platform::IsSocketValid(listen_fd_)) {
       throw std::runtime_error("failed to create fixed resolve server socket");
     }
 
@@ -47,13 +47,13 @@ class FixedResolveServer {
     addr.sin_port = htons(0);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to bind fixed resolve server: " + error);
     }
     if (listen(listen_fd_, 8) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to listen fixed resolve server: " + error);
     }
 
@@ -63,8 +63,8 @@ class FixedResolveServer {
             listen_fd_,
             reinterpret_cast<sockaddr*>(&bound_addr),
             &bound_size) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to inspect fixed resolve server: " + error);
     }
     port_ = ntohs(bound_addr.sin_port);
@@ -75,17 +75,17 @@ class FixedResolveServer {
     stop_requested_.store(true);
     if (port_ > 0) {
       const auto wake_fd = socket(AF_INET, SOCK_STREAM, 0);
-      if (comet::platform::IsSocketValid(wake_fd)) {
+      if (naim::platform::IsSocketValid(wake_fd)) {
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<uint16_t>(port_));
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         (void)connect(wake_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-        comet::platform::CloseSocket(wake_fd);
+        naim::platform::CloseSocket(wake_fd);
       }
     }
-    if (comet::platform::IsSocketValid(listen_fd_)) {
-      comet::platform::CloseSocket(listen_fd_);
+    if (naim::platform::IsSocketValid(listen_fd_)) {
+      naim::platform::CloseSocket(listen_fd_);
     }
     if (thread_.joinable()) {
       thread_.join();
@@ -96,7 +96,7 @@ class FixedResolveServer {
 
  private:
   void WriteJsonResponse(
-      comet::platform::SocketHandle client_fd,
+      naim::platform::SocketHandle client_fd,
       int status_code,
       const json& payload) {
     const std::string body = payload.dump();
@@ -125,11 +125,11 @@ class FixedResolveServer {
       socklen_t client_size = sizeof(client_addr);
       const auto client_fd = accept(
           listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_size);
-      if (!comet::platform::IsSocketValid(client_fd)) {
+      if (!naim::platform::IsSocketValid(client_fd)) {
         return;
       }
       if (stop_requested_.load()) {
-        comet::platform::CloseSocket(client_fd);
+        naim::platform::CloseSocket(client_fd);
         return;
       }
 
@@ -144,37 +144,37 @@ class FixedResolveServer {
       } else {
         WriteJsonResponse(client_fd, 404, json{{"status", "error"}});
       }
-      comet::platform::CloseSocket(client_fd);
+      naim::platform::CloseSocket(client_fd);
     }
   }
 
   json resolve_response_;
-  comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  naim::platform::SocketHandle listen_fd_ = naim::platform::kInvalidSocket;
   int port_ = 0;
   std::atomic<bool> stop_requested_{false};
   std::thread thread_;
 };
 
-comet::DesiredState BuildDesiredStateWithBrowsingPort(
+naim::DesiredState BuildDesiredStateWithBrowsingPort(
     const std::string& host_ip,
     int host_port) {
-  comet::DesiredState desired_state;
+  naim::DesiredState desired_state;
   desired_state.plane_name = "maglev";
-  desired_state.plane_mode = comet::PlaneMode::Llm;
-  comet::BrowsingSettings settings;
+  desired_state.plane_mode = naim::PlaneMode::Llm;
+  naim::BrowsingSettings settings;
   settings.enabled = true;
-  comet::BrowsingPolicySettings policy;
+  naim::BrowsingPolicySettings policy;
   policy.browser_session_enabled = true;
   policy.rendered_browser_enabled = true;
   settings.policy = policy;
   desired_state.browsing = settings;
 
-  comet::InstanceSpec browsing;
+  naim::InstanceSpec browsing;
   browsing.name = "webgateway-maglev";
   browsing.plane_name = "maglev";
   browsing.node_name = "local-hostd";
-  browsing.role = comet::InstanceRole::Browsing;
-  comet::PublishedPort published_port;
+  browsing.role = naim::InstanceRole::Browsing;
+  naim::PublishedPort published_port;
   published_port.host_ip = host_ip;
   published_port.host_port = host_port;
   published_port.container_port = 18130;
@@ -184,36 +184,36 @@ comet::DesiredState BuildDesiredStateWithBrowsingPort(
 }
 
 void TestPersistedEnabledModeBuildsIdleFallbackWithoutUpstream() {
-  comet::controller::InteractionBrowsingService service;
-  comet::controller::InteractionRequestContext context;
+  naim::controller::InteractionBrowsingService service;
+  naim::controller::InteractionRequestContext context;
   context.session_context_state = json{{"browsing_mode", "enabled"}};
   context.payload = json{
-      {comet::controller::kInteractionSessionContextStatePayloadKey,
+      {naim::controller::kInteractionSessionContextStatePayloadKey,
        json{{"browsing_mode", "enabled"}}},
       {"messages",
        json::array({json{{"role", "user"}, {"content", "Explain TCP handshakes."}}})},
   };
-  comet::controller::PlaneInteractionResolution resolution;
+  naim::controller::PlaneInteractionResolution resolution;
   resolution.desired_state = BuildDesiredStateWithBrowsingPort("127.0.0.1", 18130);
 
   const auto error = service.ResolveInteractionBrowsing(resolution, &context);
   Expect(!error.has_value(), "persisted enabled mode should not require upstream for idle prompt");
   const auto& summary =
-      context.payload.at(comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      context.payload.at(naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
   Expect(summary.at("mode").get<std::string>() == "enabled",
          "persisted enabled mode should stay enabled");
   Expect(summary.at("lookup_state").get<std::string>() == "enabled_not_needed",
          "persisted enabled mode should expose enabled_not_needed fallback");
   Expect(
       context.payload
-          .at(comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
+          .at(naim::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
           .get<std::string>()
           .find("WebGateway determined that no web lookup was needed for this request") !=
           std::string::npos,
       "persisted enabled fallback should inject no-lookup system instruction");
   Expect(
       context.payload
-          .at(comet::controller::kInteractionSessionContextStatePayloadKey)
+          .at(naim::controller::kInteractionSessionContextStatePayloadKey)
           .at("browsing_mode")
           .get<std::string>() == "enabled",
       "persisted enabled fallback should preserve session browsing mode");
@@ -248,21 +248,21 @@ void TestResolvePayloadPersistsBrowsingModeFromUpstreamContext() {
             {"response_policy", json::object()},
             {"indicator", json{{"compact", "web:on"}}}}}});
 
-  comet::controller::InteractionBrowsingService service;
-  comet::controller::InteractionRequestContext context;
+  naim::controller::InteractionBrowsingService service;
+  naim::controller::InteractionRequestContext context;
   context.payload = json{
       {"messages",
        json::array(
            {json{{"role", "user"}, {"content", "Enable web for this chat."}}})},
   };
-  comet::controller::PlaneInteractionResolution resolution;
+  naim::controller::PlaneInteractionResolution resolution;
   resolution.desired_state = BuildDesiredStateWithBrowsingPort("127.0.0.1", server.port());
 
   const auto error = service.ResolveInteractionBrowsing(resolution, &context);
   Expect(!error.has_value(), "upstream browsing resolve should succeed");
   Expect(
       context.payload
-          .at(comet::controller::kInteractionSessionContextStatePayloadKey)
+          .at(naim::controller::kInteractionSessionContextStatePayloadKey)
           .at("browsing_mode")
           .get<std::string>() == "enabled",
       "upstream enabled context should persist enabled session mode");

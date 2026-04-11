@@ -3,16 +3,16 @@
 #include <algorithm>
 #include <utility>
 
-#include "comet/state/desired_state_placement_resolver.h"
+#include "naim/state/desired_state_placement_resolver.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 PlanePlacementPayloadBuilder::PlanePlacementPayloadBuilder(
-    const comet::DesiredState& desired_state)
+    const naim::DesiredState& desired_state)
     : desired_state_(desired_state) {}
 
 nlohmann::json PlanePlacementPayloadBuilder::Build() const {
-  const comet::DesiredStatePlacementResolver placement_resolver(desired_state_);
+  const naim::DesiredStatePlacementResolver placement_resolver(desired_state_);
   const auto primary_node_name = placement_resolver.PrimaryNodeName();
   const auto app_host_auth_mode = ResolveExternalAppHostAuthMode();
 
@@ -40,7 +40,7 @@ nlohmann::json PlanePlacementPayloadBuilder::Build() const {
   };
 
   nlohmann::json service_targets = nlohmann::json::array();
-  if (const auto infer_node_name = FindFirstInstanceNodeName(comet::InstanceRole::Infer);
+  if (const auto infer_node_name = FindFirstInstanceNodeName(naim::InstanceRole::Infer);
       infer_node_name.has_value()) {
     service_targets.push_back(nlohmann::json{
         {"service", "infer"},
@@ -49,7 +49,7 @@ nlohmann::json PlanePlacementPayloadBuilder::Build() const {
     });
   }
 
-  const auto worker_node_names = FindInstanceNodeNames(comet::InstanceRole::Worker);
+  const auto worker_node_names = FindInstanceNodeNames(naim::InstanceRole::Worker);
   if (!worker_node_names.empty()) {
     service_targets.push_back(nlohmann::json{
         {"service", "worker"},
@@ -58,7 +58,7 @@ nlohmann::json PlanePlacementPayloadBuilder::Build() const {
     });
   }
 
-  if (const auto app_node_name = FindFirstInstanceNodeName(comet::InstanceRole::App);
+  if (const auto app_node_name = FindFirstInstanceNodeName(naim::InstanceRole::App);
       app_node_name.has_value()) {
     const bool external_app_host =
         desired_state_.app_host.has_value() && !desired_state_.app_host->address.empty();
@@ -72,7 +72,7 @@ nlohmann::json PlanePlacementPayloadBuilder::Build() const {
     });
   }
 
-  if (const auto skills_node_name = FindFirstInstanceNodeName(comet::InstanceRole::Skills);
+  if (const auto skills_node_name = FindFirstInstanceNodeName(naim::InstanceRole::Skills);
       skills_node_name.has_value()) {
     const bool external_app_host =
         desired_state_.app_host.has_value() && !desired_state_.app_host->address.empty();
@@ -91,12 +91,12 @@ nlohmann::json PlanePlacementPayloadBuilder::Build() const {
   if (desired_state_.skills.has_value() && desired_state_.skills->enabled) {
     service_targets.push_back(nlohmann::json{
         {"service", "skills-factory"},
-        {"target_type", "comet"},
-        {"target", "comet-controller"},
+        {"target_type", "naim"},
+        {"target", "naim-controller"},
     });
   }
 
-  if (const auto browsing_node_name = FindFirstInstanceNodeName(comet::InstanceRole::Browsing);
+  if (const auto browsing_node_name = FindFirstInstanceNodeName(naim::InstanceRole::Browsing);
       browsing_node_name.has_value()) {
     service_targets.push_back(nlohmann::json{
         {"service", "webgateway"},
@@ -127,11 +127,11 @@ std::optional<std::string> PlanePlacementPayloadBuilder::ResolveExternalAppHostA
 }
 
 std::optional<std::string> PlanePlacementPayloadBuilder::FindFirstInstanceNodeName(
-    comet::InstanceRole role) const {
+    naim::InstanceRole role) const {
   const auto instance_it = std::find_if(
       desired_state_.instances.begin(),
       desired_state_.instances.end(),
-      [&](const comet::InstanceSpec& instance) {
+      [&](const naim::InstanceSpec& instance) {
         return instance.role == role;
       });
   if (instance_it == desired_state_.instances.end()) {
@@ -141,7 +141,7 @@ std::optional<std::string> PlanePlacementPayloadBuilder::FindFirstInstanceNodeNa
 }
 
 std::set<std::string> PlanePlacementPayloadBuilder::FindInstanceNodeNames(
-    comet::InstanceRole role) const {
+    naim::InstanceRole role) const {
   std::set<std::string> node_names;
   for (const auto& instance : desired_state_.instances) {
     if (instance.role == role && !instance.node_name.empty()) {
@@ -151,4 +151,4 @@ std::set<std::string> PlanePlacementPayloadBuilder::FindInstanceNodeNames(
   return node_names;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

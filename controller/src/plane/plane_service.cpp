@@ -9,7 +9,7 @@
 
 #include "host/host_assignment_reconciliation_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 PlaneService::PlaneService(
     std::string db_path,
@@ -20,7 +20,7 @@ PlaneService::PlaneService(
       lifecycle_support_(std::move(lifecycle_support)) {}
 
 bool PlaneService::FinalizeDeletedPlaneIfReady(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& plane_name) const {
   const auto plane = store.LoadPlane(plane_name);
   if (!plane.has_value() || plane->state != "deleting" ||
@@ -42,8 +42,8 @@ bool PlaneService::FinalizeDeletedPlaneIfReady(
 }
 
 std::string PlaneService::ResolveArtifactsRoot(
-    comet::ControllerStore& store,
-    const comet::PlaneRecord& plane,
+    naim::ControllerStore& store,
+    const naim::PlaneRecord& plane,
     const std::string& plane_name) const {
   if (!plane.artifacts_root.empty()) {
     return plane.artifacts_root;
@@ -56,7 +56,7 @@ std::string PlaneService::ResolveArtifactsRoot(
 }
 
 int PlaneService::ListPlanes() const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   const auto planes = store.LoadPlanes();
   if (planes.empty()) {
@@ -74,7 +74,7 @@ int PlaneService::ListPlanes() const {
 }
 
 int PlaneService::ShowPlane(const std::string& plane_name) const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   (void)FinalizeDeletedPlaneIfReady(store, plane_name);
   const auto state = store.LoadDesiredState(plane_name);
@@ -95,7 +95,7 @@ int PlaneService::ShowPlane(const std::string& plane_name) const {
 }
 
 int PlaneService::StartPlane(const std::string& plane_name) const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   const HostAssignmentReconciliationService reconciliation_service;
   const auto plane = store.LoadPlane(plane_name);
@@ -118,7 +118,7 @@ int PlaneService::StartPlane(const std::string& plane_name) const {
 
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
   const auto observations = store.LoadHostObservations();
-  const auto scheduling_report = comet::EvaluateSchedulingPolicy(*desired_state);
+  const auto scheduling_report = naim::EvaluateSchedulingPolicy(*desired_state);
   const std::string artifacts_root = ResolveArtifactsRoot(store, *plane, plane_name);
 
   store.ReplaceRolloutActions(
@@ -149,7 +149,7 @@ int PlaneService::StartPlane(const std::string& plane_name) const {
 }
 
 int PlaneService::StopPlane(const std::string& plane_name) const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   const HostAssignmentReconciliationService reconciliation_service;
   const auto plane = store.LoadPlane(plane_name);
@@ -200,7 +200,7 @@ int PlaneService::StopPlane(const std::string& plane_name) const {
 }
 
 int PlaneService::DeletePlane(const std::string& plane_name) const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   const HostAssignmentReconciliationService reconciliation_service;
   const auto plane = store.LoadPlane(plane_name);
@@ -254,8 +254,8 @@ int PlaneService::DeletePlane(const std::string& plane_name) const {
   store.ClearSchedulerPlaneRuntime(plane_name);
   store.EnqueueHostAssignments(
       [&]() {
-        comet::DesiredState cleanup_state = *desired_state;
-        std::vector<comet::NodeInventory> nodes;
+        naim::DesiredState cleanup_state = *desired_state;
+        std::vector<naim::NodeInventory> nodes;
         for (const auto& node : cleanup_state.nodes) {
           if (cleanup_nodes.count(node.name) > 0) {
             nodes.push_back(node);
@@ -287,4 +287,4 @@ int PlaneService::DeletePlane(const std::string& plane_name) const {
   return 0;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

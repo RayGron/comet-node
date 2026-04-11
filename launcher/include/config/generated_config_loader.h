@@ -6,7 +6,7 @@
 
 #include "config/install_layout.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 namespace fs = std::filesystem;
 
@@ -54,4 +54,4 @@ class GeneratedConfigLoader {
   const InstallLayoutResolver& install_layout_resolver_;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

@@ -49,13 +49,13 @@ cmake -E remove_directory "${preemption_runtime}"
 cmake -E remove_directory "${preemption_state}"
 
 next_port() {
-  "${script_dir}/comet-devtool.sh" free-port
+  "${script_dir}/naim-devtool.sh" free-port
 }
 
 start_server() {
   local db_path="$1"
   local port="$2"
-  "${build_dir}/comet-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${port}" >/tmp/comet-phase-f-serve.log 2>&1 &
+  "${build_dir}/naim-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${port}" >/tmp/naim-phase-f-serve.log 2>&1 &
   http_server_pid="$!"
   for _ in $(seq 1 50); do
     if curl -fsS "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
@@ -76,11 +76,11 @@ stop_server() {
 }
 
 echo "phase-f-live: basic API and CLI-over-HTTP"
-"${build_dir}/comet-controller" init-db --db "${basic_db}" >/dev/null
+"${build_dir}/naim-controller" init-db --db "${basic_db}" >/dev/null
 basic_port="$(next_port)"
 start_server "${basic_db}" "${basic_port}"
 
-curl -fsS "http://127.0.0.1:${basic_port}/health" | grep -F '"service":"comet-controller"' >/dev/null
+curl -fsS "http://127.0.0.1:${basic_port}/health" | grep -F '"service":"naim-controller"' >/dev/null
 curl -fsS "http://127.0.0.1:${basic_port}/api/v1/health" | grep -F '"api_version":"v1"' >/dev/null
 curl -fsS "http://127.0.0.1:${basic_port}/api/v1/state" | grep -F '"desired_generation":null' >/dev/null
 curl -fsS "http://127.0.0.1:${basic_port}/api/v1/host-assignments" | grep -F '"assignments":[]' >/dev/null
@@ -104,28 +104,28 @@ curl -fsS -X POST "http://127.0.0.1:${basic_port}/api/v1/scheduler-tick?artifact
 curl -fsS -X POST "http://127.0.0.1:${basic_port}/api/v1/reconcile-rebalance-proposals?artifacts_root=${basic_artifacts}" | grep -F '"action":"reconcile-rebalance-proposals"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${basic_port}/api/v1/reconcile-rollout-actions?artifacts_root=${basic_artifacts}" | grep -F '"action":"reconcile-rollout-actions"' >/dev/null
 
-"${build_dir}/comet-controller" show-state --controller "http://127.0.0.1:${basic_port}" | grep -F '"desired_generation": 2' >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --controller "http://127.0.0.1:${basic_port}" --node node-a | grep -F '"assignments"' >/dev/null
-"${build_dir}/comet-controller" show-node-availability --controller "http://127.0.0.1:${basic_port}" --node node-b | grep -F '"availability": "unavailable"' >/dev/null
-"${build_dir}/comet-controller" validate-bundle --controller "http://127.0.0.1:${basic_port}" --bundle "${PWD}/config/demo-plane" | grep -F 'bundle validation: OK' >/dev/null
-"${build_dir}/comet-controller" set-node-availability --controller "http://127.0.0.1:${basic_port}" --node node-a --availability draining --message cli-phase-f | grep -F 'updated node availability for node-a' >/dev/null
-COMET_CONTROLLER="http://127.0.0.1:${basic_port}" "${build_dir}/comet-controller" show-node-availability --node node-a | grep -F '"availability": "draining"' >/dev/null
+"${build_dir}/naim-controller" show-state --controller "http://127.0.0.1:${basic_port}" | grep -F '"desired_generation": 2' >/dev/null
+"${build_dir}/naim-controller" show-host-assignments --controller "http://127.0.0.1:${basic_port}" --node node-a | grep -F '"assignments"' >/dev/null
+"${build_dir}/naim-controller" show-node-availability --controller "http://127.0.0.1:${basic_port}" --node node-b | grep -F '"availability": "unavailable"' >/dev/null
+"${build_dir}/naim-controller" validate-bundle --controller "http://127.0.0.1:${basic_port}" --bundle "${PWD}/config/demo-plane" | grep -F 'bundle validation: OK' >/dev/null
+"${build_dir}/naim-controller" set-node-availability --controller "http://127.0.0.1:${basic_port}" --node node-a --availability draining --message cli-phase-f | grep -F 'updated node availability for node-a' >/dev/null
+NAIM_CONTROLLER="http://127.0.0.1:${basic_port}" "${build_dir}/naim-controller" show-node-availability --node node-a | grep -F '"availability": "draining"' >/dev/null
 stop_server
 
 echo "phase-f-live: safe-direct rebalance mutation"
 safe_bundle_dir="$(mktemp -d "${PWD}/var/phase-f-safe-bundle.XXXXXX")"
 cp -R "${PWD}/config/demo-plane/." "${safe_bundle_dir}"
 perl -0pi -e 's/"name": "worker-b",/"name": "worker-b",\n  "placement_mode": "movable",/' "${safe_bundle_dir}/workers/worker-b.json"
-"${build_dir}/comet-controller" init-db --db "${safe_db}" >/dev/null
+"${build_dir}/naim-controller" init-db --db "${safe_db}" >/dev/null
 safe_port="$(next_port)"
-curl_safe_output="$("${build_dir}/comet-controller" apply-bundle --bundle "${safe_bundle_dir}" --db "${safe_db}" --artifacts-root "${safe_artifacts}")"
+curl_safe_output="$("${build_dir}/naim-controller" apply-bundle --bundle "${safe_bundle_dir}" --db "${safe_db}" --artifacts-root "${safe_artifacts}")"
 printf '%s' "${curl_safe_output}" | grep -F "applied bundle '${safe_bundle_dir}'" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${safe_db}" --node node-a --runtime-root "${safe_runtime}" --state-root "${safe_state}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${safe_db}" --node node-b --runtime-root "${safe_runtime}" --state-root "${safe_state}" --compose-mode skip >/dev/null
+"${build_dir}/naim-hostd" apply-next-assignment --db "${safe_db}" --node node-a --runtime-root "${safe_runtime}" --state-root "${safe_state}" --compose-mode skip >/dev/null
+"${build_dir}/naim-hostd" apply-next-assignment --db "${safe_db}" --node node-b --runtime-root "${safe_runtime}" --state-root "${safe_state}" --compose-mode skip >/dev/null
 start_server "${safe_db}" "${safe_port}"
 curl -fsS "http://127.0.0.1:${safe_port}/api/v1/rebalance-plan" | grep -F '"worker_name":"worker-b"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${safe_port}/api/v1/apply-rebalance-proposal?worker=worker-b&artifacts_root=${safe_artifacts}" | grep -F '"action":"apply-rebalance-proposal"' >/dev/null
-"${build_dir}/comet-controller" show-state --controller "http://127.0.0.1:${safe_port}" | grep -F '"desired_generation": 2' >/dev/null
+"${build_dir}/naim-controller" show-state --controller "http://127.0.0.1:${safe_port}" | grep -F '"desired_generation": 2' >/dev/null
 stop_server
 
 echo "phase-f-live: rollout/preemption mutations"
@@ -134,7 +134,7 @@ cp -R "${PWD}/config/demo-plane/." "${preemption_bundle_dir}"
 perl -0pi -e 's/"gpus": \["0", "1"\]/"gpus": ["0"]/; s/"0": 24576,\n\s*"1": 24576/"0": 24576/' "${preemption_bundle_dir}/plane.json"
 perl -0pi -e 's/"node": "node-a"/"node": "node-b"/; s/"share_mode": "exclusive"/"share_mode": "shared"/; s/"gpu_fraction": 1.0/"gpu_fraction": 0.75/; s/"memory_cap_mb": 16384/"memory_cap_mb": 12288/; s/"name": "worker-a",/"name": "worker-a",\n  "placement_mode": "movable",/' "${preemption_bundle_dir}/workers/worker-a.json"
 perl -0pi -e 's/"node": "node-b"/"node": "node-a"/; s/"share_mode": "shared"/"share_mode": "best-effort"/; s/"gpu_fraction": 0.5/"gpu_fraction": 0.25/; s/"priority": 100/"priority": 50/; s/"memory_cap_mb": 8192/"memory_cap_mb": 4096/' "${preemption_bundle_dir}/workers/worker-b.json"
-"${build_dir}/comet-controller" init-db --db "${preemption_db}" >/dev/null
+"${build_dir}/naim-controller" init-db --db "${preemption_db}" >/dev/null
 preemption_port="$(next_port)"
 start_server "${preemption_db}" "${preemption_port}"
 curl -fsS -X POST "http://127.0.0.1:${preemption_port}/api/v1/bundles/import?bundle=${preemption_bundle_dir}" | grep -F '"action":"import-bundle"' >/dev/null
@@ -145,7 +145,7 @@ test -n "${first_action_id}"
 test -n "${second_action_id}"
 curl -fsS -X POST "http://127.0.0.1:${preemption_port}/api/v1/set-rollout-action-status?id=${first_action_id}&status=acknowledged&message=phase-f-live" | grep -F '"action":"set-rollout-action-status"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${preemption_port}/api/v1/enqueue-rollout-eviction?id=${first_action_id}" | grep -F '"action":"enqueue-rollout-eviction"' >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${preemption_db}" --node node-a --runtime-root "${preemption_runtime}" --state-root "${preemption_state}" --compose-mode skip >/dev/null
+"${build_dir}/naim-hostd" apply-next-assignment --db "${preemption_db}" --node node-a --runtime-root "${preemption_runtime}" --state-root "${preemption_state}" --compose-mode skip >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${preemption_port}/api/v1/reconcile-rollout-actions?artifacts_root=${preemption_artifacts}" | grep -F '"action":"reconcile-rollout-actions"' >/dev/null
 
 manual_bundle_dir="$(mktemp -d "${PWD}/var/phase-f-manual-rollout.XXXXXX")"
@@ -157,7 +157,7 @@ manual_db="${PWD}/var/controller-phase-f-manual-rollout.sqlite"
 manual_artifacts="${PWD}/var/artifacts-phase-f-manual-rollout"
 cmake -E rm -f "${manual_db}"
 cmake -E remove_directory "${manual_artifacts}"
-"${build_dir}/comet-controller" init-db --db "${manual_db}" >/dev/null
+"${build_dir}/naim-controller" init-db --db "${manual_db}" >/dev/null
 manual_port="$(next_port)"
 stop_server
 start_server "${manual_db}" "${manual_port}"
@@ -169,7 +169,7 @@ test -n "${manual_first_action_id}"
 curl -fsS -X POST "http://127.0.0.1:${manual_port}/api/v1/set-rollout-action-status?id=${manual_first_action_id}&status=ready-to-retry&message=phase-f-live" | grep -F '"action":"set-rollout-action-status"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${manual_port}/api/v1/set-rollout-action-status?id=${manual_second_action_id}&status=ready-to-retry&message=phase-f-live" | grep -F '"action":"set-rollout-action-status"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${manual_port}/api/v1/apply-ready-rollout-action?id=${manual_second_action_id}&artifacts_root=${manual_artifacts}" | grep -F '"action":"apply-ready-rollout-action"' >/dev/null
-"${build_dir}/comet-controller" show-state --controller "http://127.0.0.1:${manual_port}" | grep -F '"desired_generation": 2' >/dev/null
+"${build_dir}/naim-controller" show-state --controller "http://127.0.0.1:${manual_port}" | grep -F '"desired_generation": 2' >/dev/null
 stop_server
 
 echo "phase-f-live: OK"

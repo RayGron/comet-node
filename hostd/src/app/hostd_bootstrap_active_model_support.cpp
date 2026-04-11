@@ -5,7 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 namespace fs = std::filesystem;
 using nlohmann::json;
@@ -21,7 +21,7 @@ HostdBootstrapActiveModelSupport::HostdBootstrapActiveModelSupport(
       local_state_repository_(local_state_path_support_) {}
 
 std::string HostdBootstrapActiveModelSupport::ActiveModelPathForNode(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name) const {
   const auto active_model_path =
       path_support_.ControlFilePathForNode(state, node_name, "active-model.json");
@@ -34,11 +34,11 @@ std::string HostdBootstrapActiveModelSupport::ActiveModelPathForNode(
 }
 
 std::string HostdBootstrapActiveModelSupport::BootstrapRuntimeModelPath(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& target_host_path) const {
   const std::string node_name =
       local_state_repository_.RequireSingleNodeName(state);
-  const comet::DiskSpec& shared_disk =
+  const naim::DiskSpec& shared_disk =
       artifact_support_.RequirePlaneSharedDiskForNode(state, node_name);
   const fs::path target_path(target_host_path);
   const fs::path shared_root(shared_disk.host_path);
@@ -50,7 +50,7 @@ std::string HostdBootstrapActiveModelSupport::BootstrapRuntimeModelPath(
 }
 
 void HostdBootstrapActiveModelSupport::WriteBootstrapActiveModel(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name,
     const std::string& target_host_path,
     const std::optional<std::string>& runtime_model_path_override) const {
@@ -78,4 +78,4 @@ void HostdBootstrapActiveModelSupport::WriteBootstrapActiveModel(
           .dump(2));
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

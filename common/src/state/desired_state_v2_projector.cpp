@@ -1,4 +1,4 @@
-#include "comet/state/desired_state_v2_projector.h"
+#include "naim/state/desired_state_v2_projector.h"
 
 #include <algorithm>
 #include <set>
@@ -6,11 +6,11 @@
 #include <string>
 #include <utility>
 
-#include "comet/state/desired_state_placement_resolver.h"
-#include "comet/state/desired_state_v2_projector_support.h"
-#include "comet/state/worker_group_topology.h"
+#include "naim/state/desired_state_placement_resolver.h"
+#include "naim/state/desired_state_v2_projector_support.h"
+#include "naim/state/worker_group_topology.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -528,7 +528,7 @@ std::string DesiredStateV2Projector::DefaultNodeName() const {
 int DesiredStateV2Projector::InferReplicaCount() const {
   std::set<std::string> infer_instance_names;
   for (const auto* worker_instance : worker_instances_) {
-    const auto it = worker_instance->environment.find("COMET_INFER_INSTANCE_NAME");
+    const auto it = worker_instance->environment.find("NAIM_INFER_INSTANCE_NAME");
     if (it == worker_instance->environment.end() || it->second.empty()) {
       continue;
     }
@@ -617,4 +617,4 @@ std::string DesiredStateV2Projector::AddBundlePrefixIfRelative(const std::string
   return "bundle://" + value;
 }
 
-}  // namespace comet
+}  // namespace naim

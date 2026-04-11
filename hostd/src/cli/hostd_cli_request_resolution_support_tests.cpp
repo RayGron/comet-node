@@ -16,9 +16,9 @@ void Expect(bool condition, const std::string& message) {
 
 int main() {
   try {
-    comet::hostd::HostdCliRequestResolutionSupport support;
-    comet::hostd::CometNodeConfig node_config;
-    node_config.storage_root = "/srv/comet";
+    naim::hostd::HostdCliRequestResolutionSupport support;
+    naim::hostd::NaimNodeConfig node_config;
+    node_config.storage_root = "/srv/naim";
 
     {
       char command[] = "show-local-state";
@@ -34,7 +34,7 @@ int main() {
           state_flag,
           state_value,
       };
-      const comet::hostd::HostdCommandLine command_line(6, argv);
+      const naim::hostd::HostdCommandLine command_line(6, argv);
       const auto request = support.ResolveNodeStateRequest(command_line, "gamma");
       Expect(request.node_name == "gamma", "node state request should preserve node name");
       Expect(
@@ -73,11 +73,11 @@ int main() {
           compose_flag,
           compose_value,
       };
-      const comet::hostd::HostdCommandLine command_line(14, argv);
+      const naim::hostd::HostdCommandLine command_line(14, argv);
       const auto request =
           support.ResolveStateOpsRequest(command_line, node_config, "alpha");
       Expect(request.common.node_name == "alpha", "node name should be preserved");
-      Expect(request.common.storage_root == "/srv/comet", "storage root should come from config");
+      Expect(request.common.storage_root == "/srv/naim", "storage root should come from config");
       Expect(
           request.common.runtime_root.has_value() &&
               *request.common.runtime_root == "/tmp/runtime",
@@ -86,7 +86,7 @@ int main() {
       Expect(request.db_path == "/tmp/controller.sqlite", "db path should be resolved");
       Expect(request.artifacts_root == "/tmp/artifacts", "artifacts root should be resolved");
       Expect(
-          request.compose_mode == comet::hostd::ComposeMode::Exec,
+          request.compose_mode == naim::hostd::ComposeMode::Exec,
           "compose mode should be resolved");
       std::cout << "ok: hostd-cli-request-resolution-state-ops\n";
     }
@@ -117,7 +117,7 @@ int main() {
           onboarding_flag,
           onboarding_value,
       };
-      const comet::hostd::HostdCommandLine command_line(12, argv);
+      const naim::hostd::HostdCommandLine command_line(12, argv);
       const auto request =
           support.ResolveAssignmentRequest(command_line, node_config, "beta");
       Expect(request.common.node_name == "beta", "assignment node name should be preserved");
@@ -137,7 +137,7 @@ int main() {
           request.onboarding_key.has_value() && *request.onboarding_key == "token",
           "onboarding key should be preserved");
       Expect(
-          request.compose_mode == comet::hostd::ComposeMode::Skip,
+          request.compose_mode == naim::hostd::ComposeMode::Skip,
           "compose mode should default to skip");
       std::cout << "ok: hostd-cli-request-resolution-assignment\n";
     }

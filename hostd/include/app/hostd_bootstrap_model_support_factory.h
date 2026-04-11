@@ -9,7 +9,7 @@
 #include "app/hostd_file_support.h"
 #include "app/hostd_reporting_support.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdBootstrapModelSupportFactory final {
  public:
@@ -31,4 +31,4 @@ class HostdBootstrapModelSupportFactory final {
   HostdBootstrapTransferSupport transfer_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -6,7 +6,7 @@
 #include "cli/hostd_cli_command_dispatcher.h"
 #include "cli/hostd_command_line.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class NodeConfigLoader;
 class HostdObservationService;
@@ -24,4 +24,4 @@ class HostdCli {
   HostdCliCommandDispatcher dispatcher_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

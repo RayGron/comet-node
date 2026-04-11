@@ -5,11 +5,11 @@
 #include <iostream>
 #include <stdexcept>
 
-#include "comet/core/platform_compat.h"
-#include "comet/planning/compose_renderer.h"
-#include "comet/runtime/infer_runtime_config.h"
+#include "naim/core/platform_compat.h"
+#include "naim/planning/compose_renderer.h"
+#include "naim/runtime/infer_runtime_config.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdDesiredStateApplyPlanSupport::HostdDesiredStateApplyPlanSupport(
     const HostdCommandSupport& command_support,
@@ -22,9 +22,9 @@ HostdDesiredStateApplyPlanSupport::HostdDesiredStateApplyPlanSupport(
       file_support_(file_support) {}
 
 void HostdDesiredStateApplyPlanSupport::ApplyNodePlan(
-    const comet::NodeExecutionPlan& plan,
-    const comet::DesiredState& desired_node_state,
-    const comet::NodeComposePlan& compose_plan,
+    const naim::NodeExecutionPlan& plan,
+    const naim::DesiredState& desired_node_state,
+    const naim::NodeComposePlan& compose_plan,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
     ComposeMode compose_mode,
@@ -49,12 +49,12 @@ void HostdDesiredStateApplyPlanSupport::ApplyNodePlan(
         }
       };
 
-  auto apply_operation = [&](const comet::HostOperation& operation) {
+  auto apply_operation = [&](const naim::HostOperation& operation) {
     switch (operation.kind) {
-      case comet::HostOperationKind::EnsureDisk: {
+      case naim::HostOperationKind::EnsureDisk: {
         const auto disk =
             disk_runtime_support_.FindDiskInStateByKey(
-                std::optional<comet::DesiredState>(desired_node_state),
+                std::optional<naim::DesiredState>(desired_node_state),
                 operation.target);
         if (!disk.has_value()) {
           throw std::runtime_error(
@@ -72,7 +72,7 @@ void HostdDesiredStateApplyPlanSupport::ApplyNodePlan(
         PrintOperationApplied(operation, "applied");
         break;
       }
-      case comet::HostOperationKind::RemoveDisk: {
+      case naim::HostOperationKind::RemoveDisk: {
         const auto disk_key = disk_runtime_support_.SplitDiskKey(operation.target);
         const std::string& disk_name = disk_key.first;
         const std::string& disk_node_name = disk_key.second;
@@ -82,10 +82,10 @@ void HostdDesiredStateApplyPlanSupport::ApplyNodePlan(
         const bool is_plane_shared_disk = std::any_of(
             desired_node_state.disks.begin(),
             desired_node_state.disks.end(),
-            [&](const comet::DiskSpec& disk) {
+            [&](const naim::DiskSpec& disk) {
               return disk.name == disk_name &&
                      disk.node_name == disk_node_name &&
-                     disk.kind == comet::DiskKind::PlaneShared;
+                     disk.kind == naim::DiskKind::PlaneShared;
             });
         const bool delegated_shared_remove =
             is_plane_shared_disk &&
@@ -96,13 +96,13 @@ void HostdDesiredStateApplyPlanSupport::ApplyNodePlan(
                 ? false
                 : !runtime_state->mount_point.empty() &&
                       runtime_state->runtime_state == "mounted";
-        if (comet::platform::HasElevatedPrivileges() &&
+        if (naim::platform::HasElevatedPrivileges() &&
             (mounted_now ||
              (runtime_state.has_value() &&
               (runtime_state->runtime_state == "mounted" ||
                !runtime_state->loop_device.empty() ||
                !runtime_state->image_path.empty())))) {
-          comet::DiskRuntimeState effective_state;
+          naim::DiskRuntimeState effective_state;
           if (runtime_state.has_value()) {
             effective_state = *runtime_state;
           } else {
@@ -144,11 +144,11 @@ void HostdDesiredStateApplyPlanSupport::ApplyNodePlan(
         PrintOperationApplied(operation, removed ? "applied" : "skipped");
         break;
       }
-      case comet::HostOperationKind::EnsureService:
-      case comet::HostOperationKind::RemoveService:
+      case naim::HostOperationKind::EnsureService:
+      case naim::HostOperationKind::RemoveService:
         PrintOperationApplied(operation, "planned");
         break;
-      case comet::HostOperationKind::WriteInferRuntimeConfig:
+      case naim::HostOperationKind::WriteInferRuntimeConfig:
         maybe_publish_progress(
             "rendering-runtime",
             "Rendering runtime",
@@ -158,29 +158,29 @@ void HostdDesiredStateApplyPlanSupport::ApplyNodePlan(
         file_support_.WriteTextFile(
             operation.target,
             operation.details.empty()
-                ? comet::RenderInferRuntimeConfigJson(desired_node_state)
-                : comet::RenderInferRuntimeConfigJsonForInstance(
+                ? naim::RenderInferRuntimeConfigJson(desired_node_state)
+                : naim::RenderInferRuntimeConfigJsonForInstance(
                       desired_node_state, operation.details));
         PrintOperationApplied(operation, "applied");
         break;
-      case comet::HostOperationKind::RemoveInferRuntimeConfig:
+      case naim::HostOperationKind::RemoveInferRuntimeConfig:
         file_support_.RemoveFileIfExists(operation.target);
         PrintOperationApplied(operation, "applied");
         break;
-      case comet::HostOperationKind::WriteComposeFile:
+      case naim::HostOperationKind::WriteComposeFile:
         maybe_publish_progress(
             "rendering-runtime",
             "Rendering runtime",
             "Writing docker compose plan for the node.",
             88);
-        file_support_.WriteTextFile(operation.target, comet::RenderComposeYaml(compose_plan));
+        file_support_.WriteTextFile(operation.target, naim::RenderComposeYaml(compose_plan));
         PrintOperationApplied(operation, "applied");
         break;
-      case comet::HostOperationKind::RemoveComposeFile:
+      case naim::HostOperationKind::RemoveComposeFile:
         file_support_.RemoveFileIfExists(operation.target);
         PrintOperationApplied(operation, "applied");
         break;
-      case comet::HostOperationKind::ComposeUp:
+      case naim::HostOperationKind::ComposeUp:
         maybe_publish_progress(
             "starting-runtime",
             "Starting runtime",
@@ -193,7 +193,7 @@ void HostdDesiredStateApplyPlanSupport::ApplyNodePlan(
             operation,
             compose_mode == ComposeMode::Exec ? "applied" : "skipped");
         break;
-      case comet::HostOperationKind::ComposeDown:
+      case naim::HostOperationKind::ComposeDown:
         compose_runtime_support_.RunComposeCommand(operation.target, "down", compose_mode);
         PrintOperationApplied(
             operation,
@@ -203,21 +203,21 @@ void HostdDesiredStateApplyPlanSupport::ApplyNodePlan(
   };
 
   for (const auto& operation : plan.operations) {
-    if (operation.kind == comet::HostOperationKind::ComposeDown ||
-        operation.kind == comet::HostOperationKind::RemoveComposeFile) {
+    if (operation.kind == naim::HostOperationKind::ComposeDown ||
+        operation.kind == naim::HostOperationKind::RemoveComposeFile) {
       apply_operation(operation);
     }
   }
   for (const auto& operation : plan.operations) {
-    if (operation.kind == comet::HostOperationKind::ComposeDown ||
-        operation.kind == comet::HostOperationKind::RemoveComposeFile ||
-        operation.kind == comet::HostOperationKind::ComposeUp) {
+    if (operation.kind == naim::HostOperationKind::ComposeDown ||
+        operation.kind == naim::HostOperationKind::RemoveComposeFile ||
+        operation.kind == naim::HostOperationKind::ComposeUp) {
       continue;
     }
     apply_operation(operation);
   }
   for (const auto& operation : plan.operations) {
-    if (operation.kind == comet::HostOperationKind::ComposeUp) {
+    if (operation.kind == naim::HostOperationKind::ComposeUp) {
       apply_operation(operation);
     }
   }
@@ -228,10 +228,10 @@ void HostdDesiredStateApplyPlanSupport::ApplyNodePlan(
 }
 
 std::size_t HostdDesiredStateApplyPlanSupport::ExpectedRuntimeStatusCountForComposePlan(
-    const comet::NodeComposePlan& compose_plan) const {
+    const naim::NodeComposePlan& compose_plan) const {
   std::size_t count = 0;
   for (const auto& service : compose_plan.services) {
-    const auto role_it = service.environment.find("COMET_INSTANCE_ROLE");
+    const auto role_it = service.environment.find("NAIM_INSTANCE_ROLE");
     if (role_it == service.environment.end()) {
       continue;
     }
@@ -243,14 +243,14 @@ std::size_t HostdDesiredStateApplyPlanSupport::ExpectedRuntimeStatusCountForComp
 }
 
 bool HostdDesiredStateApplyPlanSupport::IsDesiredNodeStateEmpty(
-    const comet::DesiredState& state) {
+    const naim::DesiredState& state) {
   return state.disks.empty() && state.instances.empty();
 }
 
 void HostdDesiredStateApplyPlanSupport::PrintOperationApplied(
-    const comet::HostOperation& operation,
+    const naim::HostOperation& operation,
     const std::string& status) const {
-  std::cout << "[" << status << "] " << comet::ToString(operation.kind)
+  std::cout << "[" << status << "] " << naim::ToString(operation.kind)
             << " " << operation.target;
   if (!operation.details.empty()) {
     std::cout << " :: " << operation.details;
@@ -296,7 +296,7 @@ void HostdDesiredStateApplyPlanSupport::RemoveDiskDirectory(
       std::filesystem::exists(disk_path) &&
       disk_path.has_parent_path()) {
     const std::filesystem::path parent = disk_path.parent_path();
-    const std::string helper_image = "comet/base-runtime:dev";
+    const std::string helper_image = "naim/base-runtime:dev";
     const std::string docker = command_support_.ResolvedDockerCommand();
     if (!command_support_.RunCommandOk(
             docker + " image inspect " + command_support_.ShellQuote(helper_image) +
@@ -322,4 +322,4 @@ void HostdDesiredStateApplyPlanSupport::RemoveDiskDirectory(
   }
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

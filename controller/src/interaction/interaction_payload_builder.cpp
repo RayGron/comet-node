@@ -7,13 +7,13 @@
 #include "app/controller_composition_support.h"
 #include "app/controller_language_support.h"
 #include "browsing/interaction_browsing_service.h"
-#include "comet/runtime/model_adapter.h"
+#include "naim/runtime/model_adapter.h"
 #include "interaction/interaction_completion_policy_support.h"
 #include "interaction/interaction_model_identity_builder.h"
 #include "interaction/interaction_utf8_payload_sanitizer.h"
 #include "skills/plane_skills_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string BuildInteractionUpstreamBodyPayload(
     const PlaneInteractionResolution& resolution,
@@ -169,10 +169,10 @@ std::string BuildInteractionUpstreamBodyPayload(
   payload.erase(InteractionBrowsingService::kWebGatewayReviewPayloadKey);
   payload["chat_template_kwargs"]["enable_thinking"] = thinking_enabled;
   const InteractionModelIdentityBuilder model_identity_builder;
-  comet::runtime::ModelAdapter::AdaptInteractionPayload(
+  naim::runtime::ModelAdapter::AdaptInteractionPayload(
       &payload,
       model_identity_builder.BuildStatusPreferred(resolution),
-      comet::runtime::ModelAdapterPolicy{thinking_enabled});
+      naim::runtime::ModelAdapterPolicy{thinking_enabled});
   if (force_stream) {
     payload["stream"] = true;
   }
@@ -195,4 +195,4 @@ std::string BuildInteractionUpstreamBodyPayload(
   return InteractionUtf8PayloadSanitizer{}.SanitizeJson(payload).dump();
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

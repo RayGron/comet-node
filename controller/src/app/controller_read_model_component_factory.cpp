@@ -5,7 +5,7 @@
 #include "app/controller_read_model_support.h"
 #include "scheduler/scheduler_domain_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 BundleHttpService ControllerReadModelComponentFactory::CreateBundleHttpService(
     const IBundleCliService& bundle_cli_service) const {
@@ -116,4 +116,4 @@ ControllerReadModelComponentFactory::SchedulerServiceFactoryInstance() const {
   return scheduler_service_factory;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

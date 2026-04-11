@@ -7,7 +7,7 @@ Usage:
   check-live-scheduler.sh --gguf <path-to-model.gguf> [--skip-build-images]
 
 Runs a live safe-direct rebalance check under Docker/NVIDIA:
-  1. builds comet binaries and runtime images
+  1. builds naim binaries and runtime images
   2. deploys a movable-worker test plane
   3. loads a real GGUF into the shared disk
   4. waits for worker runtimes to become ready
@@ -75,10 +75,10 @@ wait_for_workers_ready() {
   local attempts="$4"
 
   for ((attempt = 1; attempt <= attempts; ++attempt)); do
-    "${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
-    "${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-b --state-root "${state_root}" >/dev/null
+    "${build_dir}/naim-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
+    "${build_dir}/naim-hostd" report-observed-state --db "${db_path}" --node node-b --state-root "${state_root}" >/dev/null
     local observations
-    observations="$("${build_dir}/comet-controller" show-host-observations --db "${db_path}")"
+    observations="$("${build_dir}/naim-controller" show-host-observations --db "${db_path}")"
     if grep -F "instance name=worker-a role=worker phase=running ready=yes" <<<"${observations}" >/dev/null &&
        grep -F "instance name=worker-b role=worker phase=running ready=yes" <<<"${observations}" >/dev/null; then
       return 0
@@ -87,7 +87,7 @@ wait_for_workers_ready() {
   done
 
   echo "error: worker runtimes did not become ready in time" >&2
-  "${build_dir}/comet-controller" show-host-observations --db "${db_path}" >&2 || true
+  "${build_dir}/naim-controller" show-host-observations --db "${db_path}" >&2 || true
   return 1
 }
 
@@ -99,11 +99,11 @@ wait_for_verified_move() {
   local attempts="$5"
 
   for ((attempt = 1; attempt <= attempts; ++attempt)); do
-    "${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
-    "${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-b --state-root "${state_root}" >/dev/null
-    "${build_dir}/comet-controller" scheduler-tick --db "${db_path}" --artifacts-root "${artifacts_root}" >/dev/null
+    "${build_dir}/naim-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
+    "${build_dir}/naim-hostd" report-observed-state --db "${db_path}" --node node-b --state-root "${state_root}" >/dev/null
+    "${build_dir}/naim-controller" scheduler-tick --db "${db_path}" --artifacts-root "${artifacts_root}" >/dev/null
     local state_text
-    state_text="$("${build_dir}/comet-controller" show-state --db "${db_path}")"
+    state_text="$("${build_dir}/naim-controller" show-state --db "${db_path}")"
     if grep -E "worker=worker-b .* last_phase=verified .*manual_intervention_required=no" <<<"${state_text}" >/dev/null; then
       return 0
     fi
@@ -111,8 +111,8 @@ wait_for_verified_move() {
   done
 
   echo "error: scheduler move did not reach verified state in time" >&2
-  "${build_dir}/comet-controller" show-state --db "${db_path}" >&2 || true
-  "${build_dir}/comet-controller" show-host-observations --db "${db_path}" >&2 || true
+  "${build_dir}/naim-controller" show-state --db "${db_path}" >&2 || true
+  "${build_dir}/naim-controller" show-host-observations --db "${db_path}" >&2 || true
   return 1
 }
 
@@ -165,13 +165,13 @@ perl -0pi -e 's/"name": "worker-b",/"name": "worker-b",\n  "placement_mode": "mo
   "${bundle_dir}/workers/worker-b.json"
 
 echo "[live-scheduler] deploying initial generation"
-"${build_dir}/comet-controller" init-db --db "${db_path}" >/dev/null
-"${build_dir}/comet-controller" apply-bundle --bundle "${bundle_dir}" --db "${db_path}" --artifacts-root "${artifacts_root}" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${db_path}" --node node-a --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode exec >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${db_path}" --node node-b --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode exec >/dev/null
+"${build_dir}/naim-controller" init-db --db "${db_path}" >/dev/null
+"${build_dir}/naim-controller" apply-bundle --bundle "${bundle_dir}" --db "${db_path}" --artifacts-root "${artifacts_root}" >/dev/null
+"${build_dir}/naim-hostd" apply-next-assignment --db "${db_path}" --node node-a --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode exec >/dev/null
+"${build_dir}/naim-hostd" apply-next-assignment --db "${db_path}" --node node-b --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode exec >/dev/null
 
 echo "[live-scheduler] staging gguf on shared disk"
-shared_root="${runtime_root}/var/lib/comet/disks/planes/alpha/shared"
+shared_root="${runtime_root}/var/lib/naim/disks/planes/alpha/shared"
 control_root="${shared_root}/control/alpha"
 shared_model_dir="${shared_root}/models/live-safe-direct"
 mkdir -p "${shared_model_dir}"
@@ -204,7 +204,7 @@ perl -MJSON::PP -e '
   close $out;
 ' "${artifacts_root}/alpha/infer-runtime.json" "${runtime_infer_config}" "${shared_root}"
 
-runtime_model_path="/comet/shared/models/live-safe-direct/${model_filename}"
+runtime_model_path="/naim/shared/models/live-safe-direct/${model_filename}"
 local_model_id="local/live-safe-direct"
 
 echo "[live-scheduler] activating model for infer and workers"
@@ -226,21 +226,21 @@ echo "[live-scheduler] waiting for worker GPU runtimes to become ready"
 wait_for_workers_ready "${build_dir}" "${db_path}" "${state_root}" 90
 
 echo "[live-scheduler] materializing safe-direct rebalance"
-"${build_dir}/comet-controller" show-rebalance-plan --db "${db_path}" | grep -F \
+"${build_dir}/naim-controller" show-rebalance-plan --db "${db_path}" | grep -F \
   "worker=worker-b placement_mode=movable current=node-b:0 class=safe-direct decision=propose" >/dev/null
-"${build_dir}/comet-controller" reconcile-rebalance-proposals --db "${db_path}" --artifacts-root "${artifacts_root}" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${db_path}" --node node-a --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode exec >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${db_path}" --node node-b --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode exec >/dev/null
+"${build_dir}/naim-controller" reconcile-rebalance-proposals --db "${db_path}" --artifacts-root "${artifacts_root}" >/dev/null
+"${build_dir}/naim-hostd" apply-next-assignment --db "${db_path}" --node node-a --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode exec >/dev/null
+"${build_dir}/naim-hostd" apply-next-assignment --db "${db_path}" --node node-b --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode exec >/dev/null
 
 echo "[live-scheduler] driving scheduler-tick until move is verified"
 wait_for_verified_move "${build_dir}" "${db_path}" "${artifacts_root}" "${state_root}" 90
 
 echo "[live-scheduler] asserting final live ownership"
-"${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
-"${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-b --state-root "${state_root}" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" | grep -F \
+"${build_dir}/naim-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
+"${build_dir}/naim-hostd" report-observed-state --db "${db_path}" --node node-b --state-root "${state_root}" >/dev/null
+"${build_dir}/naim-controller" show-host-observations --db "${db_path}" | grep -F \
   "instance name=worker-b role=worker phase=running ready=yes" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" | grep -F \
+"${build_dir}/naim-controller" show-host-observations --db "${db_path}" | grep -F \
   "gpu device=1" >/dev/null
 if [[ -e "${state_root}/node-b/applied-state.json" ]]; then
   echo "error: expected node-b local state to be cleared after worker-b move" >&2

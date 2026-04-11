@@ -2,7 +2,7 @@
 
 #include <memory>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class IHttpHostdBackendSupport;
 class IHostdBackendFactory;
@@ -31,4 +31,4 @@ class HostdServiceComponentFactory final {
   std::unique_ptr<NodeConfigLoader> CreateConfigLoader() const;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

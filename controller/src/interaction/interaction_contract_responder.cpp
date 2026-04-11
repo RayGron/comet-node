@@ -1,7 +1,7 @@
 #include "interaction/interaction_request_contract_support.h"
 #include "interaction/interaction_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 nlohmann::json InteractionContractResponder::BuildStandaloneErrorPayload(
     const std::string& request_id,
@@ -31,7 +31,7 @@ nlohmann::json InteractionContractResponder::BuildStandaloneErrorPayload(
            {"message", message},
            {"retryable", retryable},
        }},
-      {"comet",
+      {"naim",
        nlohmann::json{
            {"request_id", request_id},
            {"plane_name", plane_name.has_value() ? nlohmann::json(*plane_name)
@@ -64,7 +64,7 @@ nlohmann::json InteractionContractResponder::BuildPlaneErrorPayload(
       {"message", message},
       {"retryable", retryable},
   };
-  payload["comet"] =
+  payload["naim"] =
       InteractionRequestContractSupport{}.BuildInteractionContractMetadata(
           resolution, request_id);
   if (!details.empty()) {
@@ -73,4 +73,4 @@ nlohmann::json InteractionContractResponder::BuildPlaneErrorPayload(
   return payload;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

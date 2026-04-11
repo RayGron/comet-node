@@ -6,7 +6,7 @@
 
 #include "interaction/interaction_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionUpstreamEventParser {
  public:
@@ -29,4 +29,4 @@ class InteractionUpstreamEventParser {
   std::string TrimCopy(const std::string& value) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -1,4 +1,4 @@
-#include "comet/security/crypto_utils.h"
+#include "naim/security/crypto_utils.h"
 
 #include <algorithm>
 #include <array>
@@ -13,7 +13,7 @@
 
 #include <sodium.h>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -291,4 +291,4 @@ std::string DecryptEnvelopeBase64(
   return std::string(plaintext.begin(), plaintext.end());
 }
 
-}  // namespace comet
+}  // namespace naim

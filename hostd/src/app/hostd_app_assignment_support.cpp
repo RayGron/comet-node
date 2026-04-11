@@ -1,6 +1,6 @@
 #include "app/hostd_app_assignment_support.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdAppAssignmentSupport::HostdAppAssignmentSupport()
     : path_support_(),
@@ -40,8 +40,8 @@ HostdAppAssignmentSupport::HostdAppAssignmentSupport()
           bootstrap_model_support_),
       observation_support_() {}
 
-comet::DesiredState HostdAppAssignmentSupport::RebaseStateForRuntimeRoot(
-    comet::DesiredState state,
+naim::DesiredState HostdAppAssignmentSupport::RebaseStateForRuntimeRoot(
+    naim::DesiredState state,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root) const {
   return path_support_.RebaseStateForRuntimeRoot(std::move(state), storage_root, runtime_root);
@@ -76,11 +76,11 @@ std::vector<std::string> HostdAppAssignmentSupport::ParseTaggedCsv(
   return reporting_support_.ParseTaggedCsv(tagged_message, tag);
 }
 
-comet::HostObservation HostdAppAssignmentSupport::BuildObservedStateSnapshot(
+naim::HostObservation HostdAppAssignmentSupport::BuildObservedStateSnapshot(
     const std::string& node_name,
     const std::string& storage_root,
     const std::string& state_root,
-    comet::HostObservationStatus status,
+    naim::HostObservationStatus status,
     const std::string& status_message,
     const std::optional<int>& assignment_id) const {
   return observation_support_.BuildObservedStateSnapshot(
@@ -98,7 +98,7 @@ std::map<std::string, int> HostdAppAssignmentSupport::CaptureServiceHostPids(
 }
 
 bool HostdAppAssignmentSupport::VerifyEvictionAssignment(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const std::string& node_name,
     const std::string& state_root,
     const std::string& tagged_message,
@@ -112,7 +112,7 @@ bool HostdAppAssignmentSupport::VerifyEvictionAssignment(
 }
 
 void HostdAppAssignmentSupport::ApplyDesiredNodeState(
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     const std::string& artifacts_root,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
@@ -201,4 +201,4 @@ void HostdAppAssignmentSupport::AppendHostdEvent(
       severity);
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

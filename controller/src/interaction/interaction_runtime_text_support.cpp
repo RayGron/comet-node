@@ -2,7 +2,7 @@
 
 #include <cctype>
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string InteractionRuntimeTextSupport::TrimCopy(
     const std::string& value) const {
@@ -40,4 +40,4 @@ std::string InteractionRuntimeTextSupport::LowercaseCopy(
   return lowered;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

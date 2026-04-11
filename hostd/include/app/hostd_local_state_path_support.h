@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdLocalStatePathSupport final {
  public:
@@ -30,4 +30,4 @@ class HostdLocalStatePathSupport final {
       const std::string& node_name) const;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

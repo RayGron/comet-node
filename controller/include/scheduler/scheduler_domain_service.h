@@ -9,12 +9,12 @@
 #include "scheduler/scheduler_domain_support.h"
 #include "scheduler/scheduler_view_service.h"
 
-#include "comet/state/models.h"
-#include "comet/runtime/runtime_status.h"
-#include "comet/planning/scheduling_policy.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/planning/scheduling_policy.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 struct SchedulerDomainPolicyConfig {
   int default_stale_after_seconds = 300;
@@ -32,30 +32,30 @@ class SchedulerDomainService {
       SchedulerDomainPolicyConfig policy_config = {});
 
   std::vector<RolloutLifecycleEntry> BuildRolloutLifecycleEntries(
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       int desired_generation,
-      const std::vector<comet::RolloutActionRecord>& rollout_actions,
-      const std::vector<comet::HostAssignment>& assignments,
-      const std::vector<comet::HostObservation>& observations) const;
+      const std::vector<naim::RolloutActionRecord>& rollout_actions,
+      const std::vector<naim::HostAssignment>& assignments,
+      const std::vector<naim::HostObservation>& observations) const;
 
   RebalanceControllerGateSummary BuildRebalanceControllerGateSummary(
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       int desired_generation,
-      const std::vector<comet::NodeAvailabilityOverride>& availability_overrides,
+      const std::vector<naim::NodeAvailabilityOverride>& availability_overrides,
       const std::vector<RolloutLifecycleEntry>& rollout_lifecycle_entries,
-      const std::vector<comet::HostAssignment>& assignments,
+      const std::vector<naim::HostAssignment>& assignments,
       const SchedulerRuntimeView& scheduler_runtime,
-      const std::vector<comet::HostObservation>& observations,
+      const std::vector<naim::HostObservation>& observations,
       int stale_after_seconds) const;
 
   std::vector<RebalancePlanEntry> BuildRebalancePlanEntries(
-      const comet::DesiredState& state,
-      const comet::SchedulingPolicyReport& scheduling_report,
-      const std::vector<comet::NodeAvailabilityOverride>& availability_overrides,
+      const naim::DesiredState& state,
+      const naim::SchedulingPolicyReport& scheduling_report,
+      const std::vector<naim::NodeAvailabilityOverride>& availability_overrides,
       const std::vector<RolloutLifecycleEntry>& rollout_lifecycle_entries,
-      const std::vector<comet::HostAssignment>& assignments,
+      const std::vector<naim::HostAssignment>& assignments,
       const SchedulerRuntimeView& scheduler_runtime,
-      const std::vector<comet::HostObservation>& observations,
+      const std::vector<naim::HostObservation>& observations,
       int stale_after_seconds,
       const std::optional<std::string>& node_name_filter = std::nullopt) const;
 
@@ -64,4 +64,4 @@ class SchedulerDomainService {
   SchedulerDomainPolicyConfig policy_config_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

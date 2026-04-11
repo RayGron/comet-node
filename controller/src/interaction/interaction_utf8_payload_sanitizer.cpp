@@ -1,6 +1,6 @@
 #include "interaction/interaction_utf8_payload_sanitizer.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 bool InteractionUtf8PayloadSanitizer::IsUtf8ContinuationByte(
     unsigned char value) const {
@@ -78,4 +78,4 @@ nlohmann::json InteractionUtf8PayloadSanitizer::SanitizeJson(
   return value;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

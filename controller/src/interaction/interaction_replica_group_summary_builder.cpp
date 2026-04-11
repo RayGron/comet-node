@@ -4,12 +4,12 @@
 #include <map>
 #include <set>
 
-#include "comet/state/worker_group_topology.h"
+#include "naim/state/worker_group_topology.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string InteractionReplicaGroupSummaryBuilder::BuildHybridReplicaGroupKey(
-    const comet::WorkerGroupMemberSpec& member) const {
+    const naim::WorkerGroupMemberSpec& member) const {
   const std::string node_name = member.node_name.empty() ? std::string("unknown-node")
                                                          : member.node_name;
   return "hybrid-node-" + node_name + "-start-" +
@@ -17,7 +17,7 @@ std::string InteractionReplicaGroupSummaryBuilder::BuildHybridReplicaGroupKey(
 }
 
 int InteractionReplicaGroupSummaryBuilder::CountExpectedHybridApiEndpoints(
-    const comet::DesiredState& desired_state) const {
+    const naim::DesiredState& desired_state) const {
   std::set<std::string> keys;
   for (const auto& member : desired_state.worker_group.members) {
     if (!member.enabled || !member.data_parallel_api_endpoint) {
@@ -29,14 +29,14 @@ int InteractionReplicaGroupSummaryBuilder::CountExpectedHybridApiEndpoints(
 }
 
 InteractionReplicaGroupSummary InteractionReplicaGroupSummaryBuilder::Build(
-    const comet::DesiredState& desired_state,
-    const std::vector<comet::RuntimeProcessStatus>& instance_statuses) const {
+    const naim::DesiredState& desired_state,
+    const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const {
   const bool llama_rpc_runtime =
       desired_state.inference.runtime_engine == "llama.cpp" &&
       desired_state.inference.distributed_backend == "llama_rpc";
   const bool hybrid_data_parallel =
-      comet::DataParallelEnabled(desired_state.inference) &&
-      desired_state.inference.data_parallel_lb_mode == comet::kDataParallelLbModeHybrid;
+      naim::DataParallelEnabled(desired_state.inference) &&
+      desired_state.inference.data_parallel_lb_mode == naim::kDataParallelLbModeHybrid;
   InteractionReplicaGroupSummary summary;
   if (llama_rpc_runtime) {
     std::map<std::string, std::pair<int, int>> groups;
@@ -53,7 +53,7 @@ InteractionReplicaGroupSummary InteractionReplicaGroupSummaryBuilder::Build(
       const auto status_it = std::find_if(
           instance_statuses.begin(),
           instance_statuses.end(),
-          [&](const comet::RuntimeProcessStatus& status) {
+          [&](const naim::RuntimeProcessStatus& status) {
             return status.instance_name == member.name;
           });
       if (status_it != instance_statuses.end() && status_it->ready) {
@@ -90,7 +90,7 @@ InteractionReplicaGroupSummary InteractionReplicaGroupSummaryBuilder::Build(
     const auto status_it = std::find_if(
         instance_statuses.begin(),
         instance_statuses.end(),
-        [&](const comet::RuntimeProcessStatus& status) {
+        [&](const naim::RuntimeProcessStatus& status) {
           return status.instance_name == member.name;
         });
     if (member.data_parallel_api_endpoint) {
@@ -122,4 +122,4 @@ InteractionReplicaGroupSummary InteractionReplicaGroupSummaryBuilder::Build(
   return summary;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

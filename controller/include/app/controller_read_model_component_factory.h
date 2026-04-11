@@ -2,7 +2,7 @@
 
 #include "app/controller_main_includes.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerComponentDefaults;
 
@@ -27,4 +27,4 @@ class ControllerReadModelComponentFactory final {
   const ControllerSchedulerServiceFactory& SchedulerServiceFactoryInstance() const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

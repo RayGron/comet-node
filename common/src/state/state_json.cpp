@@ -1,4 +1,4 @@
-#include "comet/state/state_json.h"
+#include "naim/state/state_json.h"
 
 #include <cstring>
 #include <filesystem>
@@ -9,13 +9,13 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/desired_state_v2_projector.h"
-#include "comet/state/desired_state_v2_renderer.h"
-#include "comet/state/state_json_runtime_codecs.h"
-#include "comet/state/state_json_settings_codecs.h"
-#include "comet/state/worker_group_topology.h"
+#include "naim/state/desired_state_v2_projector.h"
+#include "naim/state/desired_state_v2_renderer.h"
+#include "naim/state/state_json_runtime_codecs.h"
+#include "naim/state/state_json_settings_codecs.h"
+#include "naim/state/worker_group_topology.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -225,7 +225,7 @@ DesiredState DesiredStateFromJson(const json& value) {
   state.plane_name = value.at("plane_name").get<std::string>();
   state.plane_shared_disk_name = value.at("plane_shared_disk_name").get<std::string>();
   state.control_root =
-      value.value("control_root", "/comet/shared/control/" + state.plane_name);
+      value.value("control_root", "/naim/shared/control/" + state.plane_name);
   state.plane_mode = ParsePlaneMode(value.value("plane_mode", std::string("compute")));
   state.protected_plane = value.value("protected", state.protected_plane);
   if (value.contains("post_deploy_script") && !value.at("post_deploy_script").is_null()) {
@@ -404,7 +404,7 @@ DesiredState DesiredStateFromJson(const json& value) {
         member.name = instance.name;
         member.node_name = instance.node_name;
         member.gpu_device = instance.gpu_device.value_or("");
-        if (const auto rpc_port_it = instance.environment.find("COMET_WORKER_RPC_PORT");
+        if (const auto rpc_port_it = instance.environment.find("NAIM_WORKER_RPC_PORT");
             rpc_port_it != instance.environment.end() && !rpc_port_it->second.empty()) {
           member.rpc_port = std::stoi(rpc_port_it->second);
         }
@@ -600,4 +600,4 @@ void SaveDesiredStateJson(const DesiredState& state, const std::string& path) {
   }
 }
 
-}  // namespace comet
+}  // namespace naim

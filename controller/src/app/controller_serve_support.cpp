@@ -10,12 +10,12 @@
 #include <cstdlib>
 #include <cstdio>
 
-namespace comet::controller::serve_support {
+namespace naim::controller::serve_support {
 
 namespace {
 
 using nlohmann::json;
-using SocketHandle = comet::platform::SocketHandle;
+using SocketHandle = naim::platform::SocketHandle;
 
 std::string LowercaseCopy(std::string value) {
   std::transform(
@@ -48,7 +48,7 @@ bool WebGatewayRoutesEnabledForListener(const std::string& listen_host) {
   if (IsLoopbackHost(listen_host) || IsPrivateIpv4Host(listen_host)) {
     return true;
   }
-  if (const char* internal_host = std::getenv("COMET_CONTROLLER_INTERNAL_HOST");
+  if (const char* internal_host = std::getenv("NAIM_CONTROLLER_INTERNAL_HOST");
       internal_host != nullptr && internal_host[0] != '\0') {
     return listen_host == internal_host;
   }
@@ -142,7 +142,7 @@ int ServeControllerHttp(
         return InteractionRequestContractSupport{}.ParseInteractionStreamPlaneName(
             method, path);
       },
-      [&](const comet::EventRecord& event) {
+      [&](const naim::EventRecord& event) {
         return read_model_service.BuildEventPayloadItem(event);
       },
   });
@@ -171,7 +171,7 @@ int ServeSkillsFactoryHttp(
         if (request.path == "/health" || request.path == "/api/v1/health") {
           return composition_support::BuildJsonResponse(
               200,
-              json{{"service", "comet-skills-factory"}, {"status", "ok"}},
+              json{{"service", "naim-skills-factory"}, {"status", "ok"}},
               {});
         }
         if (const auto response =
@@ -187,7 +187,7 @@ int ServeSkillsFactoryHttp(
       [](const std::string&, const std::string&) -> std::optional<std::string> {
         return std::nullopt;
       },
-      [](const comet::EventRecord&) { return json::object(); },
+      [](const naim::EventRecord&) { return json::object(); },
   });
 
   return server.Serve({
@@ -200,4 +200,4 @@ int ServeSkillsFactoryHttp(
   });
 }
 
-}  // namespace comet::controller::serve_support
+}  // namespace naim::controller::serve_support

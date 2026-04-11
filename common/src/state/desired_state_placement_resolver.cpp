@@ -1,8 +1,8 @@
-#include "comet/state/desired_state_placement_resolver.h"
+#include "naim/state/desired_state_placement_resolver.h"
 
 #include <string_view>
 
-namespace comet {
+namespace naim {
 
 DesiredStatePlacementResolver::DesiredStatePlacementResolver(const DesiredState& state)
     : state_(state) {}
@@ -56,4 +56,4 @@ std::optional<std::string> DesiredStatePlacementResolver::ResolvePlacementTarget
   return std::nullopt;
 }
 
-}  // namespace comet
+}  // namespace naim

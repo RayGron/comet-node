@@ -8,9 +8,9 @@
 #include <sstream>
 #include <stdexcept>
 
-#include "comet/state/state_json.h"
+#include "naim/state/state_json.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdLocalStateRepository::HostdLocalStateRepository(
     const HostdLocalStatePathSupport& path_support)
@@ -66,10 +66,10 @@ void HostdLocalStateRepository::SaveLocalAppliedGeneration(
   }
 }
 
-std::vector<comet::DesiredState> HostdLocalStateRepository::LoadAllLocalAppliedStates(
+std::vector<naim::DesiredState> HostdLocalStateRepository::LoadAllLocalAppliedStates(
     const std::string& state_root,
     const std::string& node_name) const {
-  std::vector<comet::DesiredState> result;
+  std::vector<naim::DesiredState> result;
   for (const auto& plane_name : path_support_.ListLocalPlaneNames(state_root, node_name)) {
     const auto plane_state = LoadStateFromPath(
         path_support_.LocalPlaneStatePath(state_root, node_name, plane_name));
@@ -88,7 +88,7 @@ std::vector<comet::DesiredState> HostdLocalStateRepository::LoadAllLocalAppliedS
   return result;
 }
 
-std::optional<comet::DesiredState> HostdLocalStateRepository::LoadLocalAppliedState(
+std::optional<naim::DesiredState> HostdLocalStateRepository::LoadLocalAppliedState(
     const std::string& state_root,
     const std::string& node_name,
     const std::optional<std::string>& plane_name) const {
@@ -106,7 +106,7 @@ std::optional<comet::DesiredState> HostdLocalStateRepository::LoadLocalAppliedSt
 void HostdLocalStateRepository::RewriteAggregateLocalState(
     const std::string& state_root,
     const std::string& node_name) const {
-  std::vector<comet::DesiredState> states;
+  std::vector<naim::DesiredState> states;
   for (const auto& plane_name : path_support_.ListLocalPlaneNames(state_root, node_name)) {
     const auto plane_state = LoadStateFromPath(
         path_support_.LocalPlaneStatePath(state_root, node_name, plane_name));
@@ -146,7 +146,7 @@ void HostdLocalStateRepository::RewriteAggregateLocalGeneration(
 void HostdLocalStateRepository::SaveLocalAppliedState(
     const std::string& state_root,
     const std::string& node_name,
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::optional<std::string>& plane_name) const {
   const std::string effective_plane_name =
       plane_name.has_value() ? *plane_name : state.plane_name;
@@ -175,7 +175,7 @@ void HostdLocalStateRepository::RemoveLocalAppliedPlaneState(
 }
 
 void HostdLocalStateRepository::PrintLocalStateSummary(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& state_path,
     const std::string& node_name,
     const std::optional<int>& generation) const {
@@ -189,20 +189,20 @@ void HostdLocalStateRepository::PrintLocalStateSummary(
   std::cout << "instances=" << state.instances.size() << "\n";
   for (const auto& disk : state.disks) {
     std::cout << "  - disk=" << disk.name
-              << " kind=" << comet::ToString(disk.kind)
+              << " kind=" << naim::ToString(disk.kind)
               << " host_path=" << disk.host_path
               << " realized=directory-backed"
               << " exists=" << (std::filesystem::exists(disk.host_path) ? "yes" : "no")
               << "\n";
   }
   for (const auto& instance : state.instances) {
-    std::cout << "  - " << instance.name << " role=" << comet::ToString(instance.role)
+    std::cout << "  - " << instance.name << " role=" << naim::ToString(instance.role)
               << " image=" << instance.image << "\n";
   }
 }
 
 std::string HostdLocalStateRepository::RequireSingleNodeName(
-    const comet::DesiredState& state) const {
+    const naim::DesiredState& state) const {
   if (state.nodes.empty()) {
     throw std::runtime_error("desired node state is empty");
   }
@@ -250,7 +250,7 @@ std::optional<int> HostdLocalStateRepository::LoadGenerationFromPath(
   return generation;
 }
 
-std::optional<comet::DesiredState> HostdLocalStateRepository::LoadStateFromPath(
+std::optional<naim::DesiredState> HostdLocalStateRepository::LoadStateFromPath(
     const std::string& path) const {
   if (!std::filesystem::exists(path)) {
     return std::nullopt;
@@ -264,16 +264,16 @@ std::optional<comet::DesiredState> HostdLocalStateRepository::LoadStateFromPath(
   if (!input.good() && !input.eof()) {
     throw std::runtime_error("failed to read local state file: " + path);
   }
-  return comet::DeserializeDesiredStateJson(buffer.str());
+  return naim::DeserializeDesiredStateJson(buffer.str());
 }
 
-comet::DesiredState HostdLocalStateRepository::MergeLocalAppliedStates(
-    const std::vector<comet::DesiredState>& states) const {
+naim::DesiredState HostdLocalStateRepository::MergeLocalAppliedStates(
+    const std::vector<naim::DesiredState>& states) const {
   if (states.empty()) {
     throw std::runtime_error("cannot merge empty local state list");
   }
 
-  comet::DesiredState merged = states.front();
+  naim::DesiredState merged = states.front();
   if (states.size() > 1) {
     merged.plane_name.clear();
     merged.plane_shared_disk_name.clear();
@@ -312,7 +312,7 @@ void HostdLocalStateRepository::RemoveStateFileIfExists(const std::string& path)
 }
 
 void HostdLocalStateRepository::WriteLocalStateFile(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& path) const {
   const std::filesystem::path file_path(path);
   if (file_path.has_parent_path()) {
@@ -324,10 +324,10 @@ void HostdLocalStateRepository::WriteLocalStateFile(
     throw std::runtime_error("failed to open local state file for write: " + path);
   }
 
-  output << comet::SerializeDesiredStateJson(state) << "\n";
+  output << naim::SerializeDesiredStateJson(state) << "\n";
   if (!output.good()) {
     throw std::runtime_error("failed to write local state file: " + path);
   }
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -4,7 +4,7 @@
 
 #include "interaction/interaction_http_support.h"
 
-#include "comet/runtime/runtime_status.h"
+#include "naim/runtime/runtime_status.h"
 
 namespace {
 
@@ -15,23 +15,23 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestInteractionSupportMatchesRuntimeOnlyPlaneObservation() {
-  const comet::controller::ControllerRuntimeSupportService runtime_support_service;
-  const comet::controller::DesiredStatePolicyService desired_state_policy_service;
-  const comet::controller::InteractionRuntimeSupportService interaction_runtime_support_service;
+  const naim::controller::ControllerRuntimeSupportService runtime_support_service;
+  const naim::controller::DesiredStatePolicyService desired_state_policy_service;
+  const naim::controller::InteractionRuntimeSupportService interaction_runtime_support_service;
   const InteractionHttpSupport support(
       runtime_support_service,
       desired_state_policy_service,
       interaction_runtime_support_service);
 
-  comet::HostObservation observation;
+  naim::HostObservation observation;
   observation.node_name = "remote-app-host";
-  observation.instance_runtime_json = comet::SerializeRuntimeStatusListJson({
-      comet::RuntimeProcessStatus{
+  observation.instance_runtime_json = naim::SerializeRuntimeStatusListJson({
+      naim::RuntimeProcessStatus{
           "app-cypher", "app", "remote-app-host", "", "", "running", "", "", 101, 0, true},
-      comet::RuntimeProcessStatus{
+      naim::RuntimeProcessStatus{
           "skills-cypher", "skills", "remote-app-host", "", "", "running", "", "", 102, 0,
           true},
-      comet::RuntimeProcessStatus{
+      naim::RuntimeProcessStatus{
           "webgateway-cypher", "browsing", "remote-app-host", "", "", "running", "", "", 103,
           0, true},
   });

@@ -3,7 +3,7 @@
 #include "interaction/interaction_completion_policy_support.h"
 #include "interaction/interaction_text_post_processor.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 nlohmann::json InteractionContinuationPayloadBuilder::Build(
     const nlohmann::json& original_payload,
@@ -62,4 +62,4 @@ nlohmann::json InteractionContinuationPayloadBuilder::Build(
   return payload;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

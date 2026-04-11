@@ -8,7 +8,7 @@
 #include "http/controller_http_transport.h"
 #include "interaction/interaction_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionStreamHttpErrorResponseBuilder final {
  public:
@@ -23,4 +23,4 @@ class InteractionStreamHttpErrorResponseBuilder final {
       const nlohmann::json& details = nlohmann::json::object()) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

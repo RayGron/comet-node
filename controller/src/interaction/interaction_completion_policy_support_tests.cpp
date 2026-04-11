@@ -13,8 +13,8 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestNormalizesConfiguredPolicy() {
-  const comet::controller::InteractionCompletionPolicySupport support;
-  comet::InteractionSettings::CompletionPolicy configured;
+  const naim::controller::InteractionCompletionPolicySupport support;
+  naim::InteractionSettings::CompletionPolicy configured;
   configured.response_mode = "Very-Long";
   configured.max_tokens = 99999;
   configured.max_continuations = 99;
@@ -37,11 +37,11 @@ void TestNormalizesConfiguredPolicy() {
 }
 
 void TestResolvesAnalysisLongPolicy() {
-  const comet::controller::InteractionCompletionPolicySupport support;
-  comet::DesiredState desired_state;
-  desired_state.interaction = comet::InteractionSettings{};
+  const naim::controller::InteractionCompletionPolicySupport support;
+  naim::DesiredState desired_state;
+  desired_state.interaction = naim::InteractionSettings{};
   desired_state.interaction->thinking_enabled = true;
-  comet::InteractionSettings::CompletionPolicy analysis_long;
+  naim::InteractionSettings::CompletionPolicy analysis_long;
   analysis_long.response_mode = "long";
   analysis_long.max_tokens = 1500;
   desired_state.interaction->analysis_long_completion_policy = analysis_long;
@@ -63,8 +63,8 @@ void TestResolvesAnalysisLongPolicy() {
 }
 
 void TestBuildsSemanticAndContinuationPrompts() {
-  const comet::controller::InteractionCompletionPolicySupport support;
-  comet::controller::InteractionCompletionPolicy policy;
+  const naim::controller::InteractionCompletionPolicySupport support;
+  naim::controller::InteractionCompletionPolicy policy;
   policy.completion_marker = "[[DONE]]";
   policy.semantic_goal = "finish requested artifact";
   policy.target_completion_tokens = 1200;
@@ -91,17 +91,17 @@ void TestBuildsSemanticAndContinuationPrompts() {
 }
 
 void TestNaturalStopRules() {
-  const comet::controller::InteractionCompletionPolicySupport support;
-  comet::controller::InteractionCompletionPolicy policy;
+  const naim::controller::InteractionCompletionPolicySupport support;
+  naim::controller::InteractionCompletionPolicy policy;
   policy.target_completion_tokens = 100;
-  comet::controller::InteractionSegmentSummary summary;
+  naim::controller::InteractionSegmentSummary summary;
   summary.text = "answer";
   summary.finish_reason = "stop";
 
   Expect(
       support.SessionReachedTargetLength(policy, 120),
       "target length should be satisfied after reaching requested tokens");
-  comet::controller::InteractionCompletionPolicy marker_policy;
+  naim::controller::InteractionCompletionPolicy marker_policy;
   marker_policy.require_completion_marker = true;
   Expect(
       !support.CanCompleteOnNaturalStop(marker_policy, summary),

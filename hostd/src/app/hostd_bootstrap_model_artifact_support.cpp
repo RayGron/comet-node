@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <stdexcept>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 namespace fs = std::filesystem;
 
@@ -11,12 +11,12 @@ HostdBootstrapModelArtifactSupport::HostdBootstrapModelArtifactSupport(
     const HostdDesiredStatePathSupport& path_support)
     : path_support_(path_support) {}
 
-const comet::DiskSpec& HostdBootstrapModelArtifactSupport::RequirePlaneSharedDiskForNode(
-    const comet::DesiredState& state,
+const naim::DiskSpec& HostdBootstrapModelArtifactSupport::RequirePlaneSharedDiskForNode(
+    const naim::DesiredState& state,
     const std::string& node_name) const {
   for (const auto& disk : state.disks) {
     if (disk.node_name == node_name &&
-        disk.kind == comet::DiskKind::PlaneShared) {
+        disk.kind == naim::DiskKind::PlaneShared) {
       return disk;
     }
   }
@@ -26,7 +26,7 @@ const comet::DiskSpec& HostdBootstrapModelArtifactSupport::RequirePlaneSharedDis
 }
 
 std::vector<HostdBootstrapModelArtifact> HostdBootstrapModelArtifactSupport::BuildArtifacts(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name) const {
   const auto& shared_disk = RequirePlaneSharedDiskForNode(state, node_name);
   const fs::path target_root = path_support_.SharedDiskHostPathForContainerPath(
@@ -77,7 +77,7 @@ std::vector<HostdBootstrapModelArtifact> HostdBootstrapModelArtifactSupport::Bui
 }
 
 std::string HostdBootstrapModelArtifactSupport::TargetPath(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name) const {
   const auto artifacts = BuildArtifacts(state, node_name);
   if (artifacts.empty()) {
@@ -88,7 +88,7 @@ std::string HostdBootstrapModelArtifactSupport::TargetPath(
 }
 
 std::string HostdBootstrapModelArtifactSupport::SharedModelBootstrapOwnerNode(
-    const comet::DesiredState& state) const {
+    const naim::DesiredState& state) const {
   if (!state.inference.primary_infer_node.empty()) {
     return state.inference.primary_infer_node;
   }
@@ -117,4 +117,4 @@ std::string HostdBootstrapModelArtifactSupport::FilenameFromUrl(
   return filename;
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

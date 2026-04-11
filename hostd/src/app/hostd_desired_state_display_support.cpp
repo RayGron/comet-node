@@ -8,13 +8,13 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/planning/execution_plan.h"
-#include "comet/runtime/runtime_status.h"
-#include "comet/state/demo_state.h"
-#include "comet/state/sqlite_store.h"
-#include "comet/state/state_json.h"
+#include "naim/planning/execution_plan.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/state/demo_state.h"
+#include "naim/state/sqlite_store.h"
+#include "naim/state/state_json.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdDesiredStateDisplaySupport::HostdDesiredStateDisplaySupport(
     const HostdDesiredStatePathSupport& path_support)
@@ -31,20 +31,20 @@ void HostdDesiredStateDisplaySupport::ShowDemoOps(
     const std::string& node_name,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root) const {
-  const comet::DesiredState state =
+  const naim::DesiredState state =
       path_support_.RebaseStateForRuntimeRoot(
-          comet::BuildDemoState(),
+          naim::BuildDemoState(),
           storage_root,
           runtime_root);
   const auto plan = FindNodeExecutionPlan(
-      comet::BuildNodeExecutionPlans(
+      naim::BuildNodeExecutionPlans(
           std::nullopt,
           state,
           DefaultArtifactsRoot()),
       node_name);
 
   std::cout << "hostd demo ops for node=" << plan.node_name << "\n";
-  std::cout << comet::RenderNodeExecutionPlans({plan});
+  std::cout << naim::RenderNodeExecutionPlans({plan});
 }
 
 void HostdDesiredStateDisplaySupport::ShowStateOps(
@@ -54,17 +54,17 @@ void HostdDesiredStateDisplaySupport::ShowStateOps(
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
     const std::string& state_root) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto state = store.LoadDesiredState();
   if (!state.has_value()) {
     throw std::runtime_error("no desired state found in db '" + db_path + "'");
   }
 
-  const comet::DesiredState rebased_full_state =
+  const naim::DesiredState rebased_full_state =
       path_support_.RebaseStateForRuntimeRoot(*state, storage_root, runtime_root);
-  const comet::DesiredState desired_node_state =
-      comet::SliceDesiredStateForNode(rebased_full_state, node_name);
+  const naim::DesiredState desired_node_state =
+      naim::SliceDesiredStateForNode(rebased_full_state, node_name);
   const auto desired_generation = store.LoadDesiredGeneration();
 
   std::cout << "db=" << db_path << "\n";
@@ -164,7 +164,7 @@ void HostdDesiredStateDisplaySupport::ShowRuntimeStatus(
 }
 
 std::string HostdDesiredStateDisplaySupport::RuntimeConfigSummary(
-    const comet::DesiredState& state) {
+    const naim::DesiredState& state) {
   std::ostringstream out;
   out << "gpu_nodes=" << state.runtime_gpu_nodes.size()
       << " primary_infer_node=" << state.inference.primary_infer_node
@@ -176,8 +176,8 @@ std::string HostdDesiredStateDisplaySupport::DefaultArtifactsRoot() {
   return (std::filesystem::path("var") / "artifacts").string();
 }
 
-comet::NodeExecutionPlan HostdDesiredStateDisplaySupport::FindNodeExecutionPlan(
-    const std::vector<comet::NodeExecutionPlan>& plans,
+naim::NodeExecutionPlan HostdDesiredStateDisplaySupport::FindNodeExecutionPlan(
+    const std::vector<naim::NodeExecutionPlan>& plans,
     const std::string& node_name) {
   for (const auto& plan : plans) {
     if (plan.node_name == node_name) {
@@ -188,7 +188,7 @@ comet::NodeExecutionPlan HostdDesiredStateDisplaySupport::FindNodeExecutionPlan(
 }
 
 bool HostdDesiredStateDisplaySupport::StateHasNode(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::string& node_name) {
   for (const auto& node : state.nodes) {
     if (node.name == node_name) {
@@ -206,10 +206,10 @@ std::string HostdDesiredStateDisplaySupport::ComposePathForNode(
       .string();
 }
 
-comet::NodeExecutionPlan HostdDesiredStateDisplaySupport::ResolveNodeExecutionPlan(
-    const std::vector<comet::NodeExecutionPlan>& plans,
-    const std::optional<comet::DesiredState>& current_state,
-    const comet::DesiredState& desired_state,
+naim::NodeExecutionPlan HostdDesiredStateDisplaySupport::ResolveNodeExecutionPlan(
+    const std::vector<naim::NodeExecutionPlan>& plans,
+    const std::optional<naim::DesiredState>& current_state,
+    const naim::DesiredState& desired_state,
     const std::string& node_name,
     const std::string& artifacts_root) {
   for (const auto& plan : plans) {
@@ -225,7 +225,7 @@ comet::NodeExecutionPlan HostdDesiredStateDisplaySupport::ResolveNodeExecutionPl
   }
 
   const std::string plane_name = in_desired ? desired_state.plane_name : current_state->plane_name;
-  comet::NodeExecutionPlan plan;
+  naim::NodeExecutionPlan plan;
   plan.plane_name = plane_name;
   plan.node_name = node_name;
   plan.compose_file_path = ComposePathForNode(artifacts_root, plane_name, node_name);
@@ -259,7 +259,7 @@ std::string HostdDesiredStateDisplaySupport::FormatDisplayTimestamp(const std::s
 }
 
 void HostdDesiredStateDisplaySupport::ShowDesiredNodeOps(
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     const std::string& artifacts_root,
     const std::optional<std::string>& runtime_root,
     const std::string& state_root,
@@ -278,7 +278,7 @@ void HostdDesiredStateDisplaySupport::ShowDesiredNodeOps(
           node_name,
           desired_node_state.plane_name);
   const auto plan = ResolveNodeExecutionPlan(
-      comet::BuildNodeExecutionPlans(current_local_state, desired_node_state, artifacts_root),
+      naim::BuildNodeExecutionPlans(current_local_state, desired_node_state, artifacts_root),
       current_local_state,
       desired_node_state,
       node_name,
@@ -305,7 +305,7 @@ void HostdDesiredStateDisplaySupport::ShowDesiredNodeOps(
     std::cout << "infer_runtime_config=" << *runtime_config_path << "\n";
     std::cout << "infer_runtime_summary=" << RuntimeConfigSummary(desired_node_state) << "\n";
   }
-  std::cout << comet::RenderNodeExecutionPlans({plan});
+  std::cout << naim::RenderNodeExecutionPlans({plan});
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

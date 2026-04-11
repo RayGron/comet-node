@@ -357,7 +357,7 @@ function buildEmptySkillForm() {
     internal: false,
     enabled: true,
     sessionIdsText: "",
-    cometLinksText: "",
+    naimLinksText: "",
   };
 }
 
@@ -784,14 +784,14 @@ function bootstrapModelTargetPath(desiredState) {
     return bootstrapModel.local_path;
   }
   if (Array.isArray(bootstrapModel.source_urls) && bootstrapModel.source_urls.length > 1) {
-    return `${desiredState?.inference?.model_cache_dir || desiredState?.inference?.gguf_cache_dir || "/comet/shared/models/cache"}/multipart`;
+    return `${desiredState?.inference?.model_cache_dir || desiredState?.inference?.gguf_cache_dir || "/naim/shared/models/cache"}/multipart`;
   }
   const targetFilename =
     bootstrapModel.target_filename ||
     bootstrapModel.local_path?.split("/").pop() ||
     bootstrapModel.source_url?.split("/").pop() ||
     "model.gguf";
-  return `${desiredState?.inference?.gguf_cache_dir || "/comet/shared/models/gguf"}/${targetFilename}`;
+  return `${desiredState?.inference?.gguf_cache_dir || "/naim/shared/models/gguf"}/${targetFilename}`;
 }
 
 function bootstrapModelSourceLabel(bootstrapModel) {
@@ -894,13 +894,13 @@ function hostObservationItemsFromPayload(payload) {
 
 function instanceRole(instance) {
   const subrole =
-    instance?.labels?.["comet.subrole"] ||
-    instance?.environment?.COMET_INSTANCE_SUBROLE ||
+    instance?.labels?.["naim.subrole"] ||
+    instance?.environment?.NAIM_INSTANCE_SUBROLE ||
     "";
   if (subrole === "aggregator") {
     return "aggregator";
   }
-  const upstreams = instance?.environment?.COMET_REPLICA_UPSTREAMS || "";
+  const upstreams = instance?.environment?.NAIM_REPLICA_UPSTREAMS || "";
   if ((instance?.kind === "infer" || instance?.role === "infer") && upstreams) {
     return "aggregator";
   }
@@ -1363,7 +1363,7 @@ function SkillsDialog({
                     </div>
                     <div className="metric-grid compact-metric-grid">
                       <div className="metric-row"><span>Sessions</span><strong>{Array.isArray(item.session_ids) ? item.session_ids.length : 0}</strong></div>
-                      <div className="metric-row"><span>Links</span><strong>{Array.isArray(item.comet_links) ? item.comet_links.length : 0}</strong></div>
+                      <div className="metric-row"><span>Links</span><strong>{Array.isArray(item.naim_links) ? item.naim_links.length : 0}</strong></div>
                       <div className="metric-row"><span>Updated</span><strong>{formatTimestamp(item.updated_at)}</strong></div>
                     </div>
                     <div className="toolbar">
@@ -1434,11 +1434,11 @@ function SkillsDialog({
                 />
               </label>
               <label className="field-label">
-                <span className="field-label-title">Comet links</span>
+                <span className="field-label-title">Naim links</span>
                 <textarea
                   className="editor-textarea"
-                  value={form.cometLinksText}
-                  onChange={(event) => onFormChange("cometLinksText", event.target.value)}
+                  value={form.naimLinksText}
+                  onChange={(event) => onFormChange("naimLinksText", event.target.value)}
                   rows={6}
                 />
               </label>
@@ -3447,7 +3447,7 @@ function App() {
         content: skill.content || "",
         enabled: skill.enabled !== false,
         sessionIdsText: renderLineSeparatedValues(skill.session_ids),
-        cometLinksText: renderLineSeparatedValues(skill.comet_links),
+        naimLinksText: renderLineSeparatedValues(skill.naim_links),
       },
       error: "",
     }));
@@ -3474,7 +3474,7 @@ function App() {
       content: String(skillsDialog.form?.content || "").trim(),
       enabled: Boolean(skillsDialog.form?.enabled),
       session_ids: parseLineSeparatedValues(skillsDialog.form?.sessionIdsText),
-      comet_links: parseLineSeparatedValues(skillsDialog.form?.cometLinksText),
+      naim_links: parseLineSeparatedValues(skillsDialog.form?.naimLinksText),
     };
     if (!payload.name || !payload.description || !payload.content) {
       setSkillsDialog((current) => ({
@@ -3598,7 +3598,7 @@ function App() {
         internal: skill.internal === true,
         enabled: true,
         sessionIdsText: "",
-        cometLinksText: "",
+        naimLinksText: "",
       },
       selectedGroupPath: skill.group_path || current.selectedGroupPath,
       error: "",
@@ -6185,7 +6185,7 @@ function App() {
       <div className="starfield" aria-hidden="true" />
       <header className="hero">
         <div className="hero-copy">
-          <div className="eyebrow">Comet Operator Interface</div>
+          <div className="eyebrow">Naim Operator Interface</div>
           <h1>Constellation Control</h1>
           <p className="hero-text">
             Multi-plane control surface for lifecycle, rollout pressure, runtime
@@ -6473,7 +6473,7 @@ function App() {
 
               <section className="subpanel dashboard-services-panel">
                 <div className="subpanel-header">
-                  <h3>Comet node services</h3>
+                  <h3>Naim node services</h3>
                   <span className="subpanel-meta">
                     {`${dashboardSelfServiceSummary.total} services / ${dashboardSelfServiceSummary.warning + dashboardSelfServiceSummary.critical} degraded`}
                   </span>

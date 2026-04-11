@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionRuntimeTextSupport final {
  public:
@@ -14,4 +14,4 @@ class InteractionRuntimeTextSupport final {
   std::string LowercaseCopy(const std::string& value) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

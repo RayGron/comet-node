@@ -8,13 +8,13 @@
 #include <nlohmann/json.hpp>
 
 #include "app/controller_service_interfaces.h"
-#include "comet/state/models.h"
-#include "comet/planning/scheduling_policy.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/planning/scheduling_policy.h"
+#include "naim/state/sqlite_store.h"
 #include "plane/plane_lifecycle_support.h"
 #include "plane/plane_state_presentation_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class PlaneService : public IPlaneService {
  public:
@@ -31,11 +31,11 @@ class PlaneService : public IPlaneService {
 
  private:
   bool FinalizeDeletedPlaneIfReady(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       const std::string& plane_name) const;
   std::string ResolveArtifactsRoot(
-      comet::ControllerStore& store,
-      const comet::PlaneRecord& plane,
+      naim::ControllerStore& store,
+      const naim::PlaneRecord& plane,
       const std::string& plane_name) const;
 
   std::string db_path_;
@@ -43,4 +43,4 @@ class PlaneService : public IPlaneService {
   std::shared_ptr<const PlaneLifecycleSupport> lifecycle_support_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -6,7 +6,7 @@
 #include "app/controller_composition_support.h"
 #include "scheduler/scheduler_domain_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 using nlohmann::json;
 
@@ -192,10 +192,10 @@ const ControllerStateService&
 ControllerPlaneComponentFactory::ControllerStateServiceInstance() const {
   static const ControllerStateService controller_state_service(
       ControllerStateService::Deps{
-          [](comet::ControllerStore& store, const std::string& plane_name) {
+          [](naim::ControllerStore& store, const std::string& plane_name) {
             return composition_support::CanFinalizeDeletedPlane(store, plane_name);
           },
-          [](comet::ControllerStore& store,
+          [](naim::ControllerStore& store,
               const std::string& category,
               const std::string& event_type,
               const std::string& message,
@@ -264,15 +264,15 @@ const DashboardService& ControllerPlaneComponentFactory::DashboardServiceInstanc
   static const DashboardService dashboard_service(
       DashboardService::Deps{
           state_aggregate_loader,
-          [read_model_service](const comet::EventRecord& event) {
+          [read_model_service](const naim::EventRecord& event) {
             return read_model_service->BuildEventPayloadItem(event);
           },
           [runtime_support_service](
-              const std::vector<comet::NodeAvailabilityOverride>& overrides) {
+              const std::vector<naim::NodeAvailabilityOverride>& overrides) {
             return runtime_support_service->BuildAvailabilityOverrideMap(overrides);
           },
           [runtime_support_service](
-              const std::map<std::string, comet::NodeAvailabilityOverride>& overrides,
+              const std::map<std::string, naim::NodeAvailabilityOverride>& overrides,
               const std::string& node_name) {
             return runtime_support_service->ResolveNodeAvailability(overrides, node_name);
           },
@@ -283,10 +283,10 @@ const DashboardService& ControllerPlaneComponentFactory::DashboardServiceInstanc
               const std::optional<long long>& age_seconds, int stale_after_seconds) {
             return runtime_support_service->HealthFromAge(age_seconds, stale_after_seconds);
           },
-          [runtime_support_service](const comet::HostObservation& observation) {
+          [runtime_support_service](const naim::HostObservation& observation) {
             return runtime_support_service->ParseRuntimeStatus(observation);
           },
-          [runtime_support_service](const comet::HostObservation& observation) {
+          [runtime_support_service](const naim::HostObservation& observation) {
             return runtime_support_service->ParseGpuTelemetry(observation);
           },
       });
@@ -327,4 +327,4 @@ const SkillsFactoryService& ControllerPlaneComponentFactory::SkillsFactoryServic
   return skills_factory_service;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

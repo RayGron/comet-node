@@ -14,22 +14,22 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-comet::DesiredState BuildState(const std::string& shared_root) {
-  comet::DesiredState state;
+naim::DesiredState BuildState(const std::string& shared_root) {
+  naim::DesiredState state;
   state.plane_name = "plane-a";
   state.control_root = "/workspace/shared/control/plane-a";
   state.inference.primary_infer_node = "node-primary";
 
-  comet::DiskSpec disk;
+  naim::DiskSpec disk;
   disk.name = "plane-a-shared";
   disk.plane_name = "plane-a";
   disk.node_name = "node-a";
-  disk.kind = comet::DiskKind::PlaneShared;
+  disk.kind = naim::DiskKind::PlaneShared;
   disk.host_path = shared_root;
   disk.container_path = "/workspace/shared";
   state.disks.push_back(disk);
 
-  comet::NodeInventory primary_node;
+  naim::NodeInventory primary_node;
   primary_node.name = "node-primary";
   state.nodes.push_back(primary_node);
   return state;
@@ -41,12 +41,12 @@ int main() {
   try {
     namespace fs = std::filesystem;
 
-    const comet::hostd::HostdDesiredStatePathSupport path_support;
-    const comet::hostd::HostdBootstrapModelArtifactSupport support(path_support);
+    const naim::hostd::HostdDesiredStatePathSupport path_support;
+    const naim::hostd::HostdBootstrapModelArtifactSupport support(path_support);
 
     {
-      auto state = BuildState("/var/lib/comet/disks/plane-a/shared");
-      comet::BootstrapModelSpec bootstrap_model;
+      auto state = BuildState("/var/lib/naim/disks/plane-a/shared");
+      naim::BootstrapModelSpec bootstrap_model;
       bootstrap_model.model_id = "model-a";
       bootstrap_model.source_url = "https://example.com/models/model-a.gguf?download=1";
       state.bootstrap_model = bootstrap_model;
@@ -54,7 +54,7 @@ int main() {
       Expect(artifacts.size() == 1, "BuildArtifacts should create one artifact");
       Expect(
           artifacts.front().target_host_path ==
-              "/var/lib/comet/disks/plane-a/shared/models/gguf/model-a.gguf",
+              "/var/lib/naim/disks/plane-a/shared/models/gguf/model-a.gguf",
           "BuildArtifacts should resolve target file from URL");
       Expect(
           support.TargetPath(state, "node-a") == artifacts.front().target_host_path,
@@ -63,7 +63,7 @@ int main() {
 
     {
       const fs::path temp_root =
-          fs::temp_directory_path() / "comet-hostd-bootstrap-model-artifact-support-tests";
+          fs::temp_directory_path() / "naim-hostd-bootstrap-model-artifact-support-tests";
       std::error_code cleanup_error;
       fs::remove_all(temp_root, cleanup_error);
       fs::create_directories(temp_root / "hf-model");
@@ -72,14 +72,14 @@ int main() {
         output << "{}";
       }
       Expect(
-          comet::hostd::HostdBootstrapModelArtifactSupport::LooksLikeRecognizedModelDirectory(
+          naim::hostd::HostdBootstrapModelArtifactSupport::LooksLikeRecognizedModelDirectory(
               (temp_root / "hf-model").string()),
           "LooksLikeRecognizedModelDirectory should detect config.json");
       fs::remove_all(temp_root, cleanup_error);
     }
 
     {
-      auto state = BuildState("/var/lib/comet/disks/plane-a/shared");
+      auto state = BuildState("/var/lib/naim/disks/plane-a/shared");
       Expect(
           support.SharedModelBootstrapOwnerNode(state) == "node-primary",
           "SharedModelBootstrapOwnerNode should prefer primary infer node");

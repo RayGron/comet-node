@@ -23,7 +23,7 @@ fi
 
 if [[ "${skip_image_build}" -eq 0 ]]; then
   (cd "${PWD}/ui/operator-react" && npm run build >/dev/null)
-  docker build -f "${PWD}/runtime/web-ui/Dockerfile" -t comet/web-ui:dev "${PWD}" >/dev/null
+  docker build -f "${PWD}/runtime/web-ui/Dockerfile" -t naim/web-ui:dev "${PWD}" >/dev/null
 fi
 
 base="${PWD}/var/live-phase-h"
@@ -43,13 +43,13 @@ cleanup() {
     wait "${controller_pid}" >/dev/null 2>&1 || true
   fi
   if [[ -f "${db_path}" ]]; then
-    "${build_dir}/comet-controller" stop-web-ui --db "${db_path}" --web-ui-root "${web_ui_root}" --compose-mode exec >/dev/null 2>&1 || true
+    "${build_dir}/naim-controller" stop-web-ui --db "${db_path}" --web-ui-root "${web_ui_root}" --compose-mode exec >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
 
 next_port() {
-  "${script_dir}/comet-devtool.sh" free-port
+  "${script_dir}/naim-devtool.sh" free-port
 }
 
 wait_for_http() {
@@ -85,27 +85,27 @@ cmake -E remove_directory "${base}"
 mkdir -p "${artifacts_root}" "${runtime_root}" "${state_root}" "${web_ui_root}"
 
 echo "phase-h-live: init plane"
-"${build_dir}/comet-controller" apply-bundle \
+"${build_dir}/naim-controller" apply-bundle \
   --bundle "${PWD}/config/demo-plane" \
   --db "${db_path}" \
   --artifacts-root "${artifacts_root}" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment \
+"${build_dir}/naim-hostd" apply-next-assignment \
   --db "${db_path}" \
   --node node-a \
   --runtime-root "${runtime_root}" \
   --state-root "${state_root}" \
   --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment \
+"${build_dir}/naim-hostd" apply-next-assignment \
   --db "${db_path}" \
   --node node-b \
   --runtime-root "${runtime_root}" \
   --state-root "${state_root}" \
   --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" report-observed-state \
+"${build_dir}/naim-hostd" report-observed-state \
   --db "${db_path}" \
   --node node-a \
   --state-root "${state_root}" >/dev/null
-"${build_dir}/comet-hostd" report-observed-state \
+"${build_dir}/naim-hostd" report-observed-state \
   --db "${db_path}" \
   --node node-b \
   --state-root "${state_root}" >/dev/null
@@ -114,10 +114,10 @@ controller_port="$(next_port)"
 ui_port="$(next_port)"
 
 echo "phase-h-live: start controller"
-"${build_dir}/comet-controller" serve \
+"${build_dir}/naim-controller" serve \
   --db "${db_path}" \
   --listen-host 0.0.0.0 \
-  --listen-port "${controller_port}" >/tmp/comet-phase-h-serve.log 2>&1 &
+  --listen-port "${controller_port}" >/tmp/naim-phase-h-serve.log 2>&1 &
 controller_pid="$!"
 wait_for_http "http://127.0.0.1:${controller_port}/api/v1/health"
 
@@ -125,7 +125,7 @@ controller_upstream="$(detect_controller_upstream "${controller_port}")"
 echo "phase-h-live: controller_upstream=${controller_upstream}"
 
 echo "phase-h-live: ensure sidecar"
-"${build_dir}/comet-controller" ensure-web-ui \
+"${build_dir}/naim-controller" ensure-web-ui \
   --db "${db_path}" \
   --web-ui-root "${web_ui_root}" \
   --listen-port "${ui_port}" \
@@ -134,7 +134,7 @@ echo "phase-h-live: ensure sidecar"
 wait_for_http "http://127.0.0.1:${ui_port}/health"
 
 echo "phase-h-live: proxied rest"
-curl -fsS "http://127.0.0.1:${ui_port}/" | grep -F 'Comet Operator' >/dev/null
+curl -fsS "http://127.0.0.1:${ui_port}/" | grep -F 'Naim Operator' >/dev/null
 curl -fsS "http://127.0.0.1:${ui_port}/api/v1/planes" | grep -F '"name":"alpha"' >/dev/null
 curl -fsS "http://127.0.0.1:${ui_port}/api/v1/planes/alpha/dashboard" | grep -F '"plane_name":"alpha"' >/dev/null
 curl -fsS "http://127.0.0.1:${ui_port}/api/v1/planes/alpha/dashboard" | grep -F '"alerts"' >/dev/null
@@ -147,13 +147,13 @@ curl -NsS --max-time 10 -H "Last-Event-ID: ${last_event_id}" \
 stream_pid="$!"
 sleep 1
 curl -fsS -X POST "http://127.0.0.1:${ui_port}/api/v1/planes/alpha/stop" | grep -F '"action":"stop-plane"' >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment \
+"${build_dir}/naim-hostd" apply-next-assignment \
   --db "${db_path}" \
   --node node-a \
   --runtime-root "${runtime_root}" \
   --state-root "${state_root}" \
   --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment \
+"${build_dir}/naim-hostd" apply-next-assignment \
   --db "${db_path}" \
   --node node-b \
   --runtime-root "${runtime_root}" \
@@ -174,13 +174,13 @@ grep -F '"event_type":"stopped"' "${stream_log}" >/dev/null
 echo "phase-h-live: proxied lifecycle"
 curl -fsS "http://127.0.0.1:${ui_port}/api/v1/planes/alpha" | grep -F '"state":"stopped"' >/dev/null
 curl -fsS -X POST "http://127.0.0.1:${ui_port}/api/v1/planes/alpha/start" | grep -F '"action":"start-plane"' >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment \
+"${build_dir}/naim-hostd" apply-next-assignment \
   --db "${db_path}" \
   --node node-a \
   --runtime-root "${runtime_root}" \
   --state-root "${state_root}" \
   --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment \
+"${build_dir}/naim-hostd" apply-next-assignment \
   --db "${db_path}" \
   --node node-b \
   --runtime-root "${runtime_root}" \
@@ -191,6 +191,6 @@ curl -fsS "http://127.0.0.1:${ui_port}/api/v1/events?plane=alpha&category=plane&
 curl -fsS "http://127.0.0.1:${ui_port}/api/v1/events?plane=alpha&category=web-ui&limit=10" | grep -F '"category":"web-ui"' >/dev/null
 
 echo "phase-h-live: sidecar status"
-"${build_dir}/comet-controller" show-web-ui-status --db "${db_path}" --web-ui-root "${web_ui_root}" | grep -F 'running=yes' >/dev/null
+"${build_dir}/naim-controller" show-web-ui-status --db "${db_path}" --web-ui-root "${web_ui_root}" | grep -F 'running=yes' >/dev/null
 
 echo "phase-h-live: OK"

@@ -11,8 +11,8 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/core/platform_compat.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/core/platform_compat.h"
+#include "naim/state/sqlite_store.h"
 #include "http/controller_http_transport.h"
 #include "infra/controller_runtime_support_service.h"
 #include "plane/dashboard_service.h"
@@ -80,9 +80,9 @@ class HealthProbeTestServer {
  public:
   explicit HealthProbeTestServer(json payload)
       : payload_(std::move(payload)) {
-    comet::platform::EnsureSocketsInitialized();
+    naim::platform::EnsureSocketsInitialized();
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (!comet::platform::IsSocketValid(listen_fd_)) {
+    if (!naim::platform::IsSocketValid(listen_fd_)) {
       throw std::runtime_error("failed to create probe server socket");
     }
 
@@ -103,21 +103,21 @@ class HealthProbeTestServer {
     addr.sin_port = htons(0);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to bind probe server: " + error);
     }
     if (listen(listen_fd_, 8) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to listen probe server: " + error);
     }
 
     sockaddr_in bound_addr{};
     socklen_t bound_size = sizeof(bound_addr);
     if (getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound_addr), &bound_size) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to inspect probe server socket: " + error);
     }
     port_ = ntohs(bound_addr.sin_port);
@@ -128,17 +128,17 @@ class HealthProbeTestServer {
     stop_requested_.store(true);
     if (port_ > 0) {
       const auto wake_fd = socket(AF_INET, SOCK_STREAM, 0);
-      if (comet::platform::IsSocketValid(wake_fd)) {
+      if (naim::platform::IsSocketValid(wake_fd)) {
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<uint16_t>(port_));
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         (void)connect(wake_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-        comet::platform::CloseSocket(wake_fd);
+        naim::platform::CloseSocket(wake_fd);
       }
     }
-    if (comet::platform::IsSocketValid(listen_fd_)) {
-      comet::platform::CloseSocket(listen_fd_);
+    if (naim::platform::IsSocketValid(listen_fd_)) {
+      naim::platform::CloseSocket(listen_fd_);
     }
     if (thread_.joinable()) {
       thread_.join();
@@ -156,11 +156,11 @@ class HealthProbeTestServer {
       socklen_t client_size = sizeof(client_addr);
       const auto client_fd =
           accept(listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_size);
-      if (!comet::platform::IsSocketValid(client_fd)) {
+      if (!naim::platform::IsSocketValid(client_fd)) {
         return;
       }
       if (stop_requested_.load()) {
-        comet::platform::CloseSocket(client_fd);
+        naim::platform::CloseSocket(client_fd);
         return;
       }
 
@@ -185,18 +185,18 @@ class HealthProbeTestServer {
         data += written;
         remaining -= static_cast<std::size_t>(written);
       }
-      comet::platform::CloseSocket(client_fd);
+      naim::platform::CloseSocket(client_fd);
     }
   }
 
   json payload_;
   std::atomic<bool> stop_requested_{false};
-  comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  naim::platform::SocketHandle listen_fd_ = naim::platform::kInvalidSocket;
   int port_ = 0;
   std::thread thread_;
 };
 
-class TestSchedulerDomainSupport final : public comet::controller::SchedulerDomainSupport {
+class TestSchedulerDomainSupport final : public naim::controller::SchedulerDomainSupport {
  public:
   std::optional<long long> HeartbeatAgeSeconds(
       const std::string& heartbeat_at) const override {
@@ -209,29 +209,29 @@ class TestSchedulerDomainSupport final : public comet::controller::SchedulerDoma
     return runtime_support_service_.HealthFromAge(age_seconds, stale_after_seconds);
   }
 
-  std::optional<comet::RuntimeStatus> ParseRuntimeStatus(
-      const comet::HostObservation& observation) const override {
+  std::optional<naim::RuntimeStatus> ParseRuntimeStatus(
+      const naim::HostObservation& observation) const override {
     return runtime_support_service_.ParseRuntimeStatus(observation);
   }
 
-  std::optional<comet::GpuTelemetrySnapshot> ParseGpuTelemetry(
-      const comet::HostObservation& observation) const override {
+  std::optional<naim::GpuTelemetrySnapshot> ParseGpuTelemetry(
+      const naim::HostObservation& observation) const override {
     return runtime_support_service_.ParseGpuTelemetry(observation);
   }
 
-  std::map<std::string, comet::NodeAvailabilityOverride> BuildAvailabilityOverrideMap(
-      const std::vector<comet::NodeAvailabilityOverride>& availability_overrides) const override {
+  std::map<std::string, naim::NodeAvailabilityOverride> BuildAvailabilityOverrideMap(
+      const std::vector<naim::NodeAvailabilityOverride>& availability_overrides) const override {
     return runtime_support_service_.BuildAvailabilityOverrideMap(availability_overrides);
   }
 
-  comet::NodeAvailability ResolveNodeAvailability(
-      const std::map<std::string, comet::NodeAvailabilityOverride>& overrides,
+  naim::NodeAvailability ResolveNodeAvailability(
+      const std::map<std::string, naim::NodeAvailabilityOverride>& overrides,
       const std::string& node_name) const override {
     return runtime_support_service_.ResolveNodeAvailability(overrides, node_name);
   }
 
-  bool IsNodeSchedulable(comet::NodeAvailability availability) const override {
-    return availability == comet::NodeAvailability::Active;
+  bool IsNodeSchedulable(naim::NodeAvailability availability) const override {
+    return availability == naim::NodeAvailability::Active;
   }
 
   std::optional<long long> TimestampAgeSeconds(
@@ -240,20 +240,20 @@ class TestSchedulerDomainSupport final : public comet::controller::SchedulerDoma
   }
 
   std::optional<std::string> ObservedSchedulingGateReason(
-      const std::vector<comet::HostObservation>&,
+      const std::vector<naim::HostObservation>&,
       const std::string&,
       int) const override {
     return std::nullopt;
   }
 
  private:
-  comet::controller::ControllerRuntimeSupportService runtime_support_service_;
+  naim::controller::ControllerRuntimeSupportService runtime_support_service_;
 };
 
-comet::controller::SchedulerDomainService MakeSchedulerDomainService() {
-  return comet::controller::SchedulerDomainService(
+naim::controller::SchedulerDomainService MakeSchedulerDomainService() {
+  return naim::controller::SchedulerDomainService(
       std::make_shared<TestSchedulerDomainSupport>(),
-      comet::controller::SchedulerDomainPolicyConfig{
+      naim::controller::SchedulerDomainPolicyConfig{
           300,
           100,
           300,
@@ -263,29 +263,29 @@ comet::controller::SchedulerDomainService MakeSchedulerDomainService() {
       });
 }
 
-comet::controller::DashboardService MakeDashboardService() {
-  static const comet::controller::ControllerRuntimeSupportService runtime_support_service;
+naim::controller::DashboardService MakeDashboardService() {
+  static const naim::controller::ControllerRuntimeSupportService runtime_support_service;
   static const SchedulerViewService scheduler_view_service;
-  static const comet::controller::SchedulerDomainService scheduler_domain_service =
+  static const naim::controller::SchedulerDomainService scheduler_domain_service =
       MakeSchedulerDomainService();
-  static const comet::controller::StateAggregateLoader state_aggregate_loader(
+  static const naim::controller::StateAggregateLoader state_aggregate_loader(
       scheduler_domain_service,
       scheduler_view_service,
       runtime_support_service,
       1);
-  static const comet::controller::DashboardService dashboard_service(
-      comet::controller::DashboardService::Deps{
+  static const naim::controller::DashboardService dashboard_service(
+      naim::controller::DashboardService::Deps{
           &state_aggregate_loader,
-          [](const comet::EventRecord& event) {
+          [](const naim::EventRecord& event) {
             return json{
                 {"id", event.id},
                 {"message", event.message},
             };
           },
-          [&](const std::vector<comet::NodeAvailabilityOverride>& overrides) {
+          [&](const std::vector<naim::NodeAvailabilityOverride>& overrides) {
             return runtime_support_service.BuildAvailabilityOverrideMap(overrides);
           },
-          [&](const std::map<std::string, comet::NodeAvailabilityOverride>& overrides,
+          [&](const std::map<std::string, naim::NodeAvailabilityOverride>& overrides,
               const std::string& node_name) {
             return runtime_support_service.ResolveNodeAvailability(overrides, node_name);
           },
@@ -295,10 +295,10 @@ comet::controller::DashboardService MakeDashboardService() {
           [&](const std::optional<long long>& age_seconds, int stale_after_seconds) {
             return runtime_support_service.HealthFromAge(age_seconds, stale_after_seconds);
           },
-          [&](const comet::HostObservation& observation) {
+          [&](const naim::HostObservation& observation) {
             return runtime_support_service.ParseRuntimeStatus(observation);
           },
-          [&](const comet::HostObservation& observation) {
+          [&](const naim::HostObservation& observation) {
             return runtime_support_service.ParseGpuTelemetry(observation);
           },
       });
@@ -306,7 +306,7 @@ comet::controller::DashboardService MakeDashboardService() {
 }
 
 std::string MakeTempDbPath(const std::string& test_name) {
-  const fs::path root = fs::temp_directory_path() / "comet-dashboard-service-tests" / test_name;
+  const fs::path root = fs::temp_directory_path() / "naim-dashboard-service-tests" / test_name;
   std::error_code error;
   fs::remove_all(root, error);
   fs::create_directories(root);
@@ -314,13 +314,13 @@ std::string MakeTempDbPath(const std::string& test_name) {
 }
 
 void SeedHostRecord(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& node_name,
     const std::string& registration_state,
     const std::string& session_state,
     const std::string& last_heartbeat_at,
     const std::string& updated_at) {
-  comet::RegisteredHostRecord host;
+  naim::RegisteredHostRecord host;
   host.node_name = node_name;
   host.registration_state = registration_state;
   host.session_state = session_state;
@@ -339,7 +339,7 @@ void WriteWebUiState(
   const json state{
       {"compose_path", (web_ui_root / "docker-compose.yml").string()},
       {"controller_upstream", "http://127.0.0.1:18080"},
-      {"image", "comet/web-ui:dev"},
+      {"image", "naim/web-ui:dev"},
       {"listen_port", listen_port},
       {"materialized", materialized},
       {"requested_controller_upstream", "http://127.0.0.1:18080"},
@@ -371,27 +371,27 @@ json FindPlaneServiceTarget(const json& placement_payload, const std::string& se
 
 void TestHealthySelfServicesPayload() {
   const auto db_path = MakeTempDbPath("healthy");
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
-  const comet::controller::ControllerRuntimeSupportService runtime_support_service;
+  const naim::controller::ControllerRuntimeSupportService runtime_support_service;
   const std::string now = runtime_support_service.UtcNowSqlTimestamp();
   SeedHostRecord(store, "local-hostd", "registered", "connected", now, now);
 
   HealthProbeTestServer skills_factory_server(
-      json{{"service", "comet-skills-factory"}, {"status", "ok"}});
+      json{{"service", "naim-skills-factory"}, {"status", "ok"}});
   HealthProbeTestServer web_ui_server(
-      json{{"service", "comet-controller"}, {"status", "ok"}});
+      json{{"service", "naim-controller"}, {"status", "ok"}});
   const fs::path web_ui_root =
-      fs::temp_directory_path() / "comet-dashboard-service-tests" / "healthy-web-ui";
+      fs::temp_directory_path() / "naim-dashboard-service-tests" / "healthy-web-ui";
   WriteWebUiState(web_ui_root, ParseControllerEndpointTarget(web_ui_server.url()).port, true, true, "running");
 
-  ScopedEnvVar admin_upstream("COMET_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
-  ScopedEnvVar internal_upstream("COMET_CONTROLLER_INTERNAL_UPSTREAM", std::nullopt);
+  ScopedEnvVar admin_upstream("NAIM_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
+  ScopedEnvVar internal_upstream("NAIM_CONTROLLER_INTERNAL_UPSTREAM", std::nullopt);
   ScopedEnvVar skills_factory_upstream(
-      "COMET_SKILLS_FACTORY_UPSTREAM",
+      "NAIM_SKILLS_FACTORY_UPSTREAM",
       skills_factory_server.url());
-  ScopedEnvVar web_ui_root_env("COMET_WEB_UI_ROOT", web_ui_root.string());
-  ScopedEnvVar hostd_node("COMET_HOSTD_NODE_NAME", std::string("local-hostd"));
+  ScopedEnvVar web_ui_root_env("NAIM_WEB_UI_ROOT", web_ui_root.string());
+  ScopedEnvVar hostd_node("NAIM_HOSTD_NODE_NAME", std::string("local-hostd"));
 
   const auto payload = MakeDashboardService().BuildPayload(db_path, 300, std::nullopt);
   const auto& items = payload.at("self_services").at("items");
@@ -419,7 +419,7 @@ void TestHealthySelfServicesPayload() {
 
 void TestHostdStaleHeartbeatWarning() {
   const auto db_path = MakeTempDbPath("hostd-stale");
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   SeedHostRecord(
       store,
@@ -429,11 +429,11 @@ void TestHostdStaleHeartbeatWarning() {
       "2000-01-01 00:00:00",
       "2000-01-01 00:00:00");
 
-  ScopedEnvVar admin_upstream("COMET_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
-  ScopedEnvVar internal_upstream("COMET_CONTROLLER_INTERNAL_UPSTREAM", std::nullopt);
-  ScopedEnvVar skills_factory_upstream("COMET_SKILLS_FACTORY_UPSTREAM", std::nullopt);
-  ScopedEnvVar web_ui_root_env("COMET_WEB_UI_ROOT", std::nullopt);
-  ScopedEnvVar hostd_node("COMET_HOSTD_NODE_NAME", std::string("local-hostd"));
+  ScopedEnvVar admin_upstream("NAIM_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
+  ScopedEnvVar internal_upstream("NAIM_CONTROLLER_INTERNAL_UPSTREAM", std::nullopt);
+  ScopedEnvVar skills_factory_upstream("NAIM_SKILLS_FACTORY_UPSTREAM", std::nullopt);
+  ScopedEnvVar web_ui_root_env("NAIM_WEB_UI_ROOT", std::nullopt);
+  ScopedEnvVar hostd_node("NAIM_HOSTD_NODE_NAME", std::string("local-hostd"));
 
   const auto payload = MakeDashboardService().BuildPayload(db_path, 300, std::nullopt);
   Expect(
@@ -444,22 +444,22 @@ void TestHostdStaleHeartbeatWarning() {
 
 void TestWebUiMissingStateCritical() {
   const auto db_path = MakeTempDbPath("web-ui-missing");
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
-  const comet::controller::ControllerRuntimeSupportService runtime_support_service;
+  const naim::controller::ControllerRuntimeSupportService runtime_support_service;
   const std::string now = runtime_support_service.UtcNowSqlTimestamp();
   SeedHostRecord(store, "local-hostd", "registered", "connected", now, now);
 
   const fs::path missing_root =
-      fs::temp_directory_path() / "comet-dashboard-service-tests" / "missing-web-ui";
+      fs::temp_directory_path() / "naim-dashboard-service-tests" / "missing-web-ui";
   std::error_code error;
   fs::remove_all(missing_root, error);
 
-  ScopedEnvVar admin_upstream("COMET_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
-  ScopedEnvVar internal_upstream("COMET_CONTROLLER_INTERNAL_UPSTREAM", std::nullopt);
-  ScopedEnvVar skills_factory_upstream("COMET_SKILLS_FACTORY_UPSTREAM", std::nullopt);
-  ScopedEnvVar web_ui_root_env("COMET_WEB_UI_ROOT", missing_root.string());
-  ScopedEnvVar hostd_node("COMET_HOSTD_NODE_NAME", std::string("local-hostd"));
+  ScopedEnvVar admin_upstream("NAIM_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
+  ScopedEnvVar internal_upstream("NAIM_CONTROLLER_INTERNAL_UPSTREAM", std::nullopt);
+  ScopedEnvVar skills_factory_upstream("NAIM_SKILLS_FACTORY_UPSTREAM", std::nullopt);
+  ScopedEnvVar web_ui_root_env("NAIM_WEB_UI_ROOT", missing_root.string());
+  ScopedEnvVar hostd_node("NAIM_HOSTD_NODE_NAME", std::string("local-hostd"));
 
   const auto payload = MakeDashboardService().BuildPayload(db_path, 300, std::nullopt);
   const auto web_ui = FindServiceItem(payload, "web-ui");
@@ -472,23 +472,23 @@ void TestWebUiMissingStateCritical() {
 
 void TestSkillsFactoryProbeFailureDoesNotBreakPayload() {
   const auto db_path = MakeTempDbPath("skills-factory-failure");
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
-  const comet::controller::ControllerRuntimeSupportService runtime_support_service;
+  const naim::controller::ControllerRuntimeSupportService runtime_support_service;
   const std::string now = runtime_support_service.UtcNowSqlTimestamp();
   SeedHostRecord(store, "local-hostd", "registered", "connected", now, now);
 
-  ScopedEnvVar admin_upstream("COMET_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
-  ScopedEnvVar internal_upstream("COMET_CONTROLLER_INTERNAL_UPSTREAM", std::nullopt);
+  ScopedEnvVar admin_upstream("NAIM_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
+  ScopedEnvVar internal_upstream("NAIM_CONTROLLER_INTERNAL_UPSTREAM", std::nullopt);
   ScopedEnvVar skills_factory_upstream(
-      "COMET_SKILLS_FACTORY_UPSTREAM",
+      "NAIM_SKILLS_FACTORY_UPSTREAM",
       std::string("http://127.0.0.1:9"));
-  ScopedEnvVar web_ui_root_env("COMET_WEB_UI_ROOT", std::nullopt);
-  ScopedEnvVar hostd_node("COMET_HOSTD_NODE_NAME", std::string("local-hostd"));
+  ScopedEnvVar web_ui_root_env("NAIM_WEB_UI_ROOT", std::nullopt);
+  ScopedEnvVar hostd_node("NAIM_HOSTD_NODE_NAME", std::string("local-hostd"));
 
   const auto payload = MakeDashboardService().BuildPayload(db_path, 300, std::nullopt);
   Expect(
-      payload.at("service").get<std::string>() == "comet-controller",
+      payload.at("service").get<std::string>() == "naim-controller",
       "dashboard payload should still be produced when the skills factory probe fails");
   Expect(
       FindServiceItem(payload, "skills-factory").at("health").get<std::string>() == "critical",
@@ -497,38 +497,38 @@ void TestSkillsFactoryProbeFailureDoesNotBreakPayload() {
 }
 
 void TestRuntimePayloadIncludesKvCacheBytes() {
-  const comet::controller::ControllerRuntimeSupportService runtime_support_service;
+  const naim::controller::ControllerRuntimeSupportService runtime_support_service;
   const std::string now = runtime_support_service.UtcNowSqlTimestamp();
 
-  comet::NodeInventory node;
+  naim::NodeInventory node;
   node.name = "node-a";
   node.gpu_devices = {"0"};
 
-  comet::DesiredState desired_state;
+  naim::DesiredState desired_state;
   desired_state.plane_name = "plane-a";
   desired_state.nodes.push_back(node);
 
-  comet::HostObservation observation;
+  naim::HostObservation observation;
   observation.node_name = "node-a";
   observation.plane_name = desired_state.plane_name;
-  observation.status = comet::HostObservationStatus::Applied;
+  observation.status = naim::HostObservationStatus::Applied;
   observation.heartbeat_at = now;
 
-  comet::RuntimeStatus runtime_status;
+  naim::RuntimeStatus runtime_status;
   runtime_status.plane_name = desired_state.plane_name;
   runtime_status.runtime_backend = "llama-rpc-head";
   runtime_status.runtime_phase = "running";
   runtime_status.launch_ready = true;
   runtime_status.kv_cache_bytes = 3ULL * 1024ULL * 1024ULL * 1024ULL;
-  observation.runtime_status_json = comet::SerializeRuntimeStatusJson(runtime_status);
+  observation.runtime_status_json = naim::SerializeRuntimeStatusJson(runtime_status);
 
-  std::map<std::string, comet::NodeInventory> dashboard_nodes;
+  std::map<std::string, naim::NodeInventory> dashboard_nodes;
   dashboard_nodes.emplace(node.name, node);
-  std::map<std::string, comet::HostObservation> observation_by_node;
+  std::map<std::string, naim::HostObservation> observation_by_node;
   observation_by_node.emplace(observation.node_name, observation);
-  const std::map<std::string, comet::NodeAvailabilityOverride> availability_override_map;
+  const std::map<std::string, naim::NodeAvailabilityOverride> availability_override_map;
 
-  const auto nodes_payload = comet::controller::DashboardService::BuildNodesPayload(
+  const auto nodes_payload = naim::controller::DashboardService::BuildNodesPayload(
       dashboard_nodes,
       observation_by_node,
       availability_override_map,
@@ -544,14 +544,14 @@ void TestRuntimePayloadIncludesKvCacheBytes() {
       [&](const std::optional<long long>& age_seconds, int stale_after_seconds) {
         return runtime_support_service.HealthFromAge(age_seconds, stale_after_seconds);
       },
-      [&](const std::map<std::string, comet::NodeAvailabilityOverride>& overrides,
+      [&](const std::map<std::string, naim::NodeAvailabilityOverride>& overrides,
           const std::string& node_name) {
         return runtime_support_service.ResolveNodeAvailability(overrides, node_name);
       },
-      [&](const comet::HostObservation& value) {
+      [&](const naim::HostObservation& value) {
         return runtime_support_service.ParseRuntimeStatus(value);
       },
-      [](const comet::HostObservation&) -> std::optional<comet::GpuTelemetrySnapshot> {
+      [](const naim::HostObservation&) -> std::optional<naim::GpuTelemetrySnapshot> {
         return std::nullopt;
       });
 
@@ -565,7 +565,7 @@ void TestRuntimePayloadIncludesKvCacheBytes() {
           *nodes_payload.kv_cache_bytes == *runtime_status.kv_cache_bytes,
       "nodes payload should aggregate kv_cache_bytes");
 
-  const auto runtime_payload = comet::controller::DashboardService::BuildRuntimePayload(
+  const auto runtime_payload = naim::controller::DashboardService::BuildRuntimePayload(
       nodes_payload.observed_nodes,
       nodes_payload.ready_nodes,
       nodes_payload.not_ready_nodes,
@@ -579,38 +579,38 @@ void TestRuntimePayloadIncludesKvCacheBytes() {
 }
 
 void TestPlaneScopedNodesIgnoreForeignRuntimeStatus() {
-  const comet::controller::ControllerRuntimeSupportService runtime_support_service;
+  const naim::controller::ControllerRuntimeSupportService runtime_support_service;
   const std::string now = runtime_support_service.UtcNowSqlTimestamp();
 
-  comet::NodeInventory node;
+  naim::NodeInventory node;
   node.name = "node-a";
   node.gpu_devices = {"0"};
 
-  comet::DesiredState desired_state;
+  naim::DesiredState desired_state;
   desired_state.plane_name = "maglev";
   desired_state.nodes.push_back(node);
 
-  comet::HostObservation observation;
+  naim::HostObservation observation;
   observation.node_name = "node-a";
-  observation.status = comet::HostObservationStatus::Applied;
+  observation.status = naim::HostObservationStatus::Applied;
   observation.heartbeat_at = now;
 
-  comet::RuntimeStatus foreign_runtime_status;
+  naim::RuntimeStatus foreign_runtime_status;
   foreign_runtime_status.plane_name = "lt-cypher-ai";
   foreign_runtime_status.instance_name = "infer-lt-cypher-ai";
   foreign_runtime_status.runtime_backend = "llama-rpc-head";
   foreign_runtime_status.runtime_phase = "running";
   foreign_runtime_status.launch_ready = true;
   observation.runtime_status_json =
-      comet::SerializeRuntimeStatusJson(foreign_runtime_status);
+      naim::SerializeRuntimeStatusJson(foreign_runtime_status);
 
-  std::map<std::string, comet::NodeInventory> dashboard_nodes;
+  std::map<std::string, naim::NodeInventory> dashboard_nodes;
   dashboard_nodes.emplace(node.name, node);
-  std::map<std::string, comet::HostObservation> observation_by_node;
+  std::map<std::string, naim::HostObservation> observation_by_node;
   observation_by_node.emplace(observation.node_name, observation);
-  const std::map<std::string, comet::NodeAvailabilityOverride> availability_override_map;
+  const std::map<std::string, naim::NodeAvailabilityOverride> availability_override_map;
 
-  const auto nodes_payload = comet::controller::DashboardService::BuildNodesPayload(
+  const auto nodes_payload = naim::controller::DashboardService::BuildNodesPayload(
       dashboard_nodes,
       observation_by_node,
       availability_override_map,
@@ -626,14 +626,14 @@ void TestPlaneScopedNodesIgnoreForeignRuntimeStatus() {
       [&](const std::optional<long long>& age_seconds, int stale_after_seconds) {
         return runtime_support_service.HealthFromAge(age_seconds, stale_after_seconds);
       },
-      [&](const std::map<std::string, comet::NodeAvailabilityOverride>& overrides,
+      [&](const std::map<std::string, naim::NodeAvailabilityOverride>& overrides,
           const std::string& node_name) {
         return runtime_support_service.ResolveNodeAvailability(overrides, node_name);
       },
-      [&](const comet::HostObservation& value) {
+      [&](const naim::HostObservation& value) {
         return runtime_support_service.ParseRuntimeStatus(value);
       },
-      [](const comet::HostObservation&) -> std::optional<comet::GpuTelemetrySnapshot> {
+      [](const naim::HostObservation&) -> std::optional<naim::GpuTelemetrySnapshot> {
         return std::nullopt;
       });
 
@@ -649,54 +649,54 @@ void TestPlaneScopedNodesIgnoreForeignRuntimeStatus() {
 }
 
 void TestPlanePayloadExposesPlacementFirstTargets() {
-  comet::DesiredState desired_state;
+  naim::DesiredState desired_state;
   desired_state.plane_name = "placement-plane";
-  desired_state.plane_mode = comet::PlaneMode::Llm;
+  desired_state.plane_mode = naim::PlaneMode::Llm;
   desired_state.placement_target = std::string("node:worker-a");
-  desired_state.app_host = comet::ExternalAppHostConfig{
+  desired_state.app_host = naim::ExternalAppHostConfig{
       "10.0.0.15",
       std::optional<std::string>("/tmp/id_ed25519"),
       std::nullopt,
       std::nullopt,
   };
-  desired_state.skills = comet::SkillsSettings{true, {"skill-a"}};
+  desired_state.skills = naim::SkillsSettings{true, {"skill-a"}};
 
-  comet::NodeInventory node;
+  naim::NodeInventory node;
   node.name = "worker-a";
   desired_state.nodes.push_back(node);
 
-  comet::InstanceSpec infer;
+  naim::InstanceSpec infer;
   infer.name = "infer-placement-plane";
-  infer.role = comet::InstanceRole::Infer;
+  infer.role = naim::InstanceRole::Infer;
   infer.node_name = "worker-a";
   desired_state.instances.push_back(infer);
 
-  comet::InstanceSpec worker;
+  naim::InstanceSpec worker;
   worker.name = "worker-placement-plane";
-  worker.role = comet::InstanceRole::Worker;
+  worker.role = naim::InstanceRole::Worker;
   worker.node_name = "worker-a";
   desired_state.instances.push_back(worker);
 
-  comet::InstanceSpec app;
+  naim::InstanceSpec app;
   app.name = "app-placement-plane";
-  app.role = comet::InstanceRole::App;
+  app.role = naim::InstanceRole::App;
   app.node_name = "worker-a";
   desired_state.instances.push_back(app);
 
-  comet::InstanceSpec skills;
+  naim::InstanceSpec skills;
   skills.name = "skills-placement-plane";
-  skills.role = comet::InstanceRole::Skills;
+  skills.role = naim::InstanceRole::Skills;
   skills.node_name = "worker-a";
   desired_state.instances.push_back(skills);
 
-  comet::PlaneRecord plane_record;
+  naim::PlaneRecord plane_record;
   plane_record.name = "placement-plane";
   plane_record.plane_mode = "llm";
   plane_record.generation = 3;
   plane_record.applied_generation = 2;
   plane_record.state = "running";
 
-  const auto payload = comet::controller::DashboardService::BuildPlanePayload(
+  const auto payload = naim::controller::DashboardService::BuildPlanePayload(
       desired_state,
       3,
       plane_record,
@@ -727,36 +727,36 @@ void TestPlanePayloadExposesPlacementFirstTargets() {
       "skills runtime should follow the app host");
   Expect(
       FindPlaneServiceTarget(placement, "skills-factory").at("target").get<std::string>() ==
-          "comet-controller",
-      "skills factory should stay on comet");
+          "naim-controller",
+      "skills factory should stay on naim");
   std::cout << "ok: plane-payload-exposes-placement-first-targets" << '\n';
 }
 
 void TestPlanePayloadExposesLegacyCompatibilityMode() {
-  comet::DesiredState desired_state;
+  naim::DesiredState desired_state;
   desired_state.plane_name = "legacy-plane";
-  desired_state.plane_mode = comet::PlaneMode::Llm;
+  desired_state.plane_mode = naim::PlaneMode::Llm;
 
-  comet::NodeInventory infer_node;
+  naim::NodeInventory infer_node;
   infer_node.name = "controller-node";
   desired_state.nodes.push_back(infer_node);
-  comet::NodeInventory worker_node;
+  naim::NodeInventory worker_node;
   worker_node.name = "worker-node-a";
   desired_state.nodes.push_back(worker_node);
 
-  comet::InstanceSpec infer;
+  naim::InstanceSpec infer;
   infer.name = "infer-legacy-plane";
-  infer.role = comet::InstanceRole::Infer;
+  infer.role = naim::InstanceRole::Infer;
   infer.node_name = "controller-node";
   desired_state.instances.push_back(infer);
 
-  comet::InstanceSpec worker;
+  naim::InstanceSpec worker;
   worker.name = "worker-legacy-plane";
-  worker.role = comet::InstanceRole::Worker;
+  worker.role = naim::InstanceRole::Worker;
   worker.node_name = "worker-node-a";
   desired_state.instances.push_back(worker);
 
-  const auto payload = comet::controller::DashboardService::BuildPlanePayload(
+  const auto payload = naim::controller::DashboardService::BuildPlanePayload(
       desired_state,
       1,
       std::nullopt,

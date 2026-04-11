@@ -16,7 +16,7 @@ void Expect(bool condition, const std::string& message) {
 
 int main() {
   try {
-    const comet::hostd::HostdCommandSupport support;
+    const naim::hostd::HostdCommandSupport support;
     Expect(support.Trim("  hello \n") == "hello", "Trim should strip outer whitespace");
     Expect(
         support.ShellQuote("a'b") == "'a'\"'\"'b'",

@@ -13,7 +13,7 @@
 #include "http/controller_http_transport.h"
 #include "skills/plane_skills_target_resolver.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -760,4 +760,4 @@ nlohmann::json PlaneSkillContextualResolverService::BuildDebugPayload(
   };
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -2,7 +2,7 @@
 
 #include "app/hostd_composition_root.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdApp::HostdApp(int argc, char** argv) : argc_(argc), argv_(argv) {}
 
@@ -11,4 +11,4 @@ int HostdApp::Run() {
   return composition_root.Run(argc_, argv_);
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

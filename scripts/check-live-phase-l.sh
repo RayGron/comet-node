@@ -32,9 +32,9 @@ require_image() {
 
 if [[ "${skip_image_build}" -eq 0 ]]; then
   (cd "${PWD}/ui/operator-react" && npm run build >/dev/null)
-  docker build -f "${PWD}/runtime/web-ui/Dockerfile" -t comet/web-ui:dev "${PWD}" >/dev/null
+  docker build -f "${PWD}/runtime/web-ui/Dockerfile" -t naim/web-ui:dev "${PWD}" >/dev/null
 else
-  require_image "comet/web-ui:dev"
+  require_image "naim/web-ui:dev"
 fi
 
 wait_for_http() {
@@ -63,7 +63,7 @@ wait_for_match() {
 }
 
 next_port() {
-  "${script_dir}/comet-devtool.sh" free-port
+  "${script_dir}/naim-devtool.sh" free-port
 }
 
 base="${PWD}/var/live-phase-l"
@@ -79,7 +79,7 @@ cleanup() {
     wait "${controller_pid}" >/dev/null 2>&1 || true
   fi
   if [[ -f "${db_path}" ]]; then
-    "${build_dir}/comet-controller" stop-web-ui \
+    "${build_dir}/naim-controller" stop-web-ui \
       --db "${db_path}" \
       --web-ui-root "${web_ui_root}" \
       --compose-mode exec >/dev/null 2>&1 || true
@@ -90,11 +90,11 @@ trap cleanup EXIT
 cmake -E remove_directory "${base}"
 
 controller_port="$(next_port)"
-run_log="/tmp/comet-phase-l-run.log"
+run_log="/tmp/naim-phase-l-run.log"
 
 echo "phase-l-live: install controller"
 install_output="$(
-  COMET_INSTALL_ROOT="${install_root}" \
+  NAIM_INSTALL_ROOT="${install_root}" \
   "${build_dir}/naim-node" install controller \
     --with-hostd \
     --with-web-ui \
@@ -106,7 +106,7 @@ printf '%s' "${install_output}" | grep -F 'installed controller' >/dev/null
 printf '%s' "${install_output}" | grep -F "controller_api_url=http://127.0.0.1:${controller_port}" >/dev/null
 
 echo "phase-l-live: start platform"
-COMET_INSTALL_ROOT="${install_root}" \
+NAIM_INSTALL_ROOT="${install_root}" \
   "${build_dir}/naim-node" run controller \
   --hostd-compose-mode skip \
   --poll-interval-sec 1 >"${run_log}" 2>&1 &
@@ -116,7 +116,7 @@ wait_for_http "http://127.0.0.1:${controller_port}/health"
 wait_for_http "http://127.0.0.1:18081/health"
 
 echo "phase-l-live: web ui reachable"
-curl -fsS "http://127.0.0.1:18081/" | grep -F 'Comet Operator' >/dev/null
+curl -fsS "http://127.0.0.1:18081/" | grep -F 'Naim Operator' >/dev/null
 curl -fsS "http://127.0.0.1:18081/api/v1/planes" | grep -F '"items":[]' >/dev/null
 
 echo "phase-l-live: load first plane through web ui path"
@@ -129,9 +129,9 @@ curl -fsS -X POST \
 
 wait_for_match 80 '"name":"alpha"' curl -fsS "http://127.0.0.1:18081/api/v1/planes"
 wait_for_match 80 '"session_state": "connected"' \
-  "${build_dir}/comet-controller" show-hostd-hosts --db "${db_path}" --node node-a
+  "${build_dir}/naim-controller" show-hostd-hosts --db "${db_path}" --node node-a
 for _ in $(seq 1 80); do
-  observations="$("${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a)"
+  observations="$("${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node node-a)"
   if printf '%s' "${observations}" | grep -F 'applied_generation=1' >/dev/null 2>&1; then
     break
   fi
@@ -144,7 +144,7 @@ if ! printf '%s' "${observations}" | grep -F 'applied_generation=1' >/dev/null 2
   printf '%s' "${observations}" | grep -F 'message=manual heartbeat' >/dev/null
 fi
 for _ in $(seq 1 80); do
-  local_state="$("${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${state_root}/hostd-state")"
+  local_state="$("${build_dir}/naim-hostd" show-local-state --node node-a --state-root "${state_root}/hostd-state")"
   if printf '%s' "${local_state}" | grep -E 'instances=[1-9][0-9]*' >/dev/null 2>&1; then
     break
   fi

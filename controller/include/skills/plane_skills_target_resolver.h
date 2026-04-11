@@ -5,10 +5,10 @@
 #include <utility>
 #include <vector>
 
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 #include "interaction/interaction_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class PlaneSkillsTargetResolver final {
  public:
@@ -19,4 +19,4 @@ class PlaneSkillsTargetResolver final {
   static std::string NormalizeSkillPathSuffix(const std::string& path_suffix);
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

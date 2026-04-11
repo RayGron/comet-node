@@ -16,9 +16,9 @@
 #include "app/hostd_observed_state_snapshot_builder.h"
 #include "app/hostd_runtime_telemetry_support.h"
 #include "app/hostd_system_telemetry_collector.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdReportingSupport final {
  public:
@@ -55,16 +55,16 @@ class HostdReportingSupport final {
   std::map<std::string, int> CaptureServiceHostPids(
       const std::vector<std::string>& service_names) const;
   bool VerifyEvictionAssignment(
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       const std::string& node_name,
       const std::string& state_root,
       const std::string& tagged_message,
       const std::map<std::string, int>& expected_victim_host_pids) const;
-  comet::HostObservation BuildObservedStateSnapshot(
+  naim::HostObservation BuildObservedStateSnapshot(
       const std::string& node_name,
       const std::string& storage_root,
       const std::string& state_root,
-      comet::HostObservationStatus status,
+      naim::HostObservationStatus status,
       const std::string& status_message,
       const std::optional<int>& assignment_id = std::nullopt) const;
 
@@ -80,4 +80,4 @@ class HostdReportingSupport final {
   HostdObservedStateSnapshotBuilder observed_state_snapshot_builder_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

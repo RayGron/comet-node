@@ -5,15 +5,15 @@
 #include <stdexcept>
 #include <utility>
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
-std::optional<comet::HostAssignment> FindLatestHostAssignmentForNodeGeneration(
-    const std::vector<comet::HostAssignment>& assignments,
+std::optional<naim::HostAssignment> FindLatestHostAssignmentForNodeGeneration(
+    const std::vector<naim::HostAssignment>& assignments,
     const std::string& node_name,
     int desired_generation) {
-  std::optional<comet::HostAssignment> result;
+  std::optional<naim::HostAssignment> result;
   for (const auto& assignment : assignments) {
     if (assignment.node_name != node_name ||
         assignment.desired_generation != desired_generation) {
@@ -24,8 +24,8 @@ std::optional<comet::HostAssignment> FindLatestHostAssignmentForNodeGeneration(
   return result;
 }
 
-std::optional<comet::HostObservation> FindHostObservationForNode(
-    const std::vector<comet::HostObservation>& observations,
+std::optional<naim::HostObservation> FindHostObservationForNode(
+    const std::vector<naim::HostObservation>& observations,
     const std::string& node_name) {
   for (const auto& observation : observations) {
     if (observation.node_name == node_name) {
@@ -36,14 +36,14 @@ std::optional<comet::HostObservation> FindHostObservationForNode(
 }
 
 bool AssignmentReferencesRolloutAction(
-    const comet::HostAssignment& assignment,
+    const naim::HostAssignment& assignment,
     int action_id) {
   return assignment.status_message.find(
              "rollout_action_id=" + std::to_string(action_id)) != std::string::npos;
 }
 
 bool HasRolloutEvictionAssignments(
-    const std::vector<comet::HostAssignment>& assignments,
+    const std::vector<naim::HostAssignment>& assignments,
     int action_id) {
   for (const auto& assignment : assignments) {
     if (assignment.assignment_type == "evict-workers" &&
@@ -55,7 +55,7 @@ bool HasRolloutEvictionAssignments(
 }
 
 bool AreRolloutEvictionAssignmentsApplied(
-    const std::vector<comet::HostAssignment>& assignments,
+    const std::vector<naim::HostAssignment>& assignments,
     int action_id) {
   bool found = false;
   for (const auto& assignment : assignments) {
@@ -64,7 +64,7 @@ bool AreRolloutEvictionAssignmentsApplied(
       continue;
     }
     found = true;
-    if (assignment.status != comet::HostAssignmentStatus::Applied) {
+    if (assignment.status != naim::HostAssignmentStatus::Applied) {
       return false;
     }
   }
@@ -86,13 +86,13 @@ bool RolloutPhaseBlocksRebalance(SchedulerRolloutPhase phase) {
   return phase != SchedulerRolloutPhase::RolloutApplied;
 }
 
-bool HostAssignmentBlocksRebalance(const comet::HostAssignment& assignment) {
-  return assignment.status == comet::HostAssignmentStatus::Pending ||
-         assignment.status == comet::HostAssignmentStatus::Claimed;
+bool HostAssignmentBlocksRebalance(const naim::HostAssignment& assignment) {
+  return assignment.status == naim::HostAssignmentStatus::Pending ||
+         assignment.status == naim::HostAssignmentStatus::Claimed;
 }
 
 bool NodeHasBlockingHostAssignment(
-    const std::vector<comet::HostAssignment>& assignments,
+    const std::vector<naim::HostAssignment>& assignments,
     const std::string& node_name) {
   for (const auto& assignment : assignments) {
     if (assignment.node_name == node_name &&
@@ -103,19 +103,19 @@ bool NodeHasBlockingHostAssignment(
   return false;
 }
 
-const comet::InstanceSpec* FindWorkerInstance(
-    const comet::DesiredState& state,
+const naim::InstanceSpec* FindWorkerInstance(
+    const naim::DesiredState& state,
     const std::string& worker_name) {
   for (const auto& instance : state.instances) {
-    if (instance.role == comet::InstanceRole::Worker && instance.name == worker_name) {
+    if (instance.role == naim::InstanceRole::Worker && instance.name == worker_name) {
       return &instance;
     }
   }
   return nullptr;
 }
 
-std::optional<comet::GpuDeviceTelemetry> FindObservedGpuDeviceTelemetry(
-    const std::vector<comet::HostObservation>& observations,
+std::optional<naim::GpuDeviceTelemetry> FindObservedGpuDeviceTelemetry(
+    const std::vector<naim::HostObservation>& observations,
     const std::string& node_name,
     const std::string& gpu_device,
     const SchedulerDomainSupport& domain_support) {
@@ -136,7 +136,7 @@ std::optional<comet::GpuDeviceTelemetry> FindObservedGpuDeviceTelemetry(
 }
 
 bool ObservedGpuDeviceHasForeignProcess(
-    const std::vector<comet::HostObservation>& observations,
+    const std::vector<naim::HostObservation>& observations,
     const std::string& node_name,
     const std::string& gpu_device,
     const std::string& worker_name,
@@ -155,8 +155,8 @@ bool ObservedGpuDeviceHasForeignProcess(
 }
 
 std::optional<std::string> ObservedGpuPlacementGateReason(
-    const std::vector<comet::HostObservation>& observations,
-    const comet::InstanceSpec& worker,
+    const std::vector<naim::HostObservation>& observations,
+    const naim::InstanceSpec& worker,
     const std::string& target_node_name,
     const std::string& target_gpu_device,
     bool moving_to_different_gpu,
@@ -202,12 +202,12 @@ SchedulerDomainService::SchedulerDomainService(
       policy_config_(std::move(policy_config)) {}
 
 std::vector<RolloutLifecycleEntry> SchedulerDomainService::BuildRolloutLifecycleEntries(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     int desired_generation,
-    const std::vector<comet::RolloutActionRecord>& rollout_actions,
-    const std::vector<comet::HostAssignment>& assignments,
-    const std::vector<comet::HostObservation>& observations) const {
-  std::map<std::string, std::vector<comet::RolloutActionRecord>> actions_by_worker;
+    const std::vector<naim::RolloutActionRecord>& rollout_actions,
+    const std::vector<naim::HostAssignment>& assignments,
+    const std::vector<naim::HostObservation>& observations) const {
+  std::map<std::string, std::vector<naim::RolloutActionRecord>> actions_by_worker;
   for (const auto& action : rollout_actions) {
     if (action.desired_generation == desired_generation) {
       actions_by_worker[action.worker_name].push_back(action);
@@ -219,15 +219,15 @@ std::vector<RolloutLifecycleEntry> SchedulerDomainService::BuildRolloutLifecycle
     std::sort(
         actions.begin(),
         actions.end(),
-        [](const comet::RolloutActionRecord& left, const comet::RolloutActionRecord& right) {
+        [](const naim::RolloutActionRecord& left, const naim::RolloutActionRecord& right) {
           if (left.step != right.step) {
             return left.step < right.step;
           }
           return left.id < right.id;
         });
 
-    const comet::RolloutActionRecord* evict_action = nullptr;
-    const comet::RolloutActionRecord* retry_action = nullptr;
+    const naim::RolloutActionRecord* evict_action = nullptr;
+    const naim::RolloutActionRecord* retry_action = nullptr;
     for (const auto& action : actions) {
       if (action.action == "evict-best-effort" && evict_action == nullptr) {
         evict_action = &action;
@@ -251,10 +251,10 @@ std::vector<RolloutLifecycleEntry> SchedulerDomainService::BuildRolloutLifecycle
 
     if (evict_action != nullptr) {
       entry.action_id = evict_action->id;
-      if (evict_action->status == comet::RolloutActionStatus::Pending) {
+      if (evict_action->status == naim::RolloutActionStatus::Pending) {
         entry.phase = SchedulerRolloutPhase::Planned;
         entry.detail = "awaiting eviction enqueue";
-      } else if (evict_action->status == comet::RolloutActionStatus::Acknowledged) {
+      } else if (evict_action->status == naim::RolloutActionStatus::Acknowledged) {
         if (AreRolloutEvictionAssignmentsApplied(assignments, evict_action->id)) {
           entry.phase = SchedulerRolloutPhase::EvictionApplied;
           entry.detail = "eviction assignments applied";
@@ -267,14 +267,14 @@ std::vector<RolloutLifecycleEntry> SchedulerDomainService::BuildRolloutLifecycle
                              ? "eviction acknowledged"
                              : evict_action->status_message;
         }
-      } else if (evict_action->status == comet::RolloutActionStatus::ReadyToRetry) {
+      } else if (evict_action->status == naim::RolloutActionStatus::ReadyToRetry) {
         entry.phase = SchedulerRolloutPhase::EvictionApplied;
         entry.detail = "eviction completed";
       }
     }
 
     if (retry_action != nullptr &&
-        retry_action->status == comet::RolloutActionStatus::ReadyToRetry) {
+        retry_action->status == naim::RolloutActionStatus::ReadyToRetry) {
       entry.phase = SchedulerRolloutPhase::RetryReady;
       entry.action_id = retry_action->id;
       entry.detail = "retry placement can be materialized";
@@ -284,11 +284,11 @@ std::vector<RolloutLifecycleEntry> SchedulerDomainService::BuildRolloutLifecycle
   }
 
   for (const auto& instance : desired_state.instances) {
-    if (instance.role != comet::InstanceRole::Worker) {
+    if (instance.role != naim::InstanceRole::Worker) {
       continue;
     }
-    const auto placement_action_it = instance.labels.find("comet.placement.action");
-    const auto placement_decision_it = instance.labels.find("comet.placement.decision");
+    const auto placement_action_it = instance.labels.find("naim.placement.action");
+    const auto placement_decision_it = instance.labels.find("naim.placement.decision");
     if (placement_action_it == instance.labels.end() ||
         placement_decision_it == instance.labels.end() ||
         placement_action_it->second != "materialized-retry-placement" ||
@@ -314,7 +314,7 @@ std::vector<RolloutLifecycleEntry> SchedulerDomainService::BuildRolloutLifecycle
     const auto target_observation =
         FindHostObservationForNode(observations, instance.node_name);
     if (target_observation.has_value() &&
-        target_observation->status == comet::HostObservationStatus::Failed) {
+        target_observation->status == naim::HostObservationStatus::Failed) {
       entry.phase = SchedulerRolloutPhase::HostFailed;
       entry.detail = "target node observation failed";
     } else if (
@@ -332,14 +332,14 @@ std::vector<RolloutLifecycleEntry> SchedulerDomainService::BuildRolloutLifecycle
       entry.detail = "target runtime reported failed phase";
     } else if (
         target_observation.has_value() &&
-        target_observation->status == comet::HostObservationStatus::Applied &&
+        target_observation->status == naim::HostObservationStatus::Applied &&
         target_observation->applied_generation.has_value() &&
         *target_observation->applied_generation >= desired_generation) {
       entry.phase = SchedulerRolloutPhase::RolloutApplied;
       entry.detail = "target node observed desired generation applied";
     } else if (target_assignment.has_value()) {
       entry.detail =
-          "target node assignment status=" + comet::ToString(target_assignment->status);
+          "target node assignment status=" + naim::ToString(target_assignment->status);
     } else {
       entry.detail = "materialized in desired state";
     }
@@ -358,13 +358,13 @@ std::vector<RolloutLifecycleEntry> SchedulerDomainService::BuildRolloutLifecycle
 
 RebalanceControllerGateSummary
 SchedulerDomainService::BuildRebalanceControllerGateSummary(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     int desired_generation,
-    const std::vector<comet::NodeAvailabilityOverride>& availability_overrides,
+    const std::vector<naim::NodeAvailabilityOverride>& availability_overrides,
     const std::vector<RolloutLifecycleEntry>& rollout_lifecycle_entries,
-    const std::vector<comet::HostAssignment>& assignments,
+    const std::vector<naim::HostAssignment>& assignments,
     const SchedulerRuntimeView& scheduler_runtime,
-    const std::vector<comet::HostObservation>& observations,
+    const std::vector<naim::HostObservation>& observations,
     int stale_after_seconds) const {
   RebalanceControllerGateSummary summary;
   std::set<std::string> active_rollout_workers;
@@ -409,7 +409,7 @@ SchedulerDomainService::BuildRebalanceControllerGateSummary(
       unconverged_nodes.insert(node.name);
       continue;
     }
-    if (observation->status == comet::HostObservationStatus::Failed) {
+    if (observation->status == naim::HostObservationStatus::Failed) {
       unconverged_nodes.insert(node.name);
       continue;
     }
@@ -437,13 +437,13 @@ SchedulerDomainService::BuildRebalanceControllerGateSummary(
 }
 
 std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntries(
-    const comet::DesiredState& state,
-    const comet::SchedulingPolicyReport& scheduling_report,
-    const std::vector<comet::NodeAvailabilityOverride>& availability_overrides,
+    const naim::DesiredState& state,
+    const naim::SchedulingPolicyReport& scheduling_report,
+    const std::vector<naim::NodeAvailabilityOverride>& availability_overrides,
     const std::vector<RolloutLifecycleEntry>& rollout_lifecycle_entries,
-    const std::vector<comet::HostAssignment>& assignments,
+    const std::vector<naim::HostAssignment>& assignments,
     const SchedulerRuntimeView& scheduler_runtime,
-    const std::vector<comet::HostObservation>& observations,
+    const std::vector<naim::HostObservation>& observations,
     int stale_after_seconds,
     const std::optional<std::string>& node_name_filter) const {
   std::vector<RebalancePlanEntry> entries;
@@ -452,7 +452,7 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
     if (worker == nullptr) {
       continue;
     }
-    if (worker->placement_mode == comet::PlacementMode::Manual) {
+    if (worker->placement_mode == naim::PlacementMode::Manual) {
       continue;
     }
     if (node_name_filter.has_value() && worker->node_name != *node_name_filter) {
@@ -480,7 +480,7 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
             availability_override_map,
             recommendation.current_node_name);
     const bool source_requires_exit =
-        source_availability != comet::NodeAvailability::Active;
+        source_availability != naim::NodeAvailability::Active;
 
     const auto worker_runtime_it =
         scheduler_runtime.worker_runtime_by_name.find(recommendation.worker_name);
@@ -536,7 +536,7 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
       continue;
     }
 
-    const comet::PlacementCandidate* selected_candidate = nullptr;
+    const naim::PlacementCandidate* selected_candidate = nullptr;
     if (source_requires_exit) {
       for (const auto& candidate : recommendation.candidates) {
         if (candidate.action == "insufficient-memory" ||
@@ -652,7 +652,7 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
       entry.decision = "hold";
       entry.state = "gated-target";
       entry.gate_reason =
-          target_availability == comet::NodeAvailability::Draining
+          target_availability == naim::NodeAvailability::Draining
               ? "draining-target"
               : "unavailable-target";
       entries.push_back(std::move(entry));
@@ -746,4 +746,4 @@ std::vector<RebalancePlanEntry> SchedulerDomainService::BuildRebalancePlanEntrie
   return entries;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -4,7 +4,7 @@
 #include <ostream>
 #include <string>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 enum class ComposeMode {
   Skip,
@@ -50,4 +50,4 @@ class HostdCommandLine {
   std::string command_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

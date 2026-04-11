@@ -1,6 +1,6 @@
-#include "comet/state/state_json_settings_codecs.h"
+#include "naim/state/state_json_settings_codecs.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -338,4 +338,4 @@ ExternalAppHostConfig StateJsonSettingsCodecs::ExternalAppHostConfigFromJson(
   return app_host;
 }
 
-}  // namespace comet
+}  // namespace naim

@@ -9,7 +9,7 @@
 #include "app/controller_scheduler_service_builder.h"
 #include "app/controller_main_includes.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 SchedulerService BuildControllerSchedulerService(
     const std::string& db_path,
@@ -18,9 +18,9 @@ SchedulerService BuildControllerSchedulerService(
       db_path, artifacts_root);
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller
 
-namespace comet::controller::component_factory_support {
+namespace naim::controller::component_factory_support {
 
 using nlohmann::json;
 
@@ -59,7 +59,7 @@ std::unique_ptr<ISchedulerService> CreateSchedulerService(
 std::unique_ptr<IWebUiService> CreateWebUiService(const std::string& db_path) {
   return std::make_unique<WebUiService>(
       db_path,
-      [](comet::ControllerStore& store,
+      [](naim::ControllerStore& store,
           const std::string& event_type,
           const std::string& message,
           const json& payload) {
@@ -116,4 +116,4 @@ SchedulerHttpService CreateSchedulerHttpService(
       read_model_service);
 }
 
-}  // namespace comet::controller::component_factory_support
+}  // namespace naim::controller::component_factory_support

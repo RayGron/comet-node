@@ -26,8 +26,8 @@ std::string ReadFile(const std::filesystem::path& path) {
 int main() {
   try {
     namespace fs = std::filesystem;
-    const comet::hostd::HostdFileSupport support;
-    const fs::path temp_root = fs::temp_directory_path() / "comet-hostd-file-support-tests";
+    const naim::hostd::HostdFileSupport support;
+    const fs::path temp_root = fs::temp_directory_path() / "naim-hostd-file-support-tests";
     std::error_code cleanup_error;
     fs::remove_all(temp_root, cleanup_error);
 

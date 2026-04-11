@@ -10,9 +10,9 @@
 #include <string>
 #include <thread>
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdDiskRuntimeSupport::HostdDiskRuntimeSupport(
     const HostdCommandSupport& command_support,
@@ -60,10 +60,10 @@ std::string HostdDiskRuntimeSupport::SanitizeDiskPathComponent(
 }
 
 std::string HostdDiskRuntimeSupport::ManagedDiskImagePath(
-    const comet::DiskSpec& disk,
+    const naim::DiskSpec& disk,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root) const {
-  if (disk.kind == comet::DiskKind::PlaneShared) {
+  if (disk.kind == naim::DiskKind::PlaneShared) {
     const std::filesystem::path base(
         path_support_.RebaseManagedPath(
             std::string(HostdDesiredStatePathSupport::kDefaultManagedStorageRoot) +
@@ -85,7 +85,7 @@ std::string HostdDiskRuntimeSupport::ManagedDiskImagePath(
               "/disk-images",
           storage_root,
           runtime_root,
-          comet::IsNodeLocalDiskKind(disk.kind) ? std::optional<std::string>(disk.node_name)
+          naim::IsNodeLocalDiskKind(disk.kind) ? std::optional<std::string>(disk.node_name)
                                                 : std::nullopt));
   return (
       base /
@@ -100,8 +100,8 @@ void HostdDiskRuntimeSupport::EnsureDiskDirectory(
     const std::string& disk_key) const {
   std::filesystem::create_directories(path);
   file_support_.WriteTextFile(
-      (std::filesystem::path(path) / ".comet-disk-info").string(),
-      "disk=" + disk_key + "\nmanaged_by=comet-hostd\n");
+      (std::filesystem::path(path) / ".naim-disk-info").string(),
+      "disk=" + disk_key + "\nmanaged_by=naim-hostd\n");
 }
 
 void HostdDiskRuntimeSupport::RemoveDiskDirectory(
@@ -119,7 +119,7 @@ void HostdDiskRuntimeSupport::RemoveDiskDirectory(
       std::filesystem::exists(disk_path) &&
       disk_path.has_parent_path()) {
     const std::filesystem::path parent = disk_path.parent_path();
-    const std::string helper_image = "comet/base-runtime:dev";
+    const std::string helper_image = "naim/base-runtime:dev";
     const std::string docker = command_support_.ResolvedDockerCommand();
     if (!command_support_.RunCommandOk(
             docker + " image inspect " + command_support_.ShellQuote(helper_image) +
@@ -146,7 +146,7 @@ void HostdDiskRuntimeSupport::RemoveDiskDirectory(
 }
 
 bool HostdDiskRuntimeSupport::HostCanManageRealDisks() const {
-  return comet::platform::HasElevatedPrivileges();
+  return naim::platform::HasElevatedPrivileges();
 }
 
 std::string HostdDiskRuntimeSupport::NormalizeManagedPath(const std::string& path) const {
@@ -284,11 +284,11 @@ bool HostdDiskRuntimeSupport::IsSharedManagedDiskImagePath(
          image_path.find("/shared/") != std::string::npos;
 }
 
-comet::DiskRuntimeState HostdDiskRuntimeSupport::BuildDiskRuntimeState(
-    const comet::DiskSpec& disk,
+naim::DiskRuntimeState HostdDiskRuntimeSupport::BuildDiskRuntimeState(
+    const naim::DiskSpec& disk,
     const std::string& runtime_state,
     const std::string& status_message) const {
-  comet::DiskRuntimeState state;
+  naim::DiskRuntimeState state;
   state.disk_name = disk.name;
   state.plane_name = disk.plane_name;
   state.node_name = disk.node_name;
@@ -299,11 +299,11 @@ comet::DiskRuntimeState HostdDiskRuntimeSupport::BuildDiskRuntimeState(
   return state;
 }
 
-comet::DiskRuntimeState HostdDiskRuntimeSupport::EnsureRealDiskMount(
-    const comet::DiskSpec& disk,
+naim::DiskRuntimeState HostdDiskRuntimeSupport::EnsureRealDiskMount(
+    const naim::DiskSpec& disk,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root) const {
-  comet::DiskRuntimeState runtime_state;
+  naim::DiskRuntimeState runtime_state;
   runtime_state.disk_name = disk.name;
   runtime_state.plane_name = disk.plane_name;
   runtime_state.node_name = disk.node_name;
@@ -320,7 +320,7 @@ comet::DiskRuntimeState HostdDiskRuntimeSupport::EnsureRealDiskMount(
 
   runtime_state.filesystem_type = DetectFilesystemTypeForDevice(runtime_state.loop_device);
   if (runtime_state.filesystem_type.empty() && image_preexisting &&
-      disk.kind == comet::DiskKind::PlaneShared) {
+      disk.kind == naim::DiskKind::PlaneShared) {
     for (int attempt = 0; attempt < 15; ++attempt) {
       std::this_thread::sleep_for(std::chrono::seconds(2));
       runtime_state.filesystem_type = DetectFilesystemTypeForDevice(runtime_state.loop_device);
@@ -378,19 +378,19 @@ comet::DiskRuntimeState HostdDiskRuntimeSupport::EnsureRealDiskMount(
   }
 
   file_support_.WriteTextFile(
-      (std::filesystem::path(runtime_state.mount_point) / ".comet-disk-info").string(),
-      "disk=" + disk.name + "@" + disk.node_name + "\nmanaged_by=comet-hostd\nrealized=mounted\n");
+      (std::filesystem::path(runtime_state.mount_point) / ".naim-disk-info").string(),
+      "disk=" + disk.name + "@" + disk.node_name + "\nmanaged_by=naim-hostd\nrealized=mounted\n");
   runtime_state.mounted_at = "mounted";
   runtime_state.runtime_state = "mounted";
   runtime_state.status_message = "real mounted disk lifecycle applied by hostd";
   return runtime_state;
 }
 
-comet::DiskRuntimeState HostdDiskRuntimeSupport::InspectRealDiskRuntime(
-    const comet::DiskSpec& disk,
+naim::DiskRuntimeState HostdDiskRuntimeSupport::InspectRealDiskRuntime(
+    const naim::DiskSpec& disk,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root) const {
-  comet::DiskRuntimeState runtime_state;
+  naim::DiskRuntimeState runtime_state;
   runtime_state.disk_name = disk.name;
   runtime_state.plane_name = disk.plane_name;
   runtime_state.node_name = disk.node_name;
@@ -447,8 +447,8 @@ comet::DiskRuntimeState HostdDiskRuntimeSupport::InspectRealDiskRuntime(
   return runtime_state;
 }
 
-std::optional<comet::DiskSpec> HostdDiskRuntimeSupport::FindDiskInStateByKey(
-    const std::optional<comet::DesiredState>& state,
+std::optional<naim::DiskSpec> HostdDiskRuntimeSupport::FindDiskInStateByKey(
+    const std::optional<naim::DesiredState>& state,
     const std::string& disk_key) const {
   if (!state.has_value()) {
     return std::nullopt;
@@ -470,8 +470,8 @@ std::pair<std::string, std::string> HostdDiskRuntimeSupport::SplitDiskKey(
   return {disk_key.substr(0, at), disk_key.substr(at + 1)};
 }
 
-comet::DiskRuntimeState HostdDiskRuntimeSupport::EnsureDesiredDiskRuntimeState(
-    const comet::DiskSpec& disk,
+naim::DiskRuntimeState HostdDiskRuntimeSupport::EnsureDesiredDiskRuntimeState(
+    const naim::DiskSpec& disk,
     const std::string& disk_key,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root) const {
@@ -497,7 +497,7 @@ comet::DiskRuntimeState HostdDiskRuntimeSupport::EnsureDesiredDiskRuntimeState(
 
 void HostdDiskRuntimeSupport::PersistDiskRuntimeStateForDesiredDisks(
     HostdBackend* backend,
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
     const std::string& status_message) const {
@@ -518,7 +518,7 @@ void HostdDiskRuntimeSupport::PersistDiskRuntimeStateForDesiredDisks(
 
 void HostdDiskRuntimeSupport::EnsureDesiredDisksReady(
     HostdBackend* backend,
-    const comet::DesiredState& desired_node_state,
+    const naim::DesiredState& desired_node_state,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root) const {
   for (const auto& disk : desired_node_state.disks) {
@@ -536,13 +536,13 @@ void HostdDiskRuntimeSupport::EnsureDesiredDisksReady(
 
 void HostdDiskRuntimeSupport::PersistDiskRuntimeStateForRemovedDisks(
     HostdBackend* backend,
-    const std::optional<comet::DesiredState>& previous_state,
-    const comet::NodeExecutionPlan& execution_plan) const {
+    const std::optional<naim::DesiredState>& previous_state,
+    const naim::NodeExecutionPlan& execution_plan) const {
   if (backend == nullptr) {
     return;
   }
   for (const auto& operation : execution_plan.operations) {
-    if (operation.kind != comet::HostOperationKind::RemoveDisk) {
+    if (operation.kind != naim::HostOperationKind::RemoveDisk) {
       continue;
     }
     const auto [disk_name, disk_node_name] = SplitDiskKey(operation.target);
@@ -563,7 +563,7 @@ void HostdDiskRuntimeSupport::PersistDiskRuntimeStateForRemovedDisks(
 }
 
 void HostdDiskRuntimeSupport::RemoveRealDiskMount(
-    const comet::DiskRuntimeState& runtime_state,
+    const naim::DiskRuntimeState& runtime_state,
     const std::optional<std::string>& runtime_root) const {
   bool shared_image_removal_deferred = false;
   std::optional<std::string> mounted_source;
@@ -633,4 +633,4 @@ void HostdDiskRuntimeSupport::RemoveRealDiskMount(
   }
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -9,7 +9,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 #include "infra/controller_request_support.h"
 #include "model/model_library_service.h"
 
@@ -45,8 +45,8 @@ void WriteExecutableScript(const fs::path& path, const std::string& body) {
       fs::perm_options::replace);
 }
 
-comet::ModelLibraryDownloadJobRecord WaitForJobStatus(
-    comet::ControllerStore& store,
+naim::ModelLibraryDownloadJobRecord WaitForJobStatus(
+    naim::ControllerStore& store,
     const std::string& job_id,
     const std::string& expected_status) {
   for (int attempt = 0; attempt < 80; ++attempt) {
@@ -73,12 +73,12 @@ HttpRequest JsonRequest(
 }
 
 void UpsertHost(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& node_name,
     const std::string& derived_role,
     const fs::path& storage_root,
     std::uint64_t free_bytes) {
-  comet::RegisteredHostRecord host;
+  naim::RegisteredHostRecord host;
   host.node_name = node_name;
   host.registration_state = "registered";
   host.session_state = "connected";
@@ -101,7 +101,7 @@ void UpsertHost(
 
 int main() {
   try {
-    const fs::path temp_root = fs::temp_directory_path() / "comet-model-library-tests";
+    const fs::path temp_root = fs::temp_directory_path() / "naim-model-library-tests";
     const fs::path db_path = temp_root / "controller.sqlite";
     const fs::path src_root = temp_root / "src";
     const fs::path dst_root = temp_root / "dst";
@@ -149,11 +149,11 @@ int main() {
         fake_quantize_fail,
         "#!/bin/sh\n"
         "exit 17\n");
-    setenv("COMET_MODEL_LIBRARY_PYTHON", "/bin/sh", 1);
-    setenv("COMET_MODEL_LIBRARY_CONVERT_SCRIPT", fake_convert.string().c_str(), 1);
-    setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize.string().c_str(), 1);
+    setenv("NAIM_MODEL_LIBRARY_PYTHON", "/bin/sh", 1);
+    setenv("NAIM_MODEL_LIBRARY_CONVERT_SCRIPT", fake_convert.string().c_str(), 1);
+    setenv("NAIM_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize.string().c_str(), 1);
 
-    comet::ControllerStore store(db_path.string());
+    naim::ControllerStore store(db_path.string());
     store.Initialize();
     UpsertHost(
         store,
@@ -174,7 +174,7 @@ int main() {
         temp_root / "storage-low",
         4);
     const std::string now = "2026-03-30 00:00:00";
-    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+    store.UpsertModelLibraryDownloadJob(naim::ModelLibraryDownloadJobRecord{
         .id = "job-1",
         .status = "queued",
         .phase = "queued",
@@ -200,7 +200,7 @@ int main() {
         .updated_at = now,
     });
 
-    comet::controller::ControllerRequestSupport request_support;
+    naim::controller::ControllerRequestSupport request_support;
     ModelLibraryService service{ModelLibrarySupport(request_support)};
     const auto payload = service.BuildPayload(db_path.string());
     Expect(payload.at("jobs").is_array(), "jobs payload should be an array");
@@ -317,7 +317,7 @@ int main() {
     Expect(found_worker, "selected model should be marked as skills_factory_worker");
 
     const fs::path second_target_path = dst_root / "resume.gguf";
-    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+    store.UpsertModelLibraryDownloadJob(naim::ModelLibraryDownloadJobRecord{
         .id = "job-2",
         .status = "queued",
         .phase = "queued",
@@ -437,7 +437,7 @@ int main() {
     const fs::path recovered_target = recovered_dir / "recovered.gguf";
     const fs::path recovered_part = recovered_dir / "recovered.gguf.part";
     const fs::path recovered_metadata =
-        recovered_dir / ".comet-model-job-job-3.json";
+        recovered_dir / ".naim-model-job-job-3.json";
     fs::create_directories(recovered_dir);
     {
       std::ofstream out(recovered_part);
@@ -470,10 +470,10 @@ int main() {
           {"updated_at", now},
       }.dump(2);
     }
-    setenv("COMET_NODE_MODEL_LIBRARY_ROOTS", dst_root.string().c_str(), 1);
+    setenv("NAIM_NODE_MODEL_LIBRARY_ROOTS", dst_root.string().c_str(), 1);
     ModelLibraryService recovery_service{ModelLibrarySupport(request_support)};
     const auto recovered_payload = recovery_service.BuildPayload(db_path.string());
-    unsetenv("COMET_NODE_MODEL_LIBRARY_ROOTS");
+    unsetenv("NAIM_NODE_MODEL_LIBRARY_ROOTS");
     auto recovered_job = store.LoadModelLibraryDownloadJob("job-3");
     Expect(recovered_job.has_value(), "metadata-backed job should be restored into the database");
     Expect(recovered_job->status == "stopped", "restored metadata job should preserve status");
@@ -510,7 +510,7 @@ int main() {
       input.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
       out.write(prefix.data(), static_cast<std::streamsize>(input.gcount()));
     }
-    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+    store.UpsertModelLibraryDownloadJob(naim::ModelLibraryDownloadJobRecord{
         .id = "job-5",
         .status = "stopped",
         .phase = "stopped",
@@ -573,7 +573,7 @@ int main() {
       std::ofstream out(part1);
       out << "multipart-part-1";
     }
-    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+    store.UpsertModelLibraryDownloadJob(naim::ModelLibraryDownloadJobRecord{
         .id = "job-4",
         .status = "running",
         .phase = "running",
@@ -616,7 +616,7 @@ int main() {
       std::ofstream out(part2);
       out << "multipart-part-2";
     }
-    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+    store.UpsertModelLibraryDownloadJob(naim::ModelLibraryDownloadJobRecord{
         .id = "job-4",
         .status = "completed",
         .phase = "completed",
@@ -661,7 +661,7 @@ int main() {
       std::ofstream out(safetensors_source);
       out << "safetensors-payload";
     }
-    unsetenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN");
+    unsetenv("NAIM_MODEL_LIBRARY_QUANTIZE_BIN");
     const auto conversion_response = service.EnqueueDownload(
         db_path.string(),
         JsonRequest(
@@ -698,7 +698,7 @@ int main() {
         !fs::exists(completed_conversion_job.staging_directory),
         "staging directory should be removed after successful conversion");
 
-    setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize.string().c_str(), 1);
+    setenv("NAIM_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize.string().c_str(), 1);
     const auto normalized_download_response = service.EnqueueDownload(
         db_path.string(),
         JsonRequest(
@@ -869,7 +869,7 @@ int main() {
         fs::exists(dst_root / "converted-mixed" / "gemma-4-31B-it.gguf"),
         "mixed HF metadata bundle should still produce a GGUF output");
 
-    setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize_fail.string().c_str(), 1);
+    setenv("NAIM_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize_fail.string().c_str(), 1);
     const auto failed_quantized_response = service.EnqueueQuantization(
         db_path.string(),
         JsonRequest(
@@ -895,9 +895,9 @@ int main() {
     Expect(
         !failed_job.staging_directory.empty() && fs::exists(failed_job.staging_directory),
         "failed quantization job should retain staging directory for inspection or resume");
-    unsetenv("COMET_MODEL_LIBRARY_PYTHON");
-    unsetenv("COMET_MODEL_LIBRARY_CONVERT_SCRIPT");
-    unsetenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN");
+    unsetenv("NAIM_MODEL_LIBRARY_PYTHON");
+    unsetenv("NAIM_MODEL_LIBRARY_CONVERT_SCRIPT");
+    unsetenv("NAIM_MODEL_LIBRARY_QUANTIZE_BIN");
 
     fs::remove_all(temp_root, error);
     std::cout << "model library service tests passed\n";

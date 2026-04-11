@@ -36,7 +36,7 @@ std::uint64_t ReadNonNegativeCapacityBytes(
 }  // namespace
 
 ModelLibraryNodeSummary ModelLibraryNodePlacement::BuildSummary(
-    const comet::RegisteredHostRecord& host) {
+    const naim::RegisteredHostRecord& host) {
   ModelLibraryNodeSummary summary;
   summary.node_name = host.node_name;
   summary.registration_state = host.registration_state;

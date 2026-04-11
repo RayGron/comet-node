@@ -16,11 +16,11 @@
 #include <unistd.h>
 #endif
 
-#include "comet/core/platform_compat.h"
-#include "comet/security/crypto_utils.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/core/platform_compat.h"
+#include "naim/security/crypto_utils.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 namespace {
 
@@ -155,8 +155,8 @@ int LauncherRunService::RunController(
   const bool config_local_hostd_enabled =
       loaded_config && loaded_config->controller.local_hostd_enabled.value_or(false);
   const bool managed_hostd_service_present =
-      std::getenv("COMET_SERVICE_MODE") != nullptr &&
-      std::string(std::getenv("COMET_SERVICE_MODE")) == "1" &&
+      std::getenv("NAIM_SERVICE_MODE") != nullptr &&
+      std::string(std::getenv("NAIM_SERVICE_MODE")) == "1" &&
       std::filesystem::exists(
           install_service_.ParseLayout(command_line).systemd_dir / "naim-node-hostd.service");
   options.with_hostd =
@@ -171,8 +171,8 @@ int LauncherRunService::RunController(
       command_line.FindFlagValue("--poll-interval-sec"),
       options.hostd_poll_interval_sec);
 
-  if (!(std::getenv("COMET_SERVICE_MODE") != nullptr &&
-        std::string(std::getenv("COMET_SERVICE_MODE")) == "1") &&
+  if (!(std::getenv("NAIM_SERVICE_MODE") != nullptr &&
+        std::string(std::getenv("NAIM_SERVICE_MODE")) == "1") &&
       !command_line.HasFlag("--foreground") &&
       !command_line.HasFlag("--skip-systemctl")) {
     const auto layout = install_service_.ParseLayout(command_line);
@@ -278,8 +278,8 @@ int LauncherRunService::RunHostd(
           ? *loaded_config->hostd.inventory_scan_interval_sec
           : options.inventory_scan_interval_sec);
 
-  if (!(std::getenv("COMET_SERVICE_MODE") != nullptr &&
-        std::string(std::getenv("COMET_SERVICE_MODE")) == "1") &&
+  if (!(std::getenv("NAIM_SERVICE_MODE") != nullptr &&
+        std::string(std::getenv("NAIM_SERVICE_MODE")) == "1") &&
       !command_line.HasFlag("--foreground") &&
       !command_line.HasFlag("--skip-systemctl") &&
       process_runner_.CommandExists("systemctl")) {
@@ -432,7 +432,7 @@ void LauncherRunService::PrepareControllerRuntime(
       return;
     }
     std::filesystem::create_directories(private_key_path.parent_path());
-    const auto keypair = comet::GenerateSigningKeypair();
+    const auto keypair = naim::GenerateSigningKeypair();
     std::ofstream priv(private_key_path);
     std::ofstream pub(public_key_path);
     priv << keypair.private_key_base64 << "\n";
@@ -445,7 +445,7 @@ void LauncherRunService::PrepareControllerRuntime(
 
   PrepareSharedStateAccess(owner_probe_path, options.db_path);
 
-  comet::ControllerStore store(options.db_path.string());
+  naim::ControllerStore store(options.db_path.string());
   store.Initialize();
   PrepareSharedStateAccess(owner_probe_path, options.db_path);
 }
@@ -478,12 +478,12 @@ int LauncherRunService::RunControllerSupervisor(
           ? ComputePublicKeyFingerprint(controller_public_key_path)
           : "";
 
-  if (!SetEnvVar("COMET_CONTROLLER_ADMIN_UPSTREAM", local_controller_url) ||
-      !SetEnvVar("COMET_CONTROLLER_INTERNAL_HOST", options.internal_listen_host) ||
-      !SetEnvVar("COMET_CONTROLLER_INTERNAL_UPSTREAM", internal_controller_url) ||
-      !SetEnvVar("COMET_SKILLS_FACTORY_UPSTREAM", local_skills_factory_url) ||
-      !SetEnvVar("COMET_WEB_UI_ROOT", options.web_ui_root.string()) ||
-      !SetEnvVar("COMET_HOSTD_NODE_NAME", options.node_name)) {
+  if (!SetEnvVar("NAIM_CONTROLLER_ADMIN_UPSTREAM", local_controller_url) ||
+      !SetEnvVar("NAIM_CONTROLLER_INTERNAL_HOST", options.internal_listen_host) ||
+      !SetEnvVar("NAIM_CONTROLLER_INTERNAL_UPSTREAM", internal_controller_url) ||
+      !SetEnvVar("NAIM_SKILLS_FACTORY_UPSTREAM", local_skills_factory_url) ||
+      !SetEnvVar("NAIM_WEB_UI_ROOT", options.web_ui_root.string()) ||
+      !SetEnvVar("NAIM_HOSTD_NODE_NAME", options.node_name)) {
     throw std::runtime_error("failed to export controller internal routing environment");
   }
 
@@ -496,7 +496,7 @@ int LauncherRunService::RunControllerSupervisor(
         "--compose-mode",          options.compose_mode,
     };
     if (process_runner_.RunCommand(ensure_args) != 0) {
-      throw std::runtime_error("failed to ensure comet-web-ui");
+      throw std::runtime_error("failed to ensure naim-web-ui");
     }
   }
 
@@ -529,9 +529,9 @@ int LauncherRunService::RunControllerSupervisor(
 
   pid_t hostd_pid = -1;
   if (options.with_hostd) {
-    comet::ControllerStore store(options.db_path.string());
+    naim::ControllerStore store(options.db_path.string());
     store.Initialize();
-    comet::RegisteredHostRecord host;
+    naim::RegisteredHostRecord host;
     if (const auto current = store.LoadRegisteredHost(options.node_name);
         current.has_value()) {
       host = *current;
@@ -610,7 +610,7 @@ void LauncherRunService::PrepareSharedStateAccess(
   (void)owner_probe_path;
   (void)db_path;
 #else
-  if (!comet::platform::HasElevatedPrivileges()) {
+  if (!naim::platform::HasElevatedPrivileges()) {
     return;
   }
 
@@ -767,7 +767,7 @@ std::string LauncherRunService::ReadTextFile(
 
 std::string LauncherRunService::ComputePublicKeyFingerprint(
     const std::filesystem::path& public_key_path) const {
-  return comet::ComputeKeyFingerprintHex(Trim(ReadTextFile(public_key_path)));
+  return naim::ComputeKeyFingerprintHex(Trim(ReadTextFile(public_key_path)));
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

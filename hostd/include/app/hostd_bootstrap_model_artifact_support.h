@@ -5,9 +5,9 @@
 #include <vector>
 
 #include "app/hostd_desired_state_path_support.h"
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 struct HostdBootstrapModelArtifact {
   std::optional<std::string> local_path;
@@ -20,16 +20,16 @@ class HostdBootstrapModelArtifactSupport final {
   explicit HostdBootstrapModelArtifactSupport(
       const HostdDesiredStatePathSupport& path_support);
 
-  const comet::DiskSpec& RequirePlaneSharedDiskForNode(
-      const comet::DesiredState& state,
+  const naim::DiskSpec& RequirePlaneSharedDiskForNode(
+      const naim::DesiredState& state,
       const std::string& node_name) const;
   std::vector<HostdBootstrapModelArtifact> BuildArtifacts(
-      const comet::DesiredState& state,
+      const naim::DesiredState& state,
       const std::string& node_name) const;
   std::string TargetPath(
-      const comet::DesiredState& state,
+      const naim::DesiredState& state,
       const std::string& node_name) const;
-  std::string SharedModelBootstrapOwnerNode(const comet::DesiredState& state) const;
+  std::string SharedModelBootstrapOwnerNode(const naim::DesiredState& state) const;
   static bool LooksLikeRecognizedModelDirectory(const std::string& path);
 
  private:
@@ -38,4 +38,4 @@ class HostdBootstrapModelArtifactSupport final {
   const HostdDesiredStatePathSupport& path_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

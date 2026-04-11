@@ -16,12 +16,12 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-comet::DesiredState BuildState(
+naim::DesiredState BuildState(
     const std::string& plane_name,
     const std::string& node_name) {
-  comet::DesiredState state;
+  naim::DesiredState state;
   state.plane_name = plane_name;
-  comet::NodeInventory node;
+  naim::NodeInventory node;
   node.name = node_name;
   state.nodes.push_back(std::move(node));
   return state;
@@ -31,9 +31,9 @@ comet::DesiredState BuildState(
 
 int main() {
   try {
-    const comet::hostd::HostdCommandSupport command_support;
-    const comet::hostd::HostdLocalStatePathSupport local_state_path_support;
-    const comet::hostd::HostdPostDeploySupport support(command_support);
+    const naim::hostd::HostdCommandSupport command_support;
+    const naim::hostd::HostdLocalStatePathSupport local_state_path_support;
+    const naim::hostd::HostdPostDeploySupport support(command_support);
 
     {
       auto state = BuildState("plane-a", "node-a");
@@ -51,17 +51,17 @@ int main() {
     {
       auto state = BuildState("plane-c", "node-c");
       state.post_deploy_script = "scripts/post.sh";
-      comet::InstanceSpec app;
+      naim::InstanceSpec app;
       app.name = "app-plane-c";
       app.node_name = "node-c";
-      app.role = comet::InstanceRole::App;
+      app.role = naim::InstanceRole::App;
       state.instances.push_back(std::move(app));
       Expect(support.ShouldRunForNode(state, "node-c"), "app node should run");
     }
 
     {
       namespace fs = std::filesystem;
-      const fs::path temp_root = fs::temp_directory_path() / "comet-hostd-post-deploy-tests";
+      const fs::path temp_root = fs::temp_directory_path() / "naim-hostd-post-deploy-tests";
       std::error_code cleanup_error;
       fs::remove_all(temp_root, cleanup_error);
       const fs::path artifacts_root = temp_root / "artifacts";
@@ -70,7 +70,7 @@ int main() {
       {
         std::ofstream script(script_path);
         script << "#!/bin/sh\n";
-        script << "printf '%s' \"$COMET_PLANE_NAME:$COMET_NODE_NAME\" > \"$COMET_POST_DEPLOY_LOG.out\"\n";
+        script << "printf '%s' \"$NAIM_PLANE_NAME:$NAIM_NODE_NAME\" > \"$NAIM_POST_DEPLOY_LOG.out\"\n";
       }
       fs::permissions(
           script_path,

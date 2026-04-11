@@ -8,9 +8,9 @@
 #include "app/hostd_file_support.h"
 #include "app/hostd_local_state_path_support.h"
 #include "app/hostd_local_state_repository.h"
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdBootstrapActiveModelSupport final {
  public:
@@ -20,13 +20,13 @@ class HostdBootstrapActiveModelSupport final {
       const HostdBootstrapModelArtifactSupport& artifact_support);
 
   std::string ActiveModelPathForNode(
-      const comet::DesiredState& state,
+      const naim::DesiredState& state,
       const std::string& node_name) const;
   std::string BootstrapRuntimeModelPath(
-      const comet::DesiredState& state,
+      const naim::DesiredState& state,
       const std::string& target_host_path) const;
   void WriteBootstrapActiveModel(
-      const comet::DesiredState& state,
+      const naim::DesiredState& state,
       const std::string& node_name,
       const std::string& target_host_path,
       const std::optional<std::string>& runtime_model_path_override = std::nullopt) const;
@@ -39,4 +39,4 @@ class HostdBootstrapActiveModelSupport final {
   HostdLocalStateRepository local_state_repository_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

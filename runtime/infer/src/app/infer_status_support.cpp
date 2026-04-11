@@ -17,9 +17,9 @@
 #include "runtime/infer_control_support.h"
 #include "runtime/infer_replica_support.h"
 #include "runtime/infer_runtime_support.h"
-#include "comet/runtime/runtime_status.h"
+#include "naim/runtime/runtime_status.h"
 
-namespace comet::infer::status_support {
+namespace naim::infer::status_support {
 
 namespace fs = std::filesystem;
 using control_support::BuildControlPaths;
@@ -32,7 +32,7 @@ using runtime_support::RuntimeGatewayHealthUrl;
 using runtime_support::RuntimeUpstreamHealthUrl;
 using runtime_support::RuntimeUpstreamModelsUrl;
 using nlohmann::json;
-namespace replica_support = comet::infer::replica_support;
+namespace replica_support = naim::infer::replica_support;
 
 namespace {
 
@@ -93,7 +93,7 @@ json BuildGatewayPayload(const RuntimeConfig& config) {
   };
 }
 
-comet::RuntimeStatus BuildRuntimeStatus(
+naim::RuntimeStatus BuildRuntimeStatus(
     const RuntimeConfig& config,
     const std::string& backend,
     const std::string& phase,
@@ -105,18 +105,18 @@ comet::RuntimeStatus BuildRuntimeStatus(
   const json active_model = LoadActiveModel(config);
   const json gateway_plan = LoadGatewayPlan(config);
   const auto topology = replica_support::InspectReplicaTopology(config);
-  comet::RuntimeStatus status;
+  naim::RuntimeStatus status;
   status.plane_name = config.plane_name;
   status.control_root = config.control_root;
   status.controller_url = config.controller_url;
   status.primary_infer_node = config.primary_infer_node;
-  if (const char* instance_name = std::getenv("COMET_INSTANCE_NAME")) {
+  if (const char* instance_name = std::getenv("NAIM_INSTANCE_NAME")) {
     status.instance_name = instance_name;
   }
-  if (const char* instance_role = std::getenv("COMET_INSTANCE_ROLE")) {
+  if (const char* instance_role = std::getenv("NAIM_INSTANCE_ROLE")) {
     status.instance_role = instance_role;
   }
-  if (const char* node_name = std::getenv("COMET_NODE_NAME")) {
+  if (const char* node_name = std::getenv("NAIM_NODE_NAME")) {
     status.node_name = node_name;
   }
   status.runtime_backend = backend;
@@ -173,10 +173,10 @@ comet::RuntimeStatus BuildRuntimeStatus(
   return status;
 }
 
-comet::RuntimeStatus MergeWithObservedRuntimeStatus(
-    comet::RuntimeStatus status,
+naim::RuntimeStatus MergeWithObservedRuntimeStatus(
+    naim::RuntimeStatus status,
     const std::string& path) {
-  const std::optional<comet::RuntimeStatus> observed = comet::LoadRuntimeStatusJson(path);
+  const std::optional<naim::RuntimeStatus> observed = naim::LoadRuntimeStatusJson(path);
   if (!observed.has_value()) {
     return status;
   }
@@ -224,7 +224,7 @@ void PrintGatewayPlan(const RuntimeConfig& config, bool apply) {
   std::cout << "  gateway_plan_path=" << BuildControlPaths(config).gateway_plan_path.string()
             << "\n";
   if (apply) {
-    comet::SaveRuntimeStatusJson(
+    naim::SaveRuntimeStatusJson(
         BuildRuntimeStatus(config, "gateway-plan", "planned", false, false, 0, ""),
         BuildControlPaths(config).runtime_status_path.string());
     std::ofstream output(BuildControlPaths(config).gateway_plan_path);
@@ -255,7 +255,7 @@ int PrintGatewayStatus(const RuntimeConfig& config) {
 
 int PrintStatus(const RuntimeConfig& config, const std::string& backend, bool apply) {
   const auto paths = BuildControlPaths(config);
-  comet::RuntimeStatus status =
+  naim::RuntimeStatus status =
       BuildRuntimeStatus(config, backend, "planned", false, false, 0, "");
   status = MergeWithObservedRuntimeStatus(std::move(status), paths.runtime_status_path.string());
   std::cout << "[runtime]\n";
@@ -321,7 +321,7 @@ int PrintStatus(const RuntimeConfig& config, const std::string& backend, bool ap
                     : std::string("n/a"))
             << "\n";
   if (apply) {
-    comet::SaveRuntimeStatusJson(status, paths.runtime_status_path.string());
+    naim::SaveRuntimeStatusJson(status, paths.runtime_status_path.string());
   }
   return 0;
 }
@@ -338,7 +338,7 @@ void StopRuntime(const RuntimeConfig& config, bool apply, const std::string& bac
   if (apply) {
     fs::remove(paths.active_model_path);
     fs::remove(paths.gateway_plan_path);
-    comet::SaveRuntimeStatusJson(
+    naim::SaveRuntimeStatusJson(
         BuildRuntimeStatus(config, backend, "stopped", false, false, 0, ""),
         paths.runtime_status_path.string());
     PrintStatus(config, backend, false);
@@ -467,4 +467,4 @@ int RunDoctor(const RuntimeConfig& config, const std::string& checks) {
   return rc;
 }
 
-}  // namespace comet::infer::status_support
+}  // namespace naim::infer::status_support

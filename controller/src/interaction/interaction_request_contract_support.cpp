@@ -6,7 +6,7 @@
 #include "browsing/interaction_browsing_service.h"
 #include "skills/plane_skills_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 bool InteractionRequestContractSupport::PayloadContainsUnsupportedInteractionField(
     const nlohmann::json& payload,
@@ -132,7 +132,7 @@ std::map<std::string, std::string>
 InteractionRequestContractSupport::BuildInteractionResponseHeaders(
     const std::string& request_id) const {
   return {
-      {"X-Comet-Request-Id", request_id},
+      {"X-Naim-Request-Id", request_id},
   };
 }
 
@@ -286,4 +286,4 @@ nlohmann::json InteractionRequestContractSupport::DefaultBrowsingSummary() const
   };
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

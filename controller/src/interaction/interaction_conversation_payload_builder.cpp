@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <sstream>
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -44,7 +44,7 @@ int InteractionConversationPayloadBuilder::EstimateTokensForJson(
 }
 
 std::vector<json> InteractionConversationPayloadBuilder::MessageRecordsToJson(
-    const std::vector<comet::InteractionMessageRecord>& records) const {
+    const std::vector<naim::InteractionMessageRecord>& records) const {
   std::vector<json> messages;
   messages.reserve(records.size());
   for (const auto& record : records) {
@@ -73,7 +73,7 @@ std::size_t InteractionConversationPayloadBuilder::CommonPrefixLength(
 }
 
 json InteractionConversationPayloadBuilder::BuildPromptMessages(
-    const std::vector<comet::InteractionSummaryRecord>& summaries,
+    const std::vector<naim::InteractionSummaryRecord>& summaries,
     const std::vector<json>& stored_messages,
     const json& delta_messages) const {
   json prompt_messages = json::array();
@@ -89,7 +89,7 @@ json InteractionConversationPayloadBuilder::BuildPromptMessages(
   return prompt_messages;
 }
 
-std::vector<comet::InteractionSummaryRecord>
+std::vector<naim::InteractionSummaryRecord>
 InteractionConversationPayloadBuilder::BuildSummaryRecords(
     const std::string& session_id,
     const std::vector<json>& all_messages,
@@ -117,7 +117,7 @@ InteractionConversationPayloadBuilder::BuildSummaryRecords(
   }
 
   return {
-      comet::InteractionSummaryRecord{
+      naim::InteractionSummaryRecord{
           0,
           session_id,
           0,
@@ -129,7 +129,7 @@ InteractionConversationPayloadBuilder::BuildSummaryRecords(
 }
 
 json InteractionConversationPayloadBuilder::BuildSessionSummaryPayload(
-    const comet::InteractionSessionRecord& session,
+    const naim::InteractionSessionRecord& session,
     std::size_t message_count,
     std::size_t summary_count) const {
   const json context_state = ParseJsonObject(session.context_state_json);
@@ -162,7 +162,7 @@ json InteractionConversationPayloadBuilder::BuildSessionSummaryPayload(
 }
 
 json InteractionConversationPayloadBuilder::BuildSessionMessagesPayload(
-    const std::vector<comet::InteractionMessageRecord>& messages) const {
+    const std::vector<naim::InteractionMessageRecord>& messages) const {
   json payload = json::array();
   for (const auto& message : messages) {
     json item = ParseJsonOr(message.content_json, json::object());
@@ -177,7 +177,7 @@ json InteractionConversationPayloadBuilder::BuildSessionMessagesPayload(
 }
 
 json InteractionConversationPayloadBuilder::BuildSessionSummariesPayload(
-    const std::vector<comet::InteractionSummaryRecord>& summaries) const {
+    const std::vector<naim::InteractionSummaryRecord>& summaries) const {
   json payload = json::array();
   for (const auto& summary : summaries) {
     payload.push_back(json{
@@ -306,7 +306,7 @@ json InteractionConversationPayloadBuilder::BuildSummaryJson(
 }
 
 std::string InteractionConversationPayloadBuilder::BuildSummarySystemInstruction(
-    const std::vector<comet::InteractionSummaryRecord>& summaries) const {
+    const std::vector<naim::InteractionSummaryRecord>& summaries) const {
   if (summaries.empty()) {
     return "";
   }
@@ -345,4 +345,4 @@ std::string InteractionConversationPayloadBuilder::BuildSummarySystemInstruction
   return instruction.str();
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

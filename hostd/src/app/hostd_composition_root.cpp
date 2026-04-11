@@ -14,7 +14,7 @@
 #include "observation/hostd_observation_service.h"
 #include "state_apply/hostd_assignment_service.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdCompositionRoot::HostdCompositionRoot()
     : support_factory_(std::make_unique<HostdSupportComponentFactory>()),
@@ -40,4 +40,4 @@ int HostdCompositionRoot::Run(int argc, char** argv) const {
   return cli_->Run(command_line, *config_loader_, argv[0]);
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -2,7 +2,7 @@
 
 #include <iostream>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdObservationService::HostdObservationService(
     const IHostdBackendFactory& backend_factory,
@@ -24,7 +24,7 @@ void HostdObservationService::ShowRuntimeStatus(
 
 void HostdObservationService::ReportObservedState(
     HostdBackend& backend,
-    const comet::HostObservation& observation,
+    const naim::HostObservation& observation,
     const std::string& source_label) const {
   backend.UpsertHostObservation(observation);
   support_.AppendHostdEvent(
@@ -33,7 +33,7 @@ void HostdObservationService::ReportObservedState(
       "reported",
       source_label,
       nlohmann::json{
-          {"status", comet::ToString(observation.status)},
+          {"status", naim::ToString(observation.status)},
           {"applied_generation",
            observation.applied_generation.has_value() ? nlohmann::json(*observation.applied_generation)
                                                       : nlohmann::json(nullptr)},
@@ -51,7 +51,7 @@ void HostdObservationService::ReportObservedState(
   std::cout << source_label << "\n";
   std::cout << "backend=hostd-control\n";
   std::cout << "node=" << observation.node_name << "\n";
-  std::cout << "status=" << comet::ToString(observation.status) << "\n";
+  std::cout << "status=" << naim::ToString(observation.status) << "\n";
   if (!observation.plane_name.empty()) {
     std::cout << "plane=" << observation.plane_name << "\n";
   }
@@ -89,9 +89,9 @@ void HostdObservationService::ReportLocalObservedState(
           node_name,
           storage_root,
           state_root,
-          comet::HostObservationStatus::Idle,
+          naim::HostObservationStatus::Idle,
           "manual heartbeat"),
       "hostd report-observed-state");
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

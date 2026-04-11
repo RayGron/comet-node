@@ -1,13 +1,13 @@
 # naim-node
 
-`naim-node` is the implementation repository for the `comet` platform.
+`naim-node` is the implementation repository for the `naim` platform.
 At the product level, the platform is split into:
 
-- `comet`: the control point and operator-facing management surface
+- `naim`: the control point and operator-facing management surface
 - `naim-node`: the managed host agent package that runs on connected nodes
 
-This repository currently contains both sides of that split through `comet-controller`,
-`comet-hostd`, and the `naim-node` launcher. Together they manage plane state, node realization,
+This repository currently contains both sides of that split through `naim-controller`,
+`naim-hostd`, and the `naim-node` launcher. Together they manage plane state, node realization,
 model workflows, telemetry, and authenticated interaction endpoints for both application-backed
 planes and external clients such as Maglev.
 
@@ -25,12 +25,12 @@ The current primary runtime path is `llama.cpp + llama_rpc` with support for:
 
 `naim-node` currently provides:
 
-- a SQLite-backed `comet-controller` that implements the `comet` control point and stores desired
+- a SQLite-backed `naim-controller` that implements the `naim` control point and stores desired
   state, rollout state, model-library jobs, auth data, plane metadata, and the connected-node
   registry
-- a `comet-hostd` agent that implements `naim-node` and realizes compose artifacts, managed
+- a `naim-hostd` agent that implements `naim-node` and realizes compose artifacts, managed
   disks, runtime configs, and host telemetry on managed nodes
-- secure outbound `naim-node -> comet` connectivity, so managed nodes can connect from behind NAT
+- secure outbound `naim-node -> naim` connectivity, so managed nodes can connect from behind NAT
   or firewalls without needing a permanent public IP
 - node inventory scans on connect plus periodic rescans, with controller-derived `Storage` /
   `Worker` role assignment
@@ -55,13 +55,13 @@ The current primary runtime path is `llama.cpp + llama_rpc` with support for:
 
 At a high level:
 
-- `comet` owns onboarding, desired state, scheduling, plane lifecycle, model-library workflows,
+- `naim` owns onboarding, desired state, scheduling, plane lifecycle, model-library workflows,
   auth, APIs, and the operator UI
-- `naim-node` runs on managed hosts, scans local inventory, dials out to `comet`, and applies the
+- `naim-node` runs on managed hosts, scans local inventory, dials out to `naim`, and applies the
   control point's host assignments
-- `comet-controller` and `comet-hostd` are the current implementation binaries behind that product
+- `naim-controller` and `naim-hostd` are the current implementation binaries behind that product
   split
-- co-locating `comet` and `naim-node` on the same machine is a supported normal deployment shape
+- co-locating `naim` and `naim-node` on the same machine is a supported normal deployment shape
 - runtime containers are materialized from rendered compose artifacts and per-instance runtime configs
 - LLM planes use `llama.cpp` as the inference runtime and `llama_rpc` as the distributed backend by default
 
@@ -123,10 +123,10 @@ Build local dev images with:
 
 The common dev image names are:
 
-- `comet/base-runtime:dev`
-- `comet/infer-runtime:dev`
-- `comet/worker-runtime:dev`
-- `comet/web-ui:dev`
+- `naim/base-runtime:dev`
+- `naim/infer-runtime:dev`
+- `naim/worker-runtime:dev`
+- `naim/web-ui:dev`
 
 ## Dependencies
 
@@ -157,7 +157,7 @@ That default is equivalent to a host build in `Debug`. The scripts now resolve h
 architecture, build directory, `vcpkg` toolchain, and CUDA/OpenMP hints automatically.
 
 Build output paths are grouped by platform and architecture. By default they live under
-`build/`, but you can relocate the build root with `COMET_BUILD_ROOT`.
+`build/`, but you can relocate the build root with `NAIM_BUILD_ROOT`.
 
 Examples:
 
@@ -225,19 +225,19 @@ BUILD_DIR="$(./scripts/print-build-dir.sh)"
 Initialize a local controller DB:
 
 ```bash
-"${BUILD_DIR}/comet-controller" init-db --db var/controller.sqlite
+"${BUILD_DIR}/naim-controller" init-db --db var/controller.sqlite
 ```
 
 Validate a `desired-state.v2.json` bundle:
 
 ```bash
-"${BUILD_DIR}/comet-controller" validate-bundle --bundle config/v2-llama-rpc-backend
+"${BUILD_DIR}/naim-controller" validate-bundle --bundle config/v2-llama-rpc-backend
 ```
 
 Apply a v2 plane state directly:
 
 ```bash
-"${BUILD_DIR}/comet-controller" apply-state-file \
+"${BUILD_DIR}/naim-controller" apply-state-file \
   --db var/controller.sqlite \
   --artifacts-root var/artifacts \
   --state config/v2-llama-rpc-backend/desired-state.v2.json
@@ -246,7 +246,7 @@ Apply a v2 plane state directly:
 Import a bundle directory that contains `desired-state.v2.json`:
 
 ```bash
-"${BUILD_DIR}/comet-controller" import-bundle \
+"${BUILD_DIR}/naim-controller" import-bundle \
   --bundle config/v2-llama-rpc-backend \
   --db var/controller.sqlite
 ```
@@ -320,7 +320,7 @@ Current placement contract:
 
 For plane-local support services, the current target contract is:
 
-- the canonical `SkillsFactory` container lives on `comet`
+- the canonical `SkillsFactory` container lives on `naim`
 - replicated `skills-<plane>` runtime containers live on the same machine as the plane's `app`
   container
 

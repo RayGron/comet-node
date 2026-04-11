@@ -7,7 +7,7 @@
 
 #include "interaction/interaction_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionTextPostProcessor {
  public:
@@ -42,4 +42,4 @@ class InteractionTextPostProcessor {
   std::vector<std::string> SplitParagraphs(const std::string& value) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

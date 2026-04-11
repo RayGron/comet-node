@@ -4,9 +4,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/desired_state_v2_projector.h"
-#include "comet/state/desired_state_v2_renderer.h"
-#include "comet/state/desired_state_v2_validator.h"
+#include "naim/state/desired_state_v2_projector.h"
+#include "naim/state/desired_state_v2_renderer.h"
+#include "naim/state/desired_state_v2_validator.h"
 
 namespace {
 
@@ -19,10 +19,10 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void ExpectRoundTrip(const json& source, const std::string& name) {
-  const auto rendered = comet::DesiredStateV2Renderer::Render(source);
-  const auto projected = comet::DesiredStateV2Projector::Project(rendered);
-  comet::DesiredStateV2Validator::ValidateOrThrow(projected);
-  const auto rerendered = comet::DesiredStateV2Renderer::Render(projected);
+  const auto rendered = naim::DesiredStateV2Renderer::Render(source);
+  const auto projected = naim::DesiredStateV2Projector::Project(rendered);
+  naim::DesiredStateV2Validator::ValidateOrThrow(projected);
+  const auto rerendered = naim::DesiredStateV2Renderer::Render(projected);
 
   Expect(rerendered.plane_name == rendered.plane_name, name + ": plane_name mismatch");
   Expect(rerendered.plane_mode == rendered.plane_mode, name + ": plane_mode mismatch");
@@ -156,9 +156,9 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
 }
 
 void ExpectPlacementFirstProjection(const json& source, const std::string& name) {
-  const auto rendered = comet::DesiredStateV2Renderer::Render(source);
-  const auto projected = comet::DesiredStateV2Projector::Project(rendered);
-  comet::DesiredStateV2Validator::ValidateOrThrow(projected);
+  const auto rendered = naim::DesiredStateV2Renderer::Render(source);
+  const auto projected = naim::DesiredStateV2Projector::Project(rendered);
+  naim::DesiredStateV2Validator::ValidateOrThrow(projected);
 
   Expect(projected.contains("placement"), name + ": placement block missing");
   Expect(!projected.contains("topology"), name + ": topology must be suppressed");
@@ -281,7 +281,7 @@ int main() {
                   json::array({{{"name", "private-data"},
                                  {"type", "persistent"},
                                  {"size_gb", 8},
-                                 {"mount_path", "/comet/private"},
+                                 {"mount_path", "/naim/private"},
                                  {"access", "rw"}}})},
              }},
         },
@@ -396,7 +396,7 @@ int main() {
                  {"enabled", true},
                  {"node", "browse-hostd"},
                  {"image", "example/webgateway:dev"},
-                 {"env", {{"COMET_WEBGATEWAY_DEBUG", "1"}}},
+                 {"env", {{"NAIM_WEBGATEWAY_DEBUG", "1"}}},
                  {"policy",
                   {{"browser_session_enabled", true},
                    {"rendered_browser_enabled", false},

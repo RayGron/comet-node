@@ -10,50 +10,50 @@
 #include "skills/plane_skills_service.h"
 
 using nlohmann::json;
-using comet::controller::InteractionConversationService;
-using comet::controller::InteractionRequestContext;
-using comet::controller::PlaneInteractionResolution;
-using comet::controller::ResolvedInteractionPolicy;
+using naim::controller::InteractionConversationService;
+using naim::controller::InteractionRequestContext;
+using naim::controller::PlaneInteractionResolution;
+using naim::controller::ResolvedInteractionPolicy;
 
 InteractionHttpService::InteractionHttpService(InteractionHttpSupport support)
     : support_(std::move(support)) {}
 
-comet::controller::PlaneInteractionResolution InteractionHttpService::ResolvePlane(
+naim::controller::PlaneInteractionResolution InteractionHttpService::ResolvePlane(
     const std::string& db_path,
     const std::string& plane_name) const {
-  return comet::controller::InteractionHttpExecutorFactory(support_)
+  return naim::controller::InteractionHttpExecutorFactory(support_)
       .MakePlaneResolver()
       .Resolve(db_path, plane_name);
 }
 
-comet::controller::InteractionSessionResult InteractionHttpService::ExecuteSession(
-    const comet::controller::PlaneInteractionResolution& resolution,
-    const comet::controller::InteractionRequestContext& request_context) const {
-  return comet::controller::InteractionHttpExecutorFactory(support_)
+naim::controller::InteractionSessionResult InteractionHttpService::ExecuteSession(
+    const naim::controller::PlaneInteractionResolution& resolution,
+    const naim::controller::InteractionRequestContext& request_context) const {
+  return naim::controller::InteractionHttpExecutorFactory(support_)
       .MakeSessionExecutor()
       .Execute(resolution, request_context);
 }
 
-std::optional<comet::controller::InteractionValidationError>
+std::optional<naim::controller::InteractionValidationError>
 InteractionHttpService::ResolveRequestSkills(
-    const comet::controller::PlaneInteractionResolution& resolution,
-    comet::controller::InteractionRequestContext* request_context) const {
-  return comet::controller::PlaneSkillsService().ResolveInteractionSkills(
+    const naim::controller::PlaneInteractionResolution& resolution,
+    naim::controller::InteractionRequestContext* request_context) const {
+  return naim::controller::PlaneSkillsService().ResolveInteractionSkills(
       resolution, request_context);
 }
 
-std::optional<comet::controller::InteractionValidationError>
+std::optional<naim::controller::InteractionValidationError>
 InteractionHttpService::ResolveRequestBrowsing(
-    const comet::controller::PlaneInteractionResolution& resolution,
-    comet::controller::InteractionRequestContext* request_context) const {
-  return comet::controller::InteractionBrowsingService().ResolveInteractionBrowsing(
+    const naim::controller::PlaneInteractionResolution& resolution,
+    naim::controller::InteractionRequestContext* request_context) const {
+  return naim::controller::InteractionBrowsingService().ResolveInteractionBrowsing(
       resolution, request_context);
 }
 
-std::optional<comet::controller::InteractionValidationError>
+std::optional<naim::controller::InteractionValidationError>
 InteractionHttpService::ResolveRequestContext(
-    const comet::controller::PlaneInteractionResolution& resolution,
-    comet::controller::InteractionRequestContext* request_context) const {
+    const naim::controller::PlaneInteractionResolution& resolution,
+    naim::controller::InteractionRequestContext* request_context) const {
   if (const auto error = ResolveRequestSkills(resolution, request_context)) {
     return error;
   }
@@ -61,12 +61,12 @@ InteractionHttpService::ResolveRequestContext(
 }
 
 HttpResponse InteractionHttpService::BuildSessionResponse(
-    const comet::controller::PlaneInteractionResolution& resolution,
-    const comet::controller::InteractionRequestContext& request_context,
-    const comet::controller::InteractionSessionResult& result) const {
-  const comet::controller::InteractionSessionPresenter presenter;
-  comet::controller::InteractionSessionResult reviewed_result = result;
-  comet::controller::InteractionBrowsingService().ReviewInteractionResponse(
+    const naim::controller::PlaneInteractionResolution& resolution,
+    const naim::controller::InteractionRequestContext& request_context,
+    const naim::controller::InteractionSessionResult& result) const {
+  const naim::controller::InteractionSessionPresenter presenter;
+  naim::controller::InteractionSessionResult reviewed_result = result;
+  naim::controller::InteractionBrowsingService().ReviewInteractionResponse(
       resolution,
       request_context,
       &reviewed_result);
@@ -75,21 +75,21 @@ HttpResponse InteractionHttpService::BuildSessionResponse(
   return support_.BuildJsonResponse(
       response_spec.status_code,
       response_spec.payload,
-      comet::controller::InteractionRequestContractSupport{}
+      naim::controller::InteractionRequestContractSupport{}
           .BuildInteractionResponseHeaders(request_context.request_id));
 }
 
 HttpResponse InteractionHttpService::ProxyJson(
-    const comet::controller::PlaneInteractionResolution& resolution,
+    const naim::controller::PlaneInteractionResolution& resolution,
     const std::string& request_id,
     const std::string& method,
     const std::string& path,
     const std::string& body) const {
   const auto proxy_executor =
-      comet::controller::InteractionHttpExecutorFactory(support_)
+      naim::controller::InteractionHttpExecutorFactory(support_)
           .MakeProxyExecutor(
-              [&](const comet::controller::PlaneInteractionResolution& candidate,
-                  comet::controller::InteractionRequestContext* request_context) {
+              [&](const naim::controller::PlaneInteractionResolution& candidate,
+                  naim::controller::InteractionRequestContext* request_context) {
                 return ResolveRequestContext(candidate, request_context);
               });
   const auto result =
@@ -98,7 +98,7 @@ HttpResponse InteractionHttpService::ProxyJson(
     return support_.BuildJsonResponse(
         result.json_response->status_code,
         result.json_response->payload,
-        comet::controller::InteractionRequestContractSupport{}
+        naim::controller::InteractionRequestContractSupport{}
             .BuildInteractionResponseHeaders(request_id));
   }
   HttpResponse upstream;
@@ -109,18 +109,18 @@ HttpResponse InteractionHttpService::ProxyJson(
 }
 
 void InteractionHttpService::StreamPlaneInteractionSse(
-    comet::platform::SocketHandle client_fd,
+    naim::platform::SocketHandle client_fd,
     const std::string& db_path,
     const HttpRequest& request,
     AuthSupportService& auth_support) const {
   const std::string request_id =
-      comet::controller::InteractionRequestIdentitySupport{}.GenerateRequestId();
+      naim::controller::InteractionRequestIdentitySupport{}.GenerateRequestId();
   const auto executor_factory =
-      comet::controller::InteractionHttpExecutorFactory(support_);
+      naim::controller::InteractionHttpExecutorFactory(support_);
   const auto setup_result = executor_factory
       .MakeStreamRequestPreparationService(
-          [&](const comet::controller::PlaneInteractionResolution& resolution,
-              comet::controller::InteractionRequestContext* request_context) {
+          [&](const naim::controller::PlaneInteractionResolution& resolution,
+              naim::controller::InteractionRequestContext* request_context) {
             return ResolveRequestContext(resolution, request_context);
           })
       .Prepare(
@@ -140,13 +140,13 @@ void InteractionHttpService::StreamPlaneInteractionSse(
 
   const std::string stream_session_id =
       request_context.conversation_session_id.empty()
-          ? comet::controller::InteractionRequestIdentitySupport{}
+          ? naim::controller::InteractionRequestIdentitySupport{}
                 .GenerateSessionId()
           : request_context.conversation_session_id;
 
   if (!support_.SendSseHeaders(
           client_fd,
-          comet::controller::InteractionRequestContractSupport{}
+          naim::controller::InteractionRequestContractSupport{}
               .BuildInteractionResponseHeaders(request_id))) {
     support_.ShutdownAndCloseSocket(client_fd);
     return;
@@ -156,7 +156,7 @@ void InteractionHttpService::StreamPlaneInteractionSse(
       executor_factory.MakeStreamSessionExecutor();
   const auto stream_segment_executor =
       executor_factory.MakeStreamSegmentExecutor();
-  const comet::controller::InteractionSseFrameBuilder sse_frame_builder;
+  const naim::controller::InteractionSseFrameBuilder sse_frame_builder;
   const auto result = stream_session_executor.Execute(
       request_id,
       stream_session_id,

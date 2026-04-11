@@ -13,9 +13,9 @@
 #include "app/hostd_local_state_path_support.h"
 #include "app/hostd_local_state_repository.h"
 #include "app/hostd_system_telemetry_collector.h"
-#include "comet/state/state_json.h"
+#include "naim/state/state_json.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 namespace fs = std::filesystem;
 
@@ -33,14 +33,14 @@ const HostdLocalStateRepository& LocalStateRepository() {
 
 }  // namespace
 
-std::vector<comet::RuntimeProcessStatus> HostdRuntimeTelemetrySupport::LoadLocalInstanceRuntimeStatuses(
+std::vector<naim::RuntimeProcessStatus> HostdRuntimeTelemetrySupport::LoadLocalInstanceRuntimeStatuses(
     const std::string& state_root,
     const std::string& node_name,
     const std::optional<std::string>& plane_name) const {
-  std::vector<comet::RuntimeProcessStatus> result;
+  std::vector<naim::RuntimeProcessStatus> result;
   const auto local_states = plane_name.has_value()
                                 ? [&]() {
-                                    std::vector<comet::DesiredState> states;
+                                    std::vector<naim::DesiredState> states;
                                     const auto state = LocalStateRepository().LoadLocalAppliedState(
                                         state_root,
                                         node_name,
@@ -60,7 +60,7 @@ std::vector<comet::RuntimeProcessStatus> HostdRuntimeTelemetrySupport::LoadLocal
       }
       const auto status_path = WorkerRuntimeStatusPathForInstance(local_state, instance);
       const auto infer_status_path =
-          instance.role == comet::InstanceRole::Infer
+          instance.role == naim::InstanceRole::Infer
               ? path_support_.InferRuntimeStatusPathForInstance(local_state, instance)
               : std::nullopt;
       const auto selected_path =
@@ -68,7 +68,7 @@ std::vector<comet::RuntimeProcessStatus> HostdRuntimeTelemetrySupport::LoadLocal
       if (!selected_path.has_value() || !fs::exists(*selected_path)) {
         continue;
       }
-      const auto status = comet::LoadRuntimeStatusJson(*selected_path);
+      const auto status = naim::LoadRuntimeStatusJson(*selected_path);
       if (!status.has_value()) {
         continue;
       }
@@ -110,7 +110,7 @@ std::map<std::string, int> HostdRuntimeTelemetrySupport::CaptureServiceHostPids(
 }
 
 bool HostdRuntimeTelemetrySupport::VerifyEvictionAssignment(
-    const comet::DesiredState& local_state,
+    const naim::DesiredState& local_state,
     const std::string& node_name,
     const std::string& state_root,
     const std::string& status_message,
@@ -176,7 +176,7 @@ bool HostdRuntimeTelemetrySupport::VerifyEvictionAssignment(
 }
 
 void HostdRuntimeTelemetrySupport::ResolveInstanceHostPids(
-    std::vector<comet::RuntimeProcessStatus>* statuses) const {
+    std::vector<naim::RuntimeProcessStatus>* statuses) const {
   if (statuses == nullptr) {
     return;
   }
@@ -190,22 +190,22 @@ void HostdRuntimeTelemetrySupport::ResolveInstanceHostPids(
 }
 
 std::optional<std::string> HostdRuntimeTelemetrySupport::WorkerRuntimeStatusPathForInstance(
-    const comet::DesiredState& state,
-    const comet::InstanceSpec& instance) const {
-  if (instance.role != comet::InstanceRole::Worker &&
-      instance.role != comet::InstanceRole::Skills) {
+    const naim::DesiredState& state,
+    const naim::InstanceSpec& instance) const {
+  if (instance.role != naim::InstanceRole::Worker &&
+      instance.role != naim::InstanceRole::Skills) {
     return std::nullopt;
   }
   for (const auto& disk : state.disks) {
     const bool matching_disk_kind =
-        (instance.role == comet::InstanceRole::Worker &&
-         disk.kind == comet::DiskKind::WorkerPrivate) ||
-        (instance.role == comet::InstanceRole::Skills &&
-         disk.kind == comet::DiskKind::SkillsPrivate);
+        (instance.role == naim::InstanceRole::Worker &&
+         disk.kind == naim::DiskKind::WorkerPrivate) ||
+        (instance.role == naim::InstanceRole::Skills &&
+         disk.kind == naim::DiskKind::SkillsPrivate);
     if (matching_disk_kind && disk.owner_name == instance.name &&
         disk.node_name == instance.node_name) {
       return (fs::path(disk.host_path) /
-              (instance.role == comet::InstanceRole::Skills
+              (instance.role == naim::InstanceRole::Skills
                    ? "skills-runtime-status.json"
                    : "worker-runtime-status.json"))
           .string();
@@ -214,14 +214,14 @@ std::optional<std::string> HostdRuntimeTelemetrySupport::WorkerRuntimeStatusPath
   return std::nullopt;
 }
 
-comet::RuntimeProcessStatus HostdRuntimeTelemetrySupport::ToProcessStatus(
-    comet::RuntimeStatus status,
-    const comet::InstanceSpec& instance) const {
+naim::RuntimeProcessStatus HostdRuntimeTelemetrySupport::ToProcessStatus(
+    naim::RuntimeStatus status,
+    const naim::InstanceSpec& instance) const {
   if (status.instance_name.empty()) {
     status.instance_name = instance.name;
   }
   if (status.instance_role.empty()) {
-    status.instance_role = comet::ToString(instance.role);
+    status.instance_role = naim::ToString(instance.role);
   }
   if (status.node_name.empty()) {
     status.node_name = instance.node_name;
@@ -229,7 +229,7 @@ comet::RuntimeProcessStatus HostdRuntimeTelemetrySupport::ToProcessStatus(
   if (status.gpu_device.empty() && instance.gpu_device.has_value()) {
     status.gpu_device = *instance.gpu_device;
   }
-  comet::RuntimeProcessStatus process;
+  naim::RuntimeProcessStatus process;
   process.instance_name = status.instance_name;
   process.instance_role = status.instance_role;
   process.node_name = status.node_name;
@@ -319,8 +319,8 @@ std::optional<int> HostdRuntimeTelemetrySupport::ResolveServiceHostPid(
     if (pid <= 0) {
       continue;
     }
-    if (args.find("comet-workerd") != std::string::npos ||
-        args.find("comet-inferctl") != std::string::npos) {
+    if (args.find("naim-workerd") != std::string::npos ||
+        args.find("naim-inferctl") != std::string::npos) {
       return pid;
     }
     if (comm != "tini" && comm != "bash" && comm != "sh" && !fallback_pid.has_value()) {
@@ -335,4 +335,4 @@ bool HostdRuntimeTelemetrySupport::IsContainerAbsentForService(
   return !ResolveComposeContainerIdForService(service_name).has_value();
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

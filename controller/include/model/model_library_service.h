@@ -64,7 +64,7 @@ class ModelLibraryService {
     std::string quantized_from_path;
   };
 
-  using ModelLibraryDownloadJob = comet::ModelLibraryDownloadJobRecord;
+  using ModelLibraryDownloadJob = naim::ModelLibraryDownloadJobRecord;
 
   struct State {
     std::mutex jobs_mutex;

@@ -5,7 +5,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace comet::controller {
+namespace naim::controller {
 
 bool InteractionTextPostProcessor::IsUtf8ContinuationByte(
     unsigned char value) const {
@@ -238,4 +238,4 @@ std::string InteractionTextPostProcessor::ExtractInteractionText(
   return SanitizeInteractionText(choice.value("text", std::string{}));
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

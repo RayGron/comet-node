@@ -9,10 +9,10 @@
 
 #include "infra/controller_runtime_support_service.h"
 #include "observation/plane_observation_matcher.h"
-#include "comet/runtime/runtime_status.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ReadModelService {
  public:
@@ -20,7 +20,7 @@ class ReadModelService {
   explicit ReadModelService(ControllerRuntimeSupportService runtime_support_service);
 
   nlohmann::json BuildEventPayloadItem(
-      const comet::EventRecord& event) const;
+      const naim::EventRecord& event) const;
 
   nlohmann::json BuildHostAssignmentsPayload(
       const std::string& db_path,
@@ -59,4 +59,4 @@ class ReadModelService {
   PlaneObservationMatcher plane_observation_matcher_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

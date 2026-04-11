@@ -92,7 +92,7 @@ Stable top-level fields:
 - `completion_policy`
 - `long_completion_policy`
 - `request_id`
-- `comet`
+- `naim`
 
 Current `reason` values are controller-owned enums. External clients should branch on `ready`,
 `degraded`, and `reason`, not on logs.
@@ -136,7 +136,7 @@ Interaction endpoints return a machine-readable error envelope:
     "message": "plane interaction target is not ready",
     "retryable": true
   },
-  "comet": {
+  "naim": {
     "request_id": "req-...",
     "plane_name": "qwen35-35b-a3b",
     "served_model_name": "qwen3.5-35b-a3b",
@@ -226,7 +226,7 @@ Skill shape:
 - `content`
 - `enabled`
 - `session_ids[]`
-- `comet_links[]`
+- `naim_links[]`
 - `created_at`
 - `updated_at`
 
@@ -240,7 +240,7 @@ Resolution behavior for interaction requests:
 - enabled skills bound to `session_id` are appended next, ordered by `updated_at DESC`
 - duplicates are removed by skill id
 - each resolved skill is materialized by `naim-node` into a controller-owned system prompt block
-- `comet_links[]` are stored as metadata in v1 and are not injected into the prompt
+- `naim_links[]` are stored as metadata in v1 and are not injected into the prompt
 
 Response metadata when Skills are applied:
 

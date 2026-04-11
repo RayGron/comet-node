@@ -7,7 +7,7 @@
 #include "skills/plane_skill_runtime_sync_service.h"
 #include "skills/plane_skills_target_resolver.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 using nlohmann::json;
 
@@ -334,4 +334,4 @@ std::optional<HttpResponse> PlaneSkillsService::ProxyPlaneSkillsRequest(
   }
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

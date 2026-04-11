@@ -5,7 +5,7 @@
 
 #include "config/node_config_loader.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdCli::HostdCli(
     const HostdAssignmentService& assignment_service,
@@ -28,7 +28,7 @@ int HostdCli::Run(
   }
 
   try {
-    const CometNodeConfig node_config = config_loader.Load(command_line.config_path(), argv0);
+    const NaimNodeConfig node_config = config_loader.Load(command_line.config_path(), argv0);
     if (dispatcher_.Dispatch(command_line, node_config, *node_name)) {
       return 0;
     }
@@ -41,4 +41,4 @@ int HostdCli::Run(
   return 1;
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

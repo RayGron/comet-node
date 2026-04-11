@@ -4,7 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionUtf8PayloadSanitizer {
  public:
@@ -16,4 +16,4 @@ class InteractionUtf8PayloadSanitizer {
   std::size_t Utf8SequenceLength(unsigned char lead) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

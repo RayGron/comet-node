@@ -8,7 +8,7 @@
 #include "browsing/plane_browsing_service.h"
 #include "interaction/interaction_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -434,4 +434,4 @@ void InteractionBrowsingService::PersistBrowsingMode(
       persisted_mode;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

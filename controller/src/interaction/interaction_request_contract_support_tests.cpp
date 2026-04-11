@@ -13,7 +13,7 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void TestParsesTrimmedPublicSessionId() {
-  const comet::controller::InteractionRequestContractSupport support;
+  const naim::controller::InteractionRequestContractSupport support;
   const nlohmann::json payload{{"session_id", "  sess-123  "}};
   const auto session_id = support.ParsePublicSessionId(payload);
   Expect(session_id.has_value(), "support should parse session_id");
@@ -22,7 +22,7 @@ void TestParsesTrimmedPublicSessionId() {
 }
 
 void TestDetectsUnsupportedField() {
-  const comet::controller::InteractionRequestContractSupport support;
+  const naim::controller::InteractionRequestContractSupport support;
   const nlohmann::json payload{{"messages", nlohmann::json::array()}, {"tools", nlohmann::json::array()}};
   std::string field_name;
   Expect(
@@ -33,8 +33,8 @@ void TestDetectsUnsupportedField() {
 }
 
 void TestBuildsDefaultBrowsingSummary() {
-  const comet::controller::InteractionRequestContractSupport support;
-  comet::controller::InteractionRequestContext context;
+  const naim::controller::InteractionRequestContractSupport support;
+  naim::controller::InteractionRequestContext context;
   const auto browsing = support.RequestBrowsingSummary(context);
   Expect(browsing.value("mode", std::string{}) == "disabled",
          "default browsing summary should disable browsing");
@@ -45,33 +45,33 @@ void TestBuildsDefaultBrowsingSummary() {
 }
 
 void TestParsesStreamPlaneNameAndHeaders() {
-  const comet::controller::InteractionRequestContractSupport support;
+  const naim::controller::InteractionRequestContractSupport support;
   const auto plane_name = support.ParseInteractionStreamPlaneName(
       "POST",
       "/api/v1/planes/demo-plane/interaction/chat/completions/stream");
   Expect(plane_name.has_value() && *plane_name == "demo-plane",
          "support should parse stream plane name");
   const auto headers = support.BuildInteractionResponseHeaders("req-1");
-  Expect(headers.at("X-Comet-Request-Id") == "req-1",
+  Expect(headers.at("X-Naim-Request-Id") == "req-1",
          "support should build request id response header");
   std::cout << "ok: interaction-request-contract-parses-stream-path" << '\n';
 }
 
 void TestBuildsContractMetadataPreferringRuntimeIdentity() {
-  const comet::controller::InteractionRequestContractSupport support;
-  comet::controller::PlaneInteractionResolution resolution;
+  const naim::controller::InteractionRequestContractSupport support;
+  naim::controller::PlaneInteractionResolution resolution;
   resolution.status_payload = {
       {"plane_name", "demo-plane"},
       {"reason", "ready"},
       {"served_model_name", "status-served"},
       {"active_model_id", "status-active"},
   };
-  comet::RuntimeStatus runtime_status;
+  naim::RuntimeStatus runtime_status;
   runtime_status.active_served_model_name = "runtime-served";
   runtime_status.active_model_id = "runtime-active";
   resolution.runtime_status = runtime_status;
-  resolution.desired_state.interaction = comet::InteractionSettings{};
-  comet::InteractionSettings::CompletionPolicy completion_policy;
+  resolution.desired_state.interaction = naim::InteractionSettings{};
+  naim::InteractionSettings::CompletionPolicy completion_policy;
   completion_policy.response_mode = "normal";
   completion_policy.max_tokens = 512;
   resolution.desired_state.interaction->completion_policy = completion_policy;

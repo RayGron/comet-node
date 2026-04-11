@@ -9,7 +9,7 @@
 
 using nlohmann::json;
 
-namespace comet::controller {
+namespace naim::controller {
 
 PlaneRegistryService::PlaneRegistryService(
     std::shared_ptr<const PlaneLifecycleSupport> lifecycle_support,
@@ -23,7 +23,7 @@ json PlaneRegistryService::BuildPlanesPayload(const std::string& db_path) const 
         "plane registry service dependencies are not configured");
   }
 
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const HostAssignmentReconciliationService reconciliation_service;
 
@@ -69,11 +69,11 @@ json PlaneRegistryService::BuildPlanesPayload(const std::string& db_path) const 
     int in_flight_assignments = 0;
     for (const auto& [node_name, assignment] : latest_assignments_by_node) {
       (void)node_name;
-      if (assignment.status == comet::HostAssignmentStatus::Failed) {
+      if (assignment.status == naim::HostAssignmentStatus::Failed) {
         ++failed_assignments;
       } else if (
-          assignment.status == comet::HostAssignmentStatus::Pending ||
-          assignment.status == comet::HostAssignmentStatus::Claimed) {
+          assignment.status == naim::HostAssignmentStatus::Pending ||
+          assignment.status == naim::HostAssignmentStatus::Claimed) {
         ++in_flight_assignments;
       }
     }
@@ -116,10 +116,10 @@ json PlaneRegistryService::BuildPlanesPayload(const std::string& db_path) const 
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"items", std::move(items)},
   };
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

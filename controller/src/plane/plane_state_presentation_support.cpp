@@ -1,6 +1,6 @@
 #include "plane/plane_state_presentation_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 ControllerPlaneStatePresentationSupport::ControllerPlaneStatePresentationSupport(
     const ControllerPrintService& controller_print_service)
@@ -12,8 +12,8 @@ std::string ControllerPlaneStatePresentationSupport::FormatTimestamp(
 }
 
 void ControllerPlaneStatePresentationSupport::PrintStateSummary(
-    const comet::DesiredState& state) const {
+    const naim::DesiredState& state) const {
   controller_print_service_.PrintStateSummary(state);
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

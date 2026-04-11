@@ -3,10 +3,10 @@
 #include <string>
 #include <vector>
 
-#include "comet/runtime/runtime_status.h"
-#include "comet/state/models.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/state/models.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 struct InteractionReplicaGroupSummary {
   int expected_replica_groups = 0;
@@ -23,14 +23,14 @@ struct InteractionReplicaGroupSummary {
 class InteractionReplicaGroupSummaryBuilder {
  public:
   std::string BuildHybridReplicaGroupKey(
-      const comet::WorkerGroupMemberSpec& member) const;
+      const naim::WorkerGroupMemberSpec& member) const;
 
   int CountExpectedHybridApiEndpoints(
-      const comet::DesiredState& desired_state) const;
+      const naim::DesiredState& desired_state) const;
 
   InteractionReplicaGroupSummary Build(
-      const comet::DesiredState& desired_state,
-      const std::vector<comet::RuntimeProcessStatus>& instance_statuses) const;
+      const naim::DesiredState& desired_state,
+      const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -5,7 +5,7 @@
 
 #include "config/install_layout.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 namespace fs = std::filesystem;
 
@@ -70,4 +70,4 @@ struct HostdRunOptions {
   int inventory_scan_interval_sec = 3600;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

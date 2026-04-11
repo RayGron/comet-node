@@ -6,7 +6,7 @@
 
 #include "interaction/interaction_request_heuristics.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -31,7 +31,7 @@ std::string TrimCopy(const std::string& value) {
 }  // namespace
 
 InteractionCompletionPolicy InteractionCompletionPolicySupport::NormalizeConfiguredPolicy(
-    const comet::InteractionSettings::CompletionPolicy& configured_policy) const {
+    const naim::InteractionSettings::CompletionPolicy& configured_policy) const {
   InteractionCompletionPolicy policy;
   const InteractionRequestHeuristics heuristics;
   const std::string normalized_mode =
@@ -70,7 +70,7 @@ InteractionCompletionPolicy InteractionCompletionPolicySupport::NormalizeConfigu
 }
 
 InteractionCompletionPolicy InteractionCompletionPolicySupport::DefaultChatPolicy() const {
-  comet::InteractionSettings::CompletionPolicy configured_policy;
+  naim::InteractionSettings::CompletionPolicy configured_policy;
   configured_policy.response_mode = "normal";
   configured_policy.max_tokens = 512;
   configured_policy.max_continuations = 0;
@@ -80,7 +80,7 @@ InteractionCompletionPolicy InteractionCompletionPolicySupport::DefaultChatPolic
 }
 
 ResolvedInteractionPolicy InteractionCompletionPolicySupport::ResolvePolicy(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const nlohmann::json& payload) const {
   ResolvedInteractionPolicy resolved;
   const InteractionRequestHeuristics heuristics;
@@ -253,4 +253,4 @@ bool InteractionCompletionPolicySupport::CanCompleteOnNaturalStop(
   return summary.finish_reason != "length" && !TrimCopy(summary.text).empty();
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

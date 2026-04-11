@@ -8,8 +8,8 @@
 #include <sqlite3.h>
 #include <zstd.h>
 
-#include "comet/security/crypto_utils.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/security/crypto_utils.h"
+#include "naim/state/sqlite_store.h"
 #include "interaction/interaction_conversation_archive_service.h"
 #include "interaction/interaction_conversation_payload_builder.h"
 
@@ -28,7 +28,7 @@ std::filesystem::path MakeTempRoot(const std::string& name) {
                          std::chrono::system_clock::now().time_since_epoch())
                          .count();
   return std::filesystem::temp_directory_path() /
-         ("comet-" + name + "-" + std::to_string(stamp));
+         ("naim-" + name + "-" + std::to_string(stamp));
 }
 
 std::string CompressStringZstd(const std::string& input) {
@@ -80,12 +80,12 @@ void TestArchivesInactiveSessions() {
   const auto cleanup = [&]() { std::filesystem::remove_all(root); };
   try {
     const std::string db_path = (root / "controller.sqlite").string();
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     InsertPlane(db_path, "plane-a");
     const auto user = store.CreateBootstrapAdmin("archive-user", "hash");
 
-    comet::InteractionSessionRecord session;
+    naim::InteractionSessionRecord session;
     session.session_id = "session-1";
     session.plane_name = "plane-a";
     session.owner_kind = "user";
@@ -97,7 +97,7 @@ void TestArchivesInactiveSessions() {
     store.UpsertInteractionSession(session);
     store.ReplaceInteractionMessages(
         session.session_id,
-        {comet::InteractionMessageRecord{
+        {naim::InteractionMessageRecord{
             session.session_id,
             0,
             "user",
@@ -108,7 +108,7 @@ void TestArchivesInactiveSessions() {
         }});
     store.ReplaceInteractionSummaries(
         session.session_id,
-        {comet::InteractionSummaryRecord{
+        {naim::InteractionSummaryRecord{
             0,
             session.session_id,
             0,
@@ -117,7 +117,7 @@ void TestArchivesInactiveSessions() {
             "2020-01-01 00:00:00",
         }});
 
-    const comet::controller::InteractionConversationArchiveService archive_service;
+    const naim::controller::InteractionConversationArchiveService archive_service;
     archive_service.MaybeArchiveInactiveSessions(db_path);
 
     const auto archived = store.LoadInteractionSessionForOwner(
@@ -145,12 +145,12 @@ void TestRestoresArchivedSession() {
   const auto cleanup = [&]() { std::filesystem::remove_all(root); };
   try {
     const std::string db_path = (root / "controller.sqlite").string();
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     InsertPlane(db_path, "plane-b");
     const auto user = store.CreateBootstrapAdmin("restore-user", "hash");
 
-    const comet::controller::InteractionConversationPayloadBuilder payload_builder;
+    const naim::controller::InteractionConversationPayloadBuilder payload_builder;
     const std::filesystem::path archive_path =
         root / "interaction-archives" / "plane-b" / "session-2.json.zst";
     const json archive_payload{
@@ -183,7 +183,7 @@ void TestRestoresArchivedSession() {
         CompressStringZstd(payload_builder.JsonString(archive_payload));
     WriteBinaryFile(archive_path, compressed);
 
-    comet::InteractionSessionRecord archived_session;
+    naim::InteractionSessionRecord archived_session;
     archived_session.session_id = "session-2";
     archived_session.plane_name = "plane-b";
     archived_session.owner_kind = "user";
@@ -194,7 +194,7 @@ void TestRestoresArchivedSession() {
     archived_session.archived_at = "2020-01-02 00:00:00";
     archived_session.archive_path = archive_path.string();
     archived_session.archive_codec = "zstd";
-    archived_session.archive_sha256 = comet::ComputeSha256Hex(compressed);
+    archived_session.archive_sha256 = naim::ComputeSha256Hex(compressed);
     archived_session.context_state_json =
         payload_builder.JsonString(json{{"browsing_mode", "enabled"}});
     archived_session.latest_prompt_tokens = 3;
@@ -205,7 +205,7 @@ void TestRestoresArchivedSession() {
     archived_session.updated_at = "2020-01-02 00:00:00";
     store.UpsertInteractionSession(archived_session);
 
-    store.UpsertInteractionArchive(comet::InteractionArchiveRecord{
+    store.UpsertInteractionArchive(naim::InteractionArchiveRecord{
         "session-2",
         "plane-b",
         "user",
@@ -219,7 +219,7 @@ void TestRestoresArchivedSession() {
         "2020-01-02 00:00:00",
     });
 
-    const comet::controller::InteractionConversationArchiveService archive_service;
+    const naim::controller::InteractionConversationArchiveService archive_service;
     const auto error =
         archive_service.RestoreArchivedSession(
             store, "plane-b", "session-2", "user", user.id);

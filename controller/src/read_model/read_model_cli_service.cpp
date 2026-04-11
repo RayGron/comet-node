@@ -4,14 +4,14 @@
 #include <stdexcept>
 #include <utility>
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
 struct HostAssignmentsViewData {
   std::string db_path;
   std::optional<std::string> node_name;
-  std::vector<comet::HostAssignment> assignments;
+  std::vector<naim::HostAssignment> assignments;
 };
 
 struct HostObservationsViewData {
@@ -19,26 +19,26 @@ struct HostObservationsViewData {
   std::optional<std::string> plane_name;
   std::optional<std::string> node_name;
   int stale_after_seconds = 0;
-  std::vector<comet::HostObservation> observations;
+  std::vector<naim::HostObservation> observations;
 };
 
 struct HostHealthViewData {
   std::string db_path;
   std::optional<std::string> node_name;
   int stale_after_seconds = 0;
-  std::optional<comet::DesiredState> desired_state;
-  std::vector<comet::HostObservation> observations;
-  std::vector<comet::NodeAvailabilityOverride> availability_overrides;
+  std::optional<naim::DesiredState> desired_state;
+  std::vector<naim::HostObservation> observations;
+  std::vector<naim::NodeAvailabilityOverride> availability_overrides;
 };
 
 struct DiskStateViewData {
   std::string db_path;
   std::optional<std::string> plane_name;
   std::optional<std::string> node_name;
-  std::optional<comet::DesiredState> desired_state;
+  std::optional<naim::DesiredState> desired_state;
   std::optional<int> desired_generation;
-  std::vector<comet::DiskRuntimeState> runtime_states;
-  std::vector<comet::HostObservation> observations;
+  std::vector<naim::DiskRuntimeState> runtime_states;
+  std::vector<naim::HostObservation> observations;
 };
 
 struct EventsViewData {
@@ -48,7 +48,7 @@ struct EventsViewData {
   std::optional<std::string> worker_name;
   std::optional<std::string> category;
   int limit = 100;
-  std::vector<comet::EventRecord> events;
+  std::vector<naim::EventRecord> events;
 };
 
 }  // namespace
@@ -68,7 +68,7 @@ ReadModelCliService::ReadModelCliService(
 int ReadModelCliService::ShowHostAssignments(
     const std::string& db_path,
     const std::optional<std::string>& node_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const HostAssignmentsViewData view{
       db_path,
@@ -85,7 +85,7 @@ int ReadModelCliService::ShowHostObservations(
     const std::optional<std::string>& plane_name,
     const std::optional<std::string>& node_name,
     int stale_after_seconds) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto observations = plane_name.has_value()
                                 ? plane_observation_matcher_.FilterHostObservationsForPlane(
@@ -112,7 +112,7 @@ int ReadModelCliService::ShowHostObservations(
 int ReadModelCliService::ShowNodeAvailability(
     const std::string& db_path,
     const std::optional<std::string>& node_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   std::cout << "db: " << db_path << "\n";
@@ -125,7 +125,7 @@ int ReadModelCliService::ShowHostHealth(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     int stale_after_seconds) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const HostHealthViewData view{
       db_path,
@@ -153,7 +153,7 @@ int ReadModelCliService::ShowEvents(
     const std::optional<std::string>& worker_name,
     const std::optional<std::string>& category,
     int limit) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const EventsViewData view{
       db_path,
@@ -206,7 +206,7 @@ int ReadModelCliService::ShowState(const std::string& db_path) const {
       view.disk_runtime_states,
       view.observations,
       std::nullopt);
-  std::cout << comet::RenderSchedulingPolicyReport(view.scheduling_report);
+  std::cout << naim::RenderSchedulingPolicyReport(view.scheduling_report);
   controller_print_service_.PrintSchedulerDecisionSummary(*view.desired_state);
   controller_print_service_.PrintRolloutGateSummary(view.scheduling_report);
   scheduler_view_service_.PrintRebalanceControllerGateSummary(
@@ -252,7 +252,7 @@ int ReadModelCliService::ShowDiskState(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto desired_state =
       plane_name.has_value() ? store.LoadDesiredState(*plane_name)
@@ -266,7 +266,7 @@ int ReadModelCliService::ShowDiskState(
                              : store.LoadDesiredGeneration(),
       desired_state.has_value()
           ? store.LoadDiskRuntimeStates(desired_state->plane_name, node_name)
-          : std::vector<comet::DiskRuntimeState>{},
+          : std::vector<naim::DiskRuntimeState>{},
       plane_name.has_value()
           ? plane_observation_matcher_.FilterHostObservationsForPlane(
                 store.LoadHostObservations(node_name),
@@ -294,4 +294,4 @@ int ReadModelCliService::ShowDiskState(
   return 0;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -16,17 +16,17 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-comet::DiskSpec BuildDisk(
+naim::DiskSpec BuildDisk(
     const std::string& plane_name,
     const std::string& node_name,
     const std::string& disk_name,
     const std::string& host_path) {
-  comet::DiskSpec disk;
+  naim::DiskSpec disk;
   disk.name = disk_name;
   disk.plane_name = plane_name;
   disk.node_name = node_name;
   disk.host_path = host_path;
-  disk.kind = comet::DiskKind::PlaneShared;
+  disk.kind = naim::DiskKind::PlaneShared;
   disk.size_gb = 2;
   return disk;
 }
@@ -35,10 +35,10 @@ comet::DiskSpec BuildDisk(
 
 int main() {
   try {
-    const comet::hostd::HostdCommandSupport command_support;
-    const comet::hostd::HostdDesiredStatePathSupport path_support;
-    const comet::hostd::HostdFileSupport file_support;
-    const comet::hostd::HostdDiskRuntimeSupport support(
+    const naim::hostd::HostdCommandSupport command_support;
+    const naim::hostd::HostdDesiredStatePathSupport path_support;
+    const naim::hostd::HostdFileSupport file_support;
+    const naim::hostd::HostdDiskRuntimeSupport support(
         command_support,
         path_support,
         file_support);
@@ -50,7 +50,7 @@ int main() {
     }
 
     {
-      comet::DesiredState state;
+      naim::DesiredState state;
       state.plane_name = "plane-a";
       state.disks.push_back(BuildDisk("plane-a", "node-a", "shared", "/tmp/shared"));
       const auto disk = support.FindDiskInStateByKey(state, "shared@node-a");
@@ -61,7 +61,7 @@ int main() {
     {
       namespace fs = std::filesystem;
       const fs::path temp_root =
-          fs::temp_directory_path() / "comet-hostd-disk-runtime-support-tests";
+          fs::temp_directory_path() / "naim-hostd-disk-runtime-support-tests";
       std::error_code cleanup_error;
       fs::remove_all(temp_root, cleanup_error);
       fs::create_directories(temp_root);

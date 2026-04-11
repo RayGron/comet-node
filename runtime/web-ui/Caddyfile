@@ -11,10 +11,10 @@
     respond @health "ok" 200
 
     @events path /api/v1/events/stream*
-    reverse_proxy @events {$COMET_CONTROLLER_UPSTREAM}
+    reverse_proxy @events {$NAIM_CONTROLLER_UPSTREAM}
 
     @api path /api/*
-    reverse_proxy @api {$COMET_CONTROLLER_UPSTREAM}
+    reverse_proxy @api {$NAIM_CONTROLLER_UPSTREAM}
 
     try_files {path} /index.html
     file_server

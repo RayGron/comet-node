@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/build-context.sh"
 
-comet_resolve_build_context "${script_dir}" "$@"
+naim_resolve_build_context "${script_dir}" "$@"
 
 cuda_root=""
 cuda_nvcc=""
@@ -116,10 +116,10 @@ ninja_exe="$("${script_dir}/find-ninja.sh")"
 cmake_exe="$("${script_dir}/find-cmake.sh")"
 extra_cmake_args=()
 
-if [[ -n "${COMET_CMAKE_ARGS:-}" ]]; then
-  # COMET_CMAKE_ARGS uses shell-style tokenization so callers can pass multiple -D flags.
+if [[ -n "${NAIM_CMAKE_ARGS:-}" ]]; then
+  # NAIM_CMAKE_ARGS uses shell-style tokenization so callers can pass multiple -D flags.
   # shellcheck disable=SC2206
-  extra_cmake_args=( ${COMET_CMAKE_ARGS} )
+  extra_cmake_args=( ${NAIM_CMAKE_ARGS} )
 fi
 
 if [[ ! -f "${vcpkg_toolchain}" ]]; then

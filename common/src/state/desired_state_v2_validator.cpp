@@ -1,11 +1,11 @@
-#include "comet/state/desired_state_v2_validator.h"
+#include "naim/state/desired_state_v2_validator.h"
 
 #include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -676,4 +676,4 @@ void DesiredStateV2Validator::ValidateNodeRoleCompatibility(
   }
 }
 
-}  // namespace comet
+}  // namespace naim

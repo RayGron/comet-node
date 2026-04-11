@@ -8,11 +8,11 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/runtime/runtime_status.h"
-#include "comet/state/models.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/state/models.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 struct ControllerEndpointTarget {
   std::string raw;
@@ -23,10 +23,10 @@ struct ControllerEndpointTarget {
 
 struct PlaneInteractionResolution {
   std::string db_path;
-  comet::DesiredState desired_state;
-  std::optional<comet::PlaneRecord> plane_record;
-  std::optional<comet::HostObservation> observation;
-  std::optional<comet::RuntimeStatus> runtime_status;
+  naim::DesiredState desired_state;
+  std::optional<naim::PlaneRecord> plane_record;
+  std::optional<naim::HostObservation> observation;
+  std::optional<naim::RuntimeStatus> runtime_status;
   std::optional<ControllerEndpointTarget> target;
   nlohmann::json status_payload;
 };
@@ -114,7 +114,7 @@ struct InteractionRequestContext {
 };
 
 inline constexpr const char* kInteractionSessionContextStatePayloadKey =
-    "_comet_session_context_state";
+    "_naim_session_context_state";
 
 struct InteractionValidationError {
   std::string code;
@@ -159,4 +159,4 @@ struct InteractionStreamingUpstreamConnection {
   std::function<void()> close;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

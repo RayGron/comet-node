@@ -7,7 +7,7 @@
 #include "backend/hostd_backend.h"
 #include "backend/http_hostd_backend_support.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class IHostdBackendFactory {
  public:
@@ -40,4 +40,4 @@ class HostdBackendFactory final : public IHostdBackendFactory {
   const IHttpHostdBackendSupport& support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -4,7 +4,7 @@
 #include <cctype>
 #include <vector>
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string InteractionRequestHeuristics::LastUserMessageContent(
     const nlohmann::json& payload) const {
@@ -99,4 +99,4 @@ bool InteractionRequestHeuristics::ContainsAnySubstring(
       });
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

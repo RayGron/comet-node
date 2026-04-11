@@ -3,9 +3,9 @@
 #include <ctime>
 #include <stdexcept>
 
-#include "comet/security/crypto_utils.h"
+#include "naim/security/crypto_utils.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 namespace {
 
@@ -37,7 +37,7 @@ HttpHostdBackend::HttpHostdBackend(
       storage_root_(std::move(storage_root)),
       support_(support) {}
 
-std::optional<comet::HostAssignment> HttpHostdBackend::ClaimNextHostAssignment(
+std::optional<naim::HostAssignment> HttpHostdBackend::ClaimNextHostAssignment(
     const std::string& node_name) {
   EnsureSession(node_name, "claiming next assignment");
   const auto payload = SendEncryptedControllerJsonRequest(
@@ -52,22 +52,22 @@ std::optional<comet::HostAssignment> HttpHostdBackend::ClaimNextHostAssignment(
 
 bool HttpHostdBackend::TransitionClaimedHostAssignment(
     const int assignment_id,
-    const comet::HostAssignmentStatus status,
+    const naim::HostAssignmentStatus status,
     const std::string& status_message) {
-  if (status == comet::HostAssignmentStatus::Applied) {
+  if (status == naim::HostAssignmentStatus::Applied) {
     SendEncryptedControllerJsonRequest(
         "/api/v1/hostd/assignments/" + std::to_string(assignment_id) + "/applied",
         nlohmann::json{{"status_message", status_message}},
         "assignments/" + std::to_string(assignment_id) + "/applied");
     return true;
   }
-  if (status == comet::HostAssignmentStatus::Pending ||
-      status == comet::HostAssignmentStatus::Failed) {
+  if (status == naim::HostAssignmentStatus::Pending ||
+      status == naim::HostAssignmentStatus::Failed) {
     SendEncryptedControllerJsonRequest(
         "/api/v1/hostd/assignments/" + std::to_string(assignment_id) + "/failed",
         nlohmann::json{
             {"status_message", status_message},
-            {"retry", status == comet::HostAssignmentStatus::Pending},
+            {"retry", status == naim::HostAssignmentStatus::Pending},
         },
         "assignments/" + std::to_string(assignment_id) + "/failed");
     return true;
@@ -85,7 +85,7 @@ bool HttpHostdBackend::UpdateHostAssignmentProgress(
   return true;
 }
 
-void HttpHostdBackend::UpsertHostObservation(const comet::HostObservation& observation) {
+void HttpHostdBackend::UpsertHostObservation(const naim::HostObservation& observation) {
   EnsureSession(observation.node_name, "uploading observation");
   SendEncryptedControllerJsonRequest(
       "/api/v1/hostd/observations",
@@ -93,7 +93,7 @@ void HttpHostdBackend::UpsertHostObservation(const comet::HostObservation& obser
       "observations/upsert");
 }
 
-void HttpHostdBackend::AppendEvent(const comet::EventRecord& event) {
+void HttpHostdBackend::AppendEvent(const naim::EventRecord& event) {
   if (!event.node_name.empty()) {
     EnsureSession(event.node_name, "appending event");
   }
@@ -117,7 +117,7 @@ void HttpHostdBackend::AppendEvent(const comet::EventRecord& event) {
       "events/append");
 }
 
-void HttpHostdBackend::UpsertDiskRuntimeState(const comet::DiskRuntimeState& state) {
+void HttpHostdBackend::UpsertDiskRuntimeState(const naim::DiskRuntimeState& state) {
   EnsureSession(state.node_name, "upserting disk runtime state");
   SendEncryptedControllerJsonRequest(
       "/api/v1/hostd/disk-runtime-state",
@@ -125,7 +125,7 @@ void HttpHostdBackend::UpsertDiskRuntimeState(const comet::DiskRuntimeState& sta
       "disk-runtime-state/upsert");
 }
 
-std::optional<comet::DiskRuntimeState> HttpHostdBackend::LoadDiskRuntimeState(
+std::optional<naim::DiskRuntimeState> HttpHostdBackend::LoadDiskRuntimeState(
     const std::string& disk_name,
     const std::string& node_name) {
   EnsureSession(node_name, "loading disk runtime state");
@@ -175,7 +175,7 @@ void HttpHostdBackend::EnsureRegistered(const std::string& node_name) {
       "/api/v1/hostd/register",
       nlohmann::json{
           {"node_name", node_name},
-          {"public_key_base64", comet::DerivePublicKeyBase64(private_key_base64_)},
+          {"public_key_base64", naim::DerivePublicKeyBase64(private_key_base64_)},
           {"onboarding_key", onboarding_key_},
           {"transport_mode", "out"},
           {"execution_mode", "mixed"},
@@ -220,7 +220,7 @@ nlohmann::json HttpHostdBackend::SendEncryptedControllerJsonRequest(
           throw std::runtime_error("missing host session token");
         }
         host_sequence_ += 1;
-        const comet::EncryptedEnvelope envelope = comet::EncryptEnvelopeBase64(
+        const naim::EncryptedEnvelope envelope = naim::EncryptEnvelopeBase64(
             payload.dump(),
             session_token_,
             BuildRequestAad(message_type, host_sequence_));
@@ -243,11 +243,11 @@ nlohmann::json HttpHostdBackend::SendEncryptedControllerJsonRequest(
         if (controller_sequence <= controller_sequence_) {
           throw std::runtime_error("stale or replayed controller session response");
         }
-        const comet::EncryptedEnvelope response_envelope{
+        const naim::EncryptedEnvelope response_envelope{
             response.value("nonce", std::string{}),
             response.value("ciphertext", std::string{}),
         };
-        const std::string decrypted = comet::DecryptEnvelopeBase64(
+        const std::string decrypted = naim::DecryptEnvelopeBase64(
             response_envelope,
             session_token_,
             BuildResponseAad(message_type, controller_sequence));
@@ -276,10 +276,10 @@ void HttpHostdBackend::EnsureSession(const std::string& node_name, const std::st
       ResetSessionState();
     }
   }
-  const std::string nonce = comet::RandomTokenBase64(24);
+  const std::string nonce = naim::RandomTokenBase64(24);
   const std::string timestamp = std::to_string(std::time(nullptr));
   const std::string message = "hostd-session-open\n" + node_name + "\n" + timestamp + "\n" + nonce;
-  const std::string signature = comet::SignDetachedBase64(message, private_key_base64_);
+  const std::string signature = naim::SignDetachedBase64(message, private_key_base64_);
   nlohmann::json response;
   try {
     response = support_.SendControllerJsonRequest(
@@ -336,8 +336,8 @@ std::map<std::string, std::string> HttpHostdBackend::SessionHeaders() const {
     return {};
   }
   return {
-      {"X-Comet-Host-Session", session_token_},
-      {"X-Comet-Host-Node", session_node_name_},
+      {"X-Naim-Host-Session", session_token_},
+      {"X-Naim-Host-Node", session_node_name_},
   };
 }
 
@@ -361,4 +361,4 @@ nlohmann::json HttpHostdBackend::RetryOnRecoverableSessionError(
   }
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -1,8 +1,8 @@
-#include "comet/state/state_json_runtime_codecs.h"
+#include "naim/state/state_json_runtime_codecs.h"
 
 #include <stdexcept>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -70,7 +70,7 @@ json StateJsonRuntimeCodecs::ToJson(const NodeInventory& node) {
   return json{
       {"name", node.name},
       {"platform", node.platform},
-      {"execution_mode", comet::ToString(node.execution_mode)},
+      {"execution_mode", naim::ToString(node.execution_mode)},
       {"gpu_memory_mb", node.gpu_memory_mb},
   };
 }
@@ -95,7 +95,7 @@ json StateJsonRuntimeCodecs::ToJson(const WorkerGroupMemberSpec& member) {
       {"data_parallel_rpc_port", member.data_parallel_rpc_port},
       {"rpc_port", member.rpc_port},
       {"gpu_fraction", member.gpu_fraction},
-      {"share_mode", comet::ToString(member.share_mode)},
+      {"share_mode", naim::ToString(member.share_mode)},
       {"priority", member.priority},
       {"preemptible", member.preemptible},
       {"enabled", member.enabled},
@@ -129,8 +129,8 @@ json StateJsonRuntimeCodecs::ToJson(const RuntimeGpuNode& gpu_node) {
       {"name", gpu_node.name},
       {"node_name", gpu_node.node_name},
       {"gpu_device", gpu_node.gpu_device},
-      {"placement_mode", comet::ToString(gpu_node.placement_mode)},
-      {"share_mode", comet::ToString(gpu_node.share_mode)},
+      {"placement_mode", naim::ToString(gpu_node.placement_mode)},
+      {"share_mode", naim::ToString(gpu_node.share_mode)},
       {"gpu_fraction", gpu_node.gpu_fraction},
       {"priority", gpu_node.priority},
       {"preemptible", gpu_node.preemptible},
@@ -145,7 +145,7 @@ json StateJsonRuntimeCodecs::ToJson(const RuntimeGpuNode& gpu_node) {
 json StateJsonRuntimeCodecs::ToJson(const DiskSpec& disk) {
   return json{
       {"name", disk.name},
-      {"kind", comet::ToString(disk.kind)},
+      {"kind", naim::ToString(disk.kind)},
       {"plane_name", disk.plane_name},
       {"owner_name", disk.owner_name},
       {"node_name", disk.node_name},
@@ -158,7 +158,7 @@ json StateJsonRuntimeCodecs::ToJson(const DiskSpec& disk) {
 json StateJsonRuntimeCodecs::ToJson(const InstanceSpec& instance) {
   json result = json{
       {"name", instance.name},
-      {"role", comet::ToString(instance.role)},
+      {"role", naim::ToString(instance.role)},
       {"plane_name", instance.plane_name},
       {"node_name", instance.node_name},
       {"image", instance.image},
@@ -169,8 +169,8 @@ json StateJsonRuntimeCodecs::ToJson(const InstanceSpec& instance) {
       {"environment", instance.environment},
       {"labels", instance.labels},
       {"published_ports", json::array()},
-      {"placement_mode", comet::ToString(instance.placement_mode)},
-      {"share_mode", comet::ToString(instance.share_mode)},
+      {"placement_mode", naim::ToString(instance.placement_mode)},
+      {"share_mode", naim::ToString(instance.share_mode)},
       {"gpu_fraction", instance.gpu_fraction},
       {"priority", instance.priority},
       {"preemptible", instance.preemptible},
@@ -349,4 +349,4 @@ InstanceSpec StateJsonRuntimeCodecs::InstanceSpecFromJson(
   return instance;
 }
 
-}  // namespace comet
+}  // namespace naim

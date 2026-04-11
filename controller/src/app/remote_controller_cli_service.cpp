@@ -6,7 +6,7 @@
 #include "http/controller_http_server_support.h"
 #include "infra/controller_remote_client.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 int RemoteControllerCliService::EmitRemoteJsonPayload(
     const nlohmann::json& payload) const {
@@ -351,4 +351,4 @@ int RemoteControllerCliService::ExecuteCommand(
   return 1;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

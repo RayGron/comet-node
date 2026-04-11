@@ -18,7 +18,7 @@ cleanup() {
 trap cleanup EXIT
 
 next_port() {
-  "${script_dir}/comet-devtool.sh" free-port
+  "${script_dir}/naim-devtool.sh" free-port
 }
 
 cleanup
@@ -32,7 +32,7 @@ echo "macos-check: launcher smoke"
 
 launcher_port="$(next_port)"
 launcher_output="$(
-  COMET_INSTALL_ROOT="${launcher_root}" \
+  NAIM_INSTALL_ROOT="${launcher_root}" \
     "${build_dir}/naim-node" install controller \
       --with-hostd \
       --with-web-ui \
@@ -41,7 +41,7 @@ launcher_output="$(
 )"
 printf '%s' "${launcher_output}" | grep -F 'installed controller' >/dev/null
 printf '%s' "${launcher_output}" | grep -F "controller_api_url=http://127.0.0.1:${launcher_port}" >/dev/null
-COMET_INSTALL_ROOT="${launcher_root}" \
+NAIM_INSTALL_ROOT="${launcher_root}" \
   "${build_dir}/naim-node" service verify controller-hostd --skip-systemctl >/dev/null
 
 echo "macos-check: live phase l"

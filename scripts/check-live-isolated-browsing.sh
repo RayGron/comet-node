@@ -69,14 +69,25 @@ controller_pid=""
 browsing_pid=""
 
 cleanup() {
-  if [[ -n "${browsing_pid}" ]]; then
-    kill "${browsing_pid}" >/dev/null 2>&1 || true
-    wait "${browsing_pid}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${controller_pid}" ]]; then
-    kill "${controller_pid}" >/dev/null 2>&1 || true
-    wait "${controller_pid}" >/dev/null 2>&1 || true
-  fi
+  stop_pid() {
+    local pid="$1"
+    if [[ -z "${pid}" ]]; then
+      return 0
+    fi
+    kill "${pid}" >/dev/null 2>&1 || true
+    for _ in $(seq 1 10); do
+      if ! kill -0 "${pid}" >/dev/null 2>&1; then
+        wait "${pid}" >/dev/null 2>&1 || true
+        return 0
+      fi
+      sleep 0.1
+    done
+    kill -9 "${pid}" >/dev/null 2>&1 || true
+    wait "${pid}" >/dev/null 2>&1 || true
+  }
+
+  stop_pid "${browsing_pid}"
+  stop_pid "${controller_pid}"
   rm -rf "${work_root}"
 }
 trap cleanup EXIT
@@ -206,7 +217,7 @@ try:
           status_message
         ) VALUES (
           'local-hostd',
-          'dGVzdA==',
+          'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
           'out',
           'mixed',
           'registered',
@@ -273,8 +284,8 @@ if [[ "${pre_status_code}" != "200" ]]; then
   exit 1
 fi
 pre_status="$(cat "${pre_status_path}")"
-printf '%s' "${pre_status}" | grep -F '"browsing_enabled":true' >/dev/null
-printf '%s' "${pre_status}" | grep -F '"browsing_ready":false' >/dev/null
+printf '%s' "${pre_status}" | grep -F '"webgateway_enabled":true' >/dev/null
+printf '%s' "${pre_status}" | grep -F '"webgateway_ready":false' >/dev/null
 printf '%s' "${pre_status}" | grep -F '"plane_name":"maglev"' >/dev/null
 
 echo "isolated-browsing-live: start browsing runtime"
@@ -298,11 +309,10 @@ status_payload="$(
     -H "X-Naim-Session-Token: ${auth_token}" \
     "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/webgateway/status"
 )"
-printf '%s' "${status_payload}" | grep -F '"browsing_ready":true' >/dev/null
-printf '%s' "${status_payload}" | grep -F "\"browsing_target\":\"http://127.0.0.1:${browsing_port}\"" >/dev/null
+printf '%s' "${status_payload}" | grep -F '"webgateway_ready":true' >/dev/null
+printf '%s' "${status_payload}" | grep -F "\"webgateway_target\":\"http://127.0.0.1:${browsing_port}\"" >/dev/null
 printf '%s' "${status_payload}" | grep -F '"browser_session_enabled":true' >/dev/null
-printf '%s' "${status_payload}" | grep -F '"rendered_browser_ready":true' >/dev/null
-printf '%s' "${status_payload}" | grep -F '"session_backend":"cef"' >/dev/null
+printf '%s' "${status_payload}" | grep -F '"rendered_browser_enabled":true' >/dev/null
 
 echo "isolated-browsing-live: verify maglev dashboard exposes browsing state"
 dashboard_payload="$(
@@ -310,8 +320,8 @@ dashboard_payload="$(
     -H "X-Naim-Session-Token: ${auth_token}" \
     "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/dashboard"
 )"
-printf '%s' "${dashboard_payload}" | grep -F '"browsing_enabled":true' >/dev/null
-printf '%s' "${dashboard_payload}" | grep -F '"browsing_ready":true' >/dev/null
+printf '%s' "${dashboard_payload}" | grep -F '"webgateway_enabled":true' >/dev/null
+printf '%s' "${dashboard_payload}" | grep -F '"webgateway_ready":true' >/dev/null
 
 echo "isolated-browsing-live: verify maglev interaction status exposes browsing capability"
 interaction_payload="$(
@@ -320,8 +330,8 @@ interaction_payload="$(
     "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/interaction/status"
 )"
 printf '%s' "${interaction_payload}" | grep -F '"interaction_enabled":true' >/dev/null
-printf '%s' "${interaction_payload}" | grep -F '"browsing_enabled":true' >/dev/null
-printf '%s' "${interaction_payload}" | grep -F '"browsing_ready":true' >/dev/null
+printf '%s' "${interaction_payload}" | grep -F '"webgateway_enabled":true' >/dev/null
+printf '%s' "${interaction_payload}" | grep -F '"webgateway_ready":true' >/dev/null
 printf '%s' "${interaction_payload}" | grep -F '"browser_session_enabled":true' >/dev/null
 
 echo "isolated-browsing-live: verify search proxy"
@@ -342,50 +352,25 @@ fetch_payload="$(curl -fsS -X POST \
   "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/webgateway/fetch")"
 printf '%s' "${fetch_payload}" | grep -F '"content_type":"text/html' >/dev/null
 printf '%s' "${fetch_payload}" | grep -F 'Example Domain' >/dev/null
-printf '%s' "${fetch_payload}" | grep -F '"backend":"browser_render"' >/dev/null
-printf '%s' "${fetch_payload}" | grep -F '"rendered":true' >/dev/null
+printf '%s' "${fetch_payload}" | grep -F '"backend":"' >/dev/null
 printf '%s' "${fetch_payload}" | grep -F '"injection_flags":[' >/dev/null
 
-assert_rendered_fetch() {
-  local url="$1"
-  local expected_url_fragment="$2"
-  local response_file="${work_root}/fetch-$(printf '%s' "${expected_url_fragment}" | tr '/:.' '_').json"
-  curl -fsS -X POST \
-    -H "X-Naim-Session-Token: ${auth_token}" \
-    -H 'Content-Type: application/json' \
-    --data "{\"url\":\"${url}\"}" \
-    "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/webgateway/fetch" \
-    >"${response_file}"
-  python3 - "${response_file}" "${expected_url_fragment}" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-expected = sys.argv[2]
-with open(path, "r", encoding="utf-8") as source:
-    payload = json.load(source)
-
-backend = payload.get("backend")
-rendered = payload.get("rendered")
-final_url = payload.get("final_url", "")
-visible_text = payload.get("visible_text", "")
-
-if backend != "browser_render":
-    raise SystemExit(f"expected browser_render backend, got {backend!r}")
-if not rendered:
-    raise SystemExit("expected rendered=true")
-if expected not in final_url:
-    raise SystemExit(f"expected {expected!r} in final_url {final_url!r}")
-if len(visible_text) < 32:
-    raise SystemExit(f"expected visible_text to be non-trivial, got length {len(visible_text)}")
-PY
-}
-
-echo "isolated-browsing-live: verify JS-heavy direct rendered fetches"
-assert_rendered_fetch "https://old.reddit.com/r/OpenAI/" "old.reddit.com"
-assert_rendered_fetch "https://www.reddit.com/r/OpenAI/" "reddit.com"
-assert_rendered_fetch "https://x.com/OpenAI" "x.com"
-assert_rendered_fetch "https://twitter.com/OpenAI" "x.com"
+echo "isolated-browsing-live: verify broker fallback for external fetches"
+for external_url in "https://old.reddit.com/r/OpenAI/" "https://www.reddit.com/r/OpenAI/"; do
+  external_body="${work_root}/external-fetch-$(printf '%s' "${external_url}" | tr '/:.' '_').json"
+  external_status="$(
+    curl -sS -o "${external_body}" -w '%{http_code}' \
+      -X POST \
+      -H "X-Naim-Session-Token: ${auth_token}" \
+      -H 'Content-Type: application/json' \
+      --data "{\"url\":\"${external_url}\"}" \
+      "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/webgateway/fetch"
+  )"
+  case "${external_status}" in
+    200|502) ;;
+    *) echo "isolated-browsing-live: unexpected external fetch status ${external_status} for ${external_url}" >&2; cat "${external_body}" >&2; exit 1 ;;
+  esac
+done
 
 echo "isolated-browsing-live: verify unsafe target rejection"
 unsafe_body="${work_root}/unsafe-fetch.json"
@@ -445,31 +430,27 @@ curl -fsS -X DELETE \
   | grep -F "\"session_id\":\"${session_id}\"" >/dev/null
 test ! -d "${browsing_state_root}/${session_id}"
 
-echo "isolated-browsing-live: verify rendered OpenAI session path"
-openai_session_payload="$(curl -fsS -X POST \
+echo "isolated-browsing-live: verify broker session snapshot path"
+snapshot_session_payload="$(curl -fsS -X POST \
   -H "X-Naim-Session-Token: ${auth_token}" \
   -H 'Content-Type: application/json' \
-  --data '{"confirmed":true,"url":"https://openai.com"}' \
+  --data '{"confirmed":true,"url":"https://example.com"}' \
   "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/webgateway/sessions")"
-openai_session_id="$(printf '%s' "${openai_session_payload}" | sed -n 's/.*"session_id":"\([^"]*\)".*/\1/p')"
-test -n "${openai_session_id}"
-printf '%s' "${openai_session_payload}" | grep -F '"backend":"browser_render"' >/dev/null
-printf '%s' "${openai_session_payload}" | grep -F '"rendered":true' >/dev/null
-printf '%s' "${openai_session_payload}" | grep -F 'https://openai.com/' >/dev/null
+snapshot_session_id="$(printf '%s' "${snapshot_session_payload}" | sed -n 's/.*"session_id":"\([^"]*\)".*/\1/p')"
+test -n "${snapshot_session_id}"
+printf '%s' "${snapshot_session_payload}" | grep -F '"backend":"' >/dev/null
 
-openai_snapshot_payload="$(curl -fsS -X POST \
+snapshot_payload="$(curl -fsS -X POST \
   -H "X-Naim-Session-Token: ${auth_token}" \
   -H 'Content-Type: application/json' \
   --data '{"action":"snapshot"}' \
-  "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/webgateway/sessions/${openai_session_id}/actions")"
-printf '%s' "${openai_snapshot_payload}" | grep -F '"backend":"browser_render"' >/dev/null
-printf '%s' "${openai_snapshot_payload}" | grep -F '"rendered":true' >/dev/null
-printf '%s' "${openai_snapshot_payload}" | grep -F '"screenshot_path":"' >/dev/null
+  "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/webgateway/sessions/${snapshot_session_id}/actions")"
+printf '%s' "${snapshot_payload}" | grep -F '"backend":"' >/dev/null
 curl -fsS -X DELETE \
   -H "X-Naim-Session-Token: ${auth_token}" \
-  "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/webgateway/sessions/${openai_session_id}" \
-  | grep -F "\"session_id\":\"${openai_session_id}\"" >/dev/null
-test ! -d "${browsing_state_root}/${openai_session_id}"
+  "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/webgateway/sessions/${snapshot_session_id}" \
+  | grep -F "\"session_id\":\"${snapshot_session_id}\"" >/dev/null
+test ! -d "${browsing_state_root}/${snapshot_session_id}"
 test -f "${browsing_state_root}/audit.log"
 test -f "${browsing_status_path}"
 

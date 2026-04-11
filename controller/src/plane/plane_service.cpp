@@ -2,14 +2,80 @@
 
 #include <algorithm>
 #include <iostream>
+#include <iterator>
+#include <map>
 #include <memory>
 #include <set>
 #include <stdexcept>
 #include <utility>
 
 #include "host/host_assignment_reconciliation_service.h"
+#include "naim/state/state_json.h"
 
 namespace naim::controller {
+
+std::set<std::string> DesiredNodeNames(const naim::DesiredState& state) {
+  std::set<std::string> result;
+  for (const auto& node : state.nodes) {
+    result.insert(node.name);
+  }
+  return result;
+}
+
+std::map<std::string, naim::HostAssignment> LatestAssignmentsByNode(
+    const std::vector<naim::HostAssignment>& assignments,
+    const std::string& plane_name) {
+  std::map<std::string, naim::HostAssignment> result;
+  for (const auto& assignment : assignments) {
+    if (assignment.plane_name != plane_name) {
+      continue;
+    }
+    result[assignment.node_name] = assignment;
+  }
+  return result;
+}
+
+bool HasNodeLocalRuntimeState(const naim::DesiredState& state) {
+  return !state.instances.empty() || !state.disks.empty();
+}
+
+std::vector<naim::HostAssignment> BuildRemovedNodeCleanupAssignments(
+    const PlaneLifecycleSupport& lifecycle_support,
+    const std::vector<naim::HostAssignment>& existing_assignments,
+    const naim::DesiredState& desired_state,
+    int desired_generation,
+    const std::string& artifacts_root) {
+  std::vector<naim::HostAssignment> cleanup_assignments;
+  const auto desired_nodes = DesiredNodeNames(desired_state);
+  const auto latest_assignments = LatestAssignmentsByNode(
+      existing_assignments,
+      desired_state.plane_name);
+
+  for (const auto& [node_name, assignment] : latest_assignments) {
+    if (desired_nodes.count(node_name) > 0 || assignment.desired_state_json.empty()) {
+      continue;
+    }
+    try {
+      const auto previous_node_state =
+          naim::DeserializeDesiredStateJson(assignment.desired_state_json);
+      if (!HasNodeLocalRuntimeState(previous_node_state)) {
+        continue;
+      }
+      auto node_cleanup = lifecycle_support.BuildDeleteAssignments(
+          previous_node_state,
+          desired_generation,
+          artifacts_root);
+      cleanup_assignments.insert(
+          cleanup_assignments.end(),
+          std::make_move_iterator(node_cleanup.begin()),
+          std::make_move_iterator(node_cleanup.end()));
+    } catch (const std::exception&) {
+      continue;
+    }
+  }
+
+  return cleanup_assignments;
+}
 
 PlaneService::PlaneService(
     std::string db_path,
@@ -123,14 +189,25 @@ int PlaneService::StartPlane(const std::string& plane_name) const {
 
   store.ReplaceRolloutActions(
       desired_state->plane_name, plane->generation, scheduling_report.rollout_actions);
+  auto start_assignments = lifecycle_support_->BuildStartAssignments(
+      *desired_state,
+      artifacts_root,
+      plane->generation,
+      availability_overrides,
+      observations,
+      scheduling_report);
+  auto removed_node_cleanup_assignments = BuildRemovedNodeCleanupAssignments(
+      *lifecycle_support_,
+      store.LoadHostAssignments(std::nullopt, std::nullopt, plane_name),
+      *desired_state,
+      plane->generation,
+      artifacts_root);
+  start_assignments.insert(
+      start_assignments.end(),
+      std::make_move_iterator(removed_node_cleanup_assignments.begin()),
+      std::make_move_iterator(removed_node_cleanup_assignments.end()));
   store.EnqueueHostAssignments(
-      lifecycle_support_->BuildStartAssignments(
-          *desired_state,
-          artifacts_root,
-          plane->generation,
-          availability_overrides,
-          observations,
-          scheduling_report),
+      std::move(start_assignments),
       "superseded by start-plane lifecycle transition");
   (void)reconciliation_service.Reconcile(store, plane_name);
   lifecycle_support_->AppendPlaneEvent(

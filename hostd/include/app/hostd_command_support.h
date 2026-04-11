@@ -11,6 +11,7 @@ class HostdCommandSupport final {
   std::string ShellQuote(const std::string& value) const;
   bool RunCommandOk(const std::string& command) const;
   std::string ResolvedDockerCommand() const;
+  std::string ResolvedDockerComposeCommand() const;
 };
 
 }  // namespace naim::hostd

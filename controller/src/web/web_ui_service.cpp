@@ -67,6 +67,19 @@ std::string ResolvedDockerCommand() {
   throw std::runtime_error("no working Docker CLI found for web-ui lifecycle");
 }
 
+std::string ResolvedComposeCommand() {
+  static const std::string resolved = []() {
+    if (std::system("docker compose version >/dev/null 2>&1") == 0) {
+      return std::string("docker compose");
+    }
+    if (CommandExists("docker-compose")) {
+      return std::string("docker-compose");
+    }
+    return ResolvedDockerCommand() + " compose";
+  }();
+  return resolved;
+}
+
 void RunCommandOrThrow(const std::string& command) {
   const int exit_code = std::system(command.c_str());
   if (exit_code != 0) {
@@ -140,7 +153,7 @@ bool ComposeRunning(const std::string& web_ui_root) {
     return false;
   }
   const std::string command =
-      ResolvedDockerCommand() + " compose -f " + ShellQuote(compose_path) +
+      ResolvedComposeCommand() + " -f " + ShellQuote(compose_path) +
       " ps --services --status running | grep -Fx 'naim-web-ui' >/dev/null 2>&1";
   return std::system(command.c_str()) == 0;
 }
@@ -213,7 +226,7 @@ int WebUiService::Ensure(
   };
   if (compose_mode == WebUiComposeMode::Exec) {
     RunCommandOrThrow(
-        ResolvedDockerCommand() + " compose -f " + ShellQuote(compose_path) + " up -d");
+        ResolvedComposeCommand() + " -f " + ShellQuote(compose_path) + " up -d");
     state["running"] = true;
     state["status"] = "running";
   }
@@ -274,7 +287,7 @@ int WebUiService::Stop(
   const std::string compose_path = ComposePath(web_ui_root);
   if (compose_mode == WebUiComposeMode::Exec && std::filesystem::exists(compose_path)) {
     RunCommandOrThrow(
-        ResolvedDockerCommand() + " compose -f " + ShellQuote(compose_path) +
+        ResolvedComposeCommand() + " -f " + ShellQuote(compose_path) +
         " down --remove-orphans");
   }
   RemoveFileIfExists(compose_path);

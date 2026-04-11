@@ -87,6 +87,18 @@ const naim::DiskSpec& FindDisk(
   throw std::runtime_error("disk not found: " + name);
 }
 
+const naim::DiskSpec& FindDiskOnNode(
+    const naim::DesiredState& state,
+    const std::string& name,
+    const std::string& node_name) {
+  for (const auto& disk : state.disks) {
+    if (disk.name == name && disk.node_name == node_name) {
+      return disk;
+    }
+  }
+  throw std::runtime_error("disk not found: " + name + " on " + node_name);
+}
+
 }  // namespace
 
 int main() {
@@ -365,6 +377,20 @@ int main() {
              "split-topology: worker 0 gpu mismatch");
       Expect(state.disks.front().node_name == "infer-hostd",
              "split-topology: shared disk should follow infer node");
+      Expect(FindDiskOnNode(state, "plane-split-backend-shared", "worker-hostd-a").kind ==
+                 naim::DiskKind::PlaneShared,
+             "split-topology: shared disk should be available on worker-hostd-a");
+      Expect(FindDiskOnNode(state, "plane-split-backend-shared", "worker-hostd-b").kind ==
+                 naim::DiskKind::PlaneShared,
+             "split-topology: shared disk should be available on worker-hostd-b");
+      const auto persisted_v2 = naim::DeserializeDesiredStateJson(
+          naim::SerializeDesiredStateV2Json(state));
+      Expect(persisted_v2.plane_name == state.plane_name,
+             "split-topology: v2 persistence should preserve plane_name");
+      Expect(persisted_v2.nodes.size() == state.nodes.size(),
+             "split-topology: v2 persistence should preserve nodes after placement fallback");
+      Expect(persisted_v2.instances.size() == state.instances.size(),
+             "split-topology: v2 persistence should preserve instances after placement fallback");
       std::cout << "ok: split-topology-with-url-parts" << '\n';
     }
 
@@ -859,6 +885,14 @@ int main() {
       Expect(state.instances.size() == 2, "gpu-worker: expected 2 worker instances only");
       Expect(state.worker_group.expected_workers == 2,
              "gpu-worker: expected_workers should match runtime.workers");
+      const auto persisted_v2 = naim::DeserializeDesiredStateJson(
+          naim::SerializeDesiredStateV2Json(state));
+      Expect(persisted_v2.plane_name == state.plane_name,
+             "gpu-worker: v2 persistence should preserve plane_name");
+      Expect(!persisted_v2.nodes.empty(),
+             "gpu-worker: v2 persistence should preserve nodes");
+      Expect(persisted_v2.instances.size() == state.instances.size(),
+             "gpu-worker: v2 persistence should preserve instances");
       std::cout << "ok: gpu-worker" << '\n';
     }
 
@@ -1421,6 +1455,12 @@ int main() {
       Expect(
           persisted.placement_target == std::optional<std::string>("node:remote-worker-a"),
           "placement-primary-node: placement_target should survive desired-state persistence");
+      const auto persisted_v2 = naim::DeserializeDesiredStateJson(
+          naim::SerializeDesiredStateV2Json(state));
+      Expect(persisted_v2.plane_name == state.plane_name,
+             "placement-primary-node: v2 persistence should preserve plane_name");
+      Expect(!persisted_v2.nodes.empty(),
+             "placement-primary-node: v2 persistence should preserve nodes");
       std::cout << "ok: placement-primary-node" << '\n';
     }
 

@@ -3818,6 +3818,8 @@ std::optional<FetchResult> BrowsingServer::FetchUrlViaBroker(
   const auto header_path = temp_root / "headers.txt";
   const auto body_path = temp_root / "body.txt";
 
+  const int max_download_bytes = std::max(1048576, config_.policy.max_fetch_bytes * 16);
+
   std::optional<FetchResult> result;
   try {
     const auto command = RunCommandCapture(CommandRequest{
@@ -3832,6 +3834,8 @@ std::optional<FetchResult> BrowsingServer::FetchUrlViaBroker(
              "20",
              "--max-redirs",
              "5",
+             "--max-filesize",
+             std::to_string(max_download_bytes),
              "-D",
              header_path.string(),
              "-o",

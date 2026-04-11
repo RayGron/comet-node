@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -374,16 +375,24 @@ void DesiredStateV2Renderer::RenderWorkerGroup() {
 }
 
 void DesiredStateV2Renderer::RenderSharedDisk() {
-  DiskSpec plane_shared_disk;
-  plane_shared_disk.name = state_.plane_shared_disk_name;
-  plane_shared_disk.kind = DiskKind::PlaneShared;
-  plane_shared_disk.plane_name = state_.plane_name;
-  plane_shared_disk.owner_name = state_.plane_name;
-  plane_shared_disk.node_name = SharedDiskNodeName();
-  plane_shared_disk.host_path = BuildPlaneSharedHostPath();
-  plane_shared_disk.container_path = "/naim/shared";
-  plane_shared_disk.size_gb = resources_json_.value("shared_disk_gb", kDefaultSharedDiskSizeGb);
-  state_.disks.push_back(std::move(plane_shared_disk));
+  std::set<std::string> shared_disk_nodes;
+  shared_disk_nodes.insert(SharedDiskNodeName());
+  for (const auto& node : state_.nodes) {
+    shared_disk_nodes.insert(node.name);
+  }
+
+  for (const auto& node_name : shared_disk_nodes) {
+    DiskSpec plane_shared_disk;
+    plane_shared_disk.name = state_.plane_shared_disk_name;
+    plane_shared_disk.kind = DiskKind::PlaneShared;
+    plane_shared_disk.plane_name = state_.plane_name;
+    plane_shared_disk.owner_name = state_.plane_name;
+    plane_shared_disk.node_name = node_name;
+    plane_shared_disk.host_path = BuildPlaneSharedHostPath();
+    plane_shared_disk.container_path = "/naim/shared";
+    plane_shared_disk.size_gb = resources_json_.value("shared_disk_gb", kDefaultSharedDiskSizeGb);
+    state_.disks.push_back(std::move(plane_shared_disk));
+  }
 }
 
 void DesiredStateV2Renderer::RenderInferInstance() {

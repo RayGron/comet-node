@@ -538,7 +538,8 @@ std::string SerializeDesiredStateV2Json(const DesiredState& state) {
 DesiredState DeserializeDesiredStateJson(const std::string& json_text) {
   DesiredState state = DesiredStateFromJson(json::parse(json_text));
   try {
-    state = ResolvePlacementTargetAliases(std::move(state));
+    DesiredState resolved_state = state;
+    state = ResolvePlacementTargetAliases(std::move(resolved_state));
   } catch (const std::runtime_error& error) {
     if (state.placement_target.has_value() &&
         std::string_view(error.what()) ==
@@ -570,7 +571,8 @@ std::optional<DesiredState> LoadDesiredStateJson(const std::string& path) {
 
   DesiredState state = DesiredStateV2Renderer::Render(value);
   try {
-    state = ResolvePlacementTargetAliases(std::move(state));
+    DesiredState resolved_state = state;
+    state = ResolvePlacementTargetAliases(std::move(resolved_state));
   } catch (const std::runtime_error& error) {
     if (state.placement_target.has_value() &&
         std::string_view(error.what()) ==

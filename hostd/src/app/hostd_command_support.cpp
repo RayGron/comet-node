@@ -71,4 +71,17 @@ std::string HostdCommandSupport::ResolvedDockerCommand() const {
   return resolved;
 }
 
+std::string HostdCommandSupport::ResolvedDockerComposeCommand() const {
+  static const std::string resolved = [this]() -> std::string {
+    if (RunCommandOk(ResolvedDockerCommand() + " compose version >/dev/null 2>&1")) {
+      return ResolvedDockerCommand() + " compose";
+    }
+    if (RunCommandOk("command -v docker-compose >/dev/null 2>&1")) {
+      return "docker-compose";
+    }
+    return ResolvedDockerCommand() + " compose";
+  }();
+  return resolved;
+}
+
 }  // namespace naim::hostd

@@ -1,5 +1,6 @@
 #include "plane/plane_mutation_service.h"
 
+#include "naim/state/desired_state_v2_renderer.h"
 #include "naim/state/state_json.h"
 
 namespace naim::controller {
@@ -15,7 +16,11 @@ ControllerActionResult PlaneMutationService::ExecuteUpsertPlaneStateAction(
   return RunControllerActionResult(
       "upsert-plane-state",
       [&]() {
-        const auto desired_state = naim::DeserializeDesiredStateJson(desired_state_json);
+        const auto payload = nlohmann::json::parse(desired_state_json);
+        const bool desired_state_v2 = source_label == "api/v2" || payload.value("version", 0) == 2;
+        const naim::DesiredState desired_state = desired_state_v2
+            ? naim::DesiredStateV2Renderer::Render(payload)
+            : naim::DeserializeDesiredStateJson(desired_state_json);
         if (expected_plane_name.has_value() &&
             desired_state.plane_name != *expected_plane_name) {
           throw std::runtime_error(

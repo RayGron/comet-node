@@ -18,8 +18,8 @@ std::string HostdComposeRuntimeSupport::PlaneMeshNetworkName(
 bool HostdComposeRuntimeSupport::ComposeProjectHasContainers(
     const std::string& compose_file_path) const {
   const std::string command =
-      command_support_.ResolvedDockerCommand() + " compose -f '" + compose_file_path +
-      "' ps -a --quiet 2>/dev/null";
+      command_support_.ResolvedDockerComposeCommand() + " -f " +
+      command_support_.ShellQuote(compose_file_path) + " ps -a --quiet 2>/dev/null";
   const std::string output = command_support_.RunCommandCapture(command);
   return output.find_first_not_of(" \t\r\n") != std::string::npos;
 }
@@ -86,8 +86,8 @@ void HostdComposeRuntimeSupport::RunComposeCommand(
     effective_subcommand += " --remove-orphans";
   }
   const std::string command =
-      command_support_.ResolvedDockerCommand() + " compose -f '" + compose_file_path + "' " +
-      effective_subcommand;
+      command_support_.ResolvedDockerComposeCommand() + " -f " +
+      command_support_.ShellQuote(compose_file_path) + " " + effective_subcommand;
   const int rc = std::system(command.c_str());
   if (rc != 0) {
     if (subcommand == "down" && !ComposeProjectHasContainers(compose_file_path)) {

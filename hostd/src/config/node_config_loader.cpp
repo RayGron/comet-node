@@ -13,7 +13,7 @@ namespace {
 
 using nlohmann::json;
 
-constexpr const char* kDefaultNodeConfigRelativePath = "config/comet-node-config.json";
+constexpr const char* kDefaultNodeConfigRelativePath = "config/naim-node-config.json";
 
 }  // namespace
 

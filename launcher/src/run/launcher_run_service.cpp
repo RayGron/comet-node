@@ -158,7 +158,7 @@ int LauncherRunService::RunController(
       std::getenv("COMET_SERVICE_MODE") != nullptr &&
       std::string(std::getenv("COMET_SERVICE_MODE")) == "1" &&
       std::filesystem::exists(
-          install_service_.ParseLayout(command_line).systemd_dir / "comet-node-hostd.service");
+          install_service_.ParseLayout(command_line).systemd_dir / "naim-node-hostd.service");
   options.with_hostd =
       (command_line.HasFlag("--with-hostd") ||
        (!command_line.HasFlag("--without-hostd") && config_local_hostd_enabled)) &&
@@ -207,9 +207,9 @@ int LauncherRunService::RunController(
       }
       install_service_.InstallController(self_path, LauncherCommandLine(std::move(install_args)));
       std::cout << "service_mode=systemd\n";
-      std::cout << "controller_service=comet-node-controller.service\n";
+      std::cout << "controller_service=naim-node-controller.service\n";
       if (options.with_hostd) {
-        std::cout << "hostd_service=comet-node-hostd.service\n";
+        std::cout << "hostd_service=naim-node-hostd.service\n";
       }
       return 0;
     }
@@ -309,7 +309,7 @@ int LauncherRunService::RunHostd(
     install_args.insert(install_args.end(), {"--compose-mode", options.compose_mode});
     install_service_.InstallHostd(self_path, LauncherCommandLine(std::move(install_args)));
     std::cout << "service_mode=systemd\n";
-    std::cout << "hostd_service=comet-node-hostd.service\n";
+    std::cout << "hostd_service=naim-node-hostd.service\n";
     return 0;
   }
 
@@ -367,7 +367,7 @@ int LauncherRunService::RunHostdLoop(
     }
     const int apply_code = process_runner_.RunCommand(apply_args);
     if (apply_code != 0) {
-      std::cerr << "comet-node: hostd apply-next-assignment exit=" << apply_code << "\n";
+      std::cerr << "naim-node: hostd apply-next-assignment exit=" << apply_code << "\n";
     }
 
     const auto now = std::chrono::steady_clock::now();
@@ -398,7 +398,7 @@ int LauncherRunService::RunHostdLoop(
       }
       const int report_code = process_runner_.RunCommand(report_args);
       if (report_code != 0) {
-        std::cerr << "comet-node: hostd report-observed-state exit=" << report_code << "\n";
+        std::cerr << "naim-node: hostd report-observed-state exit=" << report_code << "\n";
       }
       next_inventory_report_at =
           now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
@@ -545,7 +545,7 @@ int LauncherRunService::RunControllerSupervisor(
     host.execution_mode = "mixed";
     host.registration_state = "registered";
     host.session_state = "disconnected";
-    host.status_message = "auto-registered local hostd by comet-node run controller";
+    host.status_message = "auto-registered local hostd by naim-node run controller";
     store.UpsertRegisteredHost(host);
 
     hostd_pid = static_cast<pid_t>(process_runner_.SpawnCommand({
@@ -626,7 +626,7 @@ void LauncherRunService::PrepareSharedStateAccess(
     EnsureSharedFileAccess(db_path.string() + "-shm", *group_id);
     ::umask(0002);
   } catch (const std::exception& error) {
-    std::cerr << "comet-node: warning: failed to prepare shared controller DB access: "
+    std::cerr << "naim-node: warning: failed to prepare shared controller DB access: "
               << error.what() << "\n";
   }
 #endif

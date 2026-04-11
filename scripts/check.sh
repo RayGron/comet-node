@@ -69,9 +69,9 @@ web_ui_runtime_root="${PWD}/var/web-ui-runtime"
 ui_smoke_root="${PWD}/var/ui-smoke"
 launcher_smoke_root="${PWD}/var/launcher-smoke"
 launcher_default_root="${PWD}/var/launcher-defaults"
-launcher_config_path="${launcher_smoke_root}/etc/comet-node/config.toml"
-launcher_state_root="${launcher_smoke_root}/var/lib/comet-node"
-launcher_log_root="${launcher_smoke_root}/var/log/comet-node"
+launcher_config_path="${launcher_smoke_root}/etc/naim-node/config.toml"
+launcher_state_root="${launcher_smoke_root}/var/lib/naim-node"
+launcher_log_root="${launcher_smoke_root}/var/log/naim-node"
 launcher_systemd_dir="${launcher_smoke_root}/etc/systemd/system"
 launcher_db_path="${launcher_smoke_root}/controller.sqlite"
 remote_agent_db_path="${PWD}/var/controller-remote-agent.sqlite"
@@ -79,14 +79,14 @@ remote_agent_artifacts_root="${PWD}/var/artifacts-remote-agent"
 remote_agent_runtime_root="${PWD}/var/runtime-remote-agent"
 remote_agent_state_root="${PWD}/var/hostd-state-remote-agent"
 remote_agent_install_root="${PWD}/var/remote-agent-install"
-remote_agent_config_path="${remote_agent_install_root}/etc/comet-node/config.toml"
-remote_agent_layout_state_root="${remote_agent_install_root}/var/lib/comet-node"
-remote_agent_layout_log_root="${remote_agent_install_root}/var/log/comet-node"
+remote_agent_config_path="${remote_agent_install_root}/etc/naim-node/config.toml"
+remote_agent_layout_state_root="${remote_agent_install_root}/var/lib/naim-node"
+remote_agent_layout_log_root="${remote_agent_install_root}/var/log/naim-node"
 remote_agent_layout_systemd_dir="${remote_agent_install_root}/etc/systemd/system"
 remote_agent_rotated_install_root="${PWD}/var/remote-agent-install-rotated"
-remote_agent_rotated_config_path="${remote_agent_rotated_install_root}/etc/comet-node/config.toml"
-remote_agent_rotated_layout_state_root="${remote_agent_rotated_install_root}/var/lib/comet-node"
-remote_agent_rotated_layout_log_root="${remote_agent_rotated_install_root}/var/log/comet-node"
+remote_agent_rotated_config_path="${remote_agent_rotated_install_root}/etc/naim-node/config.toml"
+remote_agent_rotated_layout_state_root="${remote_agent_rotated_install_root}/var/lib/naim-node"
+remote_agent_rotated_layout_log_root="${remote_agent_rotated_install_root}/var/log/naim-node"
 remote_agent_rotated_layout_systemd_dir="${remote_agent_rotated_install_root}/etc/systemd/system"
 http_server_pid=""
 
@@ -154,11 +154,11 @@ cmake -E rm -f "${bad_state_root}"
 
 "${script_dir}/build-target.sh" Debug
 
-"${build_dir}/comet-node" version | grep -F 'comet-node 0.1.0' >/dev/null
-"${build_dir}/comet-node" doctor controller | grep -F 'controller_binary=yes' >/dev/null
+"${build_dir}/naim-node" version | grep -F 'naim-node 0.1.0' >/dev/null
+"${build_dir}/naim-node" doctor controller | grep -F 'controller_binary=yes' >/dev/null
 default_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
 launcher_install_output="$(COMET_INSTALL_ROOT="${launcher_default_root}" \
-"${build_dir}/comet-node" install controller \
+"${build_dir}/naim-node" install controller \
   --with-hostd \
   --with-web-ui \
   --listen-port "${default_http_port}" \
@@ -166,32 +166,32 @@ launcher_install_output="$(COMET_INSTALL_ROOT="${launcher_default_root}" \
 printf '%s' "${launcher_install_output}" | grep -F "installed controller" >/dev/null
 printf '%s' "${launcher_install_output}" | grep -F "controller_api_url=http://127.0.0.1:${default_http_port}" >/dev/null
 printf '%s' "${launcher_install_output}" | grep -F "web_ui_url=http://127.0.0.1:18081" >/dev/null
-test -f "${launcher_default_root}/etc/comet-node/config.toml"
-test -f "${launcher_default_root}/etc/systemd/system/comet-node-controller.service"
-test -f "${launcher_default_root}/etc/systemd/system/comet-node-hostd.service"
+test -f "${launcher_default_root}/etc/naim-node/config.toml"
+test -f "${launcher_default_root}/etc/systemd/system/naim-node-controller.service"
+test -f "${launcher_default_root}/etc/systemd/system/naim-node-hostd.service"
 COMET_INSTALL_ROOT="${launcher_default_root}" \
-"${build_dir}/comet-node" service verify controller-hostd --skip-systemctl >/dev/null
+"${build_dir}/naim-node" service verify controller-hostd --skip-systemctl >/dev/null
 COMET_INSTALL_ROOT="${launcher_default_root}" \
-"${build_dir}/comet-node" run controller \
+"${build_dir}/naim-node" run controller \
   --listen-host 127.0.0.1 \
-  --compose-mode skip >/tmp/comet-node-default-run.log 2>&1 &
+  --compose-mode skip >/tmp/naim-node-default-run.log 2>&1 &
 http_server_pid="$!"
-wait_for_http "http://127.0.0.1:${default_http_port}/health" 100 "/tmp/comet-node-default-run.log"
+wait_for_http "http://127.0.0.1:${default_http_port}/health" 100 "/tmp/naim-node-default-run.log"
 for _ in $(seq 1 80); do
   if "${build_dir}/comet-controller" show-hostd-hosts \
-      --db "${launcher_default_root}/var/lib/comet-node/controller.sqlite" \
+      --db "${launcher_default_root}/var/lib/naim-node/controller.sqlite" \
       --node local-hostd | grep -F '"session_state": "connected"' >/dev/null; then
     break
   fi
   sleep 0.2
 done
 "${build_dir}/comet-controller" show-hostd-hosts \
-  --db "${launcher_default_root}/var/lib/comet-node/controller.sqlite" \
+  --db "${launcher_default_root}/var/lib/naim-node/controller.sqlite" \
   --node local-hostd | grep -F '"session_state": "connected"' >/dev/null
 kill "${http_server_pid}" >/dev/null 2>&1 || true
 wait "${http_server_pid}" >/dev/null 2>&1 || true
 http_server_pid=""
-"${build_dir}/comet-node" install controller \
+"${build_dir}/naim-node" install controller \
   --config "${launcher_config_path}" \
   --state-root "${launcher_state_root}" \
   --log-root "${launcher_log_root}" \
@@ -201,19 +201,19 @@ http_server_pid=""
   --with-web-ui \
   --skip-systemctl >/dev/null
 test -f "${launcher_config_path}"
-test -f "${launcher_systemd_dir}/comet-node-controller.service"
-test -f "${launcher_systemd_dir}/comet-node-hostd.service"
+test -f "${launcher_systemd_dir}/naim-node-controller.service"
+test -f "${launcher_systemd_dir}/naim-node-hostd.service"
 grep -F '[controller]' "${launcher_config_path}" >/dev/null
 grep -F 'web_ui_enabled = true' "${launcher_config_path}" >/dev/null
 grep -F 'local_hostd_enabled = true' "${launcher_config_path}" >/dev/null
-grep -F 'ExecStart=' "${launcher_systemd_dir}/comet-node-controller.service" >/dev/null
-"${build_dir}/comet-node" service status controller-hostd \
+grep -F 'ExecStart=' "${launcher_systemd_dir}/naim-node-controller.service" >/dev/null
+"${build_dir}/naim-node" service status controller-hostd \
   --systemd-dir "${launcher_systemd_dir}" \
   --skip-systemctl | grep -F 'installed=yes' >/dev/null
-"${build_dir}/comet-node" service verify controller-hostd \
+"${build_dir}/naim-node" service verify controller-hostd \
   --systemd-dir "${launcher_systemd_dir}" \
   --skip-systemctl >/dev/null
-"${build_dir}/comet-node" connect-hostd \
+"${build_dir}/naim-node" connect-hostd \
   --db "${launcher_db_path}" \
   --node gpu-b \
   --address http://127.0.0.1:29090 \
@@ -223,25 +223,25 @@ test "$(
   sqlite3 -readonly "${launcher_db_path}" \
     "SELECT node_name || '|' || advertised_address || '|' || registration_state FROM registered_hosts WHERE node_name='gpu-b';"
 )" = "gpu-b|http://127.0.0.1:29090|registered"
-"${build_dir}/comet-node" service uninstall controller-hostd \
+"${build_dir}/naim-node" service uninstall controller-hostd \
   --systemd-dir "${launcher_systemd_dir}" \
   --skip-systemctl >/dev/null
-test ! -f "${launcher_systemd_dir}/comet-node-controller.service"
-test ! -f "${launcher_systemd_dir}/comet-node-hostd.service"
+test ! -f "${launcher_systemd_dir}/naim-node-controller.service"
+test ! -f "${launcher_systemd_dir}/naim-node-hostd.service"
 "${build_dir}/comet-controller" init-db --db "${remote_agent_db_path}" >/dev/null
 remote_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
-"${build_dir}/comet-node" install hostd \
+"${build_dir}/naim-node" install hostd \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --config "${remote_agent_config_path}" \
   --state-root "${remote_agent_layout_state_root}" \
   --log-root "${remote_agent_layout_log_root}" \
   --systemd-dir "${remote_agent_layout_systemd_dir}" \
-  --skip-systemctl | grep -F "next_step_register=comet-node connect-hostd" >/dev/null
-"${build_dir}/comet-node" service verify hostd \
+  --skip-systemctl | grep -F "next_step_register=naim-node connect-hostd" >/dev/null
+"${build_dir}/naim-node" service verify hostd \
   --systemd-dir "${remote_agent_layout_systemd_dir}" \
   --skip-systemctl >/dev/null
-"${build_dir}/comet-node" connect-hostd \
+"${build_dir}/naim-node" connect-hostd \
   --db "${remote_agent_db_path}" \
   --node node-a \
   --address http://127.0.0.1:29999 \
@@ -277,14 +277,14 @@ if printf '%s' "${remote_agent_events}" | grep -F 'category=host-assignment type
 else
   "${build_dir}/comet-controller" show-host-assignments --db "${remote_agent_db_path}" --node node-a | grep -F '(empty)' >/dev/null
 fi
-"${build_dir}/comet-node" install hostd \
+"${build_dir}/naim-node" install hostd \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --config "${remote_agent_rotated_config_path}" \
   --state-root "${remote_agent_rotated_layout_state_root}" \
   --log-root "${remote_agent_rotated_layout_log_root}" \
   --systemd-dir "${remote_agent_rotated_layout_systemd_dir}" \
-  --skip-systemctl | grep -F "next_step_register=comet-node connect-hostd" >/dev/null
+  --skip-systemctl | grep -F "next_step_register=naim-node connect-hostd" >/dev/null
 "${build_dir}/comet-controller" rotate-hostd-key \
   --db "${remote_agent_db_path}" \
   --node node-a \
@@ -843,13 +843,13 @@ http_server_pid=""
 "${build_dir}/comet-controller" render-compose --db "${db_path}" --node node-a >/dev/null
 test -f "${artifacts_root}/alpha/node-a/docker-compose.yml"
 test -f "${artifacts_root}/alpha/infer-runtime.json"
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh validate-config --config "${artifacts_root}/alpha/infer-runtime.json" | grep -F "infer runtime config: OK" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh list-profiles | grep -F "generic" >/dev/null
-test ! -e /mnt/e/dev/Repos/comet-node/runtime/infer/http_probe.py
-test ! -e /mnt/e/dev/Repos/comet-node/runtime/infer/runtime_supervisor.py
-test ! -e /mnt/e/dev/Repos/comet-node/runtime/infer/runtime_launcher.py
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh bootstrap-runtime --config "${artifacts_root}/alpha/infer-runtime.json" --profile generic | grep -F "runtime_mode=llama-library" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh plan-launch --config "${artifacts_root}/alpha/infer-runtime.json" | grep -F "serving-worker=node:node-a worker:worker-a gpu:0 fraction:1 colocated_with_primary_infer:yes" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh validate-config --config "${artifacts_root}/alpha/infer-runtime.json" | grep -F "infer runtime config: OK" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh list-profiles | grep -F "generic" >/dev/null
+test ! -e /mnt/e/dev/Repos/naim-node/runtime/infer/http_probe.py
+test ! -e /mnt/e/dev/Repos/naim-node/runtime/infer/runtime_supervisor.py
+test ! -e /mnt/e/dev/Repos/naim-node/runtime/infer/runtime_launcher.py
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh bootstrap-runtime --config "${artifacts_root}/alpha/infer-runtime.json" --profile generic | grep -F "runtime_mode=llama-library" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh plan-launch --config "${artifacts_root}/alpha/infer-runtime.json" | grep -F "serving-worker=node:node-a worker:worker-a gpu:0 fraction:1 colocated_with_primary_infer:yes" >/dev/null
 mkdir -p "${infer_model_root}"
 "${script_dir}/comet-devtool.sh" rewrite-infer-runtime-config \
   --input "${artifacts_root}/alpha/infer-runtime.json" \
@@ -858,14 +858,14 @@ mkdir -p "${infer_model_root}"
   --models-root "${infer_model_root}/models" \
   --gguf-cache-dir "${infer_model_root}/models/gguf" \
   --infer-log-dir "${infer_model_root}/logs/infer"
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh preload-model --config "${infer_model_config}" --alias qwen35 --source-model-id Qwen/Qwen3.5-7B-Instruct --local-model-path "${infer_model_root}/models/qwen35" --apply | grep -F "preload-model-plan:" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh cache-status --config "${infer_model_config}" --alias qwen35 --local-model-path "${infer_model_root}/models/qwen35" | grep -F "registry=present" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh switch-model --config "${infer_model_config}" --model-id Qwen/Qwen3.5-7B-Instruct --tp 1 --pp 1 --gpu-memory-utilization 0.85 --runtime-profile qwen3_5 --apply | grep -F 'runtime_profile="qwen3_5"' >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh gateway-plan --config "${infer_model_config}" --apply | grep -F "upstream_models_url=http://127.0.0.1:8000/v1/models" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh gateway-status --config "${infer_model_config}" | grep -F "active_model=Qwen/Qwen3.5-7B-Instruct served=Qwen3.5-7B-Instruct" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh status --config "${infer_model_config}" | grep -F "runtime_phase=planned" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh status --config "${infer_model_config}" | grep -F "launch_ready=no" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh show-active-model --config "${infer_model_config}" | grep -F '"model_id": "Qwen/Qwen3.5-7B-Instruct"' >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh preload-model --config "${infer_model_config}" --alias qwen35 --source-model-id Qwen/Qwen3.5-7B-Instruct --local-model-path "${infer_model_root}/models/qwen35" --apply | grep -F "preload-model-plan:" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh cache-status --config "${infer_model_config}" --alias qwen35 --local-model-path "${infer_model_root}/models/qwen35" | grep -F "registry=present" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh switch-model --config "${infer_model_config}" --model-id Qwen/Qwen3.5-7B-Instruct --tp 1 --pp 1 --gpu-memory-utilization 0.85 --runtime-profile qwen3_5 --apply | grep -F 'runtime_profile="qwen3_5"' >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh gateway-plan --config "${infer_model_config}" --apply | grep -F "upstream_models_url=http://127.0.0.1:8000/v1/models" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh gateway-status --config "${infer_model_config}" | grep -F "active_model=Qwen/Qwen3.5-7B-Instruct served=Qwen3.5-7B-Instruct" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh status --config "${infer_model_config}" | grep -F "runtime_phase=planned" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh status --config "${infer_model_config}" | grep -F "launch_ready=no" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh show-active-model --config "${infer_model_config}" | grep -F '"model_id": "Qwen/Qwen3.5-7B-Instruct"' >/dev/null
 "${build_dir}/comet-hostd" show-demo-ops --node node-b >/dev/null
 "${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-b --state-root "${state_root}" >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-b | grep -F "status=idle" >/dev/null
@@ -883,10 +883,10 @@ runtime_shared_root="${runtime_root}/var/lib/comet/disks/planes/alpha/shared"
   --models-root "${runtime_shared_root}/models" \
   --gguf-cache-dir "${runtime_shared_root}/models/gguf" \
   --infer-log-dir "${runtime_shared_root}/logs/infer"
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh preload-model --config "${runtime_infer_config}" --alias qwen35 --source-model-id Qwen/Qwen3.5-7B-Instruct --local-model-path "${runtime_root}/var/lib/comet/disks/planes/alpha/shared/models/qwen35" --apply | grep -F "preload-model-plan:" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh switch-model --config "${runtime_infer_config}" --model-id Qwen/Qwen3.5-7B-Instruct --tp 1 --pp 1 --gpu-memory-utilization 0.85 --runtime-profile qwen3_5 --apply | grep -F 'runtime_profile="qwen3_5"' >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh gateway-plan --config "${runtime_infer_config}" --apply | grep -F "upstream_models_url=http://127.0.0.1:8000/v1/models" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh status --config "${runtime_infer_config}" --apply | grep -F "launch_ready=no" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh preload-model --config "${runtime_infer_config}" --alias qwen35 --source-model-id Qwen/Qwen3.5-7B-Instruct --local-model-path "${runtime_root}/var/lib/comet/disks/planes/alpha/shared/models/qwen35" --apply | grep -F "preload-model-plan:" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh switch-model --config "${runtime_infer_config}" --model-id Qwen/Qwen3.5-7B-Instruct --tp 1 --pp 1 --gpu-memory-utilization 0.85 --runtime-profile qwen3_5 --apply | grep -F 'runtime_profile="qwen3_5"' >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh gateway-plan --config "${runtime_infer_config}" --apply | grep -F "upstream_models_url=http://127.0.0.1:8000/v1/models" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh status --config "${runtime_infer_config}" --apply | grep -F "launch_ready=no" >/dev/null
 "${build_dir}/comet-hostd" show-runtime-status --node node-a --state-root "${state_root}" | grep -F "launch_ready=no" >/dev/null
 "${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "runtime_launch_ready=no runtime_model=Qwen/Qwen3.5-7B-Instruct" >/dev/null
@@ -915,7 +915,7 @@ curl -fsS "http://127.0.0.1:${http_port}/api/v1/events?node=node-a" | grep -F '"
 kill "${http_server_pid}" >/dev/null 2>&1 || true
 wait "${http_server_pid}" >/dev/null 2>&1 || true
 http_server_pid=""
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh stop --config "${runtime_infer_config}" --apply | grep -F "launch_ready=no" >/dev/null
+/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh stop --config "${runtime_infer_config}" --apply | grep -F "launch_ready=no" >/dev/null
 "${build_dir}/comet-hostd" show-runtime-status --node node-a --state-root "${state_root}" | grep -F "launch_ready=no" >/dev/null
 "${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "runtime_launch_ready=no runtime_model=(empty)" >/dev/null

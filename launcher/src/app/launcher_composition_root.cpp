@@ -40,7 +40,7 @@ int LauncherCompositionRoot::Run(
 
   try {
     if (command == "version") {
-      std::cout << "comet-node 0.1.0\n";
+      std::cout << "naim-node 0.1.0\n";
       return 0;
     }
 

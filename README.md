@@ -1,13 +1,13 @@
-# comet-node
+# naim-node
 
-`comet-node` is the implementation repository for the `comet` platform.
+`naim-node` is the implementation repository for the `comet` platform.
 At the product level, the platform is split into:
 
 - `comet`: the control point and operator-facing management surface
-- `comet-node`: the managed host agent package that runs on connected nodes
+- `naim-node`: the managed host agent package that runs on connected nodes
 
 This repository currently contains both sides of that split through `comet-controller`,
-`comet-hostd`, and the `comet-node` launcher. Together they manage plane state, node realization,
+`comet-hostd`, and the `naim-node` launcher. Together they manage plane state, node realization,
 model workflows, telemetry, and authenticated interaction endpoints for both application-backed
 planes and external clients such as Maglev.
 
@@ -23,14 +23,14 @@ The current primary runtime path is `llama.cpp + llama_rpc` with support for:
 
 ## What It Does
 
-`comet-node` currently provides:
+`naim-node` currently provides:
 
 - a SQLite-backed `comet-controller` that implements the `comet` control point and stores desired
   state, rollout state, model-library jobs, auth data, plane metadata, and the connected-node
   registry
-- a `comet-hostd` agent that implements `comet-node` and realizes compose artifacts, managed
+- a `comet-hostd` agent that implements `naim-node` and realizes compose artifacts, managed
   disks, runtime configs, and host telemetry on managed nodes
-- secure outbound `comet-node -> comet` connectivity, so managed nodes can connect from behind NAT
+- secure outbound `naim-node -> comet` connectivity, so managed nodes can connect from behind NAT
   or firewalls without needing a permanent public IP
 - node inventory scans on connect plus periodic rescans, with controller-derived `Storage` /
   `Worker` role assignment
@@ -57,11 +57,11 @@ At a high level:
 
 - `comet` owns onboarding, desired state, scheduling, plane lifecycle, model-library workflows,
   auth, APIs, and the operator UI
-- `comet-node` runs on managed hosts, scans local inventory, dials out to `comet`, and applies the
+- `naim-node` runs on managed hosts, scans local inventory, dials out to `comet`, and applies the
   control point's host assignments
 - `comet-controller` and `comet-hostd` are the current implementation binaries behind that product
   split
-- co-locating `comet` and `comet-node` on the same machine is a supported normal deployment shape
+- co-locating `comet` and `naim-node` on the same machine is a supported normal deployment shape
 - runtime containers are materialized from rendered compose artifacts and per-instance runtime configs
 - LLM planes use `llama.cpp` as the inference runtime and `llama_rpc` as the distributed backend by default
 
@@ -196,7 +196,7 @@ Explicit non-host targets still work:
 ```
 
 For the current multi-repo workspace and VS Code user-settings split, see
-[`../comet-docs/process/build-vscode-setup.md`](../comet-docs/process/build-vscode-setup.md).
+[`../naim-docs/process/build-vscode-setup.md`](../naim-docs/process/build-vscode-setup.md).
 
 ## Windows Builds
 

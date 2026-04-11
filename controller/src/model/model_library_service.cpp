@@ -73,8 +73,8 @@ bool ShouldScanDefaultModelRoots(const std::string& db_path) {
   if (error) {
     return false;
   }
-  return normalized == "/var/lib/comet-node/hostd-state/controller.sqlite" ||
-         normalized == "/var/lib/comet-node/controller.sqlite";
+  return normalized == "/var/lib/naim-node/hostd-state/controller.sqlite" ||
+         normalized == "/var/lib/naim-node/controller.sqlite";
 }
 
 bool IsDownloadJobComplete(

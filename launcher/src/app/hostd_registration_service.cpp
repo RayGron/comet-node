@@ -34,7 +34,7 @@ void HostdRegistrationService::Connect(const LauncherCommandLine& command_line) 
   record.registration_state = "registered";
   record.session_state = "disconnected";
   record.capabilities_json = "{}";
-  record.status_message = "registered by comet-node connect-hostd";
+  record.status_message = "registered by naim-node connect-hostd";
   store.UpsertRegisteredHost(record);
   store.AppendEvent(comet::EventRecord{
       0,
@@ -47,7 +47,7 @@ void HostdRegistrationService::Connect(const LauncherCommandLine& command_line) 
       "registered",
       "info",
       "registered hostd node",
-      "{\"source\":\"comet-node connect-hostd\"}",
+      "{\"source\":\"naim-node connect-hostd\"}",
       "",
   });
   std::cout << "registered hostd node=" << *node_name << "\n";

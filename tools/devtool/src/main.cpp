@@ -395,7 +395,7 @@ std::string MaybeRunMaglev(
   }
   const json config = {
       {"defaultBackendMode", "openai_compat"},
-      {"defaultOpenAiCompatProfile", "comet-node-contract"},
+      {"defaultOpenAiCompatProfile", "naim-node-contract"},
       {"openaiCompat",
        {
            {"requestTimeoutMs", 120000},
@@ -420,7 +420,7 @@ std::string MaybeRunMaglev(
             }},
        }},
       {"openaiCompatProfiles",
-       {{"comet-node-contract",
+       {{"naim-node-contract",
          {{"apiBaseUrl", controller_url + "/api/v1/planes/" + plane_name + "/interaction"},
           {"model", plane_name},
           {"chatModel", plane_name}}}}},
@@ -429,7 +429,7 @@ std::string MaybeRunMaglev(
   const std::string command =
       "cd " + ShellEscape(maglev_repo) + " && " + ShellEscape(binary.string()) +
       " --config-file " + ShellEscape(config_path) +
-      " --endpoint-profile comet-node-contract --task " +
+      " --endpoint-profile naim-node-contract --task " +
       ShellEscape("Какая модель сейчас активна?");
   const CommandResult result = RunCommandCapture(command);
   std::filesystem::remove(config_path);

@@ -183,7 +183,7 @@ void HttpHostdBackend::EnsureRegistered(const std::string& node_name) {
            nlohmann::json{
                {"storage_root", storage_root_},
            }.dump()},
-          {"status_message", "registered via comet-node remote hostd onboarding"},
+          {"status_message", "registered via naim-node remote hostd onboarding"},
       });
   const std::string controller_fingerprint =
       JsonNullableStringOrEmpty(response, "controller_public_key_fingerprint");

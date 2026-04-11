@@ -318,7 +318,7 @@ std::string AuthSupportService::ResolveWebAuthnOrigin(const HttpRequest& request
 }
 
 std::string AuthSupportService::ResolveWebAuthnRpName() const {
-  return GetEnvString("COMET_WEBAUTHN_RP_NAME").value_or("comet-node");
+  return GetEnvString("COMET_WEBAUTHN_RP_NAME").value_or("naim-node");
 }
 
 json AuthSupportService::RunWebAuthnHelper(

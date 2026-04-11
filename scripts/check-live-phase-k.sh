@@ -39,20 +39,20 @@ remote_artifacts_root="${remote_root}/artifacts"
 remote_runtime_root="${remote_root}/runtime"
 remote_state_root="${remote_root}/hostd-state"
 remote_install_root="${remote_root}/install"
-remote_config_path="${remote_install_root}/etc/comet-node/config.toml"
-remote_layout_state_root="${remote_install_root}/var/lib/comet-node"
-remote_layout_log_root="${remote_install_root}/var/log/comet-node"
+remote_config_path="${remote_install_root}/etc/naim-node/config.toml"
+remote_layout_state_root="${remote_install_root}/var/lib/naim-node"
+remote_layout_log_root="${remote_install_root}/var/log/naim-node"
 remote_layout_systemd_dir="${remote_install_root}/etc/systemd/system"
 remote_rotated_install_root="${remote_root}/install-rotated"
-remote_rotated_config_path="${remote_rotated_install_root}/etc/comet-node/config.toml"
-remote_rotated_layout_state_root="${remote_rotated_install_root}/var/lib/comet-node"
-remote_rotated_layout_log_root="${remote_rotated_install_root}/var/log/comet-node"
+remote_rotated_config_path="${remote_rotated_install_root}/etc/naim-node/config.toml"
+remote_rotated_layout_state_root="${remote_rotated_install_root}/var/lib/naim-node"
+remote_rotated_layout_log_root="${remote_rotated_install_root}/var/log/naim-node"
 remote_rotated_layout_systemd_dir="${remote_rotated_install_root}/etc/systemd/system"
 
 local_root="${PWD}/var/phase-k-live-local"
-local_config_path="${local_root}/etc/comet-node/config.toml"
-local_layout_state_root="${local_root}/var/lib/comet-node"
-local_layout_log_root="${local_root}/var/log/comet-node"
+local_config_path="${local_root}/etc/naim-node/config.toml"
+local_layout_state_root="${local_root}/var/lib/naim-node"
+local_layout_log_root="${local_root}/var/log/naim-node"
 local_layout_systemd_dir="${local_root}/etc/systemd/system"
 local_db_path="${local_layout_state_root}/controller.sqlite"
 local_artifacts_root="${local_layout_state_root}/artifacts"
@@ -84,7 +84,7 @@ fi
 remote_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
 
 "${build_dir}/comet-controller" init-db --db "${remote_db_path}" >/dev/null
-"${build_dir}/comet-node" install hostd \
+"${build_dir}/naim-node" install hostd \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --config "${remote_config_path}" \
@@ -92,10 +92,10 @@ remote_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
   --log-root "${remote_layout_log_root}" \
   --systemd-dir "${remote_layout_systemd_dir}" \
   --skip-systemctl >/dev/null
-"${build_dir}/comet-node" service verify hostd \
+"${build_dir}/naim-node" service verify hostd \
   --systemd-dir "${remote_layout_systemd_dir}" \
   --skip-systemctl >/dev/null
-"${build_dir}/comet-node" connect-hostd \
+"${build_dir}/naim-node" connect-hostd \
   --db "${remote_db_path}" \
   --node node-a \
   --address "http://127.0.0.1:29999" \
@@ -125,7 +125,7 @@ wait_for_http "http://127.0.0.1:${remote_http_port}/health"
 "${build_dir}/comet-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${remote_db_path}" --node node-a | grep -F 'status=idle applied_generation=1' >/dev/null
 curl -fsS "http://127.0.0.1:${remote_http_port}/api/v1/hostd/hosts?node=node-a" | grep -F '"session_state":"connected"' >/dev/null
-"${build_dir}/comet-node" install hostd \
+"${build_dir}/naim-node" install hostd \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --config "${remote_rotated_config_path}" \
@@ -168,7 +168,7 @@ remote_controller_pid=""
 
 local_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
 
-"${build_dir}/comet-node" install controller \
+"${build_dir}/naim-node" install controller \
   --with-hostd \
   --config "${local_config_path}" \
   --state-root "${local_layout_state_root}" \
@@ -177,14 +177,14 @@ local_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
   --listen-port "${local_http_port}" \
   --node node-a \
   --skip-systemctl >/dev/null
-"${build_dir}/comet-node" service verify controller-hostd \
+"${build_dir}/naim-node" service verify controller-hostd \
   --systemd-dir "${local_layout_systemd_dir}" \
   --skip-systemctl >/dev/null
 "${build_dir}/comet-controller" apply-bundle \
   --bundle "${PWD}/config/demo-plane" \
   --db "${local_db_path}" \
   --artifacts-root "${local_artifacts_root}" >/dev/null
-"${build_dir}/comet-node" run controller \
+"${build_dir}/naim-node" run controller \
   --db "${local_db_path}" \
   --artifacts-root "${local_artifacts_root}" \
   --listen-host 127.0.0.1 \

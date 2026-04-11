@@ -9,14 +9,14 @@ comet_resolve_target_context "${script_dir}" "$@"
 "${script_dir}/build-target.sh" "${TARGET_OS}" "${TARGET_ARCH}" Release
 
 dist_dir="${REPO_DIR}/dist/${TARGET_OS}/${TARGET_ARCH}"
-package_stem="comet-node-${TARGET_OS}-${TARGET_ARCH}"
+package_stem="naim-node-${TARGET_OS}-${TARGET_ARCH}"
 mkdir -p "${dist_dir}"
 
 declare -a artifacts=()
 
 for candidate in \
-  "${BUILD_DIR}/comet-node" \
-  "${BUILD_DIR}/comet-node.exe" \
+  "${BUILD_DIR}/naim-node" \
+  "${BUILD_DIR}/naim-node.exe" \
   "${BUILD_DIR}/comet-controller" \
   "${BUILD_DIR}/comet-controller.exe" \
   "${BUILD_DIR}/comet-hostd" \

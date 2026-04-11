@@ -1,18 +1,18 @@
 # Architecture Notes
 
-`comet-node` now sits inside a two-part product architecture:
+`naim-node` now sits inside a two-part product architecture:
 
 - `comet` is the control point and operator-facing management surface
-- `comet-node` is the managed host agent package that realizes work on connected nodes
+- `naim-node` is the managed host agent package that realizes work on connected nodes
 
 This repository contains the current implementation of both sides:
 
 - `comet-controller` is the current implementation of the `comet` control point
-- `comet-hostd` is the current implementation of the `comet-node` host agent
-- `comet-node` is the launcher that can install and run either role, including a co-located setup
+- `comet-hostd` is the current implementation of the `naim-node` host agent
+- `naim-node` is the launcher that can install and run either role, including a co-located setup
 
 The default remote-host pattern is no longer "controller reaches directly into every host". The
-canonical deployment model is that `comet-node` dials out to `comet`, which allows managed nodes to
+canonical deployment model is that `naim-node` dials out to `comet`, which allows managed nodes to
 live behind NAT, firewalls, or dynamic addressing without requiring a permanent public IP.
 
 ## Product Split
@@ -25,7 +25,7 @@ live behind NAT, firewalls, or dynamic addressing without requiring a permanent 
 - authenticated HTTP APIs, operator UI, and browser-facing read models
 - cluster telemetry aggregation, node role derivation, and plane participation views
 
-`comet-node` owns:
+`naim-node` owns:
 
 - local inventory scans for CPU, RAM, disk, GPU, and runtime posture
 - local realization of compose artifacts, runtime configs, disks, and containers
@@ -38,8 +38,8 @@ Managed node lifecycle:
 
 1. the operator adds a node in `comet`
 2. `comet` generates a random onboarding key for that node
-3. the operator starts `comet-node` with that key in its local configuration
-4. `comet-node` authenticates and opens the outbound channel to `comet`
+3. the operator starts `naim-node` with that key in its local configuration
+4. `naim-node` authenticates and opens the outbound channel to `comet`
 5. if TLS/SSL already protects that channel, no extra stream-encryption layer is required
 6. otherwise the host-agent channel must apply its own stream encryption
 7. the node is scanned on connect and rescanned every hour
@@ -65,7 +65,7 @@ role-dependent placement until later scans show a matching inventory.
 ### Model Library
 
 Model import and quantization are `comet` workflows, but they are realized on connected
-`comet-node` hosts.
+`naim-node` hosts.
 
 Current architectural contract:
 
@@ -81,11 +81,11 @@ Current architectural contract:
 
 Current plane deployment contract:
 
-- each plane currently chooses exactly one primary `comet-node`
+- each plane currently chooses exactly one primary `naim-node`
 - by default all plane containers run on that selected node
 - `app` containers are the exception and may be deployed to an external host over SSH
 - when a plane runs replicated `skills-<plane>` containers, they must live on the same machine as
-  the plane's `app` container rather than on the primary `comet-node`
+  the plane's `app` container rather than on the primary `naim-node`
 - plane creation must capture the SSH address plus either a key path or username/password for that
   external app host
 - plane creation still captures worker count and soft GPU allocation intent
@@ -100,7 +100,7 @@ must be divisible by `infer.replicas`. Documentation should not overstate this a
 
 The main architecture seam is:
 
-`desired state -> node registry + scheduler -> host assignments -> comet-node realization -> telemetry/observations -> controller-derived readiness`
+`desired state -> node registry + scheduler -> host assignments -> naim-node realization -> telemetry/observations -> controller-derived readiness`
 
 The interaction seam remains controller-owned:
 
@@ -114,18 +114,18 @@ controller policy and runtime execution.
 
 The architecture must support all of these as normal cases:
 
-- remote `comet` with many outbound-connected `comet-node` agents
+- remote `comet` with many outbound-connected `naim-node` agents
 - mixed clusters where some nodes are `Storage` and others are `Worker`
-- a co-located install where `comet` and `comet-node` run on the same machine
+- a co-located install where `comet` and `naim-node` run on the same machine
 
 In the co-located case, the machine participates in the node registry like any other managed node.
 Co-location is a supported deployment shape, not a special debug-only shortcut.
 
 ## Related Long-Form Docs
 
-The long-form canonical architecture set lives in [`../comet-docs/`](../comet-docs):
+The long-form canonical architecture set lives in [`../naim-docs/`](../naim-docs):
 
-- [`overview/comet-node-overview.md`](../comet-docs/overview/comet-node-overview.md)
-- [`design/comet-node-design.md`](../comet-docs/design/comet-node-design.md)
-- [`architecture/detailed-architecture.md`](../comet-docs/architecture/detailed-architecture.md)
-- [`architecture/component-reference.md`](../comet-docs/architecture/component-reference.md)
+- [`overview/naim-node-overview.md`](../naim-docs/overview/naim-node-overview.md)
+- [`design/naim-node-design.md`](../naim-docs/design/naim-node-design.md)
+- [`architecture/detailed-architecture.md`](../naim-docs/architecture/detailed-architecture.md)
+- [`architecture/component-reference.md`](../naim-docs/architecture/component-reference.md)

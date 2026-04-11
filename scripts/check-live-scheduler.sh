@@ -208,14 +208,14 @@ runtime_model_path="/comet/shared/models/live-safe-direct/${model_filename}"
 local_model_id="local/live-safe-direct"
 
 echo "[live-scheduler] activating model for infer and workers"
-"/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh" preload-model \
+"/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh" preload-model \
   --config "${runtime_infer_config}" \
   --alias live-safe-direct \
   --source-model-id "${local_model_id}" \
   --local-model-path "${shared_model_path}" \
   --runtime-model-path "${runtime_model_path}" \
   --apply >/dev/null
-"/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh" switch-model \
+"/mnt/e/dev/Repos/naim-node/runtime/infer/inferctl.sh" switch-model \
   --config "${runtime_infer_config}" \
   --model-id "${local_model_id}" \
   --served-model-name live-safe-direct \

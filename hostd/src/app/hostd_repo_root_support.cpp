@@ -32,7 +32,7 @@ std::optional<std::filesystem::path> HostdRepoRootSupport::FindRepoRootFromPath(
 std::optional<std::filesystem::path> HostdRepoRootSupport::FindRepoRootInSiblingRepos(
     std::filesystem::path current) {
   while (!current.empty()) {
-    const auto candidate = current / "repos" / "comet-node";
+    const auto candidate = current / "repos" / "naim-node";
     if (LooksLikeCometRepoRoot(candidate)) {
       return candidate;
     }

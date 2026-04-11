@@ -311,7 +311,7 @@ std::string InteractionConversationPayloadBuilder::BuildSummarySystemInstruction
     return "";
   }
   std::ostringstream instruction;
-  instruction << "Conversation memory summary maintained by comet-node.";
+  instruction << "Conversation memory summary maintained by naim-node.";
   for (const auto& record : summaries) {
     const json summary = ParseJsonObject(record.summary_json);
     instruction << "\n\nSummary block turns "

@@ -8,9 +8,9 @@ namespace comet::launcher {
 namespace fs = std::filesystem;
 
 struct InstallLayout {
-  fs::path config_path = "/etc/comet-node/config.toml";
-  fs::path state_root = "/var/lib/comet-node";
-  fs::path log_root = "/var/log/comet-node";
+  fs::path config_path = "/etc/naim-node/config.toml";
+  fs::path state_root = "/var/lib/naim-node";
+  fs::path log_root = "/var/log/naim-node";
   fs::path systemd_dir = "/etc/systemd/system";
 };
 

@@ -52,7 +52,7 @@ if(NOT COMET_SKIP_VCPKG_TOOLCHAIN AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
 endif()
 
 project(
-  comet-node
+  naim-node
   VERSION 0.1.0
   LANGUAGES CXX
 )
@@ -163,7 +163,7 @@ elseif(DEFINED CMAKE_CUDA_COMPILER)
 endif()
 if(NOT _comet_cuda_available)
   message(FATAL_ERROR
-    "CUDA toolkit is required for comet-node builds. "
+    "CUDA toolkit is required for naim-node builds. "
     "Provide CUDAToolkit_ROOT or CMAKE_CUDA_COMPILER so GGML_CUDA can be enabled.")
 endif()
 set(GGML_CUDA ON CACHE BOOL "" FORCE)
@@ -1292,7 +1292,7 @@ endif()
 comet_enable_strict_warnings(comet-hostd)
 
 add_executable(
-  comet-node
+  naim-node
   launcher/src/app/hostd_registration_service.cpp
   launcher/src/app/launcher_composition_root.cpp
   launcher/src/app/launcher_doctor_service.cpp
@@ -1307,9 +1307,9 @@ add_executable(
   launcher/src/main.cpp
   launcher/src/app/launcher_app.cpp
 )
-target_include_directories(comet-node PRIVATE launcher/include)
-target_link_libraries(comet-node PRIVATE comet-common)
-comet_enable_strict_warnings(comet-node)
+target_include_directories(naim-node PRIVATE launcher/include)
+target_link_libraries(naim-node PRIVATE comet-common)
+comet_enable_strict_warnings(naim-node)
 
 if(NOT WIN32)
   add_executable(

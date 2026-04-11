@@ -99,7 +99,7 @@ if detect_cuda_root; then
   export CUDA_BIN_PATH="${cuda_root}/bin"
   export CUDACXX="${cuda_nvcc}"
 else
-  echo "[cmake] CUDA toolkit is required for comet-node builds; none was found" >&2
+  echo "[cmake] CUDA toolkit is required for naim-node builds; none was found" >&2
   echo "[cmake] checked CUDA_TOOLKIT_ROOT_DIR, CUDA_HOME, CUDA_PATH, /usr/local/cuda*, and nvcc on PATH" >&2
   exit 1
 fi

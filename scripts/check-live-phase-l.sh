@@ -68,7 +68,7 @@ next_port() {
 
 base="${PWD}/var/live-phase-l"
 install_root="${base}/install"
-state_root="${install_root}/var/lib/comet-node"
+state_root="${install_root}/var/lib/naim-node"
 db_path="${state_root}/controller.sqlite"
 web_ui_root="${state_root}/web-ui"
 controller_pid=""
@@ -95,7 +95,7 @@ run_log="/tmp/comet-phase-l-run.log"
 echo "phase-l-live: install controller"
 install_output="$(
   COMET_INSTALL_ROOT="${install_root}" \
-  "${build_dir}/comet-node" install controller \
+  "${build_dir}/naim-node" install controller \
     --with-hostd \
     --with-web-ui \
     --node node-a \
@@ -107,7 +107,7 @@ printf '%s' "${install_output}" | grep -F "controller_api_url=http://127.0.0.1:$
 
 echo "phase-l-live: start platform"
 COMET_INSTALL_ROOT="${install_root}" \
-  "${build_dir}/comet-node" run controller \
+  "${build_dir}/naim-node" run controller \
   --hostd-compose-mode skip \
   --poll-interval-sec 1 >"${run_log}" 2>&1 &
 controller_pid="$!"

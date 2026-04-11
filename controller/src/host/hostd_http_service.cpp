@@ -557,7 +557,7 @@ HttpResponse HostdHttpService::HandleHosts(
       host.derived_role = "ineligible";
       host.role_reason = "awaiting first inventory scan";
       host.session_state = "disconnected";
-      host.status_message = "node provisioned; awaiting comet-node onboarding";
+      host.status_message = "node provisioned; awaiting naim-node onboarding";
       context.store().UpsertRegisteredHost(host);
       context.EmitHostRegistryEvent(
           "provisioned",

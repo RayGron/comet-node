@@ -6,7 +6,7 @@ repo_root="$(cd -- "${script_dir}/.." && pwd)"
 
 remote_host="${COMET_HPC1_HOST:-baal@195.168.22.186}"
 remote_port="${COMET_HPC1_PORT:-2222}"
-sandbox_name="${COMET_HPC1_SANDBOX_NAME:-comet-node-dev}"
+sandbox_name="${COMET_HPC1_SANDBOX_NAME:-naim-node-dev}"
 remote_base="${COMET_HPC1_SANDBOX_BASE:-/mnt/shared-storage/backups/baal/dev-sandboxes}"
 remote_root="${COMET_HPC1_SANDBOX_ROOT:-${remote_base}/${sandbox_name}}"
 remote_repo="${remote_root}/repo"
@@ -32,9 +32,9 @@ hostd_advertised_address="${COMET_HPC1_HOSTD_ADDRESS:-http://127.0.0.1:29999}"
 runtime_smoke_bundle="${COMET_HPC1_RUNTIME_SMOKE_BUNDLE:-config/v2-gpu-worker/desired-state.v2.json}"
 
 remote_hostd_install_root="${remote_root}/install/hostd"
-remote_hostd_config_path="${remote_hostd_install_root}/etc/comet-node/config.toml"
-remote_hostd_layout_state_root="${remote_hostd_install_root}/var/lib/comet-node"
-remote_hostd_layout_log_root="${remote_hostd_install_root}/var/log/comet-node"
+remote_hostd_config_path="${remote_hostd_install_root}/etc/naim-node/config.toml"
+remote_hostd_layout_state_root="${remote_hostd_install_root}/var/lib/naim-node"
+remote_hostd_layout_log_root="${remote_hostd_install_root}/var/log/naim-node"
 remote_hostd_layout_systemd_dir="${remote_hostd_install_root}/etc/systemd/system"
 remote_hostd_private_key_path="${remote_hostd_layout_state_root}/keys/hostd.key.b64"
 remote_hostd_public_key_path="${remote_hostd_layout_state_root}/keys/hostd.pub.b64"
@@ -176,14 +176,14 @@ export COMET_HPC1_HOSTD_COMPOSE_MODE="$hostd_compose_mode"
 ENV
 
 cat > "$remote_root/README.txt" <<TXT
-This is the isolated comet-node development sandbox for hpc1.
+This is the isolated naim-node development sandbox for hpc1.
 
 It is intentionally separate from the active production-like install:
-  /var/lib/comet-node
-  comet-node-controller.service
-  comet-node-hostd.service
+  /var/lib/naim-node
+  naim-node-controller.service
+  naim-node-hostd.service
 
-Do not point sandbox commands at /var/lib/comet-node or production ports.
+Do not point sandbox commands at /var/lib/naim-node or production ports.
 TXT
 
 python3 - "$controller_port" "$skills_port" "$web_ui_port" <<PY
@@ -408,7 +408,7 @@ mkdir -p \
 
 cd "$remote_repo"
 build_dir="$(COMET_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
-launcher_bin="$build_dir/comet-node"
+launcher_bin="$build_dir/naim-node"
 controller_url="http://127.0.0.1:$controller_port"
 onboarding_dir="$remote_root/onboarding"
 onboarding_key_file="$onboarding_dir/${hostd_node}.key"
@@ -550,7 +550,7 @@ controller_db="${12}"
 mkdir -p "$remote_logs_root"
 cd "$remote_repo"
 build_dir="$(COMET_BUILD_ROOT="$remote_build_root" ./scripts/print-build-dir.sh linux x64)"
-launcher_bin="$build_dir/comet-node"
+launcher_bin="$build_dir/naim-node"
 controller_bin="$build_dir/comet-controller"
 pid_file="$remote_logs_root/hostd.pid"
 
@@ -570,7 +570,7 @@ fi
 
 if [[ ! -f "$pid_file" ]]; then
   COMET_CONFIG="$remote_hostd_config_path" \
-  COMET_NODE_CONFIG_PATH="$remote_repo/config/comet-node-config.json" \
+  COMET_NODE_CONFIG_PATH="$remote_repo/config/naim-node-config.json" \
     nohup "$launcher_bin" run hostd \
       --controller "http://127.0.0.1:$controller_port" \
       --node "$hostd_node" \

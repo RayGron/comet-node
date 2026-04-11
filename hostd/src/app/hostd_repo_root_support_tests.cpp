@@ -52,10 +52,10 @@ int main() {
     std::error_code cleanup_error;
     fs::remove_all(temp_root, cleanup_error);
 
-    const fs::path repo_root = temp_root / "backups" / "baal" / "repos" / "comet-node";
+    const fs::path repo_root = temp_root / "backups" / "baal" / "repos" / "naim-node";
     const fs::path plane_root = temp_root / "backups" / "baal" / "repos" / "lt-cypher-ai";
     const fs::path build_root =
-        temp_root / "backups" / "baal" / "builds" / "comet-node-build" / "linux" / "x64";
+        temp_root / "backups" / "baal" / "builds" / "naim-node-build" / "linux" / "x64";
     const fs::path artifacts_root = temp_root / "artifacts";
 
     Touch(repo_root / "scripts" / "build-runtime-images.sh", "#!/bin/sh\n");
@@ -71,7 +71,7 @@ int main() {
       const auto repo = support.DetectCometRepoRoot();
       Expect(repo.has_value(), "repo root should be detected from split builds/repos layout");
       Expect(repo->lexically_normal() == repo_root.lexically_normal(),
-             "detected repo root should match repos/comet-node");
+             "detected repo root should match repos/naim-node");
 
       const auto plane_script = support.ResolvePlaneOwnedPath(
           BuildDesiredState("lt-cypher-ai"),

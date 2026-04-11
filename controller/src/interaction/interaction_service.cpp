@@ -52,7 +52,7 @@ InteractionRequestValidator::ValidateAndNormalizeRequest(
     return InteractionValidationError{
         "unsupported_field",
         "interaction request field '" + unsupported_field +
-            "' is not supported by comet-node",
+            "' is not supported by naim-node",
         false,
         nlohmann::json{{"field", unsupported_field}},
     };

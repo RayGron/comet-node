@@ -85,7 +85,7 @@ For replica-parallel `llama_rpc`, the effective instance topology is:
 - `common/`: shared state models, JSON/projector/renderer code, planning, importing, SQLite support
 - `controller/`: controller HTTP surface, auth, model library, interaction proxying, rollout orchestration
 - `hostd/`: host agent, telemetry collection, disk lifecycle, local realization logic
-- `runtime/`: runtime images and binaries for infer, worker, base, and web UI
+- `runtime/`: runtime images and binaries for controller, hostd, infer, worker, skills, webgateway, base, and web UI
 - `ui/operator-react/`: operator frontend
 - `config/`: shipped example plane configs and runtime examples
 - `scripts/`: build, smoke, benchmark, and convenience scripts
@@ -111,8 +111,12 @@ See [`config/v2-examples.README.md`](./config/v2-examples.README.md) for a compa
 The repo ships runtime Dockerfiles for the current stack:
 
 - [`runtime/base/Dockerfile`](./runtime/base/Dockerfile)
+- [`runtime/controller/Dockerfile`](./runtime/controller/Dockerfile)
+- [`runtime/hostd/Dockerfile`](./runtime/hostd/Dockerfile)
 - [`runtime/infer/Dockerfile`](./runtime/infer/Dockerfile)
 - [`runtime/worker/Dockerfile`](./runtime/worker/Dockerfile)
+- [`runtime/skills/Dockerfile`](./runtime/skills/Dockerfile)
+- [`runtime/browsing/Dockerfile`](./runtime/browsing/Dockerfile)
 - [`runtime/web-ui/Dockerfile`](./runtime/web-ui/Dockerfile)
 
 Build local dev images with:
@@ -124,8 +128,12 @@ Build local dev images with:
 The common dev image names are:
 
 - `naim/base-runtime:dev`
+- `naim/controller:dev`
+- `naim/hostd:dev`
 - `naim/infer-runtime:dev`
 - `naim/worker-runtime:dev`
+- `naim/skills-runtime:dev`
+- `naim/webgateway-runtime:dev`
 - `naim/web-ui:dev`
 
 ## Dependencies

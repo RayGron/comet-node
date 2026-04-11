@@ -64,23 +64,9 @@ trap 'rm -rf "${stage_root}"' EXIT
 mkdir -p "${stage_root}/runtime" "${stage_root}/build/linux/x64"
 cp -R "${repo_root}/runtime/browsing" "${stage_root}/runtime/"
 
-for artifact in \
-  naim-webgatewayd \
-  libcef.so \
-  chrome-sandbox \
-  chrome_100_percent.pak \
-  chrome_200_percent.pak \
-  icudtl.dat \
-  libEGL.so \
-  libGLESv2.so \
-  resources.pak \
-  v8_context_snapshot.bin \
-  vk_swiftshader_icd.json \
-  locales; do
-  copy_build_artifact \
-    "${build_dir}/${artifact}" \
-    "${stage_root}/build/linux/x64/${artifact}"
-done
+copy_build_artifact \
+  "${build_dir}/naim-webgatewayd" \
+  "${stage_root}/build/linux/x64/naim-webgatewayd"
 
 "${docker_cmd[@]}" build \
   -f "${stage_root}/runtime/browsing/Dockerfile" \

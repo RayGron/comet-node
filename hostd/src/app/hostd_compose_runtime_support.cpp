@@ -113,6 +113,12 @@ bool HostdComposeRuntimeSupport::LocalRuntimeBinaryExists(
   if (image == "naim/worker-runtime:dev") {
     return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "naim-workerd");
   }
+  if (image == "naim/skills-runtime:dev") {
+    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "naim-skillsd");
+  }
+  if (image == "naim/webgateway-runtime:dev") {
+    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "naim-webgatewayd");
+  }
   return true;
 }
 
@@ -187,6 +193,22 @@ void HostdComposeRuntimeSupport::BuildNaimRuntimeImage(
     }
     EnsureLocalRuntimeBinary(repo_root, image);
     build_runtime("runtime/worker/Dockerfile", image);
+    return;
+  }
+  if (image == "naim/skills-runtime:dev") {
+    if (!DockerImageExists("naim/base-runtime:dev")) {
+      build_base();
+    }
+    EnsureLocalRuntimeBinary(repo_root, image);
+    build_runtime("runtime/skills/Dockerfile", image);
+    return;
+  }
+  if (image == "naim/webgateway-runtime:dev") {
+    if (!DockerImageExists("naim/base-runtime:dev")) {
+      build_base();
+    }
+    EnsureLocalRuntimeBinary(repo_root, image);
+    build_runtime("runtime/browsing/Dockerfile", image);
     return;
   }
   if (image == "naim/web-ui:dev") {

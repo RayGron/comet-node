@@ -35,21 +35,9 @@ RUN apt-get update \
 
 COPY runtime/browsing /runtime/browsing
 COPY build/linux/x64/naim-webgatewayd /runtime/bin/naim-webgatewayd
-COPY build/linux/x64/libcef.so /runtime/bin/libcef.so
-COPY build/linux/x64/chrome-sandbox /runtime/bin/chrome-sandbox
-COPY build/linux/x64/chrome_100_percent.pak /runtime/bin/chrome_100_percent.pak
-COPY build/linux/x64/chrome_200_percent.pak /runtime/bin/chrome_200_percent.pak
-COPY build/linux/x64/icudtl.dat /runtime/bin/icudtl.dat
-COPY build/linux/x64/libEGL.so /runtime/bin/libEGL.so
-COPY build/linux/x64/libGLESv2.so /runtime/bin/libGLESv2.so
-COPY build/linux/x64/resources.pak /runtime/bin/resources.pak
-COPY build/linux/x64/v8_context_snapshot.bin /runtime/bin/v8_context_snapshot.bin
-COPY build/linux/x64/vk_swiftshader_icd.json /runtime/bin/vk_swiftshader_icd.json
-COPY build/linux/x64/locales /runtime/bin/locales
 
 RUN chmod +x \
       /runtime/browsing/entrypoint.sh \
-      /runtime/bin/naim-webgatewayd \
-      /runtime/bin/chrome-sandbox
+      /runtime/bin/naim-webgatewayd
 
 WORKDIR /runtime

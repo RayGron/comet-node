@@ -1,4 +1,5 @@
-FROM naim/base-runtime:dev
+ARG BASE_IMAGE=naim/base-runtime:dev
+FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 

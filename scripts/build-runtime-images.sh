@@ -121,24 +121,28 @@ echo "building ${hostd_tag}"
 echo "building ${infer_tag}"
 "${docker_cmd[@]}" build \
   -f "${image_context}/runtime/infer/Dockerfile" \
+  --build-arg "BASE_IMAGE=${base_tag}" \
   -t "${infer_tag}" \
   "${image_context}"
 
 echo "building ${worker_tag}"
 "${docker_cmd[@]}" build \
   -f "${image_context}/runtime/worker/Dockerfile" \
+  --build-arg "BASE_IMAGE=${base_tag}" \
   -t "${worker_tag}" \
   "${image_context}"
 
 echo "building ${skills_tag}"
 "${docker_cmd[@]}" build \
   -f "${image_context}/runtime/skills/Dockerfile" \
+  --build-arg "BASE_IMAGE=${base_tag}" \
   -t "${skills_tag}" \
   "${image_context}"
 
 echo "building ${webgateway_tag}"
 "${docker_cmd[@]}" build \
   -f "${image_context}/runtime/browsing/Dockerfile" \
+  --build-arg "BASE_IMAGE=${base_tag}" \
   -t "${webgateway_tag}" \
   "${image_context}"
 

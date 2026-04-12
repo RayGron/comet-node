@@ -12,14 +12,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-runtime /usr/local/bin/npm /usr/local/bin/npm
-COPY --from=node-runtime /usr/local/bin/npx /usr/local/bin/npx
 COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY build/linux/x64/naim-controller /runtime/bin/naim-controller
 COPY ui/operator-react/package.json ui/operator-react/package-lock.json /runtime/ui/operator-react/
 COPY ui/operator-react/scripts/webauthn-helper.mjs /runtime/ui/operator-react/scripts/webauthn-helper.mjs
 
 RUN chmod +x /runtime/bin/naim-controller \
+    && ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && mkdir -p /naim/state /naim/artifacts \
     && cd /runtime/ui/operator-react \
     && npm ci --omit=dev \

@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM node:20-bookworm-slim
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -10,9 +10,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY build/linux/x64/naim-controller /runtime/bin/naim-controller
+COPY ui/operator-react/package.json ui/operator-react/package-lock.json /runtime/ui/operator-react/
+COPY ui/operator-react/scripts/webauthn-helper.mjs /runtime/ui/operator-react/scripts/webauthn-helper.mjs
 
 RUN chmod +x /runtime/bin/naim-controller \
-    && mkdir -p /naim/state /naim/artifacts
+    && mkdir -p /naim/state /naim/artifacts \
+    && cd /runtime/ui/operator-react \
+    && npm ci --omit=dev \
+    && npm cache clean --force
 
 WORKDIR /naim
 

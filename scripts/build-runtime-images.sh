@@ -54,6 +54,12 @@ trap cleanup_image_context EXIT
 
 mkdir -p "${image_context}/build/linux/x64/bin"
 cp -R "${repo_root}/runtime" "${image_context}/runtime"
+mkdir -p "${image_context}/ui/operator-react/scripts"
+cp "${repo_root}/ui/operator-react/package.json" \
+  "${repo_root}/ui/operator-react/package-lock.json" \
+  "${image_context}/ui/operator-react/"
+cp "${repo_root}/ui/operator-react/scripts/webauthn-helper.mjs" \
+  "${image_context}/ui/operator-react/scripts/webauthn-helper.mjs"
 for binary in naim-controller naim-hostd naim-node naim-inferctl naim-workerd naim-skillsd naim-webgatewayd; do
   cp "${build_dir}/${binary}" "${image_context}/build/linux/x64/${binary}"
 done

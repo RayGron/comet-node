@@ -1,4 +1,6 @@
-FROM node:20-bookworm-slim
+FROM node:20-bookworm-slim AS node-runtime
+
+FROM ubuntu:24.04
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -9,6 +11,10 @@ RUN apt-get update \
       tini \
     && rm -rf /var/lib/apt/lists/*
 
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/bin/npm /usr/local/bin/npm
+COPY --from=node-runtime /usr/local/bin/npx /usr/local/bin/npx
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY build/linux/x64/naim-controller /runtime/bin/naim-controller
 COPY ui/operator-react/package.json ui/operator-react/package-lock.json /runtime/ui/operator-react/
 COPY ui/operator-react/scripts/webauthn-helper.mjs /runtime/ui/operator-react/scripts/webauthn-helper.mjs

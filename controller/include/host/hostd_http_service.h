@@ -34,6 +34,12 @@ class HostdHttpService {
   HttpResponse HandleFileTransferTicketValidate(
       const std::string& db_path,
       const HttpRequest& request) const;
+  HttpResponse HandleFileUploadTickets(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleFileUploadTicketValidate(
+      const std::string& db_path,
+      const HttpRequest& request) const;
   HttpResponse HandleHostPath(
       const std::string& db_path,
       const HttpRequest& request) const;

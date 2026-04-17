@@ -78,6 +78,30 @@ json StateJsonSettingsCodecs::ToJson(
   if (!bootstrap_model.source_paths.empty()) {
     result["source_paths"] = bootstrap_model.source_paths;
   }
+  if (bootstrap_model.source_format.has_value()) {
+    result["source_format"] = *bootstrap_model.source_format;
+  }
+  if (bootstrap_model.source_quantization.has_value()) {
+    result["source_quantization"] = *bootstrap_model.source_quantization;
+  }
+  if (bootstrap_model.desired_output_format.has_value()) {
+    result["desired_output_format"] = *bootstrap_model.desired_output_format;
+  }
+  if (bootstrap_model.quantization.has_value()) {
+    result["quantization"] = *bootstrap_model.quantization;
+  }
+  if (!bootstrap_model.keep_source) {
+    result["keep_source"] = bootstrap_model.keep_source;
+  }
+  if (bootstrap_model.writeback_enabled) {
+    result["writeback"] = {
+        {"enabled", bootstrap_model.writeback_enabled},
+        {"if_missing", bootstrap_model.writeback_if_missing},
+    };
+    if (bootstrap_model.writeback_target_node_name.has_value()) {
+      result["writeback"]["target_node_name"] = *bootstrap_model.writeback_target_node_name;
+    }
+  }
   if (bootstrap_model.source_url.has_value()) {
     result["source_url"] = *bootstrap_model.source_url;
   }
@@ -213,6 +237,31 @@ BootstrapModelSpec StateJsonSettingsCodecs::BootstrapModelSpecFromJson(
   }
   if (value.contains("source_paths") && value.at("source_paths").is_array()) {
     bootstrap_model.source_paths = value.at("source_paths").get<std::vector<std::string>>();
+  }
+  if (value.contains("source_format") && !value.at("source_format").is_null()) {
+    bootstrap_model.source_format = value.at("source_format").get<std::string>();
+  }
+  if (value.contains("source_quantization") && !value.at("source_quantization").is_null()) {
+    bootstrap_model.source_quantization = value.at("source_quantization").get<std::string>();
+  }
+  if (value.contains("desired_output_format") && !value.at("desired_output_format").is_null()) {
+    bootstrap_model.desired_output_format = value.at("desired_output_format").get<std::string>();
+  }
+  if (value.contains("quantization") && !value.at("quantization").is_null()) {
+    bootstrap_model.quantization = value.at("quantization").get<std::string>();
+  }
+  bootstrap_model.keep_source = value.value("keep_source", bootstrap_model.keep_source);
+  if (value.contains("writeback") && value.at("writeback").is_object()) {
+    const auto& writeback = value.at("writeback");
+    bootstrap_model.writeback_enabled =
+        writeback.value("enabled", bootstrap_model.writeback_enabled);
+    bootstrap_model.writeback_if_missing =
+        writeback.value("if_missing", bootstrap_model.writeback_if_missing);
+    if (writeback.contains("target_node_name") &&
+        !writeback.at("target_node_name").is_null()) {
+      bootstrap_model.writeback_target_node_name =
+          writeback.at("target_node_name").get<std::string>();
+    }
   }
   if (value.contains("source_url") && !value.at("source_url").is_null()) {
     bootstrap_model.source_url = value.at("source_url").get<std::string>();

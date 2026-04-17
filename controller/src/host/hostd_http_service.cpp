@@ -31,6 +31,13 @@ bool StartsWithPathPrefix(const std::string& path, const std::string& prefix) {
   return path.rfind(prefix, 0) == 0;
 }
 
+bool IsSafeRelativePath(const std::string& value) {
+  const std::filesystem::path normalized = std::filesystem::path(value).lexically_normal();
+  const std::string text = normalized.generic_string();
+  return !text.empty() && text != "." && text.front() != '/' &&
+         text != ".." && text.rfind("../", 0) != 0;
+}
+
 struct HostInventorySummary {
   std::string storage_root;
   int gpu_count = 0;
@@ -518,6 +525,12 @@ std::optional<HttpResponse> HostdHttpService::HandleRequest(
   }
   if (request.path == "/api/v1/hostd/file-transfer-tickets/validate") {
     return HandleFileTransferTicketValidate(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/file-upload-tickets") {
+    return HandleFileUploadTickets(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/file-upload-tickets/validate") {
+    return HandleFileUploadTicketValidate(db_path, request);
   }
   if (StartsWithPathPrefix(request.path, "/api/v1/hostd/hosts/")) {
     return HandleHostPath(db_path, request);
@@ -1028,6 +1041,162 @@ HttpResponse HostdHttpService::HandleFileTransferTicketValidate(
              {"source_node_name", ticket->source_node_name},
              {"requester_node_name", ticket->requester_node_name},
              {"source_paths", source_paths},
+             {"expires_at", ticket->expires_at},
+             {"max_chunk_bytes", ticket->max_chunk_bytes}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleFileUploadTickets(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "file-upload-tickets/create");
+    const std::string uploader_node_name =
+        body.value("uploader_node_name", host.node_name);
+    const std::string target_node_name =
+        body.value("target_node_name", std::string{});
+    const std::string target_relative_path =
+        std::filesystem::path(body.value("target_relative_path", std::string{}))
+            .lexically_normal()
+            .generic_string();
+    const std::string sha256 = body.value("sha256", std::string{});
+    const std::uintmax_t size_bytes =
+        body.value("size_bytes", static_cast<std::uintmax_t>(0));
+    const bool if_missing = body.value("if_missing", true);
+    if (uploader_node_name != host.node_name || target_node_name.empty() ||
+        !IsSafeRelativePath(target_relative_path) || sha256.empty() || size_bytes == 0) {
+      return context.Json(
+          400,
+          json{{"status", "bad_request"},
+               {"message", "invalid uploader, target, path, sha256, or size"}});
+    }
+    const auto forward_links =
+        context.store().LoadHostPeerLinks(uploader_node_name, target_node_name);
+    const auto reverse_links =
+        context.store().LoadHostPeerLinks(target_node_name, uploader_node_name);
+    std::optional<naim::HostPeerLinkRecord> forward =
+        forward_links.empty() ? std::nullopt
+                              : std::optional<naim::HostPeerLinkRecord>(forward_links.front());
+    std::optional<naim::HostPeerLinkRecord> reverse =
+        reverse_links.empty() ? std::nullopt
+                              : std::optional<naim::HostPeerLinkRecord>(reverse_links.front());
+    if (!forward.has_value() ||
+        PeerLinkState(support_, *forward, reverse) != "direct") {
+      return context.EncryptedResponse(
+          &host,
+          "file-upload-tickets/create",
+          json{{"service", "naim-controller"},
+               {"status", "not_available"},
+               {"message", "target node is not directly reachable over LAN"}});
+    }
+    naim::FileUploadTicketRecord ticket;
+    ticket.ticket_id = naim::RandomTokenBase64(32);
+    ticket.target_node_name = target_node_name;
+    ticket.uploader_node_name = uploader_node_name;
+    ticket.target_relative_path = target_relative_path;
+    ticket.sha256 = sha256;
+    ticket.size_bytes = size_bytes;
+    ticket.if_missing = if_missing;
+    ticket.expires_at = support_.sql_timestamp_after_seconds(kTransferTicketTtlSeconds);
+    ticket.max_chunk_bytes = kMaxPeerTransferChunkBytes;
+    context.store().InsertFileUploadTicket(ticket);
+    return context.EncryptedResponse(
+        &host,
+        "file-upload-tickets/create",
+        json{{"service", "naim-controller"},
+             {"status", "issued"},
+             {"ticket_id", ticket.ticket_id},
+             {"target_node_name", ticket.target_node_name},
+             {"uploader_node_name", ticket.uploader_node_name},
+             {"target_relative_path", ticket.target_relative_path},
+             {"target_endpoint", forward->peer_endpoint},
+             {"sha256", ticket.sha256},
+             {"size_bytes", ticket.size_bytes},
+             {"if_missing", ticket.if_missing},
+             {"expires_at", ticket.expires_at},
+             {"max_chunk_bytes", ticket.max_chunk_bytes}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleFileUploadTicketValidate(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "file-upload-tickets/validate");
+    const std::string ticket_id = body.value("ticket_id", std::string{});
+    const auto ticket = context.store().LoadFileUploadTicket(ticket_id);
+    if (!ticket.has_value() || ticket->target_node_name != host.node_name) {
+      return context.EncryptedResponse(
+          &host,
+          "file-upload-tickets/validate",
+          json{{"service", "naim-controller"},
+               {"status", "denied"},
+               {"message", "ticket not found for this target node"}});
+    }
+    const auto expiry_age = support_.timestamp_age_seconds(ticket->expires_at);
+    if (!expiry_age.has_value() || *expiry_age >= 0) {
+      return context.EncryptedResponse(
+          &host,
+          "file-upload-tickets/validate",
+          json{{"service", "naim-controller"},
+               {"status", "expired"},
+               {"message", "ticket expired"}});
+    }
+    context.store().MarkFileUploadTicketValidated(
+        ticket->ticket_id,
+        support_.utc_now_sql_timestamp());
+    return context.EncryptedResponse(
+        &host,
+        "file-upload-tickets/validate",
+        json{{"service", "naim-controller"},
+             {"status", "valid"},
+             {"ticket_id", ticket->ticket_id},
+             {"target_node_name", ticket->target_node_name},
+             {"uploader_node_name", ticket->uploader_node_name},
+             {"target_relative_path", ticket->target_relative_path},
+             {"sha256", ticket->sha256},
+             {"size_bytes", ticket->size_bytes},
+             {"if_missing", ticket->if_missing},
              {"expires_at", ticket->expires_at},
              {"max_chunk_bytes", ticket->max_chunk_bytes}});
   } catch (const std::exception& error) {

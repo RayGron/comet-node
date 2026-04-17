@@ -173,6 +173,37 @@ nlohmann::json HttpHostdBackend::ValidateFileTransferTicket(
       "file-transfer-tickets/validate");
 }
 
+nlohmann::json HttpHostdBackend::RequestFileUploadTicket(
+    const std::string& uploader_node_name,
+    const std::string& target_node_name,
+    const std::string& target_relative_path,
+    const std::string& sha256,
+    std::uintmax_t size_bytes,
+    bool if_missing) {
+  EnsureSession(uploader_node_name, "requesting LAN file upload ticket");
+  return SendEncryptedControllerJsonRequest(
+      "/api/v1/hostd/file-upload-tickets",
+      nlohmann::json{
+          {"uploader_node_name", uploader_node_name},
+          {"target_node_name", target_node_name},
+          {"target_relative_path", target_relative_path},
+          {"sha256", sha256},
+          {"size_bytes", size_bytes},
+          {"if_missing", if_missing},
+      },
+      "file-upload-tickets/create");
+}
+
+nlohmann::json HttpHostdBackend::ValidateFileUploadTicket(
+    const std::string& target_node_name,
+    const std::string& ticket_id) {
+  EnsureSession(target_node_name, "validating LAN file upload ticket");
+  return SendEncryptedControllerJsonRequest(
+      "/api/v1/hostd/file-upload-tickets/validate",
+      nlohmann::json{{"ticket_id", ticket_id}},
+      "file-upload-tickets/validate");
+}
+
 void HttpHostdBackend::UpsertHostObservation(const naim::HostObservation& observation) {
   EnsureSession(observation.node_name, "uploading observation");
   SendEncryptedControllerJsonRequest(

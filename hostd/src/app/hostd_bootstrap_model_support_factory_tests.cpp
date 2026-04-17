@@ -246,6 +246,35 @@ class RelayHostdBackend final : public naim::hostd::HostdBackend {
     };
   }
 
+  nlohmann::json RequestFileTransferTicket(
+      const std::string&,
+      const std::string&,
+      const std::vector<std::string>&) override {
+    return nlohmann::json{{"status", "not_available"}};
+  }
+
+  nlohmann::json ValidateFileTransferTicket(
+      const std::string&,
+      const std::string&) override {
+    return nlohmann::json{{"status", "denied"}};
+  }
+
+  nlohmann::json RequestFileUploadTicket(
+      const std::string&,
+      const std::string&,
+      const std::string&,
+      const std::string&,
+      std::uintmax_t,
+      bool) override {
+    return nlohmann::json{{"status", "not_available"}};
+  }
+
+  nlohmann::json ValidateFileUploadTicket(
+      const std::string&,
+      const std::string&) override {
+    return nlohmann::json{{"status", "denied"}};
+  }
+
   void UpsertHostObservation(const naim::HostObservation&) override {}
   void AppendEvent(const naim::EventRecord&) override {}
   void UpsertDiskRuntimeState(const naim::DiskRuntimeState&) override {}

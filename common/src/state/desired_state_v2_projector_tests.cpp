@@ -49,6 +49,24 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
     Expect(rerendered.bootstrap_model->source_paths ==
                rendered.bootstrap_model->source_paths,
            name + ": source_paths mismatch");
+    Expect(rerendered.bootstrap_model->source_format ==
+               rendered.bootstrap_model->source_format,
+           name + ": source_format mismatch");
+    Expect(rerendered.bootstrap_model->desired_output_format ==
+               rendered.bootstrap_model->desired_output_format,
+           name + ": desired_output_format mismatch");
+    Expect(rerendered.bootstrap_model->quantization ==
+               rendered.bootstrap_model->quantization,
+           name + ": quantization mismatch");
+    Expect(rerendered.bootstrap_model->keep_source ==
+               rendered.bootstrap_model->keep_source,
+           name + ": keep_source mismatch");
+    Expect(rerendered.bootstrap_model->writeback_enabled ==
+               rendered.bootstrap_model->writeback_enabled,
+           name + ": writeback_enabled mismatch");
+    Expect(rerendered.bootstrap_model->writeback_target_node_name ==
+               rendered.bootstrap_model->writeback_target_node_name,
+           name + ": writeback_target_node_name mismatch");
     Expect(rerendered.bootstrap_model->source_urls == rendered.bootstrap_model->source_urls,
            name + ": source_urls mismatch");
   }
@@ -382,6 +400,36 @@ int main() {
             {"app", {{"enabled", false}}},
         },
         "llm-with-skills");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "llm-prepare-on-worker"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "library"}, {"ref", "Qwen/Qwen3"}, {"path", "/storage/qwen"}}},
+                 {"materialization",
+                  {{"mode", "prepare_on_worker"},
+                   {"local_path", "/storage/qwen"},
+                   {"source_node_name", "storage-a"},
+                   {"source_paths", json::array({"/storage/qwen"})},
+                   {"source_format", "model-directory"},
+                   {"desired_output_format", "gguf"},
+                   {"quantization", "Q4_K_M"},
+                   {"keep_source", false},
+                   {"writeback",
+                    {{"enabled", true},
+                     {"if_missing", true},
+                     {"target_node_name", "storage-a"}}}}},
+                 {"served_model_name", "qwen-worker-prepared"},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", false}}},
+        },
+        "llm-prepare-on-worker");
 
     ExpectRoundTrip(
         json{

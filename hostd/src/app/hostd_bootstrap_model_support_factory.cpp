@@ -20,6 +20,7 @@ HostdBootstrapModelSupport HostdBootstrapModelSupportFactory::Create() const {
       artifact_support_,
       active_model_support_,
       transfer_support_,
+      command_support_,
       file_support_,
       reporting_support_);
 }

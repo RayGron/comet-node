@@ -97,6 +97,46 @@ DesiredStatePolicyService::DescribeUnsupportedControllerLocalRuntime(
 void DesiredStatePolicyService::ValidateDesiredStateForControllerAdmission(
     naim::ControllerStore& store,
     const naim::DesiredState& desired_state) const {
+  if (desired_state.bootstrap_model.has_value() &&
+      desired_state.bootstrap_model->materialization_mode == "prepare_on_worker") {
+    const auto& bootstrap_model = *desired_state.bootstrap_model;
+    const auto validate_storage_node = [&](const std::string& field_name,
+                                           const std::string& node_name) {
+      const auto host = store.LoadRegisteredHost(node_name);
+      if (!host.has_value()) {
+        throw std::invalid_argument(
+            "model.materialization." + field_name + " '" + node_name +
+            "' is not registered in naim");
+      }
+      if (host->registration_state != "registered") {
+        throw std::invalid_argument(
+            "model.materialization." + field_name + " '" + node_name +
+            "' is not ready for model-library placement");
+      }
+      if (!(host->storage_role_enabled || host->derived_role == "storage" ||
+            host->derived_role == "worker")) {
+        throw std::invalid_argument(
+            "model.materialization." + field_name + " '" + node_name +
+            "' must have storage_role_enabled or derived_role storage/worker");
+      }
+    };
+    if (!bootstrap_model.source_node_name.has_value() ||
+        bootstrap_model.source_node_name->empty()) {
+      throw std::invalid_argument(
+          "prepare_on_worker requires model.materialization.source_node_name");
+    }
+    if (bootstrap_model.source_paths.empty()) {
+      throw std::invalid_argument(
+          "prepare_on_worker requires model.materialization.source_paths");
+    }
+    validate_storage_node("source_node_name", *bootstrap_model.source_node_name);
+    if (bootstrap_model.writeback_enabled) {
+      validate_storage_node(
+          "writeback.target_node_name",
+          bootstrap_model.writeback_target_node_name.value_or(
+              *bootstrap_model.source_node_name));
+    }
+  }
   const naim::DesiredStatePlacementResolver placement_resolver(desired_state);
   if (const auto placement_node_name = placement_resolver.ExecutionNodeName();
       placement_node_name.has_value()) {

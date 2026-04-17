@@ -67,6 +67,22 @@ nlohmann::json LocalDbHostdBackend::ValidateFileTransferTicket(
   return nlohmann::json{{"status", "denied"}};
 }
 
+nlohmann::json LocalDbHostdBackend::RequestFileUploadTicket(
+    const std::string&,
+    const std::string&,
+    const std::string&,
+    const std::string&,
+    std::uintmax_t,
+    bool) {
+  return nlohmann::json{{"status", "not_available"}};
+}
+
+nlohmann::json LocalDbHostdBackend::ValidateFileUploadTicket(
+    const std::string&,
+    const std::string&) {
+  return nlohmann::json{{"status", "denied"}};
+}
+
 void LocalDbHostdBackend::UpsertHostObservation(const naim::HostObservation& observation) {
   store_.UpsertHostObservation(observation);
 }

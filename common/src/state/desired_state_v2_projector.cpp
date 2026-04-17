@@ -132,6 +132,32 @@ void DesiredStateV2Projector::ProjectModel() {
   if (!model.source_paths.empty()) {
     model_json["materialization"]["source_paths"] = model.source_paths;
   }
+  if (model.source_format.has_value() && !model.source_format->empty()) {
+    model_json["materialization"]["source_format"] = *model.source_format;
+  }
+  if (model.source_quantization.has_value() && !model.source_quantization->empty()) {
+    model_json["materialization"]["source_quantization"] = *model.source_quantization;
+  }
+  if (model.desired_output_format.has_value() && !model.desired_output_format->empty()) {
+    model_json["materialization"]["desired_output_format"] = *model.desired_output_format;
+  }
+  if (model.quantization.has_value() && !model.quantization->empty()) {
+    model_json["materialization"]["quantization"] = *model.quantization;
+  }
+  if (!model.keep_source) {
+    model_json["materialization"]["keep_source"] = model.keep_source;
+  }
+  if (model.writeback_enabled) {
+    model_json["materialization"]["writeback"] = {
+        {"enabled", model.writeback_enabled},
+        {"if_missing", model.writeback_if_missing},
+    };
+    if (model.writeback_target_node_name.has_value() &&
+        !model.writeback_target_node_name->empty()) {
+      model_json["materialization"]["writeback"]["target_node_name"] =
+          *model.writeback_target_node_name;
+    }
+  }
   if (model.served_model_name.has_value() && !model.served_model_name->empty()) {
     model_json["served_model_name"] = *model.served_model_name;
   }
@@ -612,6 +638,9 @@ std::string DesiredStateV2Projector::PreferredModelSourceType() const {
   }
   if (model.local_path.has_value() && model.materialization_mode == "reference") {
     return "local";
+  }
+  if (model.materialization_mode == "prepare_on_worker") {
+    return "library";
   }
   return "huggingface";
 }

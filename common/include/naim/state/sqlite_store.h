@@ -225,6 +225,20 @@ struct FileTransferTicketRecord {
   std::string last_validated_at;
 };
 
+struct FileUploadTicketRecord {
+  std::string ticket_id;
+  std::string target_node_name;
+  std::string uploader_node_name;
+  std::string target_relative_path;
+  std::string sha256;
+  std::uintmax_t size_bytes = 0;
+  bool if_missing = true;
+  std::string expires_at;
+  std::uintmax_t max_chunk_bytes = 0;
+  std::string created_at;
+  std::string last_validated_at;
+};
+
 struct UserRecord {
   int id = 0;
   std::string username;
@@ -426,6 +440,12 @@ class ControllerStore {
   std::optional<FileTransferTicketRecord> LoadFileTransferTicket(
       const std::string& ticket_id) const;
   bool MarkFileTransferTicketValidated(
+      const std::string& ticket_id,
+      const std::string& validated_at);
+  void InsertFileUploadTicket(const FileUploadTicketRecord& ticket);
+  std::optional<FileUploadTicketRecord> LoadFileUploadTicket(
+      const std::string& ticket_id) const;
+  bool MarkFileUploadTicketValidated(
       const std::string& ticket_id,
       const std::string& validated_at);
   int LoadUserCount() const;

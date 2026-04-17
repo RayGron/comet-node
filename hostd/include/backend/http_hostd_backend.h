@@ -51,6 +51,16 @@ class HttpHostdBackend final : public HostdBackend {
   nlohmann::json ValidateFileTransferTicket(
       const std::string& source_node_name,
       const std::string& ticket_id) override;
+  nlohmann::json RequestFileUploadTicket(
+      const std::string& uploader_node_name,
+      const std::string& target_node_name,
+      const std::string& target_relative_path,
+      const std::string& sha256,
+      std::uintmax_t size_bytes,
+      bool if_missing) override;
+  nlohmann::json ValidateFileUploadTicket(
+      const std::string& target_node_name,
+      const std::string& ticket_id) override;
   void UpsertHostObservation(const naim::HostObservation& observation) override;
   void AppendEvent(const naim::EventRecord& event) override;
   void UpsertDiskRuntimeState(const naim::DiskRuntimeState& state) override;

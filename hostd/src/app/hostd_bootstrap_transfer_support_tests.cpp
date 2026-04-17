@@ -81,6 +81,22 @@ class RecordingHostdBackend final : public naim::hostd::HostdBackend {
     return nlohmann::json::object();
   }
 
+  nlohmann::json RequestFileUploadTicket(
+      const std::string&,
+      const std::string&,
+      const std::string&,
+      const std::string&,
+      std::uintmax_t,
+      bool) override {
+    return nlohmann::json::object();
+  }
+
+  nlohmann::json ValidateFileUploadTicket(
+      const std::string&,
+      const std::string&) override {
+    return nlohmann::json::object();
+  }
+
   void UpsertHostObservation(const naim::HostObservation&) override {}
   void AppendEvent(const naim::EventRecord&) override {}
   void UpsertDiskRuntimeState(const naim::DiskRuntimeState&) override {}

@@ -90,10 +90,11 @@ void DesiredStateV2Validator::ValidateModel() const {
   if (source_type.empty()) {
     throw std::runtime_error("desired-state v2 model.source requires type");
   }
-  if ((source_type == "catalog" || source_type == "huggingface") &&
+  if ((source_type == "catalog" || source_type == "huggingface" ||
+       source_type == "library") &&
       source.value("ref", std::string{}).empty()) {
     throw std::runtime_error(
-        "desired-state v2 model.source.ref is required for catalog/huggingface models");
+        "desired-state v2 model.source.ref is required for catalog/huggingface/library models");
   }
   if (source_type == "url" && source.value("url", std::string{}).empty()) {
     if (!source.contains("urls") || !source.at("urls").is_array() || source.at("urls").empty()) {
@@ -111,11 +112,33 @@ void DesiredStateV2Validator::ValidateModel() const {
   }
   if (model.contains("materialization") && model.at("materialization").is_object()) {
     const auto& materialization = model.at("materialization");
+    const std::string mode = materialization.value("mode", std::string{});
     if (materialization.value("mode", std::string{}) == "reference" &&
         materialization.value("local_path", std::string{}).empty() &&
         source.value("path", std::string{}).empty()) {
       throw std::runtime_error(
           "desired-state v2 reference materialization requires local_path or source.path");
+    }
+    if (mode == "prepare_on_worker") {
+      if (source_type != "library" && source_type != "local") {
+        throw std::runtime_error(
+            "desired-state v2 prepare_on_worker requires library or local model source");
+      }
+      if (materialization.value("source_node_name", std::string{}).empty()) {
+        throw std::runtime_error(
+            "desired-state v2 prepare_on_worker requires materialization.source_node_name");
+      }
+      if (!materialization.contains("source_paths") ||
+          !materialization.at("source_paths").is_array() ||
+          materialization.at("source_paths").empty()) {
+        throw std::runtime_error(
+            "desired-state v2 prepare_on_worker requires non-empty materialization.source_paths");
+      }
+    }
+    if (materialization.contains("writeback") &&
+        !materialization.at("writeback").is_object()) {
+      throw std::runtime_error(
+          "desired-state v2 model.materialization.writeback must be an object");
     }
   }
 }

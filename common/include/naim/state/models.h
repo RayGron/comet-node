@@ -237,6 +237,14 @@ struct BootstrapModelSpec {
   std::optional<std::string> local_path;
   std::optional<std::string> source_node_name;
   std::vector<std::string> source_paths;
+  std::optional<std::string> source_format;
+  std::optional<std::string> source_quantization;
+  std::optional<std::string> desired_output_format;
+  std::optional<std::string> quantization;
+  bool keep_source = true;
+  bool writeback_enabled = false;
+  bool writeback_if_missing = true;
+  std::optional<std::string> writeback_target_node_name;
   std::optional<std::string> source_url;
   std::vector<std::string> source_urls;
   std::optional<std::string> target_filename;

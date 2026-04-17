@@ -47,6 +47,16 @@ class HostdBackend {
   virtual nlohmann::json ValidateFileTransferTicket(
       const std::string& source_node_name,
       const std::string& ticket_id) = 0;
+  virtual nlohmann::json RequestFileUploadTicket(
+      const std::string& uploader_node_name,
+      const std::string& target_node_name,
+      const std::string& target_relative_path,
+      const std::string& sha256,
+      std::uintmax_t size_bytes,
+      bool if_missing) = 0;
+  virtual nlohmann::json ValidateFileUploadTicket(
+      const std::string& target_node_name,
+      const std::string& ticket_id) = 0;
   virtual void UpsertHostObservation(const naim::HostObservation& observation) = 0;
   virtual void AppendEvent(const naim::EventRecord& event) = 0;
   virtual void UpsertDiskRuntimeState(const naim::DiskRuntimeState& state) = 0;

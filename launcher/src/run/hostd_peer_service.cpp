@@ -535,27 +535,30 @@ void HostdPeerService::HandleHttpClient(int client_fd) const {
   std::string content_type = "application/json";
   std::string response_body;
   try {
-    const std::string request = ReadAll(client_fd);
-    const std::size_t first_line_end = request.find("\r\n");
-    const std::string first_line =
-        first_line_end == std::string::npos ? request : request.substr(0, first_line_end);
-    std::istringstream first(first_line);
-    std::string method;
-    std::string path;
-    first >> method >> path;
-    const std::size_t header_end = request.find("\r\n\r\n");
-    const std::string body =
-        header_end == std::string::npos ? std::string{} : request.substr(header_end + 4);
-    if (method == "GET" && path == "/peer/v1/health") {
+    const HttpPeerRequest request = ParseHttpPeerRequest(ReadAll(client_fd));
+    if (request.method == "GET" && request.path == "/peer/v1/health") {
       response_body = json{
           {"service", "naim-peer"},
           {"node_name", options_.node_name},
           {"peer_endpoint", BuildAdvertisedEndpoint()},
       }.dump();
-    } else if (method == "POST" && path == "/peer/v1/files/manifest") {
-      response_body = HandlePeerJsonRequest(path, body, &status_code, &content_type);
-    } else if (method == "POST" && path == "/peer/v1/files/chunk") {
-      response_body = HandlePeerChunkRequest(body, &status_code, &content_type);
+    } else if (request.method == "POST" && request.path == "/peer/v1/files/manifest") {
+      response_body = HandlePeerJsonRequest(
+          request.path,
+          request.body,
+          &status_code,
+          &content_type);
+    } else if (request.method == "POST" && request.path == "/peer/v1/files/chunk") {
+      response_body = HandlePeerChunkRequest(request.body, &status_code, &content_type);
+    } else if (request.method == "POST" && request.path == "/peer/v1/files/upload-start") {
+      response_body =
+          HandlePeerUploadStartRequest(request.body, &status_code, &content_type);
+    } else if (request.method == "POST" && request.path == "/peer/v1/files/upload-chunk") {
+      response_body =
+          HandlePeerUploadChunkRequest(request, &status_code, &content_type);
+    } else if (request.method == "POST" && request.path == "/peer/v1/files/upload-complete") {
+      response_body =
+          HandlePeerUploadCompleteRequest(request.body, &status_code, &content_type);
     } else {
       status_code = 404;
       response_body = json{{"status", "not_found"}}.dump();
@@ -573,6 +576,51 @@ void HostdPeerService::HandleHttpClient(int client_fd) const {
   const std::string text = response.str();
   send(client_fd, text.data(), text.size(), 0);
   close(client_fd);
+}
+
+HostdPeerService::HttpPeerRequest HostdPeerService::ParseHttpPeerRequest(
+    const std::string& request) const {
+  HttpPeerRequest parsed;
+  const std::size_t first_line_end = request.find("\r\n");
+  const std::string first_line =
+      first_line_end == std::string::npos ? request : request.substr(0, first_line_end);
+  std::istringstream first(first_line);
+  first >> parsed.method >> parsed.path;
+  const std::size_t query = parsed.path.find('?');
+  if (query != std::string::npos) {
+    parsed.path = parsed.path.substr(0, query);
+  }
+  const std::size_t header_end = request.find("\r\n\r\n");
+  if (header_end == std::string::npos) {
+    return parsed;
+  }
+  std::istringstream headers(request.substr(0, header_end));
+  std::string line;
+  bool first_header_line = true;
+  while (std::getline(headers, line)) {
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    if (first_header_line) {
+      first_header_line = false;
+      continue;
+    }
+    const std::size_t colon = line.find(':');
+    if (colon == std::string::npos) {
+      continue;
+    }
+    std::string key = line.substr(0, colon);
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char ch) {
+      return static_cast<char>(std::tolower(ch));
+    });
+    std::string value = line.substr(colon + 1);
+    while (!value.empty() && value.front() == ' ') {
+      value.erase(value.begin());
+    }
+    parsed.headers[key] = value;
+  }
+  parsed.body = request.substr(header_end + 4);
+  return parsed;
 }
 
 std::string HostdPeerService::HandlePeerJsonRequest(
@@ -720,6 +768,178 @@ std::string HostdPeerService::HandlePeerChunkRequest(
   return bytes;
 }
 
+std::string HostdPeerService::HandlePeerUploadStartRequest(
+    const std::string& body,
+    int* status_code,
+    std::string* content_type) const {
+  *content_type = "application/json";
+  const auto request = json::parse(body, nullptr, false);
+  if (request.is_discarded() || !request.is_object()) {
+    *status_code = 400;
+    return json{{"status", "bad_request"}}.dump();
+  }
+  const std::string ticket_id = request.value("ticket_id", std::string{});
+  std::string relative_path;
+  std::string sha256;
+  std::uintmax_t size_bytes = 0;
+  std::uintmax_t max_chunk_bytes = 0;
+  bool if_missing = true;
+  if (!ValidateUploadTicket(
+          ticket_id,
+          &relative_path,
+          &sha256,
+          &size_bytes,
+          &if_missing,
+          &max_chunk_bytes)) {
+    *status_code = 403;
+    return json{{"status", "forbidden"}}.dump();
+  }
+  const std::filesystem::path target = ResolveUploadTargetPath(relative_path);
+  if (if_missing && std::filesystem::exists(target)) {
+    return json{{"status", "already_exists"}, {"target_path", target.string()}}.dump();
+  }
+  std::error_code error;
+  std::filesystem::create_directories(target.parent_path(), error);
+  if (error) {
+    *status_code = 500;
+    return json{{"status", "internal_error"}, {"message", error.message()}}.dump();
+  }
+  std::filesystem::remove(target.string() + ".part", error);
+  return json{
+      {"status", "ready"},
+      {"target_path", target.string()},
+      {"target_relative_path", relative_path},
+      {"sha256", sha256},
+      {"size_bytes", size_bytes},
+      {"max_chunk_bytes", max_chunk_bytes},
+  }.dump();
+}
+
+std::string HostdPeerService::HandlePeerUploadChunkRequest(
+    const HttpPeerRequest& request,
+    int* status_code,
+    std::string* content_type) const {
+  *content_type = "application/json";
+  const auto ticket_it = request.headers.find("x-naim-ticket-id");
+  const auto offset_it = request.headers.find("x-naim-offset");
+  if (ticket_it == request.headers.end() || offset_it == request.headers.end()) {
+    *status_code = 400;
+    return json{{"status", "bad_request"}}.dump();
+  }
+  std::string relative_path;
+  std::string sha256;
+  std::uintmax_t size_bytes = 0;
+  std::uintmax_t max_chunk_bytes = 0;
+  bool if_missing = true;
+  if (!ValidateUploadTicket(
+          ticket_it->second,
+          &relative_path,
+          &sha256,
+          &size_bytes,
+          &if_missing,
+          &max_chunk_bytes)) {
+    *status_code = 403;
+    return json{{"status", "forbidden"}}.dump();
+  }
+  if (request.body.size() > max_chunk_bytes) {
+    *status_code = 400;
+    return json{{"status", "too_large"}}.dump();
+  }
+  std::uintmax_t offset = 0;
+  try {
+    offset = static_cast<std::uintmax_t>(std::stoull(offset_it->second));
+  } catch (const std::exception&) {
+    *status_code = 400;
+    return json{{"status", "bad_request"}, {"message", "invalid upload offset"}}.dump();
+  }
+  if (offset > size_bytes ||
+      static_cast<std::uintmax_t>(request.body.size()) > size_bytes - offset) {
+    *status_code = 400;
+    return json{{"status", "bad_request"}, {"message", "chunk exceeds ticket size"}}.dump();
+  }
+  const std::filesystem::path target = ResolveUploadTargetPath(relative_path);
+  if (if_missing && std::filesystem::exists(target)) {
+    return json{{"status", "already_exists"}, {"next_offset", offset}}.dump();
+  }
+  const std::filesystem::path part = target.string() + ".part";
+  std::fstream output(
+      part,
+      std::ios::binary | std::ios::in | std::ios::out |
+          (offset == 0 ? std::ios::trunc : std::ios::openmode{}));
+  if (!output.is_open()) {
+    output.open(part, std::ios::binary | std::ios::out);
+  }
+  if (!output.is_open()) {
+    *status_code = 500;
+    return json{{"status", "internal_error"}, {"message", "failed to open upload part"}}.dump();
+  }
+  output.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
+  output.write(request.body.data(), static_cast<std::streamsize>(request.body.size()));
+  output.close();
+  return json{
+      {"status", "chunk_written"},
+      {"next_offset", offset + request.body.size()},
+  }.dump();
+}
+
+std::string HostdPeerService::HandlePeerUploadCompleteRequest(
+    const std::string& body,
+    int* status_code,
+    std::string* content_type) const {
+  *content_type = "application/json";
+  const auto request = json::parse(body, nullptr, false);
+  if (request.is_discarded() || !request.is_object()) {
+    *status_code = 400;
+    return json{{"status", "bad_request"}}.dump();
+  }
+  const std::string ticket_id = request.value("ticket_id", std::string{});
+  std::string relative_path;
+  std::string sha256;
+  std::uintmax_t size_bytes = 0;
+  std::uintmax_t max_chunk_bytes = 0;
+  bool if_missing = true;
+  if (!ValidateUploadTicket(
+          ticket_id,
+          &relative_path,
+          &sha256,
+          &size_bytes,
+          &if_missing,
+          &max_chunk_bytes)) {
+    *status_code = 403;
+    return json{{"status", "forbidden"}}.dump();
+  }
+  const std::filesystem::path target = ResolveUploadTargetPath(relative_path);
+  if (if_missing && std::filesystem::exists(target)) {
+    return json{{"status", "already_exists"}, {"target_path", target.string()}}.dump();
+  }
+  const std::filesystem::path part = target.string() + ".part";
+  std::error_code error;
+  const auto actual_size = std::filesystem::file_size(part, error);
+  if (error || actual_size != size_bytes) {
+    *status_code = 400;
+    return json{{"status", "size_mismatch"}}.dump();
+  }
+  const std::string actual_sha256 = naim::ComputeFileSha256Hex(part.string());
+  std::string expected = sha256;
+  std::transform(expected.begin(), expected.end(), expected.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  std::string actual = actual_sha256;
+  std::transform(actual.begin(), actual.end(), actual.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  if (actual != expected) {
+    *status_code = 400;
+    return json{{"status", "sha256_mismatch"}}.dump();
+  }
+  std::filesystem::rename(part, target, error);
+  if (error) {
+    *status_code = 500;
+    return json{{"status", "internal_error"}, {"message", error.message()}}.dump();
+  }
+  return json{{"status", "completed"}, {"target_path", target.string()}}.dump();
+}
+
 std::string HostdPeerService::ReadPrivateKey() const {
   std::ifstream input(options_.host_private_key_path);
   std::string value;
@@ -812,6 +1032,81 @@ bool HostdPeerService::IsPathUnderStorageRoot(const std::string& source_path) co
     storage_text.push_back('/');
   }
   return source == storage || source_text.rfind(storage_text, 0) == 0;
+}
+
+bool HostdPeerService::ValidateUploadTicket(
+    const std::string& ticket_id,
+    std::string* target_relative_path,
+    std::string* sha256,
+    std::uintmax_t* size_bytes,
+    bool* if_missing,
+    std::uintmax_t* max_chunk_bytes) const {
+  if (ticket_id.empty() || options_.storage_root.empty()) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(backend_mutex_);
+  static LauncherHostdBackendSupport support;
+  naim::hostd::HttpHostdBackend backend(
+      options_.controller_url,
+      ReadPrivateKey(),
+      options_.controller_fingerprint,
+      options_.onboarding_key,
+      options_.node_name,
+      options_.storage_root,
+      support);
+  const json response = backend.ValidateFileUploadTicket(options_.node_name, ticket_id);
+  if (response.value("status", std::string{}) != "valid") {
+    return false;
+  }
+  const std::string relative_path =
+      std::filesystem::path(response.value("target_relative_path", std::string{}))
+          .lexically_normal()
+          .generic_string();
+  if (relative_path.empty() || relative_path == "." || relative_path.front() == '/' ||
+      relative_path == ".." || relative_path.rfind("../", 0) == 0) {
+    return false;
+  }
+  if (target_relative_path != nullptr) {
+    *target_relative_path = relative_path;
+  }
+  if (sha256 != nullptr) {
+    *sha256 = response.value("sha256", std::string{});
+  }
+  if (size_bytes != nullptr) {
+    *size_bytes = response.value("size_bytes", static_cast<std::uintmax_t>(0));
+  }
+  if (if_missing != nullptr) {
+    *if_missing = response.value("if_missing", true);
+  }
+  if (max_chunk_bytes != nullptr) {
+    *max_chunk_bytes = response.value("max_chunk_bytes", static_cast<std::uintmax_t>(0));
+    if (*max_chunk_bytes == 0) {
+      *max_chunk_bytes = 64ULL * 1024ULL * 1024ULL;
+    }
+  }
+  return true;
+}
+
+std::filesystem::path HostdPeerService::ResolveUploadTargetPath(
+    const std::string& relative_path) const {
+  std::error_code error;
+  const auto storage = std::filesystem::weakly_canonical(options_.storage_root, error);
+  if (error) {
+    throw std::runtime_error("storage root is not canonicalizable: " + error.message());
+  }
+  const auto lexical_target = (storage / relative_path).lexically_normal();
+  const auto target_parent =
+      std::filesystem::weakly_canonical(lexical_target.parent_path(), error);
+  if (error) {
+    throw std::runtime_error("upload target parent is not canonicalizable: " + error.message());
+  }
+  const auto target = target_parent / lexical_target.filename();
+  const std::string storage_text = storage.string() + "/";
+  const std::string parent_text = target_parent.string();
+  if (target_parent != storage && parent_text.rfind(storage_text, 0) != 0) {
+    throw std::runtime_error("upload target escapes storage root");
+  }
+  return target;
 }
 
 }  // namespace naim::launcher

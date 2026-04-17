@@ -85,6 +85,12 @@ function fetchJson(path, init = {}) {
   });
 }
 
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function planePath(planeName, suffix = "") {
   const encoded = encodeURIComponent(planeName);
   return suffix
@@ -1079,8 +1085,11 @@ export function PlaneEditorDialog({
   onClose,
   onSave,
   modelLibraryItems,
+  hostdHosts,
+  peerLinks,
   skillsFactoryItems,
   skillsFactoryGroups = [],
+  onResetLtCypherDeployment,
 }) {
   if (!dialog.open) {
     return null;
@@ -1160,8 +1169,11 @@ export function PlaneEditorDialog({
             setDialog={setDialog}
             languageOptions={CHAT_LANGUAGE_OPTIONS}
             modelLibraryItems={modelLibraryItems || []}
+            hostdHosts={hostdHosts || []}
+            peerLinks={peerLinks || null}
             skillsFactoryItems={skillsFactoryItems || []}
             skillsFactoryGroups={skillsFactoryGroups || []}
+            onResetLtCypherDeployment={onResetLtCypherDeployment}
           />
         ) : null}
         {showFormBuilder ? (
@@ -2667,6 +2679,50 @@ function App() {
         startedAt: new Date().toISOString(),
       });
       await refreshAll(planeName);
+    } catch (error) {
+      setApiError(error.message || String(error));
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function resetLtCypherDeployment() {
+    const planeName = "lt-cypher-ai";
+    const confirmed = window.confirm(
+      "Reset failed lt-cypher-ai deployment? This deletes only the plane/runtime state and waits for controller cleanup. Model-library artifacts and prepared caches are preserved.",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setActionBusy("reset-lt-cypher-ai");
+    setApiError("");
+    try {
+      startTransition(() => {
+        setSelectedPlane(planeName);
+        setSelectedPage("dashboard");
+      });
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        try {
+          await fetchJson(planePath(planeName), { method: "DELETE" });
+        } catch (error) {
+          if (error?.status === 404) {
+            break;
+          }
+          throw error;
+        }
+        await delay(1500);
+        const payload = await fetchJson("/api/v1/planes");
+        const items = Array.isArray(payload.items) ? payload.items : [];
+        if (!items.some((item) => item.name === planeName)) {
+          break;
+        }
+      }
+      setPendingOperation({
+        kind: "delete",
+        planeName,
+        startedAt: new Date().toISOString(),
+      });
+      await refreshAll("");
     } catch (error) {
       setApiError(error.message || String(error));
     } finally {
@@ -6935,8 +6991,11 @@ function App() {
         }
         onSave={savePlaneDialog}
         modelLibraryItems={modelLibrary.items || []}
+        hostdHosts={hostdHosts || []}
+        peerLinks={dashboard?.peer_links || null}
         skillsFactoryItems={skillsFactory.items || []}
         skillsFactoryGroups={skillsFactory.groups || []}
+        onResetLtCypherDeployment={resetLtCypherDeployment}
       />
       <SkillsDialog
         dialog={skillsDialog}

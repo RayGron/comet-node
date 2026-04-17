@@ -126,6 +126,20 @@ CREATE TABLE IF NOT EXISTS file_transfer_tickets (
     last_validated_at TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS file_upload_tickets (
+    ticket_id TEXT PRIMARY KEY,
+    target_node_name TEXT NOT NULL,
+    uploader_node_name TEXT NOT NULL,
+    target_relative_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL DEFAULT '',
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    if_missing INTEGER NOT NULL DEFAULT 1,
+    expires_at TEXT NOT NULL,
+    max_chunk_bytes INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_validated_at TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
@@ -785,6 +799,64 @@ bool ControllerStore::MarkFileTransferTicketValidated(
   SqliteStatement statement(
       AsSqlite(db_),
       "UPDATE file_transfer_tickets SET last_validated_at = ?2 WHERE ticket_id = ?1;");
+  statement.BindText(1, ticket_id);
+  statement.BindText(2, validated_at);
+  statement.StepDone();
+  return sqlite3_changes(AsSqlite(db_)) > 0;
+}
+
+void ControllerStore::InsertFileUploadTicket(const FileUploadTicketRecord& ticket) {
+  SqliteStatement statement(
+      AsSqlite(db_),
+      "INSERT INTO file_upload_tickets("
+      "ticket_id, target_node_name, uploader_node_name, target_relative_path, sha256,"
+      "size_bytes, if_missing, expires_at, max_chunk_bytes"
+      ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);");
+  statement.BindText(1, ticket.ticket_id);
+  statement.BindText(2, ticket.target_node_name);
+  statement.BindText(3, ticket.uploader_node_name);
+  statement.BindText(4, ticket.target_relative_path);
+  statement.BindText(5, ticket.sha256);
+  statement.BindInt64(6, static_cast<sqlite3_int64>(ticket.size_bytes));
+  statement.BindInt(7, ticket.if_missing ? 1 : 0);
+  statement.BindText(8, ticket.expires_at);
+  statement.BindInt64(9, static_cast<sqlite3_int64>(ticket.max_chunk_bytes));
+  statement.StepDone();
+}
+
+std::optional<FileUploadTicketRecord> ControllerStore::LoadFileUploadTicket(
+    const std::string& ticket_id) const {
+  SqliteStatement statement(
+      AsSqlite(db_),
+      "SELECT ticket_id, target_node_name, uploader_node_name, target_relative_path,"
+      " sha256, size_bytes, if_missing, expires_at, max_chunk_bytes, created_at,"
+      " last_validated_at"
+      " FROM file_upload_tickets WHERE ticket_id = ?1;");
+  statement.BindText(1, ticket_id);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  FileUploadTicketRecord ticket;
+  ticket.ticket_id = ToColumnText(statement.raw(), 0);
+  ticket.target_node_name = ToColumnText(statement.raw(), 1);
+  ticket.uploader_node_name = ToColumnText(statement.raw(), 2);
+  ticket.target_relative_path = ToColumnText(statement.raw(), 3);
+  ticket.sha256 = ToColumnText(statement.raw(), 4);
+  ticket.size_bytes = static_cast<std::uintmax_t>(sqlite3_column_int64(statement.raw(), 5));
+  ticket.if_missing = sqlite3_column_int(statement.raw(), 6) != 0;
+  ticket.expires_at = ToColumnText(statement.raw(), 7);
+  ticket.max_chunk_bytes = static_cast<std::uintmax_t>(sqlite3_column_int64(statement.raw(), 8));
+  ticket.created_at = ToColumnText(statement.raw(), 9);
+  ticket.last_validated_at = ToColumnText(statement.raw(), 10);
+  return ticket;
+}
+
+bool ControllerStore::MarkFileUploadTicketValidated(
+    const std::string& ticket_id,
+    const std::string& validated_at) {
+  SqliteStatement statement(
+      AsSqlite(db_),
+      "UPDATE file_upload_tickets SET last_validated_at = ?2 WHERE ticket_id = ?1;");
   statement.BindText(1, ticket_id);
   statement.BindText(2, validated_at);
   statement.StepDone();

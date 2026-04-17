@@ -213,7 +213,8 @@ void DesiredStateV2Renderer::RenderModel() {
   if (model_json.contains("source") && model_json.at("source").is_object()) {
     const auto& source = model_json.at("source");
     const std::string source_type = source.value("type", "");
-    if (source_type == "catalog" || source_type == "huggingface") {
+    if (source_type == "catalog" || source_type == "huggingface" ||
+        source_type == "library") {
       model.model_id = source.value("ref", "");
     } else if (source_type == "local") {
       model.model_id = source.value("ref", source.value("path", ""));
@@ -246,6 +247,36 @@ void DesiredStateV2Renderer::RenderModel() {
     if (materialization.contains("source_paths") &&
         materialization.at("source_paths").is_array()) {
       model.source_paths = materialization.at("source_paths").get<std::vector<std::string>>();
+    }
+    if (materialization.contains("source_format") &&
+        materialization.at("source_format").is_string()) {
+      model.source_format = materialization.at("source_format").get<std::string>();
+    }
+    if (materialization.contains("source_quantization") &&
+        materialization.at("source_quantization").is_string()) {
+      model.source_quantization =
+          materialization.at("source_quantization").get<std::string>();
+    }
+    if (materialization.contains("desired_output_format") &&
+        materialization.at("desired_output_format").is_string()) {
+      model.desired_output_format =
+          materialization.at("desired_output_format").get<std::string>();
+    }
+    if (materialization.contains("quantization") &&
+        materialization.at("quantization").is_string()) {
+      model.quantization = materialization.at("quantization").get<std::string>();
+    }
+    model.keep_source = materialization.value("keep_source", model.keep_source);
+    if (materialization.contains("writeback") &&
+        materialization.at("writeback").is_object()) {
+      const auto& writeback = materialization.at("writeback");
+      model.writeback_enabled = writeback.value("enabled", model.writeback_enabled);
+      model.writeback_if_missing = writeback.value("if_missing", model.writeback_if_missing);
+      if (writeback.contains("target_node_name") &&
+          writeback.at("target_node_name").is_string()) {
+        model.writeback_target_node_name =
+            writeback.at("target_node_name").get<std::string>();
+      }
     }
   }
 

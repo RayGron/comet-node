@@ -36,6 +36,12 @@ class HostdPeerService final {
     std::string last_seen_at;
     std::string last_probe_at;
   };
+  struct HttpPeerRequest {
+    std::string method;
+    std::string path;
+    std::map<std::string, std::string> headers;
+    std::string body;
+  };
 
   void BeaconLoop();
   void ListenLoop();
@@ -50,12 +56,25 @@ class HostdPeerService final {
   std::string CurrentTimestamp() const;
 
   void HandleHttpClient(int client_fd) const;
+  HttpPeerRequest ParseHttpPeerRequest(const std::string& request) const;
   std::string HandlePeerJsonRequest(
       const std::string& path,
       const std::string& body,
       int* status_code,
       std::string* content_type) const;
   std::string HandlePeerChunkRequest(
+      const std::string& body,
+      int* status_code,
+      std::string* content_type) const;
+  std::string HandlePeerUploadStartRequest(
+      const std::string& body,
+      int* status_code,
+      std::string* content_type) const;
+  std::string HandlePeerUploadChunkRequest(
+      const HttpPeerRequest& request,
+      int* status_code,
+      std::string* content_type) const;
+  std::string HandlePeerUploadCompleteRequest(
       const std::string& body,
       int* status_code,
       std::string* content_type) const;
@@ -69,6 +88,14 @@ class HostdPeerService final {
       const std::string& source_path,
       const std::vector<std::string>& allowed_paths) const;
   bool IsPathUnderStorageRoot(const std::string& source_path) const;
+  bool ValidateUploadTicket(
+      const std::string& ticket_id,
+      std::string* target_relative_path,
+      std::string* sha256,
+      std::uintmax_t* size_bytes,
+      bool* if_missing,
+      std::uintmax_t* max_chunk_bytes) const;
+  std::filesystem::path ResolveUploadTargetPath(const std::string& relative_path) const;
   std::string ReadPrivateKey() const;
 
   HostdRunOptions options_;

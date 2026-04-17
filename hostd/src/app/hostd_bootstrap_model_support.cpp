@@ -6,6 +6,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <cstdlib>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -60,10 +61,28 @@ PeerEndpoint ParsePeerEndpoint(std::string endpoint) {
   return parsed;
 }
 
+PeerHttpResponse SendPeerHttpRawRequest(
+    const std::string& endpoint,
+    const std::string& path,
+    const std::string& body,
+    const std::string& content_type,
+    const std::map<std::string, std::string>& extra_headers);
+
 PeerHttpResponse SendPeerHttpRequest(
     const std::string& endpoint,
     const std::string& path,
     const nlohmann::json& payload) {
+  std::map<std::string, std::string> headers;
+  const std::string body = payload.dump();
+  return SendPeerHttpRawRequest(endpoint, path, body, "application/json", headers);
+}
+
+PeerHttpResponse SendPeerHttpRawRequest(
+    const std::string& endpoint,
+    const std::string& path,
+    const std::string& body,
+    const std::string& content_type,
+    const std::map<std::string, std::string>& extra_headers) {
   const PeerEndpoint target = ParsePeerEndpoint(endpoint);
   naim::platform::EnsureSocketsInitialized();
   addrinfo hints{};
@@ -91,12 +110,14 @@ PeerHttpResponse SendPeerHttpRequest(
   if (!naim::platform::IsSocketValid(fd)) {
     throw std::runtime_error("failed to connect to peer endpoint: " + target.raw);
   }
-  const std::string body = payload.dump();
   std::ostringstream request;
   request << "POST " << path << " HTTP/1.1\r\n";
   request << "Host: " << target.host << ":" << target.port << "\r\n";
   request << "Connection: close\r\n";
-  request << "Content-Type: application/json\r\n";
+  request << "Content-Type: " << content_type << "\r\n";
+  for (const auto& [key, value] : extra_headers) {
+    request << key << ": " << value << "\r\n";
+  }
   request << "Content-Length: " << body.size() << "\r\n\r\n";
   request << body;
   const std::string request_text = request.str();
@@ -187,17 +208,49 @@ std::string NormalizeLowercase(std::string value) {
   return value;
 }
 
+std::string EnvString(const char* name) {
+  const char* value = std::getenv(name);
+  return value == nullptr ? std::string{} : std::string(value);
+}
+
+std::string SanitizePathPart(std::string value) {
+  for (char& ch : value) {
+    const bool ok = std::isalnum(static_cast<unsigned char>(ch)) || ch == '-' || ch == '_' ||
+                    ch == '.';
+    if (!ok) {
+      ch = '-';
+    }
+  }
+  while (value.find("--") != std::string::npos) {
+    value.replace(value.find("--"), 2, "-");
+  }
+  if (value.empty() || value == "." || value == "..") {
+    return "model";
+  }
+  return value;
+}
+
+bool EndsWithIgnoreCase(const std::string& value, const std::string& suffix) {
+  if (value.size() < suffix.size()) {
+    return false;
+  }
+  return NormalizeLowercase(value.substr(value.size() - suffix.size())) ==
+         NormalizeLowercase(suffix);
+}
+
 }  // namespace
 
 HostdBootstrapModelSupport::HostdBootstrapModelSupport(
     const HostdBootstrapModelArtifactSupport& artifact_support,
     const HostdBootstrapActiveModelSupport& active_model_support,
     const HostdBootstrapTransferSupport& transfer_support,
+    const HostdCommandSupport& command_support,
     const HostdFileSupport& file_support,
     const HostdReportingSupport& reporting_support)
     : artifact_support_(artifact_support),
       active_model_support_(active_model_support),
       transfer_support_(transfer_support),
+      command_support_(command_support),
       file_support_(file_support),
       reporting_support_(reporting_support) {}
 
@@ -270,6 +323,7 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
     const std::string& node_name,
     const naim::BootstrapModelSpec& bootstrap_model,
     const std::string& target_path,
+    const bool write_active_model,
     HostdBackend* backend,
     const std::optional<int>& assignment_id) const {
   if (!bootstrap_model.local_path.has_value() ||
@@ -504,10 +558,12 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
         72,
         state.plane_name,
         node_name);
-    active_model_support_.WriteBootstrapActiveModel(
-        state,
-        node_name,
-        directory_transfer ? target_path : target_paths.front());
+    if (write_active_model) {
+      active_model_support_.WriteBootstrapActiveModel(
+          state,
+          node_name,
+          directory_transfer ? target_path : target_paths.front());
+    }
     return true;
   }
 
@@ -525,56 +581,84 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
       throw std::runtime_error("failed to open bootstrap model relay target: " + temp_path);
     }
 
+    const std::uintmax_t file_prefix_done = aggregate_done;
     std::uintmax_t offset = 0;
     bool eof = false;
     while (!eof) {
       if (use_peer_direct) {
-        const std::uintmax_t expected_size =
-            JsonUintmax(files[file_index], "size_bytes").value_or(0);
-        const PeerHttpResponse peer_chunk = SendPeerHttpRequest(
-            peer_endpoint,
-            "/peer/v1/files/chunk",
-            nlohmann::json{
-                {"ticket_id", peer_ticket_id},
-                {"source_path", source_path},
-                {"offset", offset},
-                {"max_bytes", kControllerRelayedChunkBytes},
-            });
-        if (peer_chunk.body.empty() && offset < expected_size) {
-          throw std::runtime_error("direct LAN transfer returned an empty non-final chunk");
-        }
-        if (!peer_chunk.body.empty()) {
-          output.write(peer_chunk.body.data(), static_cast<std::streamsize>(peer_chunk.body.size()));
-          if (!output.good()) {
-            throw std::runtime_error("failed to write bootstrap model direct target: " + temp_path);
+        try {
+          const std::uintmax_t expected_size =
+              JsonUintmax(files[file_index], "size_bytes").value_or(0);
+          const PeerHttpResponse peer_chunk = SendPeerHttpRequest(
+              peer_endpoint,
+              "/peer/v1/files/chunk",
+              nlohmann::json{
+                  {"ticket_id", peer_ticket_id},
+                  {"source_path", source_path},
+                  {"offset", offset},
+                  {"max_bytes", kControllerRelayedChunkBytes},
+              });
+          if (peer_chunk.body.empty() && offset < expected_size) {
+            throw std::runtime_error("direct LAN transfer returned an empty non-final chunk");
           }
+          if (!peer_chunk.body.empty()) {
+            output.write(peer_chunk.body.data(), static_cast<std::streamsize>(peer_chunk.body.size()));
+            if (!output.good()) {
+              throw std::runtime_error("failed to write bootstrap model direct target: " + temp_path);
+            }
+          }
+          const std::uintmax_t next_offset = offset + peer_chunk.body.size();
+          aggregate_done += next_offset - offset;
+          offset = next_offset;
+          eof = offset >= expected_size || peer_chunk.body.size() < kControllerRelayedChunkBytes;
+          int percent = 60;
+          if (aggregate_total > 0) {
+            percent = 20 + static_cast<int>(
+                               (static_cast<double>(aggregate_done) / aggregate_total) * 40.0);
+            percent = std::clamp(percent, 20, 60);
+          }
+          const std::optional<std::uintmax_t> aggregate_total_progress =
+              aggregate_total > 0 ? std::optional<std::uintmax_t>(aggregate_total)
+                                  : std::nullopt;
+          PublishAssignmentProgress(
+              backend,
+              assignment_id,
+              "acquiring-model",
+              "Acquiring model",
+              "Copying bootstrap model directly from storage node " +
+                  *bootstrap_model.source_node_name + " over LAN.",
+              percent,
+              state.plane_name,
+              node_name,
+              aggregate_done,
+              aggregate_total_progress);
+          continue;
+        } catch (const std::exception& direct_error) {
+          output.close();
+          std::error_code cleanup_error;
+          fs::remove(temp_path, cleanup_error);
+          output.open(temp_path, std::ios::binary | std::ios::trunc);
+          if (!output.is_open()) {
+            throw std::runtime_error("failed to reopen bootstrap model relay target: " + temp_path);
+          }
+          aggregate_done = file_prefix_done;
+          offset = 0;
+          eof = false;
+          use_peer_direct = false;
+          PublishAssignmentProgress(
+              backend,
+              assignment_id,
+              "acquiring-model",
+              "Acquiring model",
+              "Direct LAN transfer failed; continuing through the controller relay: " +
+                  std::string(direct_error.what()),
+              20,
+              state.plane_name,
+              node_name,
+              aggregate_done,
+              aggregate_total > 0 ? std::optional<std::uintmax_t>(aggregate_total)
+                                  : std::nullopt);
         }
-        const std::uintmax_t next_offset = offset + peer_chunk.body.size();
-        aggregate_done += next_offset - offset;
-        offset = next_offset;
-        eof = offset >= expected_size || peer_chunk.body.size() < kControllerRelayedChunkBytes;
-        int percent = 60;
-        if (aggregate_total > 0) {
-          percent = 20 + static_cast<int>(
-                             (static_cast<double>(aggregate_done) / aggregate_total) * 40.0);
-          percent = std::clamp(percent, 20, 60);
-        }
-        const std::optional<std::uintmax_t> aggregate_total_progress =
-            aggregate_total > 0 ? std::optional<std::uintmax_t>(aggregate_total)
-                                : std::nullopt;
-        PublishAssignmentProgress(
-            backend,
-            assignment_id,
-            "acquiring-model",
-            "Acquiring model",
-            "Copying bootstrap model directly from storage node " +
-                *bootstrap_model.source_node_name + " over LAN.",
-            percent,
-            state.plane_name,
-            node_name,
-            aggregate_done,
-            aggregate_total_progress);
-        continue;
       }
       const nlohmann::json request = backend->RequestModelArtifactChunk(
           node_name,
@@ -680,8 +764,371 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
     fs::rename(target_root, target_path);
     active_target_path = target_path;
   }
-  active_model_support_.WriteBootstrapActiveModel(state, node_name, active_target_path);
+  if (write_active_model) {
+    active_model_support_.WriteBootstrapActiveModel(state, node_name, active_target_path);
+  }
   return true;
+}
+
+bool HostdBootstrapModelSupport::TryPrepareWorkerBootstrapModel(
+    const naim::DesiredState& state,
+    const std::string& node_name,
+    const naim::BootstrapModelSpec& bootstrap_model,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id) const {
+  if (bootstrap_model.materialization_mode != "prepare_on_worker") {
+    return false;
+  }
+  if (!bootstrap_model.source_node_name.has_value() ||
+      bootstrap_model.source_node_name->empty()) {
+    throw std::runtime_error("prepare_on_worker requires source_node_name");
+  }
+
+  const std::string target_path = artifact_support_.TargetPath(state, node_name);
+  const fs::path target_base(target_path);
+  const fs::path output_dir = target_base.parent_path();
+  const std::string quantization =
+      bootstrap_model.quantization.value_or("base").empty()
+          ? std::string("base")
+          : bootstrap_model.quantization.value_or("base");
+  const std::string source_format =
+      NormalizeLowercase(bootstrap_model.source_format.value_or(""));
+  const bool source_quantization_matches =
+      source_format == "gguf" && quantization != "base" &&
+      NormalizeLowercase(bootstrap_model.source_quantization.value_or("")) ==
+          NormalizeLowercase(quantization);
+  const bool should_quantize = quantization != "base" && !source_quantization_matches;
+  const std::string base_stem =
+      SanitizePathPart(target_base.stem().string().empty()
+                           ? bootstrap_model.model_id
+                           : target_base.stem().string());
+  const fs::path prepared_path =
+      output_dir /
+      (quantization == "base" ? base_stem + ".gguf"
+                              : base_stem + "-" + SanitizePathPart(quantization) + ".gguf");
+  const fs::path signature_path = prepared_path.string() + ".naim-prep.json";
+  const nlohmann::json signature = {
+      {"version", 1},
+      {"model_id", bootstrap_model.model_id},
+      {"source_node_name", *bootstrap_model.source_node_name},
+      {"source_paths", bootstrap_model.source_paths},
+      {"source_format", bootstrap_model.source_format.value_or("")},
+      {"source_quantization", bootstrap_model.source_quantization.value_or("")},
+      {"desired_output_format", bootstrap_model.desired_output_format.value_or("gguf")},
+      {"quantization", quantization},
+      {"served_model_name", bootstrap_model.served_model_name.value_or("")},
+  };
+  std::error_code error;
+  if (fs::exists(prepared_path, error) && fs::exists(signature_path, error)) {
+    std::ifstream input(signature_path);
+    const auto cached_signature = nlohmann::json::parse(input, nullptr, false);
+    if (!cached_signature.is_discarded() && cached_signature == signature) {
+      PublishAssignmentProgress(
+          backend,
+          assignment_id,
+          "using-cached-prepared-model",
+          "Using prepared model",
+          "Using the existing worker-local prepared model artifact.",
+          82,
+          state.plane_name,
+          node_name);
+      active_model_support_.WriteBootstrapActiveModel(state, node_name, prepared_path.string());
+      TryWriteBackPreparedModel(
+          state,
+          node_name,
+          bootstrap_model,
+          prepared_path.string(),
+          backend,
+          assignment_id);
+      return true;
+    }
+  }
+
+  fs::create_directories(output_dir, error);
+  const fs::path staging_root = output_dir / (base_stem + ".prepare");
+  std::string source_cache_name = "source";
+  if (!bootstrap_model.source_paths.empty()) {
+    source_cache_name = fs::path(bootstrap_model.source_paths.front()).filename().string();
+  } else if (bootstrap_model.local_path.has_value()) {
+    source_cache_name = fs::path(*bootstrap_model.local_path).filename().string();
+  }
+  if (source_cache_name.empty() || source_cache_name == "." || source_cache_name == "..") {
+    source_cache_name = "source";
+  }
+  const fs::path source_cache = staging_root / source_cache_name;
+  fs::remove_all(staging_root, error);
+  fs::create_directories(staging_root, error);
+
+  PublishAssignmentProgress(
+      backend,
+      assignment_id,
+      "acquiring-model",
+      "Acquiring model",
+      "Copying source model to worker-local preparation cache.",
+      18,
+      state.plane_name,
+      node_name);
+
+  bool acquired = false;
+  if (bootstrap_model.local_path.has_value() && fs::exists(*bootstrap_model.local_path, error) &&
+      !error) {
+    transfer_support_.CopyFileWithProgress(
+        *bootstrap_model.local_path,
+        source_cache.string(),
+        backend,
+        assignment_id,
+        state.plane_name,
+        node_name);
+    acquired = true;
+  } else {
+    acquired = TryAcquireControllerRelayedBootstrapModel(
+        state,
+        node_name,
+        bootstrap_model,
+        source_cache.string(),
+        false,
+        backend,
+        assignment_id);
+  }
+  if (!acquired) {
+    throw std::runtime_error("failed to acquire source model for worker preparation");
+  }
+
+  fs::remove(prepared_path, error);
+  PublishAssignmentProgress(
+      backend,
+      assignment_id,
+      should_quantize ? "quantizing-model" : "preparing-model",
+      should_quantize ? "Quantizing model" : "Preparing model",
+      should_quantize
+          ? "Generating requested GGUF quantization on worker."
+          : (source_quantization_matches
+                 ? "Selected GGUF already matches requested quantization; caching on worker."
+                 : "Preparing GGUF model artifact on worker."),
+      68,
+      state.plane_name,
+      node_name);
+
+  const bool source_is_directory = fs::is_directory(source_cache, error) && !error;
+  if (source_is_directory) {
+    const std::string convert_script =
+        !EnvString("NAIM_MODEL_LIBRARY_CONVERT_SCRIPT").empty()
+            ? EnvString("NAIM_MODEL_LIBRARY_CONVERT_SCRIPT")
+            : EnvString("NAIM_LLAMA_CPP_CONVERT_SCRIPT");
+    if (convert_script.empty()) {
+      throw std::runtime_error(
+          "prepare_on_worker requires NAIM_MODEL_LIBRARY_CONVERT_SCRIPT for directory models");
+    }
+    const fs::path base_output = staging_root / (base_stem + ".gguf");
+    const std::string command =
+        "python3 " + command_support_.ShellQuote(convert_script) + " " +
+        command_support_.ShellQuote(source_cache.string()) + " --outfile " +
+        command_support_.ShellQuote(base_output.string());
+    if (!command_support_.RunCommandOk(command)) {
+      throw std::runtime_error("failed to convert source model directory to GGUF");
+    }
+    if (!should_quantize) {
+      fs::rename(base_output, prepared_path);
+    } else {
+      const std::string quantize_bin =
+          !EnvString("NAIM_MODEL_LIBRARY_QUANTIZE_BIN").empty()
+              ? EnvString("NAIM_MODEL_LIBRARY_QUANTIZE_BIN")
+              : EnvString("NAIM_LLAMA_CPP_QUANTIZE");
+      if (quantize_bin.empty()) {
+        throw std::runtime_error(
+            "prepare_on_worker requires NAIM_MODEL_LIBRARY_QUANTIZE_BIN for quantization");
+      }
+      const std::string command =
+          command_support_.ShellQuote(quantize_bin) + " " +
+          command_support_.ShellQuote(base_output.string()) + " " +
+          command_support_.ShellQuote(prepared_path.string()) + " " +
+          command_support_.ShellQuote(quantization);
+      if (!command_support_.RunCommandOk(command)) {
+        throw std::runtime_error("failed to quantize prepared GGUF model");
+      }
+      fs::remove(base_output, error);
+    }
+  } else if (EndsWithIgnoreCase(source_cache.filename().string(), ".gguf") ||
+             (source_format == "gguf" && fs::is_regular_file(source_cache, error))) {
+    if (!should_quantize) {
+      fs::rename(source_cache, prepared_path);
+    } else {
+      const std::string quantize_bin =
+          !EnvString("NAIM_MODEL_LIBRARY_QUANTIZE_BIN").empty()
+              ? EnvString("NAIM_MODEL_LIBRARY_QUANTIZE_BIN")
+              : EnvString("NAIM_LLAMA_CPP_QUANTIZE");
+      if (quantize_bin.empty()) {
+        throw std::runtime_error(
+            "prepare_on_worker requires NAIM_MODEL_LIBRARY_QUANTIZE_BIN for quantization");
+      }
+      const std::string command =
+          command_support_.ShellQuote(quantize_bin) + " " +
+          command_support_.ShellQuote(source_cache.string()) + " " +
+          command_support_.ShellQuote(prepared_path.string()) + " " +
+          command_support_.ShellQuote(quantization);
+      if (!command_support_.RunCommandOk(command)) {
+        throw std::runtime_error("failed to quantize prepared GGUF model");
+      }
+    }
+  } else {
+    throw std::runtime_error("prepare_on_worker source must be a GGUF file or model directory");
+  }
+
+  if (!fs::exists(prepared_path, error) || error) {
+    throw std::runtime_error("prepared model artifact was not created: " + prepared_path.string());
+  }
+  if (!bootstrap_model.keep_source) {
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        "cleanup-model-source",
+        "Cleaning up source model",
+        "Removing worker-local source staging files after preparation.",
+        84,
+        state.plane_name,
+        node_name);
+    fs::remove_all(staging_root, error);
+  }
+  {
+    std::ofstream output(signature_path, std::ios::trunc);
+    output << signature.dump(2) << "\n";
+  }
+  PublishAssignmentProgress(
+      backend,
+      assignment_id,
+      "prepared-model",
+      "Prepared model",
+      "Worker-local model artifact is ready.",
+      86,
+      state.plane_name,
+      node_name,
+      transfer_support_.FileSizeIfExists(prepared_path.string()),
+      transfer_support_.FileSizeIfExists(prepared_path.string()));
+  active_model_support_.WriteBootstrapActiveModel(state, node_name, prepared_path.string());
+  TryWriteBackPreparedModel(
+      state,
+      node_name,
+      bootstrap_model,
+      prepared_path.string(),
+      backend,
+      assignment_id);
+  return true;
+}
+
+bool HostdBootstrapModelSupport::TryWriteBackPreparedModel(
+    const naim::DesiredState& state,
+    const std::string& node_name,
+    const naim::BootstrapModelSpec& bootstrap_model,
+    const std::string& prepared_path,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id) const {
+  if (!bootstrap_model.writeback_enabled || backend == nullptr) {
+    return false;
+  }
+  const std::string target_node =
+      bootstrap_model.writeback_target_node_name.value_or(
+          bootstrap_model.source_node_name.value_or(""));
+  if (target_node.empty() || target_node == node_name) {
+    return false;
+  }
+  try {
+    const std::string sha256 = naim::ComputeFileSha256Hex(prepared_path);
+    const auto size = transfer_support_.FileSizeIfExists(prepared_path);
+    if (!size.has_value() || *size == 0) {
+      return false;
+    }
+    const std::string quantization = bootstrap_model.quantization.value_or("base");
+    const std::string relative_path =
+        "prepared/" + SanitizePathPart(bootstrap_model.model_id) + "/" +
+        SanitizePathPart(quantization) + "/" +
+        SanitizePathPart(fs::path(prepared_path).filename().string());
+    const nlohmann::json ticket = backend->RequestFileUploadTicket(
+        node_name,
+        target_node,
+        relative_path,
+        sha256,
+        *size,
+        bootstrap_model.writeback_if_missing);
+    if (ticket.value("status", std::string{}) != "issued") {
+      PublishAssignmentProgress(
+          backend,
+          assignment_id,
+          "writeback-pending",
+          "Storage writeback pending",
+          "Prepared model is running locally; storage writeback is pending: " +
+              ticket.value("message", std::string("upload ticket unavailable")),
+          92,
+          state.plane_name,
+          node_name);
+      return false;
+    }
+    const std::string endpoint = ticket.value("target_endpoint", std::string{});
+    const std::string ticket_id = ticket.value("ticket_id", std::string{});
+    const PeerHttpResponse start = SendPeerHttpRequest(
+        endpoint,
+        "/peer/v1/files/upload-start",
+        nlohmann::json{{"ticket_id", ticket_id}});
+    const auto start_json = nlohmann::json::parse(start.body, nullptr, false);
+    if (!start_json.is_discarded() &&
+        start_json.value("status", std::string{}) == "already_exists") {
+      return true;
+    }
+    std::ifstream input(prepared_path, std::ios::binary);
+    if (!input.is_open()) {
+      return false;
+    }
+    std::array<char, 4 * 1024 * 1024> buffer{};
+    std::uintmax_t offset = 0;
+    while (input.good()) {
+      input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+      const auto count = input.gcount();
+      if (count <= 0) {
+        break;
+      }
+      const std::string body(buffer.data(), static_cast<std::size_t>(count));
+      SendPeerHttpRawRequest(
+          endpoint,
+          "/peer/v1/files/upload-chunk",
+          body,
+          "application/octet-stream",
+          {
+              {"X-Naim-Ticket-Id", ticket_id},
+              {"X-Naim-Offset", std::to_string(offset)},
+          });
+      offset += static_cast<std::uintmax_t>(count);
+      PublishAssignmentProgress(
+          backend,
+          assignment_id,
+          "writeback-model",
+          "Writing model back to storage",
+          "Uploading prepared model variant to storage node " + target_node + ".",
+          std::clamp(86 + static_cast<int>((static_cast<double>(offset) / *size) * 10.0), 86, 96),
+          state.plane_name,
+          node_name,
+          offset,
+          *size);
+    }
+    const PeerHttpResponse complete = SendPeerHttpRequest(
+        endpoint,
+        "/peer/v1/files/upload-complete",
+        nlohmann::json{{"ticket_id", ticket_id}});
+    const auto complete_json = nlohmann::json::parse(complete.body, nullptr, false);
+    return !complete_json.is_discarded() &&
+           (complete_json.value("status", std::string{}) == "completed" ||
+            complete_json.value("status", std::string{}) == "already_exists");
+  } catch (const std::exception& error) {
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        "writeback-pending",
+        "Storage writeback pending",
+        std::string("Prepared model is running locally; storage writeback failed: ") +
+            error.what(),
+        92,
+        state.plane_name,
+        node_name);
+    return false;
+  }
 }
 
 bool HostdBootstrapModelSupport::TryUseSharedBootstrapFromOtherNode(
@@ -911,6 +1358,14 @@ void HostdBootstrapModelSupport::BootstrapPlaneModelIfNeeded(
   }
 
   const auto& bootstrap_model = *state.bootstrap_model;
+  if (TryPrepareWorkerBootstrapModel(
+          state,
+          node_name,
+          bootstrap_model,
+          backend,
+          assignment_id)) {
+    return;
+  }
   if (TryUseReferenceBootstrapModel(
           state,
           node_name,
@@ -927,6 +1382,7 @@ void HostdBootstrapModelSupport::BootstrapPlaneModelIfNeeded(
           node_name,
           bootstrap_model,
           target_path,
+          true,
           backend,
           assignment_id)) {
     return;

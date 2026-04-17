@@ -295,6 +295,21 @@ void InitializeSchema(
       ");");
   Exec(
       db,
+      "CREATE TABLE IF NOT EXISTS file_upload_tickets("
+      "ticket_id TEXT PRIMARY KEY,"
+      "target_node_name TEXT NOT NULL,"
+      "uploader_node_name TEXT NOT NULL,"
+      "target_relative_path TEXT NOT NULL,"
+      "sha256 TEXT NOT NULL DEFAULT '',"
+      "size_bytes INTEGER NOT NULL DEFAULT 0,"
+      "if_missing INTEGER NOT NULL DEFAULT 1,"
+      "expires_at TEXT NOT NULL,"
+      "max_chunk_bytes INTEGER NOT NULL DEFAULT 0,"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "last_validated_at TEXT NOT NULL DEFAULT ''"
+      ");");
+  Exec(
+      db,
       "CREATE TABLE IF NOT EXISTS interaction_sessions("
       "session_id TEXT PRIMARY KEY,"
       "plane_name TEXT NOT NULL,"

@@ -11,6 +11,8 @@
 
 #include "infra/controller_action.h"
 
+#include "app/controller_time_support.h"
+
 #include "naim/security/crypto_utils.h"
 #include "naim/runtime/runtime_status.h"
 #include "naim/state/models.h"
@@ -1471,6 +1473,7 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
             if (body.contains("bytes_total") && body["bytes_total"].is_number_integer()) {
               job->bytes_total = body["bytes_total"].get<std::int64_t>();
             }
+            job->updated_at = naim::controller::ControllerTimeSupport::UtcNowSqlTimestamp();
             context.store().UpsertModelLibraryDownloadJob(*job);
           }
         }
@@ -1499,6 +1502,10 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
             job->phase = "completed";
             job->current_item.clear();
             job->error_message.clear();
+            if (job->bytes_total.has_value()) {
+              job->bytes_done = *job->bytes_total;
+            }
+            job->updated_at = naim::controller::ControllerTimeSupport::UtcNowSqlTimestamp();
             context.store().UpsertModelLibraryDownloadJob(*job);
           }
         }
@@ -1556,6 +1563,7 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
             job->status = "failed";
             job->phase = "failed";
             job->error_message = status_message;
+            job->updated_at = naim::controller::ControllerTimeSupport::UtcNowSqlTimestamp();
             context.store().UpsertModelLibraryDownloadJob(*job);
           }
         }

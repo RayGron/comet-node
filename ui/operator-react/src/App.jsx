@@ -41,7 +41,7 @@ import {
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
-const MODEL_LIBRARY_ACTIVE_POLL_MS = 3000;
+const MODEL_LIBRARY_ACTIVE_POLL_MS = 1000;
 const MODEL_LIBRARY_BACKGROUND_POLL_MS = 10000;
 const EVENT_LIMIT = 24;
 const MODEL_LIBRARY_PAGE_SIZE = 24;
@@ -93,6 +93,10 @@ function planePath(planeName, suffix = "") {
 
 function modelLibraryPath(suffix = "") {
   return suffix ? `/api/v1/model-library/${suffix}` : "/api/v1/model-library";
+}
+
+function modelLibraryJobsPath() {
+  return "/api/v1/model-library/jobs";
 }
 
 function hostdHostsPath(nodeName = "") {
@@ -2059,6 +2063,32 @@ function App() {
     }
   }
 
+  async function refreshModelLibraryJobs() {
+    try {
+      const payload = await fetchJson(modelLibraryJobsPath());
+      const nextJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+      startTransition(() => {
+        setModelLibrary((current) => ({
+          ...current,
+          jobs: nextJobs,
+        }));
+      });
+      setModelJobPage((current) => {
+        const nextPageCount = Math.max(
+          1,
+          Math.ceil(nextJobs.length / MODEL_LIBRARY_JOB_PAGE_SIZE),
+        );
+        return Math.min(current, nextPageCount - 1);
+      });
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      throw error;
+    }
+  }
+
   async function refreshSkillsFactory() {
     try {
       const payload = await fetchJson(skillsFactoryPath());
@@ -3103,6 +3133,10 @@ function App() {
       return undefined;
     }
     const timer = setInterval(() => {
+      if (selectedPage === "models") {
+        refreshModelLibraryJobs().catch(() => {});
+        return;
+      }
       refreshModelLibrary().catch(() => {});
     }, selectedPage === "models" ? MODEL_LIBRARY_ACTIVE_POLL_MS : MODEL_LIBRARY_BACKGROUND_POLL_MS);
     return () => clearInterval(timer);

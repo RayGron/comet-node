@@ -23,6 +23,7 @@ class ModelLibraryService {
   explicit ModelLibraryService(ModelLibrarySupport support);
 
   nlohmann::json BuildPayload(const std::string& db_path) const;
+  nlohmann::json BuildJobsPayload(const std::string& db_path) const;
   HttpResponse DeleteEntryByPath(
       const std::string& db_path,
       const HttpRequest& request) const;

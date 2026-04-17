@@ -212,6 +212,23 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
   return json{{"items", items}, {"roots", roots}, {"jobs", jobs}, {"nodes", nodes}};
 }
 
+nlohmann::json ModelLibraryService::BuildJobsPayload(const std::string& db_path) const {
+  ResumePersistentJobs(db_path);
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  json jobs = json::array();
+  for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
+    if (job.hidden) {
+      continue;
+    }
+    jobs.push_back(BuildJobPayload(job));
+  }
+  return json{
+      {"jobs", jobs},
+      {"generated_at", support_.utc_now_sql_timestamp()},
+  };
+}
+
 HttpResponse ModelLibraryService::SetSkillsFactoryWorker(
     const std::string& db_path,
     const HttpRequest& request) const {

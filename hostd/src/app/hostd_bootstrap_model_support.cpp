@@ -24,6 +24,7 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr std::uintmax_t kControllerRelayedChunkBytes = 4ULL * 1024ULL * 1024ULL;
+constexpr std::uintmax_t kPeerDirectChunkBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr int kControllerRelayedChunkPollAttempts = 600;
 constexpr std::chrono::milliseconds kControllerRelayedChunkPollInterval(500);
 
@@ -641,7 +642,7 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
                   {"ticket_id", peer_ticket_id},
                   {"source_path", source_path},
                   {"offset", offset},
-                  {"max_bytes", kControllerRelayedChunkBytes},
+                  {"max_bytes", kPeerDirectChunkBytes},
               });
           if (peer_chunk.body.empty() && offset < expected_size) {
             throw std::runtime_error("direct LAN transfer returned an empty non-final chunk");
@@ -664,7 +665,7 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
           const std::uintmax_t next_offset = offset + peer_chunk.body.size();
           aggregate_done += next_offset - offset;
           offset = next_offset;
-          eof = offset >= expected_size || peer_chunk.body.size() < kControllerRelayedChunkBytes;
+          eof = offset >= expected_size || peer_chunk.body.size() < kPeerDirectChunkBytes;
           int percent = 60;
           if (aggregate_total > 0) {
             percent = 20 + static_cast<int>(

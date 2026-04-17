@@ -25,7 +25,7 @@ namespace {
 constexpr std::uintmax_t kMaxModelArtifactChunkBytes = 4ULL * 1024ULL * 1024ULL;
 constexpr std::uintmax_t kMaxPeerTransferChunkBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr int kPeerLinkFreshSeconds = 120;
-constexpr int kTransferTicketTtlSeconds = 600;
+constexpr int kTransferTicketTtlSeconds = 7200;
 
 bool StartsWithPathPrefix(const std::string& path, const std::string& prefix) {
   return path.rfind(prefix, 0) == 0;

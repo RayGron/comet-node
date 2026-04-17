@@ -182,7 +182,13 @@ PeerHttpResponse SendPeerHttpRawRequest(
   response.body =
       headers_end == std::string::npos ? std::string{} : response_text.substr(headers_end + 4);
   if (response.status_code >= 400) {
-    throw std::runtime_error("peer request failed with status " + std::to_string(response.status_code));
+    std::string detail = response.body;
+    if (detail.size() > 512) {
+      detail = detail.substr(0, 512);
+    }
+    throw std::runtime_error(
+        "peer request failed with status " + std::to_string(response.status_code) +
+        (detail.empty() ? std::string{} : ": " + detail));
   }
   return response;
 }

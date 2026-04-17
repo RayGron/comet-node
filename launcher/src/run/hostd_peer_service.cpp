@@ -7,8 +7,10 @@
 #include <cstdio>
 #include <ctime>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -116,6 +118,35 @@ std::string HttpReason(int status_code) {
     return "Not Found";
   }
   return "Internal Server Error";
+}
+
+std::time_t ParseSqlTimestampUtc(const std::string& value) {
+  if (value.empty()) {
+    return 0;
+  }
+  std::tm tm{};
+  std::istringstream input(value);
+  input >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+  if (input.fail()) {
+    return 0;
+  }
+#if defined(_WIN32)
+  return _mkgmtime(&tm);
+#else
+  return timegm(&tm);
+#endif
+}
+
+bool SendAll(int fd, const char* data, std::size_t size) {
+  std::size_t sent = 0;
+  while (sent < size) {
+    const ssize_t count = send(fd, data + sent, size - sent, 0);
+    if (count <= 0) {
+      return false;
+    }
+    sent += static_cast<std::size_t>(count);
+  }
+  return true;
 }
 
 class LauncherHostdBackendSupport final : public naim::hostd::IHttpHostdBackendSupport {
@@ -572,6 +603,9 @@ void HostdPeerService::HandleHttpClient(int client_fd) const {
   } catch (const std::exception& error) {
     status_code = 500;
     response_body = json{{"status", "internal_error"}, {"message", error.what()}}.dump();
+    std::cerr << "hostd peer http error"
+              << " node=" << options_.node_name
+              << " message=" << error.what() << std::endl;
   }
   std::ostringstream response;
   response << "HTTP/1.1 " << status_code << " " << HttpReason(status_code) << "\r\n";
@@ -583,7 +617,7 @@ void HostdPeerService::HandleHttpClient(int client_fd) const {
   response << "Connection: close\r\n\r\n";
   response << response_body;
   const std::string text = response.str();
-  send(client_fd, text.data(), text.size(), 0);
+  SendAll(client_fd, text.data(), text.size());
   close(client_fd);
 }
 
@@ -970,16 +1004,43 @@ bool HostdPeerService::ValidateTicketForPath(
     return false;
   }
   std::lock_guard<std::mutex> lock(backend_mutex_);
+  const std::time_t now = std::time(nullptr);
+  const auto cached = transfer_ticket_cache_.find(ticket_id);
+  if (cached != transfer_ticket_cache_.end() && cached->second.expires_at_epoch > now) {
+    if (!IsPathAllowed(source_path, cached->second.source_paths)) {
+      return false;
+    }
+    if (allowed_paths != nullptr) {
+      *allowed_paths = cached->second.source_paths;
+    }
+    if (max_chunk_bytes != nullptr) {
+      *max_chunk_bytes = cached->second.max_chunk_bytes == 0
+                             ? 64ULL * 1024ULL * 1024ULL
+                             : cached->second.max_chunk_bytes;
+    }
+    return true;
+  }
+  if (cached != transfer_ticket_cache_.end()) {
+    transfer_ticket_cache_.erase(cached);
+  }
   static LauncherHostdBackendSupport support;
-  naim::hostd::HttpHostdBackend backend(
-      options_.controller_url,
-      ReadPrivateKey(),
-      options_.controller_fingerprint,
-      options_.onboarding_key,
-      options_.node_name,
-      options_.storage_root,
-      support);
-  const json response = backend.ValidateFileTransferTicket(options_.node_name, ticket_id);
+  if (!cached_backend_) {
+    cached_backend_ = std::make_unique<naim::hostd::HttpHostdBackend>(
+        options_.controller_url,
+        ReadPrivateKey(),
+        options_.controller_fingerprint,
+        options_.onboarding_key,
+        options_.node_name,
+        options_.storage_root,
+        support);
+  }
+  json response;
+  try {
+    response = cached_backend_->ValidateFileTransferTicket(options_.node_name, ticket_id);
+  } catch (const std::exception&) {
+    cached_backend_.reset();
+    throw;
+  }
   if (response.value("status", std::string{}) != "valid") {
     return false;
   }
@@ -992,14 +1053,25 @@ bool HostdPeerService::ValidateTicketForPath(
   if (!IsPathAllowed(source_path, paths)) {
     return false;
   }
+  std::uintmax_t resolved_max_chunk_bytes =
+      response.value("max_chunk_bytes", static_cast<std::uintmax_t>(0));
+  if (resolved_max_chunk_bytes == 0) {
+    resolved_max_chunk_bytes = 64ULL * 1024ULL * 1024ULL;
+  }
+  std::time_t expires_at_epoch = ParseSqlTimestampUtc(response.value("expires_at", std::string{}));
+  if (expires_at_epoch <= now) {
+    expires_at_epoch = now + 60;
+  }
+  transfer_ticket_cache_[ticket_id] = CachedTransferTicket{
+      paths,
+      resolved_max_chunk_bytes,
+      expires_at_epoch,
+  };
   if (allowed_paths != nullptr) {
-    *allowed_paths = std::move(paths);
+    *allowed_paths = paths;
   }
   if (max_chunk_bytes != nullptr) {
-    *max_chunk_bytes = response.value("max_chunk_bytes", static_cast<std::uintmax_t>(0));
-    if (*max_chunk_bytes == 0) {
-      *max_chunk_bytes = 64ULL * 1024ULL * 1024ULL;
-    }
+    *max_chunk_bytes = resolved_max_chunk_bytes;
   }
   return true;
 }

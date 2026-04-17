@@ -1,14 +1,20 @@
 #pragma once
 
 #include <atomic>
+#include <ctime>
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "config/launcher_options.h"
+
+namespace naim::hostd {
+class HttpHostdBackend;
+}
 
 namespace naim::launcher {
 
@@ -41,6 +47,11 @@ class HostdPeerService final {
     std::string path;
     std::map<std::string, std::string> headers;
     std::string body;
+  };
+  struct CachedTransferTicket {
+    std::vector<std::string> source_paths;
+    std::uintmax_t max_chunk_bytes = 0;
+    std::time_t expires_at_epoch = 0;
   };
 
   void BeaconLoop();
@@ -110,6 +121,8 @@ class HostdPeerService final {
   mutable std::mutex peers_mutex_;
   std::map<std::string, PeerRecord> peers_;
   mutable std::mutex backend_mutex_;
+  mutable std::unique_ptr<naim::hostd::HttpHostdBackend> cached_backend_;
+  mutable std::map<std::string, CachedTransferTicket> transfer_ticket_cache_;
 };
 
 }  // namespace naim::launcher

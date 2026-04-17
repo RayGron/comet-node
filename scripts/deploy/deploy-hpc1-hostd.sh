@@ -202,13 +202,14 @@ unset host_key_exists
 
 echo "${log_prefix} preparing host keypair and config"
 if [[ -n "${onboarding_key}" ]]; then
-  printf '%s' "${onboarding_key}" | remote_hpc1_bash \
+  remote_hpc1_bash \
     "${hostd_image}" \
     "${NAIM_HOSTD_ROOT}" \
     "${NAIM_HOSTD_SHARED_ROOT}" \
     "${NAIM_HOSTD_CONTROLLER_URL}" \
     "${NAIM_HOSTD_NODE}" \
-    "${NAIM_HOSTD_ENABLE_NVIDIA}" <<'REMOTE'
+    "${NAIM_HOSTD_ENABLE_NVIDIA}" \
+    "${onboarding_key}" <<'REMOTE'
 set -euo pipefail
 hostd_image="$1"
 hostd_root="$2"
@@ -216,7 +217,7 @@ shared_root="$3"
 controller_url="$4"
 node_name="$5"
 enable_nvidia="$6"
-onboarding_key="$(cat)"
+onboarding_key="$7"
 
 docker run --rm \
   -v "${hostd_root}:${hostd_root}" \

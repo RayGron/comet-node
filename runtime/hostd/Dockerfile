@@ -7,6 +7,7 @@ RUN apt-get update \
       bash \
       ca-certificates \
       docker.io \
+      iproute2 \
       tini \
     && (DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends docker-compose-v2 \
         || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends docker-compose-plugin) \

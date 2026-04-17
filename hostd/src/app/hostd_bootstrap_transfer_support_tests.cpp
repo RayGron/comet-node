@@ -198,11 +198,67 @@ int main() {
           "CopyFileWithProgress should keep aggregate total");
     }
 
+    {
+      const fs::path source_file = temp_root / "download-source.gguf";
+      const fs::path target_file = temp_root / "download-target" / "model.gguf";
+      const fs::path part_file = target_file.string() + ".part";
+      const std::string source_payload = "resumable-download-payload";
+      {
+        std::ofstream output(source_file, std::ios::binary | std::ios::trunc);
+        output << source_payload;
+      }
+      fs::create_directories(target_file.parent_path());
+      {
+        std::ofstream output(part_file, std::ios::binary | std::ios::trunc);
+        output << source_payload.substr(0, 10);
+      }
+      RecordingHostdBackend backend;
+      support.DownloadFileWithProgress(
+          "file://" + source_file.string(),
+          target_file.string(),
+          &backend,
+          8,
+          "plane-a",
+          "node-a");
+      Expect(fs::exists(target_file), "DownloadFileWithProgress should create target file");
+      Expect(
+          !fs::exists(part_file),
+          "DownloadFileWithProgress should rename resumed partial file to final target");
+      Expect(
+          ReadFile(target_file) == source_payload,
+          "DownloadFileWithProgress should resume existing partial downloads");
+    }
+
+    {
+      const fs::path target_file = temp_root / "download-target" / "already-present.gguf";
+      const std::string existing_payload = "already-present";
+      {
+        std::ofstream output(target_file, std::ios::binary | std::ios::trunc);
+        output << existing_payload;
+      }
+      RecordingHostdBackend backend;
+      support.DownloadFileWithProgress(
+          "file://" + (temp_root / "missing-source.gguf").string(),
+          target_file.string(),
+          &backend,
+          9,
+          "plane-a",
+          "node-a");
+      Expect(
+          ReadFile(target_file) == existing_payload,
+          "DownloadFileWithProgress should skip already-present final targets");
+      Expect(
+          backend.updated_assignment_id.has_value() && *backend.updated_assignment_id == 9,
+          "DownloadFileWithProgress should publish progress when reusing final target");
+    }
+
     fs::remove_all(temp_root, cleanup_error);
 
     std::cout << "ok: hostd-bootstrap-transfer-support-file-size-and-sha256\n";
     std::cout << "ok: hostd-bootstrap-transfer-support-copy-file-progress\n";
     std::cout << "ok: hostd-bootstrap-transfer-support-copy-directory-progress\n";
+    std::cout << "ok: hostd-bootstrap-transfer-support-resumable-download\n";
+    std::cout << "ok: hostd-bootstrap-transfer-support-skip-existing-download\n";
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';

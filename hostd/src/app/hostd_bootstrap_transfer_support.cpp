@@ -250,11 +250,44 @@ void HostdBootstrapTransferSupport::DownloadFileWithProgress(
     const std::optional<std::uintmax_t>& aggregate_total) const {
   file_support_.EnsureParentDirectory(target_path);
   const std::string temp_path = target_path + ".part";
-  fs::remove(temp_path);
   const auto content_length = ProbeContentLength(source_url);
+
+  if (const auto final_size = FileSizeIfExists(target_path);
+      final_size.has_value() &&
+      (!content_length.has_value() || *content_length == 0 || *final_size == *content_length)) {
+    const std::uintmax_t overall_done = aggregate_prefix + *final_size;
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        "acquiring-model",
+        "Acquiring model",
+        part_count > 1
+            ? ("Using existing bootstrap model part " + std::to_string(part_index + 1) + "/" +
+               std::to_string(part_count) + " in the plane shared disk.")
+            : "Using existing bootstrap model in the plane shared disk.",
+        60,
+        plane_name,
+        node_name,
+        aggregate_total.has_value() ? std::optional<std::uintmax_t>(overall_done)
+                                    : std::optional<std::uintmax_t>(*final_size),
+        aggregate_total.has_value() ? aggregate_total : content_length);
+    return;
+  }
+
+  if (content_length.has_value() && *content_length > 0) {
+    const auto partial_size = FileSizeIfExists(temp_path).value_or(0);
+    if (partial_size == *content_length) {
+      fs::rename(temp_path, target_path);
+      return;
+    }
+    if (partial_size > *content_length) {
+      fs::remove(temp_path);
+    }
+  }
+
   auto future = std::async(
       std::launch::async,
-      [command = "/usr/bin/curl -fL --silent --show-error --output " +
+      [command = "/usr/bin/curl -fL -C - --silent --show-error --output " +
                      command_support_.ShellQuote(temp_path) +
                      " " + command_support_.ShellQuote(source_url)]() {
         return std::system(command.c_str());

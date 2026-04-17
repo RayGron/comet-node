@@ -29,6 +29,7 @@ constexpr std::chrono::milliseconds kControllerRelayedChunkPollInterval(500);
 
 struct PeerHttpResponse {
   int status_code = 0;
+  std::map<std::string, std::string> headers;
   std::string body;
 };
 
@@ -153,6 +154,31 @@ PeerHttpResponse SendPeerHttpRawRequest(
   std::istringstream status(headers.substr(0, headers.find("\r\n")));
   std::string version;
   status >> version >> response.status_code;
+  std::istringstream header_lines(headers);
+  std::string header_line;
+  bool first_header = true;
+  while (std::getline(header_lines, header_line)) {
+    if (!header_line.empty() && header_line.back() == '\r') {
+      header_line.pop_back();
+    }
+    if (first_header) {
+      first_header = false;
+      continue;
+    }
+    const std::size_t colon = header_line.find(':');
+    if (colon == std::string::npos) {
+      continue;
+    }
+    std::string key = header_line.substr(0, colon);
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char ch) {
+      return static_cast<char>(std::tolower(ch));
+    });
+    std::string value = header_line.substr(colon + 1);
+    while (!value.empty() && value.front() == ' ') {
+      value.erase(value.begin());
+    }
+    response.headers[key] = value;
+  }
   response.body =
       headers_end == std::string::npos ? std::string{} : response_text.substr(headers_end + 4);
   if (response.status_code >= 400) {
@@ -390,7 +416,11 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
       const PeerHttpResponse peer_manifest = SendPeerHttpRequest(
           peer_endpoint,
           "/peer/v1/files/manifest",
-          nlohmann::json{{"ticket_id", peer_ticket_id}, {"source_paths", source_paths}});
+          nlohmann::json{
+              {"ticket_id", peer_ticket_id},
+              {"source_paths", source_paths},
+              {"defer_sha256", true},
+          });
       manifest = nlohmann::json::parse(peer_manifest.body);
       if (manifest.value("phase", std::string{}) == "manifest-ready" &&
           manifest.contains("files") &&
@@ -478,9 +508,13 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
     return lhs.value("relative_path", std::string{}) <
            rhs.value("relative_path", std::string{});
   });
+  const bool deferred_peer_sha256 =
+      use_peer_direct && manifest.value("sha256_deferred", false);
   for (const auto& file : files) {
-    if (file.value("sha256", std::string{}).empty() ||
-        !JsonUintmax(file, "size_bytes").has_value()) {
+    if (!JsonUintmax(file, "size_bytes").has_value()) {
+      throw std::runtime_error("model artifact manifest is missing file size metadata");
+    }
+    if (!deferred_peer_sha256 && file.value("sha256", std::string{}).empty()) {
       throw std::runtime_error("model artifact manifest is missing file checksum metadata");
     }
   }
@@ -503,6 +537,10 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
         (!directory_transfer && files.size() == 1)
             ? files.front().value("sha256", std::string{})
             : manifest_sha256;
+    if (expected_artifact_sha256.empty()) {
+      throw std::runtime_error(
+          "bootstrap model artifact checksum cannot be verified from a deferred peer manifest");
+    }
     if (NormalizeLowercase(*bootstrap_model.sha256) !=
         NormalizeLowercase(expected_artifact_sha256)) {
       throw std::runtime_error("bootstrap model artifact checksum mismatch in manifest");
@@ -542,10 +580,11 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
     const auto current_size = transfer_support_.FileSizeIfExists(target_paths[index]);
     already_present = already_present && expected_size.has_value() &&
                       current_size.has_value() && *expected_size == *current_size;
-    if (already_present) {
+    const std::string expected_sha256 = files[index].value("sha256", std::string{});
+    if (already_present && !expected_sha256.empty()) {
       already_present =
           NormalizeLowercase(naim::ComputeFileSha256Hex(target_paths[index])) ==
-          NormalizeLowercase(files[index].value("sha256", std::string{}));
+          NormalizeLowercase(expected_sha256);
     }
   }
   if (already_present) {
@@ -602,6 +641,15 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
             throw std::runtime_error("direct LAN transfer returned an empty non-final chunk");
           }
           if (!peer_chunk.body.empty()) {
+            const auto chunk_sha256_it = peer_chunk.headers.find("x-naim-chunk-sha256");
+            if (deferred_peer_sha256 && chunk_sha256_it == peer_chunk.headers.end()) {
+              throw std::runtime_error("direct LAN transfer chunk is missing checksum header");
+            }
+            if (chunk_sha256_it != peer_chunk.headers.end() &&
+                NormalizeLowercase(naim::ComputeSha256Hex(peer_chunk.body)) !=
+                    NormalizeLowercase(chunk_sha256_it->second)) {
+              throw std::runtime_error("direct LAN transfer chunk checksum mismatch");
+            }
             output.write(peer_chunk.body.data(), static_cast<std::streamsize>(peer_chunk.body.size()));
             if (!output.good()) {
               throw std::runtime_error("failed to write bootstrap model direct target: " + temp_path);
@@ -634,6 +682,9 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
               aggregate_total_progress);
           continue;
         } catch (const std::exception& direct_error) {
+          if (deferred_peer_sha256) {
+            throw;
+          }
           output.close();
           std::error_code cleanup_error;
           fs::remove(temp_path, cleanup_error);
@@ -752,8 +803,11 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
       throw std::runtime_error("failed to close bootstrap model relay target: " + temp_path);
     }
     fs::rename(temp_path, file_target_path);
-    if (NormalizeLowercase(naim::ComputeFileSha256Hex(file_target_path)) !=
-        NormalizeLowercase(files[file_index].value("sha256", std::string{}))) {
+    const std::string expected_file_sha256 =
+        files[file_index].value("sha256", std::string{});
+    if (!expected_file_sha256.empty() &&
+        NormalizeLowercase(naim::ComputeFileSha256Hex(file_target_path)) !=
+            NormalizeLowercase(expected_file_sha256)) {
       throw std::runtime_error("model artifact chunk relay file checksum mismatch: " + file_target_path);
     }
   }

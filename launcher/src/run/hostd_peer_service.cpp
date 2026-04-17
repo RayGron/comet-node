@@ -8,6 +8,7 @@
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -534,6 +535,7 @@ void HostdPeerService::HandleHttpClient(int client_fd) const {
   int status_code = 200;
   std::string content_type = "application/json";
   std::string response_body;
+  std::map<std::string, std::string> response_headers;
   try {
     const HttpPeerRequest request = ParseHttpPeerRequest(ReadAll(client_fd));
     if (request.method == "GET" && request.path == "/peer/v1/health") {
@@ -550,6 +552,10 @@ void HostdPeerService::HandleHttpClient(int client_fd) const {
           &content_type);
     } else if (request.method == "POST" && request.path == "/peer/v1/files/chunk") {
       response_body = HandlePeerChunkRequest(request.body, &status_code, &content_type);
+      if (status_code == 200 && content_type == "application/octet-stream") {
+        response_headers["X-Naim-Chunk-Sha256"] =
+            naim::ComputeSha256Hex(response_body);
+      }
     } else if (request.method == "POST" && request.path == "/peer/v1/files/upload-start") {
       response_body =
           HandlePeerUploadStartRequest(request.body, &status_code, &content_type);
@@ -570,6 +576,9 @@ void HostdPeerService::HandleHttpClient(int client_fd) const {
   std::ostringstream response;
   response << "HTTP/1.1 " << status_code << " " << HttpReason(status_code) << "\r\n";
   response << "Content-Type: " << content_type << "\r\n";
+  for (const auto& [key, value] : response_headers) {
+    response << key << ": " << value << "\r\n";
+  }
   response << "Content-Length: " << response_body.size() << "\r\n";
   response << "Connection: close\r\n\r\n";
   response << response_body;
@@ -635,6 +644,7 @@ std::string HostdPeerService::HandlePeerJsonRequest(
     return json{{"status", "bad_request"}}.dump();
   }
   const std::string ticket_id = request.value("ticket_id", std::string{});
+  const bool defer_sha256 = request.value("defer_sha256", false);
   std::vector<std::string> source_paths;
   std::uintmax_t max_chunk_bytes = 0;
   for (const auto& path_value : request.value("source_paths", json::array())) {
@@ -677,7 +687,9 @@ std::string HostdPeerService::HandlePeerJsonRequest(
             {"source_path", entry.path().string()},
             {"relative_path", relative},
             {"size_bytes", size},
-            {"sha256", naim::ComputeFileSha256Hex(entry.path().string())},
+            {"sha256",
+             defer_sha256 ? std::string{}
+                          : naim::ComputeFileSha256Hex(entry.path().string())},
         });
       }
     } else {
@@ -688,7 +700,8 @@ std::string HostdPeerService::HandlePeerJsonRequest(
           {"source_path", root.string()},
           {"relative_path", root.filename().string()},
           {"size_bytes", size},
-          {"sha256", naim::ComputeFileSha256Hex(root.string())},
+          {"sha256",
+           defer_sha256 ? std::string{} : naim::ComputeFileSha256Hex(root.string())},
       });
     }
   }
@@ -715,6 +728,7 @@ std::string HostdPeerService::HandlePeerJsonRequest(
       {"roots", std::move(roots)},
       {"files", std::move(files)},
       {"bytes_total", total},
+      {"sha256_deferred", defer_sha256},
       {"manifest_sha256", naim::ComputeSha256Hex(canonical)},
       {"max_chunk_bytes", max_chunk_bytes},
   }.dump();

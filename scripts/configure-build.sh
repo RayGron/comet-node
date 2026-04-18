@@ -11,6 +11,7 @@ cuda_nvcc=""
 openmp_root=""
 openmp_include_dir=""
 openmp_library=""
+: "${NAIM_CUDA_NATIVE:=OFF}"
 
 detect_cuda_root() {
   local candidate=""
@@ -156,6 +157,11 @@ if [[ -f "${cache_path}" ]]; then
       && ! grep -Fq "CMAKE_CUDA_COMPILER:STRING=${cuda_nvcc}" "${cache_path}"; then
       needs_clean_reconfigure=1
     fi
+    if ! grep -Fq "NAIM_CUDA_NATIVE:BOOL=${NAIM_CUDA_NATIVE}" "${cache_path}" \
+      && ! grep -Fq "NAIM_CUDA_NATIVE:UNINITIALIZED=${NAIM_CUDA_NATIVE}" "${cache_path}" \
+      && ! grep -Fq "NAIM_CUDA_NATIVE:STRING=${NAIM_CUDA_NATIVE}" "${cache_path}"; then
+      needs_clean_reconfigure=1
+    fi
   else
     if grep -Eq '^CUDAToolkit_ROOT:(UNINITIALIZED|PATH|STRING)=' "${cache_path}" \
       || grep -Eq '^CMAKE_CUDA_COMPILER:(FILEPATH|UNINITIALIZED|STRING)=' "${cache_path}" \
@@ -214,6 +220,7 @@ cmake_args=(
 
 cmake_args+=("-DCUDAToolkit_ROOT=${cuda_root}")
 cmake_args+=("-DCMAKE_CUDA_COMPILER=${cuda_nvcc}")
+cmake_args+=("-DNAIM_CUDA_NATIVE=${NAIM_CUDA_NATIVE}")
 if [[ -n "${openmp_root}" ]]; then
   cmake_args+=(
     "-DOpenMP_ROOT=${openmp_root}"

@@ -102,7 +102,12 @@ set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER ON CACHE BOOL "" FORCE)
 set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
 set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
-option(NAIM_CUDA_NATIVE "Prefer native CUDA architectures for ggml-cuda builds" ON)
+# llama.cpp needs Blackwell FP4/MXFP4 kernels to be compiled for the
+# architecture-specific 12Xa targets. CMake's native CUDA detection reports
+# RTX PRO 6000 Blackwell as plain sm_120, which makes ptxas reject those
+# kernels. Keep native detection opt-in and let llama.cpp choose its supported
+# explicit CUDA architecture list by default.
+option(NAIM_CUDA_NATIVE "Prefer native CUDA architectures for ggml-cuda builds" OFF)
 set(GGML_NATIVE ${NAIM_CUDA_NATIVE} CACHE BOOL "" FORCE)
 set(GGML_RPC ON CACHE BOOL "" FORCE)
 

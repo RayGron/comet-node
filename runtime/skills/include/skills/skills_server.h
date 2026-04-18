@@ -50,6 +50,7 @@ class SkillsServer final {
   std::vector<std::string> SplitPath(const std::string& path) const;
   static nlohmann::json ParseJsonBody(const HttpRequest& request);
   HttpResponse BuildJsonResponse(int status_code, const nlohmann::json& payload) const;
+  void SyncFromController();
   void WriteRuntimeStatus(const std::string& phase, bool ready) const;
   void SetReadyFile(bool ready) const;
 

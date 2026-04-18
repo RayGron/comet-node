@@ -1369,6 +1369,7 @@ if(NOT WIN32)
   add_executable(
     naim-skillsd
     controller/src/http/controller_http_server_support.cpp
+    controller/src/http/controller_http_transport.cpp
     controller/src/infra/controller_network_manager.cpp
     runtime/skills/src/skills_server.cpp
     runtime/skills/src/skills_store.cpp

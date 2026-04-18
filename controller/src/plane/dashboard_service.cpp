@@ -191,7 +191,8 @@ int ComputeEffectivePlaneAppliedGeneration(
     if (observation == observations.end()) {
       return plane.applied_generation;
     }
-    if (!observation->applied_generation.has_value() ||
+    if (observation->plane_name != desired_state->plane_name ||
+        !observation->applied_generation.has_value() ||
         *observation->applied_generation < *desired_generation ||
         observation->status == naim::HostObservationStatus::Failed) {
       return plane.applied_generation;

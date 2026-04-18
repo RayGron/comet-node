@@ -329,6 +329,31 @@ void SeedHostRecord(
   store.UpsertRegisteredHost(host);
 }
 
+naim::DesiredState BuildDashboardDesiredState(
+    const std::string& plane_name,
+    const std::string& node_name) {
+  naim::DesiredState state;
+  state.plane_name = plane_name;
+  state.plane_mode = naim::PlaneMode::Compute;
+  state.control_root = "/tmp/" + plane_name;
+  naim::NodeInventory node;
+  node.name = node_name;
+  state.nodes.push_back(node);
+  return state;
+}
+
+naim::HostObservation BuildDashboardHostObservation(
+    const std::string& plane_name,
+    const std::string& node_name,
+    int applied_generation) {
+  naim::HostObservation observation;
+  observation.node_name = node_name;
+  observation.plane_name = plane_name;
+  observation.applied_generation = applied_generation;
+  observation.status = naim::HostObservationStatus::Applied;
+  return observation;
+}
+
 void WriteWebUiState(
     const fs::path& web_ui_root,
     int listen_port,
@@ -823,6 +848,26 @@ void TestPlanePayloadExposesLegacyCompatibilityMode() {
   std::cout << "ok: plane-payload-exposes-legacy-compatibility-mode" << '\n';
 }
 
+void TestDashboardDoesNotApplyGenerationFromForeignObservation() {
+  const auto db_path = MakeTempDbPath("foreign-observation-applied-generation");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  store.ReplaceDesiredState(BuildDashboardDesiredState("dashboard-plane", "shared-node"), 2);
+  store.UpsertHostObservation(
+      BuildDashboardHostObservation("other-plane", "shared-node", 99));
+
+  const auto payload = MakeDashboardService().BuildPayload(db_path, 300, std::nullopt);
+  const auto plane = store.LoadPlane("dashboard-plane");
+  Expect(plane.has_value(), "dashboard-plane should exist");
+  Expect(
+      plane->applied_generation == 0,
+      "dashboard should not persist applied_generation from another plane observation");
+  Expect(
+      payload.at("plane").at("applied_generation").get<int>() == 0,
+      "dashboard payload should keep applied_generation staged for foreign observations");
+  std::cout << "ok: dashboard-ignores-foreign-observation-applied-generation" << '\n';
+}
+
 }  // namespace
 
 int main() {
@@ -836,6 +881,7 @@ int main() {
     TestPlaneScopedNodesIgnoreForeignRuntimeStatus();
     TestPlanePayloadExposesExecutionNodeTargets();
     TestPlanePayloadExposesLegacyCompatibilityMode();
+    TestDashboardDoesNotApplyGenerationFromForeignObservation();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "dashboard service tests failed: " << error.what() << '\n';

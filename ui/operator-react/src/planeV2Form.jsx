@@ -1415,7 +1415,7 @@ function buildLtCypherPreflight({ form, modelLibraryItems, hostdHosts, peerLinks
   );
   push(
     "model",
-    "Gemma-4-31B-it Q8 model readable on storage1",
+    "Qwen3.6-35B-A3B Q8 model readable on storage1",
     Boolean(selectedModel) &&
       String(selectedModel?.node_name || form.materializationSourceNodeName || "") === "storage1" &&
       selectedFormat === "gguf" &&
@@ -1423,7 +1423,7 @@ function buildLtCypherPreflight({ form, modelLibraryItems, hostdHosts, peerLinks
       modelLibraryPaths(selectedModel).length > 0,
     selectedModel
       ? `${selectedModel.name || selectedModel.model_id || selectedModel.path} / ${selectedFormat || "unknown"} / ${selectedQuantization}`
-      : "Model Library does not contain Gemma-4-31B-it Q8.",
+      : "Model Library does not contain Qwen3.6-35B-A3B Q8.",
   );
   push(
     "image",

@@ -45,6 +45,18 @@ const hostdHosts = [
 const skillsFactoryPayload = {
   groups: [],
   skills: [
+    { id: "lt-jex-localtrade-auth-session", name: "LocalTrade auth session", group_path: "lt-jex/localtrade/auth", enabled: true },
+    { id: "lt-jex-localtrade-account-balances", name: "LocalTrade account balances", group_path: "lt-jex/localtrade/account", enabled: true },
+    { id: "lt-jex-localtrade-market-data", name: "LocalTrade market data", group_path: "lt-jex/localtrade/market-data", enabled: true },
+    { id: "lt-jex-localtrade-market-exchange", name: "LocalTrade market exchange", group_path: "lt-jex/localtrade/spot", enabled: true },
+    { id: "lt-jex-localtrade-copy-trading-discovery", name: "LocalTrade copy trading discovery", group_path: "lt-jex/localtrade/copy-trading", enabled: true },
+    { id: "lt-jex-localtrade-copy-trading-actions", name: "LocalTrade copy trading actions", group_path: "lt-jex/localtrade/copy-trading", enabled: true },
+    { id: "lt-jex-localtrade-spot-order-clarification", name: "LocalTrade spot order clarification", group_path: "lt-jex/localtrade/spot", enabled: true },
+    { id: "lt-jex-localtrade-user-streams", name: "LocalTrade user streams", group_path: "lt-jex/localtrade/streams", enabled: true },
+    { id: "lt-jex-market-overview-report", name: "Market overview report", group_path: "lt-jex/market", enabled: true },
+    { id: "lt-jex-market-asset-report", name: "Asset market report", group_path: "lt-jex/market", enabled: true },
+    { id: "lt-jex-market-forecast", name: "Asset market forecast", group_path: "lt-jex/market", enabled: true },
+    { id: "lt-jex-market-source-mix", name: "Asset source mix", group_path: "lt-jex/market", enabled: true },
     {
       id: "lt-jex-localtrade-account-balances-with-extra-long-regression-suffix",
       name: "LocalTrade account balances",
@@ -225,6 +237,23 @@ for (const viewport of viewports) {
       '"ref": "Qwen/Qwen3.6-35B-A3B"',
     );
     await expect(page.locator("#plane-editor-json")).toContainText(LONG_SOURCE_PATH);
+    await expect(page.locator("#plane-editor-json")).toContainText('"CYPHER_PUBLIC_BASE_PATH": "/"');
+    for (const skillId of [
+      "lt-jex-localtrade-auth-session",
+      "lt-jex-localtrade-account-balances",
+      "lt-jex-localtrade-market-data",
+      "lt-jex-localtrade-market-exchange",
+      "lt-jex-localtrade-copy-trading-discovery",
+      "lt-jex-localtrade-copy-trading-actions",
+      "lt-jex-localtrade-spot-order-clarification",
+      "lt-jex-localtrade-user-streams",
+      "lt-jex-market-overview-report",
+      "lt-jex-market-asset-report",
+      "lt-jex-market-forecast",
+      "lt-jex-market-source-mix",
+    ]) {
+      await expect(page.locator("#plane-editor-json")).toContainText(skillId);
+    }
     await expect(page.getByRole("button", { name: "Create plane" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
   });

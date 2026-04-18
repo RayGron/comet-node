@@ -135,6 +135,10 @@ bool HostAssignmentReconciliationService::ShouldMarkClaimedAssignmentApplied(
   if (observation->status == naim::HostObservationStatus::Failed) {
     return false;
   }
+  if (observation->last_assignment_id.has_value() &&
+      *observation->last_assignment_id < assignment.id) {
+    return false;
+  }
   return observation->applied_generation.has_value() &&
          *observation->applied_generation >= assignment.desired_generation;
 }

@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -58,11 +59,13 @@ naim::HostObservation BuildHostObservation(
     const std::string& plane_name,
     const std::string& node_name,
     int applied_generation,
-    naim::HostObservationStatus status = naim::HostObservationStatus::Applied) {
+    naim::HostObservationStatus status = naim::HostObservationStatus::Applied,
+    std::optional<int> last_assignment_id = std::nullopt) {
   naim::HostObservation observation;
   observation.node_name = node_name;
   observation.plane_name = plane_name;
   observation.applied_generation = applied_generation;
+  observation.last_assignment_id = last_assignment_id;
   observation.status = status;
   return observation;
 }
@@ -210,6 +213,41 @@ int main() {
       Expect(
           assignment.front().status == naim::HostAssignmentStatus::Applied,
           "plane-c claimed assignment should become applied");
+    }
+
+    {
+      naim::ControllerStore store(db_path.string());
+      store.Initialize();
+      const naim::controller::HostAssignmentReconciliationService reconciliation_service;
+
+      store.ReplaceDesiredState(BuildDesiredState("plane-c-stale", {"node-c-stale"}), 7);
+      Expect(
+          store.UpdatePlaneAppliedGeneration("plane-c-stale", 7),
+          "plane-c-stale applied generation should update");
+      store.ReplaceHostAssignments(
+          {BuildHostAssignment(
+              "plane-c-stale",
+              "node-c-stale",
+              7,
+              naim::HostAssignmentStatus::Claimed)});
+      const auto inserted_assignments =
+          store.LoadHostAssignments(std::nullopt, std::nullopt, "plane-c-stale");
+      Expect(inserted_assignments.size() == 1, "plane-c-stale should have one assignment");
+      store.UpsertHostObservation(BuildHostObservation(
+          "plane-c-stale",
+          "node-c-stale",
+          7,
+          naim::HostObservationStatus::Applied,
+          inserted_assignments.front().id - 1));
+
+      const auto result = reconciliation_service.Reconcile(store, "plane-c-stale");
+      const auto assignment = store.LoadHostAssignments(
+          std::nullopt, std::nullopt, "plane-c-stale");
+      Expect(result.applied == 0, "controller should not mark stale observation applied");
+      Expect(assignment.size() == 1, "plane-c-stale should still have one assignment");
+      Expect(
+          assignment.front().status == naim::HostAssignmentStatus::Claimed,
+          "plane-c-stale claimed assignment should remain claimed");
     }
 
     {

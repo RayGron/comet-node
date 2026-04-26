@@ -505,6 +505,14 @@ int LauncherRunService::RunHostdLoop(
         now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
   };
 
+  const auto wait_for_self_update_recreate = [&]() -> int {
+    peer_service.Stop();
+    for (int second = 0; second < 300 && !signal_manager.stop_requested(); ++second) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    return 0;
+  };
+
 #if !defined(_WIN32)
   pid_t apply_pid = -1;
   const auto reap_apply_if_finished = [&]() -> bool {
@@ -521,7 +529,7 @@ int LauncherRunService::RunHostdLoop(
     apply_pid = -1;
     if (std::filesystem::exists(self_update_marker)) {
       std::filesystem::remove(self_update_marker, marker_error);
-      std::cout << "hostd_self_update_scheduled=stopping\n";
+      std::cout << "hostd_self_update_scheduled=waiting_for_container_recreate\n";
       return true;
     }
     return false;
@@ -536,14 +544,12 @@ int LauncherRunService::RunHostdLoop(
     }
     if (std::filesystem::exists(self_update_marker)) {
       std::filesystem::remove(self_update_marker, marker_error);
-      std::cout << "hostd_self_update_scheduled=stopping\n";
-      peer_service.Stop();
-      return 0;
+      std::cout << "hostd_self_update_scheduled=waiting_for_container_recreate\n";
+      return wait_for_self_update_recreate();
     }
 #else
     if (reap_apply_if_finished()) {
-      peer_service.Stop();
-      return 0;
+      return wait_for_self_update_recreate();
     }
     if (apply_pid <= 0) {
       apply_pid = static_cast<pid_t>(process_runner_.SpawnCommand(build_apply_args()));
@@ -558,8 +564,7 @@ int LauncherRunService::RunHostdLoop(
       std::this_thread::sleep_for(std::chrono::seconds(1));
 #if !defined(_WIN32)
       if (reap_apply_if_finished()) {
-        peer_service.Stop();
-        return 0;
+        return wait_for_self_update_recreate();
       }
 #endif
       run_report_if_due();

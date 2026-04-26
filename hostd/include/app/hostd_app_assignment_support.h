@@ -27,6 +27,7 @@
 #include "app/hostd_post_deploy_support.h"
 #include "app/hostd_reporting_support.h"
 #include "app/hostd_runtime_http_proxy.h"
+#include "app/hostd_self_update_support.h"
 #include "backend/hostd_backend.h"
 #include "cli/hostd_command_line.h"
 #include "naim/state/models.h"
@@ -158,6 +159,7 @@ class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
   HostdPostDeploySupport post_deploy_support_;
   HostdReportingSupport reporting_support_;
   HostdRuntimeHttpProxy runtime_http_proxy_;
+  HostdSelfUpdateSupport self_update_support_;
   HostdModelArtifactRequestSupport model_artifact_request_support_;
   HostdContainerNameSupport container_name_support_;
   HostdBootstrapTransferSupport model_library_transfer_support_;

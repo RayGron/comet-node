@@ -657,27 +657,20 @@ void HostdAppAssignmentSupport::ExecuteHostSelfUpdate(
   const std::filesystem::path update_log =
       hostd_root / "logs" / ("hostd-self-update-" + release_tag + ".log");
 
-  std::string script = "#!/usr/bin/env bash\n"
-                       "set -euo pipefail\n";
-  if (std::filesystem::exists(registry_config_dir / "config.json")) {
-    script += "export DOCKER_CONFIG=" +
-              command_support_.ShellQuote(registry_config_dir.string()) + "\n";
-  }
-  const std::string sed_expression =
-      "s#^([[:space:]]*image:[[:space:]]*)chainzano.com/naim/hostd"
-      "(:[^[:space:]]+|@sha256:[a-f0-9]+)?#\\1" +
-      hostd_image + "#";
-  script += "sed -i -E " + command_support_.ShellQuote(sed_expression) + " " +
-            command_support_.ShellQuote(compose_file.string()) + "\n"
-            "grep -F " + command_support_.ShellQuote("image: " + hostd_image) + " " +
-            command_support_.ShellQuote(compose_file.string()) + " >/dev/null\n"
-            "sleep 2\n"
-            "docker compose -f " + command_support_.ShellQuote(compose_file.string()) +
-            " pull naim-hostd\n"
-            "docker compose -f " + command_support_.ShellQuote(compose_file.string()) +
-            " up -d --remove-orphans naim-hostd\n";
+  const auto update_plan = self_update_support_.BuildPlan(
+      HostdSelfUpdateRequest{
+          release_tag,
+          node_name,
+          hostd_image,
+          hostd_root,
+          compose_file,
+          registry_config_dir,
+          update_script,
+          update_log,
+          std::filesystem::exists(registry_config_dir / "config.json"),
+      });
 
-  file_support_.WriteTextFile(update_script.string(), script);
+  file_support_.WriteTextFile(update_script.string(), update_plan.script_content);
   if (!command_support_.RunCommandOk(
           "chmod 0700 " + command_support_.ShellQuote(update_script.string()))) {
     throw std::runtime_error("failed to chmod hostd self-update script");
@@ -695,13 +688,11 @@ void HostdAppAssignmentSupport::ExecuteHostSelfUpdate(
           {"hostd_image", hostd_image},
           {"compose_file_path", compose_file.string()},
           {"script_path", update_script.string()},
-          {"log_path", update_log.string()}});
+          {"log_path", update_log.string()},
+          {"helper_container", update_plan.helper_container_name}});
 
-  const std::string launch_command =
-      "nohup bash " + command_support_.ShellQuote(update_script.string()) + " >" +
-      command_support_.ShellQuote(update_log.string()) + " 2>&1 < /dev/null &";
-  if (!command_support_.RunCommandOk(launch_command)) {
-    throw std::runtime_error("failed to launch hostd self-update background job");
+  if (!command_support_.RunCommandOk(update_plan.launch_command)) {
+    throw std::runtime_error("failed to launch hostd self-update helper container");
   }
 }
 

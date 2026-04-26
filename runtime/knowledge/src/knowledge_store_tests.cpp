@@ -65,6 +65,25 @@ int main() {
   });
   Expect(!search.value("results", nlohmann::json::array()).empty(), "search should return result");
 
+  store.WriteBlock(nlohmann::json{
+      {"block_id", "lt-cypher-ai.market.assets"},
+      {"knowledge_id", "lt-cypher-ai.market.assets"},
+      {"title", "lt-cypher-ai market asset memory"},
+      {"body", "BTC latest price and bitcoin market observations from LocalTrade and CoinGecko."},
+      {"scope_ids", nlohmann::json::array({"scope.default"})},
+  });
+  const auto token_search = store.Search(nlohmann::json{
+      {"query", "bitcoin market BTC LocalTrade"},
+      {"scope_id", "scope.default"},
+      {"limit", 5},
+  });
+  const auto token_results = token_search.value("results", nlohmann::json::array());
+  Expect(!token_results.empty(), "token search should find deterministic market blocks");
+  Expect(
+      token_results.front().value("block_id", std::string{}) ==
+          "lt-cypher-ai.market.assets",
+      "token search should rank the matching deterministic market block first");
+
   const auto redacted = store.Search(nlohmann::json{
       {"query", "scheduled merge"},
       {"scope_id", "scope.other"},

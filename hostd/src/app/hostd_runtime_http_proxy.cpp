@@ -178,6 +178,23 @@ bool HostdRuntimeHttpProxy::IsAllowedProxyPath(
     const std::string& method,
     const std::string& path) {
   const std::string route = path.substr(0, path.find('?'));
+  if (policy == HostdRuntimeProxyPolicy::Skills) {
+    if (method == "GET" && route == "/health") {
+      return true;
+    }
+    if (route == "/v1/skills" && (method == "GET" || method == "POST")) {
+      return true;
+    }
+    if (route == "/v1/skills/resolve" && method == "POST") {
+      return true;
+    }
+    if (route.rfind("/v1/skills/", 0) == 0 &&
+        (method == "GET" || method == "PUT" || method == "PATCH" ||
+         method == "DELETE")) {
+      return true;
+    }
+    return false;
+  }
   if (policy == HostdRuntimeProxyPolicy::KnowledgeVault) {
     if (method == "GET" && route == "/health") {
       return true;
@@ -192,6 +209,9 @@ bool HostdRuntimeHttpProxy::IsAllowedProxyPath(
 }
 
 std::string HostdRuntimeHttpProxy::PolicyLabel(HostdRuntimeProxyPolicy policy) {
+  if (policy == HostdRuntimeProxyPolicy::Skills) {
+    return "skills-runtime-http";
+  }
   if (policy == HostdRuntimeProxyPolicy::KnowledgeVault) {
     return "knowledge-vault-http";
   }

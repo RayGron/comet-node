@@ -1409,7 +1409,8 @@ json InteractionBrowsingRuntimeTestServer::BuildResolveResponse(const json& payl
 
 naim::DesiredState BuildDesiredStateWithSkillsPort(
     const std::string& host_ip,
-    const int host_port) {
+    const int host_port,
+    const std::string& node_name = "local-hostd") {
   naim::DesiredState desired_state;
   desired_state.plane_name = "maglev";
   desired_state.plane_mode = naim::PlaneMode::Llm;
@@ -1420,7 +1421,7 @@ naim::DesiredState BuildDesiredStateWithSkillsPort(
   naim::InstanceSpec skills;
   skills.name = "skills-maglev";
   skills.plane_name = "maglev";
-  skills.node_name = "local-hostd";
+  skills.node_name = node_name;
   skills.role = naim::InstanceRole::Skills;
   naim::PublishedPort published_port;
   published_port.host_ip = host_ip;
@@ -1539,6 +1540,20 @@ int main() {
           target->raw == "http://127.0.0.1:27978",
           "skills target raw URL should normalize wildcard host_ip");
       std::cout << "ok: wildcard-host-ip-normalization" << '\n';
+    }
+
+    {
+      const auto target =
+          service.ResolveTarget(BuildDesiredStateWithSkillsPort("127.0.0.1", 27978, "hpc1"));
+      Expect(target.has_value(), "remote skills target should resolve");
+      Expect(target->node_name == "hpc1", "remote skills target should preserve node binding");
+      Expect(
+          target->route_via_hostd_proxy,
+          "remote loopback skills target should use hostd runtime proxy");
+      Expect(
+          target->route_mode == "hostd-runtime-proxy",
+          "remote loopback skills target should expose hostd proxy route mode");
+      std::cout << "ok: remote-loopback-skills-target-hostd-proxy" << '\n';
     }
 
     {
@@ -2449,10 +2464,11 @@ int main() {
                               {"content",
                                "Please debug this regression and find the root cause."}}})}});
       Expect(
-          selection.mode == "none" && selection.candidate_count == 0 &&
-              selection.selected_skill_ids.empty(),
-          "resolver should not use controller catalog entries for contextual activation");
-      std::cout << "ok: contextual-resolver-requires-plane-local-replica" << '\n';
+          selection.mode == "contextual" && selection.candidate_count == 1 &&
+              selection.selected_skill_ids.size() == 1 &&
+              selection.selected_skill_ids.front() == "code-agent-root-cause-debug",
+          "resolver should fall back to attached controller skill records when the runtime replica is unavailable");
+      std::cout << "ok: contextual-resolver-falls-back-to-attached-controller-skill-records" << '\n';
     }
 
     {
@@ -2654,14 +2670,16 @@ int main() {
       const auto applied = request_context.payload.at(
           naim::controller::PlaneSkillsService::kAppliedSkillsPayloadKey);
       Expect(
-          applied.is_array() && applied.empty(),
-          "automatic contextual skills should not fall back to the controller catalog");
+          applied.is_array() && applied.size() == 1 &&
+              applied.front().at("id").get<std::string>() ==
+                  "lt-jex-market-asset-report",
+          "automatic contextual skills should fall back to attached controller skill records");
       Expect(
           request_context.payload.at(
               naim::controller::PlaneSkillsService::kSkillResolutionModePayloadKey)
-              .get<std::string>() == "none",
-          "automatic contextual skills should report none when no plane-owned replica candidate is available");
-      std::cout << "ok: interaction-auto-skills-do-not-fallback-to-controller-catalog" << '\n';
+              .get<std::string>() == "contextual",
+          "automatic contextual skills should report contextual mode after catalog-backed match_terms selection");
+      std::cout << "ok: interaction-auto-skills-fallback-to-attached-controller-skill-records" << '\n';
     }
 
     {

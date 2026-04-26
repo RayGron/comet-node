@@ -28,6 +28,11 @@ class PlaneSkillsService final {
   std::optional<ControllerEndpointTarget> ResolveTarget(
       const DesiredState& desired_state) const;
 
+  bool ProbeTargetOk(
+      const std::string& db_path,
+      const DesiredState& desired_state,
+      const std::string& path) const;
+
   std::optional<InteractionValidationError> ResolveInteractionSkills(
       const PlaneInteractionResolution& resolution,
       InteractionRequestContext* context) const;

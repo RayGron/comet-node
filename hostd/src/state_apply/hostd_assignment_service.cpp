@@ -1,5 +1,6 @@
 #include "state_apply/hostd_assignment_service.h"
 
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
@@ -9,6 +10,29 @@
 #include "state_apply/hostd_assignment_lock.h"
 
 namespace naim::hostd {
+
+namespace {
+
+std::filesystem::path SelfUpdateMarkerPath(
+    const std::string& state_root,
+    const std::string& node_name) {
+  return std::filesystem::path(state_root) / "control" /
+         ("hostd-self-update-scheduled-" + node_name);
+}
+
+void WriteSelfUpdateMarker(
+    const std::string& state_root,
+    const std::string& node_name,
+    int assignment_id) {
+  const auto marker_path = SelfUpdateMarkerPath(state_root, node_name);
+  std::filesystem::create_directories(marker_path.parent_path());
+  std::ofstream out(marker_path, std::ios::binary | std::ios::trunc);
+  if (out.is_open()) {
+    out << assignment_id << "\n";
+  }
+}
+
+}  // namespace
 
 HostdAssignmentService::HostdAssignmentService(
     const IHostdBackendFactory& backend_factory,
@@ -296,6 +320,7 @@ void HostdAssignmentService::ApplyNextAssignment(
           assignment->id,
           std::nullopt,
           "info");
+      WriteSelfUpdateMarker(state_root, node_name, assignment->id);
       return;
     }
 

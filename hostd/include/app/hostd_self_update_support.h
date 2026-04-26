@@ -16,6 +16,7 @@ struct HostdSelfUpdateRequest {
   std::filesystem::path registry_config_dir;
   std::filesystem::path update_script;
   std::filesystem::path update_log;
+  std::string docker_socket_group_id;
   bool registry_config_available = false;
 };
 

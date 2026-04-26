@@ -115,10 +115,14 @@ HostdSelfUpdatePlan HostdSelfUpdateSupport::BuildPlan(
     launch_command += " --config " +
                       command_support_.ShellQuote(PathString(request.registry_config_dir));
   }
-  launch_command += " run --rm --detach --name " +
+  launch_command += " run --rm --detach --privileged --name " +
                     command_support_.ShellQuote(helper_container_name) +
-                    " --user 0:0 --entrypoint " +
-                    command_support_.ShellQuote("/usr/bin/env");
+                    " --user 0:0";
+  if (!request.docker_socket_group_id.empty()) {
+    launch_command += " --group-add " +
+                      command_support_.ShellQuote(request.docker_socket_group_id);
+  }
+  launch_command += " --entrypoint " + command_support_.ShellQuote("/usr/bin/env");
   for (const std::string& mount : mounts) {
     launch_command += " -v " + command_support_.ShellQuote(mount);
   }

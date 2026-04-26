@@ -656,6 +656,8 @@ void HostdAppAssignmentSupport::ExecuteHostSelfUpdate(
       hostd_root / "install-state" / "hostd-self-update.sh";
   const std::filesystem::path update_log =
       hostd_root / "logs" / ("hostd-self-update-" + release_tag + ".log");
+  const std::string docker_socket_group_id = command_support_.Trim(
+      command_support_.RunCommandCapture("stat -c %g /var/run/docker.sock 2>/dev/null"));
 
   const auto update_plan = self_update_support_.BuildPlan(
       HostdSelfUpdateRequest{
@@ -667,6 +669,7 @@ void HostdAppAssignmentSupport::ExecuteHostSelfUpdate(
           registry_config_dir,
           update_script,
           update_log,
+          docker_socket_group_id,
           std::filesystem::exists(registry_config_dir / "config.json"),
       });
 

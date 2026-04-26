@@ -34,6 +34,7 @@ int main() {
             "/opt/naim/hostd/install-state/registry-docker",
             "/opt/naim/hostd/install-state/hostd-self-update.sh",
             "/opt/naim/hostd/logs/hostd-self-update-release.log",
+            "112",
             true,
         });
 
@@ -55,8 +56,13 @@ int main() {
         !Contains(plan.launch_command, "nohup"),
         "launcher must not keep the updater inside the old hostd container");
     Expect(
-        Contains(plan.launch_command, " run --rm --detach --name 'naim-hostd-self-update-storage-1-release-abc-1234567890' "),
+        Contains(
+            plan.launch_command,
+            " run --rm --detach --privileged --name 'naim-hostd-self-update-storage-1-release-abc-1234567890' "),
         "launcher should start a detached helper container");
+    Expect(
+        Contains(plan.launch_command, "--privileged"),
+        "launcher should be privileged so Docker socket access works under host userns policies");
     Expect(
         Contains(plan.launch_command, "-v '/var/run/docker.sock:/var/run/docker.sock'"),
         "launcher should mount docker socket into helper");
@@ -69,6 +75,9 @@ int main() {
     Expect(
         Contains(plan.launch_command, "--user 0:0"),
         "launcher should run as root so it can access the mounted docker socket");
+    Expect(
+        Contains(plan.launch_command, "--group-add '112'"),
+        "launcher should include the docker socket group when it is known");
     Expect(
         Contains(plan.launch_command, "bash -lc 'bash '\"'\"'/opt/naim/hostd/install-state/hostd-self-update.sh'\"'\"' >>'\"'\"'/opt/naim/hostd/logs/hostd-self-update-release.log'\"'\"' 2>&1'"),
         "launcher should write helper script output to the hostd log path");
@@ -83,6 +92,7 @@ int main() {
             "/run/naim/registry",
             "/opt/naim/hostd/install-state/hostd-self-update.sh",
             "/opt/naim/hostd/logs/hostd-self-update-abc.log",
+            "",
             true,
         });
     Expect(

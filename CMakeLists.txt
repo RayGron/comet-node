@@ -1001,6 +1001,17 @@ target_link_libraries(naim-hostd-command-support-tests PRIVATE naim-common)
 naim_enable_strict_warnings(naim-hostd-command-support-tests)
 
 add_executable(
+  naim-hostd-self-update-support-tests
+  hostd/src/app/hostd_command_support.cpp
+  hostd/src/app/hostd_self_update_support.cpp
+  hostd/src/app/hostd_self_update_support_tests.cpp
+)
+target_include_directories(
+  naim-hostd-self-update-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(naim-hostd-self-update-support-tests PRIVATE naim-common)
+naim_enable_strict_warnings(naim-hostd-self-update-support-tests)
+
+add_executable(
   naim-hostd-install-layout-support-tests
   hostd/src/app/hostd_install_layout_support.cpp
   hostd/src/app/hostd_install_layout_support_tests.cpp
@@ -1191,6 +1202,7 @@ add_executable(
   hostd/src/app/hostd_reporting_support.cpp
   hostd/src/app/hostd_repo_root_support.cpp
   hostd/src/app/hostd_runtime_http_proxy.cpp
+  hostd/src/app/hostd_self_update_support.cpp
   hostd/src/app/hostd_runtime_telemetry_support.cpp
   hostd/src/app/hostd_system_telemetry_collector.cpp
   hostd/src/app/hostd_desired_state_apply_support_tests.cpp
@@ -1435,6 +1447,7 @@ add_executable(
   hostd/src/app/hostd_reporting_support.cpp
   hostd/src/app/hostd_repo_root_support.cpp
   hostd/src/app/hostd_runtime_http_proxy.cpp
+  hostd/src/app/hostd_self_update_support.cpp
   hostd/src/app/hostd_runtime_telemetry_support.cpp
   hostd/src/app/hostd_system_telemetry_collector.cpp
   hostd/src/backend/hostd_backend_factory.cpp

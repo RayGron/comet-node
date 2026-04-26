@@ -10,6 +10,7 @@ namespace naim::hostd {
 enum class HostdRuntimeProxyPolicy {
   Runtime,
   KnowledgeVault,
+  Skills,
 };
 
 struct HostdRuntimeHttpResponse {

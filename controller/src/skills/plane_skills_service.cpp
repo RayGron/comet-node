@@ -119,6 +119,29 @@ std::optional<ControllerEndpointTarget> PlaneSkillsService::ResolveTarget(
   return PlaneSkillsTargetResolver::ResolvePlaneLocalTarget(desired_state);
 }
 
+bool PlaneSkillsService::ProbeTargetOk(
+    const std::string& db_path,
+    const DesiredState& desired_state,
+    const std::string& path) const {
+  const auto target = ResolveTarget(desired_state);
+  if (!target.has_value()) {
+    return false;
+  }
+  try {
+    const auto response = PlaneSkillsTargetResolver::SendPlaneLocalRequest(
+        db_path,
+        desired_state.plane_name,
+        *target,
+        "GET",
+        path,
+        "",
+        PlaneSkillsTargetResolver::DefaultJsonHeaders());
+    return response.status_code == 200;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
 std::optional<std::string> PlaneSkillsService::ParseSessionId(const json& payload) {
   if (!payload.contains("session_id") || payload.at("session_id").is_null()) {
     return std::nullopt;
@@ -318,7 +341,8 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
       [&](const std::string& fallback_error_code,
           const std::string& fallback_error_message)
       -> std::optional<InteractionValidationError> {
-    if (!request.HasExplicitSelection()) {
+    if (!request.HasExplicitSelection() &&
+        contextual_selection.selected_skill_ids.empty()) {
       return InteractionValidationError{
           fallback_error_code,
           fallback_error_message,
@@ -374,7 +398,9 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
       (void)PlaneSkillRuntimeSyncService().SyncPlane(
           resolution.db_path, resolution.desired_state);
     }
-    const HttpResponse response = SendControllerHttpRequest(
+    const HttpResponse response = PlaneSkillsTargetResolver::SendPlaneLocalRequest(
+        resolution.db_path,
+        resolution.desired_state.plane_name,
         *target,
         "POST",
         "/v1/skills/resolve",
@@ -452,7 +478,9 @@ std::optional<HttpResponse> PlaneSkillsService::ProxyPlaneSkillsRequest(
   }
 
   try {
-    return SendControllerHttpRequest(
+    return PlaneSkillsTargetResolver::SendPlaneLocalRequest(
+        resolution.db_path,
+        resolution.desired_state.plane_name,
         *target,
         method,
         PlaneSkillsTargetResolver::NormalizeSkillPathSuffix(path_suffix),

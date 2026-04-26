@@ -132,6 +132,40 @@ HttpResponse ParseHostdProxyResponsePayload(const nlohmann::json& progress) {
   return response;
 }
 
+void RefreshCachedStatusFromMutationResponse(
+    const std::string& db_path,
+    const KnowledgeVaultServiceRecord& record,
+    const std::string& method,
+    const HttpResponse& response) {
+  if (response.status_code < 200 || response.status_code >= 300) {
+    return;
+  }
+  if (method != "POST" && method != "PUT") {
+    return;
+  }
+  if (response.body.empty()) {
+    return;
+  }
+  const auto payload = nlohmann::json::parse(response.body, nullptr, false);
+  if (payload.is_discarded() || !payload.is_object()) {
+    return;
+  }
+  const int event_sequence = payload.value("event_sequence", 0);
+  if (event_sequence <= 0 || event_sequence < record.latest_event_sequence) {
+    return;
+  }
+  KnowledgeVaultServiceRepository{}.UpdateServiceStatus(
+      db_path,
+      record.service_id,
+      nlohmann::json{
+          {"status", "ready"},
+          {"schema_version",
+           record.schema_version.empty() ? std::string("knowledge.v1") : record.schema_version},
+          {"index_epoch", "idx_" + std::to_string(event_sequence)},
+          {"latest_event_sequence", event_sequence},
+      });
+}
+
 }  // namespace
 
 nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) const {
@@ -294,15 +328,19 @@ HttpResponse KnowledgeVaultService::ProxyServiceRequest(
     path += ControllerHttpServerSupport::UrlEncode(value);
   }
   if (IsLoopbackEndpointHost(record->endpoint_host)) {
-    return SendHostdRuntimeProxy(
+    auto response = SendHostdRuntimeProxy(
         db_path,
         *record,
         request.method,
         path,
         request.body,
         headers);
+    RefreshCachedStatusFromMutationResponse(db_path, *record, request.method, response);
+    return response;
   }
-  return SendDirectRuntime(*record, request.method, path, request.body, headers);
+  auto response = SendDirectRuntime(*record, request.method, path, request.body, headers);
+  RefreshCachedStatusFromMutationResponse(db_path, *record, request.method, response);
+  return response;
 }
 
 HttpResponse KnowledgeVaultService::BuildJsonResponse(

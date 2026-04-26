@@ -568,9 +568,12 @@ void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
   const std::string path = payload.value("path", std::string{});
   const std::string body = payload.value("body", std::string{});
   const std::string policy_name = payload.value("policy", std::string("runtime"));
-  const HostdRuntimeProxyPolicy policy =
-      policy_name == "knowledge-vault" ? HostdRuntimeProxyPolicy::KnowledgeVault
-                                       : HostdRuntimeProxyPolicy::Runtime;
+  HostdRuntimeProxyPolicy policy = HostdRuntimeProxyPolicy::Runtime;
+  if (policy_name == "knowledge-vault") {
+    policy = HostdRuntimeProxyPolicy::KnowledgeVault;
+  } else if (policy_name == "skills") {
+    policy = HostdRuntimeProxyPolicy::Skills;
+  }
   const auto headers = runtime_http_proxy_.ParseProxyHeaders(
       payload.value("headers", nlohmann::json::array()));
 

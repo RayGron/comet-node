@@ -1949,7 +1949,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const auto skills_target = skills_service.ResolveTarget(*desired_state);
   const bool skills_ready =
       skills_enabled && running_plane && skills_target.has_value() &&
-      probe_controller_target_ok_(skills_target, "/health");
+      skills_service.ProbeTargetOk(db_path, *desired_state, "/health");
   const auto skills_instance = std::find_if(
       desired_state->instances.begin(),
       desired_state->instances.end(),

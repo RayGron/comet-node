@@ -67,6 +67,9 @@ int main() {
         Contains(plan.launch_command, "--entrypoint '/usr/bin/env'"),
         "launcher should bypass the hostd image default entrypoint");
     Expect(
+        Contains(plan.launch_command, "--user 0:0"),
+        "launcher should run as root so it can access the mounted docker socket");
+    Expect(
         Contains(plan.launch_command, "bash -lc 'bash '\"'\"'/opt/naim/hostd/install-state/hostd-self-update.sh'\"'\"' >>'\"'\"'/opt/naim/hostd/logs/hostd-self-update-release.log'\"'\"' 2>&1'"),
         "launcher should write helper script output to the hostd log path");
 

@@ -117,7 +117,8 @@ HostdSelfUpdatePlan HostdSelfUpdateSupport::BuildPlan(
   }
   launch_command += " run --rm --detach --name " +
                     command_support_.ShellQuote(helper_container_name) +
-                    " --entrypoint " + command_support_.ShellQuote("/usr/bin/env");
+                    " --user 0:0 --entrypoint " +
+                    command_support_.ShellQuote("/usr/bin/env");
   for (const std::string& mount : mounts) {
     launch_command += " -v " + command_support_.ShellQuote(mount);
   }

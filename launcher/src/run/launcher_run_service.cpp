@@ -99,6 +99,12 @@ void StopChildProcess(pid_t pid) {
 }
 #endif
 
+std::filesystem::path HostdSelfUpdateMarkerPath(
+    const std::filesystem::path& state_root,
+    const std::string& node_name) {
+  return state_root / "control" / ("hostd-self-update-scheduled-" + node_name);
+}
+
 bool IsPrivateIpv4Address(const std::string& candidate) {
   if (!IsIpv4Address(candidate)) {
     return false;
@@ -420,6 +426,10 @@ int LauncherRunService::RunHostdLoop(
   std::cout
       << "next_step=leave hostd running so it can receive assignments and upload telemetry\n";
   auto next_inventory_report_at = std::chrono::steady_clock::now();
+  const auto self_update_marker =
+      HostdSelfUpdateMarkerPath(options.state_root, options.node_name);
+  std::error_code marker_error;
+  std::filesystem::remove(self_update_marker, marker_error);
   HostdPeerService peer_service(options);
   peer_service.Start();
   if (peer_service.enabled()) {
@@ -497,18 +507,24 @@ int LauncherRunService::RunHostdLoop(
 
 #if !defined(_WIN32)
   pid_t apply_pid = -1;
-  const auto reap_apply_if_finished = [&]() {
+  const auto reap_apply_if_finished = [&]() -> bool {
     if (apply_pid <= 0) {
-      return;
+      return false;
     }
     const std::optional<int> apply_code = PollChildExitCode(apply_pid);
     if (!apply_code.has_value()) {
-      return;
+      return false;
     }
     if (*apply_code != 0) {
       std::cerr << "naim-node: hostd apply-next-assignment exit=" << *apply_code << "\n";
     }
     apply_pid = -1;
+    if (std::filesystem::exists(self_update_marker)) {
+      std::filesystem::remove(self_update_marker, marker_error);
+      std::cout << "hostd_self_update_scheduled=stopping\n";
+      return true;
+    }
+    return false;
   };
 #endif
 
@@ -518,8 +534,17 @@ int LauncherRunService::RunHostdLoop(
     if (apply_code != 0) {
       std::cerr << "naim-node: hostd apply-next-assignment exit=" << apply_code << "\n";
     }
+    if (std::filesystem::exists(self_update_marker)) {
+      std::filesystem::remove(self_update_marker, marker_error);
+      std::cout << "hostd_self_update_scheduled=stopping\n";
+      peer_service.Stop();
+      return 0;
+    }
 #else
-    reap_apply_if_finished();
+    if (reap_apply_if_finished()) {
+      peer_service.Stop();
+      return 0;
+    }
     if (apply_pid <= 0) {
       apply_pid = static_cast<pid_t>(process_runner_.SpawnCommand(build_apply_args()));
     }
@@ -532,7 +557,10 @@ int LauncherRunService::RunHostdLoop(
          ++second) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
 #if !defined(_WIN32)
-      reap_apply_if_finished();
+      if (reap_apply_if_finished()) {
+        peer_service.Stop();
+        return 0;
+      }
 #endif
       run_report_if_due();
     }

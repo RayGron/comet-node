@@ -20,7 +20,7 @@ fi
 
 repo="${1:-RayGron/naim-node}"
 ruleset_name="${NAIM_MAIN_RULESET_NAME:-main}"
-required_check="${NAIM_REQUIRED_PR_CHECK:-NAIM PR Gate / summary}"
+required_check="${NAIM_REQUIRED_PR_CHECK:-summary}"
 
 ruleset_json="$(gh api "repos/${repo}/rulesets" --jq ".[] | select(.name == \"${ruleset_name}\")")"
 if [[ -z "${ruleset_json}" ]]; then

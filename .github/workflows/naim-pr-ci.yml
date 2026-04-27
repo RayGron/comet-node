@@ -1,0 +1,281 @@
+name: NAIM PR Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: naim-pr-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NAIM_RELEASE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  NAIM_RELEASE_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+  NAIM_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+  NAIM_HPC1_SSH: ${{ vars.NAIM_HPC1_SSH || 'baal@195.168.22.186' }}
+  NAIM_HPC1_SSH_PORT: ${{ vars.NAIM_HPC1_SSH_PORT || '2222' }}
+  NAIM_HPC1_REPO_PATH: ${{ vars.NAIM_HPC1_REPO_PATH || '/mnt/shared-storage/naim/repos/naim-node' }}
+  NAIM_HPC1_PR_REPO_ROOT: ${{ vars.NAIM_HPC1_PR_REPO_ROOT || '/tmp/naim-pr-gate/naim-node' }}
+  NAIM_BUILD_TYPE: ${{ vars.NAIM_BUILD_TYPE || 'Release' }}
+  NAIM_CUDA_ARCHITECTURES: ${{ vars.NAIM_CUDA_ARCHITECTURES || '' }}
+  NAIM_CUDA_NVCC_JOBS: ${{ vars.NAIM_CUDA_NVCC_JOBS || '1' }}
+  NAIM_CMAKE_ARGS: ${{ vars.NAIM_CMAKE_ARGS || '' }}
+
+jobs:
+  hpc1-checkout:
+    name: hpc1 checkout
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      pr_repo_path: ${{ steps.checkout.outputs.pr_repo_path }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - id: checkout
+        name: Checkout PR head on hpc1
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || github.run_id }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NAIM_CI_SSH_KEY:-}" || ! -s "${NAIM_CI_SSH_KEY}" ]]; then
+            echo "NAIM_DEPLOY_SSH_KEY is required for privileged PR gate jobs" >&2
+            exit 1
+          fi
+          if [[ "${PR_HEAD_REPO}" != "${REPOSITORY}" ]]; then
+            echo "Fork PRs cannot run privileged hpc1 gate jobs; push a same-repository branch." >&2
+            exit 1
+          fi
+          pr_repo_path="${NAIM_HPC1_PR_REPO_ROOT}/pr-${PR_NUMBER}"
+          echo "pr_repo_path=${pr_repo_path}" >> "${GITHUB_OUTPUT}"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "NAIM_HPC1_REPO_PATH='${NAIM_HPC1_REPO_PATH}' PR_REPO_PATH='${pr_repo_path}' PR_HEAD_REF='${PR_HEAD_REF}' NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          mkdir -p "$(dirname -- "${PR_REPO_PATH}")"
+          origin_url="$(git -C "${NAIM_HPC1_REPO_PATH}" config --get remote.origin.url)"
+          if [[ ! -d "${PR_REPO_PATH}/.git" ]]; then
+            git clone --no-checkout "${origin_url}" "${PR_REPO_PATH}"
+          fi
+          cd "${PR_REPO_PATH}"
+          git config --global --add safe.directory "${PR_REPO_PATH}" >/dev/null 2>&1 || true
+          git fetch --prune origin "+refs/heads/${PR_HEAD_REF}:refs/remotes/origin/${PR_HEAD_REF}"
+          git checkout -f --detach "${NAIM_RELEASE_SHA}"
+          git clean -fdx -e build -e build-turboquant -e var
+          current_sha="$(git rev-parse HEAD)"
+          if [[ "${current_sha}" != "${NAIM_RELEASE_SHA}" ]]; then
+            echo "error: PR workspace is at ${current_sha}, expected ${NAIM_RELEASE_SHA}" >&2
+            exit 1
+          fi
+          echo "hpc1 PR workspace is at ${current_sha}"
+          REMOTE
+
+  detect-release-scope:
+    name: detect release scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: hpc1-checkout
+    outputs:
+      turboquant_required: ${{ steps.scope.outputs.turboquant_required }}
+      turboquant_reason: ${{ steps.scope.outputs.turboquant_reason }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.NAIM_RELEASE_SHA }}
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - id: scope
+        name: Detect TurboQuant-sensitive changes
+        shell: bash
+        env:
+          GITHUB_EVENT_NAME: pull_request
+          NAIM_RELEASE_BEFORE: ${{ env.NAIM_BASE_SHA }}
+        run: |
+          set -euo pipefail
+          bash scripts/ci/detect-release-scope.sh
+
+  hpc1-build:
+    name: hpc1 build
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs:
+      - hpc1-checkout
+      - detect-release-scope
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Build on hpc1 PR workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_q="$(printf '%q' "${{ needs.hpc1-checkout.outputs.pr_repo_path }}")"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
+
+  ui-checks:
+    name: operator UI checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.NAIM_RELEASE_SHA }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/operator-react/package-lock.json
+      - name: Test and build operator UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ui/operator-react
+          npm ci
+          npm test
+          npm run build
+
+  hpc1-knowledge-vault-release-gate:
+    name: hpc1 Knowledge Vault release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+      - hpc1-checkout
+      - hpc1-build
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Run Knowledge Vault release gate on hpc1
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_q="$(printf '%q' "${{ needs.hpc1-checkout.outputs.pr_repo_path }}")"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' bash scripts/ci/knowledge-vault-release-gate.sh"
+
+  hpc1-build-turboquant:
+    name: hpc1 TurboQuant build
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs:
+      - hpc1-checkout
+      - hpc1-build
+      - detect-release-scope
+    if: needs.detect-release-scope.outputs.turboquant_required == 'true'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Build TurboQuant runtime on hpc1
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_q="$(printf '%q' "${{ needs.hpc1-checkout.outputs.pr_repo_path }}")"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build-turboquant.sh"
+
+  summary:
+    name: summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: always()
+    needs:
+      - hpc1-checkout
+      - detect-release-scope
+      - hpc1-build
+      - ui-checks
+      - hpc1-knowledge-vault-release-gate
+      - hpc1-build-turboquant
+    steps:
+      - name: Write PR gate report
+        shell: bash
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          report_path="${RUNNER_TEMP}/naim-pr-gate-report.md"
+          python3 - "${report_path}" <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          report_path = sys.argv[1]
+          required_success = {
+              "hpc1-checkout",
+              "detect-release-scope",
+              "hpc1-build",
+              "ui-checks",
+              "hpc1-knowledge-vault-release-gate",
+          }
+          allowed_skipped = {"hpc1-build-turboquant"}
+          failures = []
+          lines = [
+              "## NAIM PR Gate",
+              "",
+              f"- run: {os.environ.get('RUN_URL', '')}",
+              "",
+              "| Stage | Result |",
+              "| --- | --- |",
+          ]
+          for name, payload in needs.items():
+              result = payload.get("result", "unknown")
+              lines.append(f"| `{name}` | `{result}` |")
+              if name in required_success and result != "success":
+                  failures.append((name, result))
+              elif name not in allowed_skipped and result not in {"success", "skipped"}:
+                  failures.append((name, result))
+          turbo = needs.get("detect-release-scope", {}).get("outputs", {})
+          if turbo:
+              lines.extend([
+                  "",
+                  "### Release Scope",
+                  f"- TurboQuant required: `{turbo.get('turboquant_required', 'unknown')}`",
+                  f"- Reason: `{turbo.get('turboquant_reason', 'unknown')}`",
+              ])
+          if failures:
+              lines.extend(["", "### Failed Stages"])
+              for name, result in failures:
+                  lines.append(f"- `{name}` ended with `{result}`")
+          else:
+              lines.extend(["", "All required PR gate stages passed."])
+          with open(report_path, "w", encoding="utf-8") as handle:
+              handle.write("\n".join(lines) + "\n")
+          print("failed=" + ("true" if failures else "false"))
+          PY
+          cat "${report_path}" >> "${GITHUB_STEP_SUMMARY}"
+          failed="$(python3 - "${report_path}" <<'PY'
+          import sys
+          text = open(sys.argv[1], encoding="utf-8").read()
+          print("true" if "### Failed Stages" in text else "false")
+          PY
+          )"
+          if [[ "${failed}" == "true" && -n "${PR_NUMBER}" ]]; then
+            gh pr comment "${PR_NUMBER}" --body-file "${report_path}" || true
+          fi
+          [[ "${failed}" != "true" ]]

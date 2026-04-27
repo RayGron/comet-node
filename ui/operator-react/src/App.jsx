@@ -22,6 +22,8 @@ import {
 import { formatPlaneDashboardSkillsSummary } from "./planeSkills.js";
 import {
   detectModelSourceFormat,
+  defaultModelDownloadTarget,
+  eligibleModelStorageNodes,
   MODEL_LIBRARY_FORMAT_OPTIONS,
   MODEL_LIBRARY_GGUF_QUANTIZATIONS,
   MODEL_LIBRARY_QUANTIZATION_FILTERS,
@@ -2028,6 +2030,7 @@ function App() {
     sourceUrls: "",
     format: "unknown",
     formatLocked: false,
+    targetSelectionTouched: false,
   });
   const [quantizationSearch, setQuantizationSearch] = useState("");
   const [quantizationFilter, setQuantizationFilter] = useState("all");
@@ -3865,13 +3868,7 @@ function App() {
   const visibleModelItems = (modelLibrary.items || []).slice(0, visibleModelCount);
   const hasMoreModelItems = activeModelCount > visibleModelCount;
   const modelLibraryNodes = Array.isArray(modelLibrary.nodes) ? modelLibrary.nodes : [];
-  const storageModelNodes = modelLibraryNodes.filter(
-    (node) =>
-      node?.role_eligible === true &&
-      node?.registration_state === "registered" &&
-      node?.session_state === "connected" &&
-      node?.storage_root,
-  );
+  const storageModelNodes = eligibleModelStorageNodes(modelLibraryNodes);
   const modelLibraryJobs = Array.isArray(modelLibrary.jobs) ? modelLibrary.jobs : [];
   const downloadModelJobs = modelLibraryJobs.filter(
     (job) => normalizeModelLibraryJobKind(job?.job_kind) === "download",
@@ -6222,7 +6219,11 @@ function App() {
           type="text"
           value={modelDownloadForm.targetRoot}
           onChange={(event) =>
-            setModelDownloadForm((current) => ({ ...current, targetRoot: event.target.value }))
+            setModelDownloadForm((current) => ({
+              ...current,
+              targetRoot: event.target.value,
+              targetSelectionTouched: true,
+            }))
           }
           placeholder="/abs/path/to/model/library"
           disabled={Boolean(modelDownloadForm.targetNodeName)}
@@ -6240,6 +6241,7 @@ function App() {
               ...current,
               targetNodeName: event.target.value,
               targetRoot: event.target.value ? "" : current.targetRoot,
+              targetSelectionTouched: true,
             }))
           }
         >
@@ -7355,14 +7357,28 @@ function App() {
   }, [desiredState, interactionStatus]);
 
   useEffect(() => {
-    if (modelDownloadForm.targetRoot || !Array.isArray(modelLibrary.roots) || modelLibrary.roots.length === 0) {
+    if (
+      modelDownloadForm.targetRoot ||
+      modelDownloadForm.targetNodeName ||
+      modelDownloadForm.targetSelectionTouched
+    ) {
+      return;
+    }
+    const nextDefault = defaultModelDownloadTarget(modelLibrary);
+    if (!nextDefault) {
       return;
     }
     setModelDownloadForm((current) => ({
       ...current,
-      targetRoot: modelLibrary.roots[0],
+      targetRoot: nextDefault.targetRoot,
+      targetNodeName: nextDefault.targetNodeName,
     }));
-  }, [modelDownloadForm.targetRoot, modelLibrary.roots]);
+  }, [
+    modelDownloadForm.targetNodeName,
+    modelDownloadForm.targetRoot,
+    modelDownloadForm.targetSelectionTouched,
+    modelLibrary,
+  ]);
 
   useEffect(() => {
     const detectedSourceFormat = detectModelSourceFormat(modelDownloadForm.sourceUrls);

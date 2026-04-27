@@ -328,9 +328,88 @@ int main() {
 	            item.at("size_bytes").get<std::uintmax_t>() == source_payload_size;
 	      }
 	    }
-	    Expect(
-	        found_remote_storage_item,
-	        "completed storage-node downloads should remain visible without controller-local files");
+    Expect(
+        found_remote_storage_item,
+        "completed storage-node downloads should remain visible without controller-local files");
+
+    const auto implicit_storage_root_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "model-implicit-storage-root"},
+                {"target_root", storage_root.string()},
+                {"target_subdir", "implicit-storage-root"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(source_path)})},
+                {"format", "gguf"},
+            }));
+    Expect(
+        implicit_storage_root_response.status_code == 202,
+        "download with a target_root matching one storage node should be accepted");
+    const auto implicit_storage_root_job_id =
+        nlohmann::json::parse(implicit_storage_root_response.body)
+            .at("job")
+            .at("id")
+            .get<std::string>();
+    const auto implicit_storage_root_job =
+        store.LoadModelLibraryDownloadJob(implicit_storage_root_job_id);
+    Expect(
+        implicit_storage_root_job.has_value() &&
+            implicit_storage_root_job->node_name == "storage-node-a",
+        "matching storage_root should resolve to the storage node assignment target");
+
+    const auto ambiguous_storage_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "model-ambiguous-storage"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(source_path)})},
+                {"format", "gguf"},
+            }));
+    Expect(
+        ambiguous_storage_response.status_code == 409,
+        "download without an explicit target should reject multiple storage-capable nodes");
+
+    const fs::path single_db_path = temp_root / "single-controller.sqlite";
+    const fs::path single_storage_root = temp_root / "single-storage";
+    fs::create_directories(single_storage_root);
+    naim::ControllerStore single_store(single_db_path.string());
+    single_store.Initialize();
+    UpsertHost(
+        single_store,
+        "local-hostd",
+        "worker",
+        single_storage_root,
+        500ULL * 1024ULL * 1024ULL * 1024ULL);
+    const auto implicit_single_node_response = service.EnqueueDownload(
+        single_db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "model-single-node-default"},
+                {"target_subdir", "single-node-default"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(source_path)})},
+                {"format", "gguf"},
+            }));
+    Expect(
+        implicit_single_node_response.status_code == 202,
+        "single-node download should default to the only storage-capable node");
+    const auto implicit_single_node_job_id =
+        nlohmann::json::parse(implicit_single_node_response.body)
+            .at("job")
+            .at("id")
+            .get<std::string>();
+    const auto implicit_single_node_job =
+        single_store.LoadModelLibraryDownloadJob(implicit_single_node_job_id);
+    Expect(
+        implicit_single_node_job.has_value() &&
+            implicit_single_node_job->node_name == "local-hostd" &&
+            implicit_single_node_job->status == "queued",
+        "single-node default download should be queued for local-hostd");
 
     const fs::path storage_safetensors_source = src_root / "storage-model.safetensors";
     const fs::path storage_chat_template = src_root / "chat_template.jinja";

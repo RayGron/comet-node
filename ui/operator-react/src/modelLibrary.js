@@ -74,6 +74,37 @@ export function shouldShowGgufConversionOptions(detectedSourceFormat, desiredFor
   );
 }
 
+export function eligibleModelStorageNodes(nodes) {
+  if (!Array.isArray(nodes)) {
+    return [];
+  }
+  return nodes.filter(
+    (node) =>
+      node?.role_eligible === true &&
+      node?.registration_state === "registered" &&
+      node?.session_state === "connected" &&
+      node?.node_name &&
+      node?.storage_root,
+  );
+}
+
+export function defaultModelDownloadTarget(modelLibrary) {
+  const storageNodes = eligibleModelStorageNodes(modelLibrary?.nodes);
+  if (storageNodes.length === 1) {
+    return {
+      targetNodeName: String(storageNodes[0].node_name || ""),
+      targetRoot: "",
+    };
+  }
+  if (Array.isArray(modelLibrary?.roots) && modelLibrary.roots.length > 0) {
+    return {
+      targetNodeName: "",
+      targetRoot: String(modelLibrary.roots[0] || ""),
+    };
+  }
+  return null;
+}
+
 export function modelLibraryJobProgress(job) {
   const bytesDone = Number(job?.bytes_done ?? 0);
   const bytesTotal = Number(job?.bytes_total ?? NaN);

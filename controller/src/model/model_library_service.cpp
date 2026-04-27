@@ -343,7 +343,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
     const HttpRequest& request) const {
   const json body = support_.parse_json_request_body(request);
   std::string target_root = body.value("target_root", std::string{});
-  const std::string target_node_name = body.value("target_node_name", std::string{});
+  std::string target_node_name = body.value("target_node_name", std::string{});
   const std::string target_subdir = body.value("target_subdir", std::string{});
   const std::string model_id = body.value("model_id", std::string{});
   const std::string source_url = body.value("source_url", std::string{});
@@ -371,10 +371,13 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   const std::string desired_output_format = NormalizeModelOutputFormat(requested_output_format);
   const std::vector<std::string> quantizations;
   const bool keep_base_gguf = true;
+  const bool requires_controller_local_conversion =
+      detected_source_format == "safetensors" && desired_output_format == "gguf";
   naim::ControllerStore store(db_path);
   store.Initialize();
-  if (!target_node_name.empty()) {
-    const auto host = store.LoadRegisteredHost(target_node_name);
+  auto apply_target_node =
+      [&](const std::string& node_name) -> std::optional<HttpResponse> {
+    const auto host = store.LoadRegisteredHost(node_name);
     if (!host.has_value()) {
       return support_.build_json_response(
           404,
@@ -407,6 +410,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
                {"message", "target_node_name does not advertise a usable storage_root"}},
           {});
     }
+    target_node_name = summary.node_name;
     target_root = summary.storage_root;
     std::uintmax_t required_bytes = 0;
     bool have_required_bytes = !source_urls.empty();
@@ -427,6 +431,66 @@ HttpResponse ModelLibraryService::EnqueueDownload(
                {"required_bytes", required_bytes},
                {"available_bytes", summary.storage_free_bytes}},
           {});
+    }
+    return std::nullopt;
+  };
+  if (!target_node_name.empty()) {
+    if (auto error_response = apply_target_node(target_node_name)) {
+      return *error_response;
+    }
+  } else if (!requires_controller_local_conversion) {
+    std::vector<ModelLibraryNodeSummary> eligible_nodes;
+    for (const auto& host : store.LoadRegisteredHosts()) {
+      const auto summary = ModelLibraryNodePlacement::BuildSummary(host);
+      if (summary.registration_state != "registered" ||
+          summary.session_state != "connected") {
+        continue;
+      }
+      if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
+              summary.derived_role,
+              summary.storage_role_enabled,
+              false)) {
+        continue;
+      }
+      if (summary.storage_root.empty() ||
+          !IsUsableAbsoluteHostPath(summary.storage_root)) {
+        continue;
+      }
+      eligible_nodes.push_back(summary);
+    }
+    if (target_root.empty()) {
+      if (eligible_nodes.size() == 1) {
+        if (auto error_response = apply_target_node(eligible_nodes.front().node_name)) {
+          return *error_response;
+        }
+      } else if (eligible_nodes.size() > 1) {
+        return support_.build_json_response(
+            409,
+            json{{"status", "conflict"},
+                 {"message", "target_node_name is required when multiple storage-capable nodes are available"}},
+            {});
+      }
+    } else if (IsUsableAbsoluteHostPath(target_root)) {
+      std::vector<ModelLibraryNodeSummary> matching_nodes;
+      const auto normalized_target_root =
+          NormalizePathString(std::filesystem::path(target_root));
+      for (const auto& summary : eligible_nodes) {
+        if (NormalizePathString(std::filesystem::path(summary.storage_root)) ==
+            normalized_target_root) {
+          matching_nodes.push_back(summary);
+        }
+      }
+      if (matching_nodes.size() == 1) {
+        if (auto error_response = apply_target_node(matching_nodes.front().node_name)) {
+          return *error_response;
+        }
+      } else if (matching_nodes.size() > 1) {
+        return support_.build_json_response(
+            409,
+            json{{"status", "conflict"},
+                 {"message", "target_node_name is required because target_root matches multiple nodes"}},
+            {});
+      }
     }
   }
   if (target_root.empty() || !IsUsableAbsoluteHostPath(target_root)) {

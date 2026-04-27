@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
+option(CCACHE_ENABLED "Enable ccache support to improve build speed" ON)
+
 option(NAIM_SKIP_VCPKG_TOOLCHAIN "Skip automatic vcpkg toolchain detection" OFF)
 set(NAIM_CUDA_NVCC_JOBS "1" CACHE STRING
     "Maximum number of concurrent nvcc compile jobs for ggml-cuda when using Ninja")
@@ -13,6 +15,14 @@ option(NAIM_ENABLE_CUDA "Build llama.cpp runtime with CUDA backend" ON)
 option(NAIM_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
 set(NAIM_CEF_ROOT "" CACHE PATH "Path to an unpacked CEF binary distribution")
 set(NAIM_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribution archive")
+
+
+if (CCACHE_ENABLED)
+    include(cmake/ccache.cmake)
+endif()
+
+include(cmake/GIT.cmake)
+updateGitVars()
 
 if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
   list(PREPEND CMAKE_PREFIX_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
@@ -60,7 +70,7 @@ endif()
 
 project(
   naim-node
-  VERSION 0.1.0
+  VERSION 0.1.${GIT_COMMIT_COUNT}
   LANGUAGES CXX
 )
 

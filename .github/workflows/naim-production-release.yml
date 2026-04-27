@@ -23,8 +23,9 @@ env:
   NAIM_REGISTRY_PROJECT: ${{ vars.NAIM_REGISTRY_PROJECT || 'naim' }}
   NAIM_REGISTRY_USERNAME: ${{ secrets.NAIM_REGISTRY_USERNAME || vars.NAIM_REGISTRY_USERNAME || 'admin' }}
   NAIM_BUILD_TYPE: ${{ vars.NAIM_BUILD_TYPE || 'Release' }}
-  NAIM_CUDA_ARCHITECTURES: ${{ vars.NAIM_CUDA_ARCHITECTURES || '' }}
+  NAIM_CUDA_ARCHITECTURES: ${{ vars.NAIM_CUDA_ARCHITECTURES || '120a-real' }}
   NAIM_CUDA_NVCC_JOBS: ${{ vars.NAIM_CUDA_NVCC_JOBS || '1' }}
+  NAIM_COMPILER_CACHE: ${{ vars.NAIM_COMPILER_CACHE || 'auto' }}
   NAIM_CMAKE_ARGS: ${{ vars.NAIM_CMAKE_ARGS || '' }}
   NAIM_MIGRATION_TIMEOUT_SEC: ${{ vars.NAIM_MIGRATION_TIMEOUT_SEC || '600' }}
 
@@ -103,8 +104,12 @@ jobs:
     timeout-minutes: 10
     needs: hpc1-pull
     outputs:
+      native_build_required: ${{ steps.scope.outputs.native_build_required }}
+      native_build_reason: ${{ steps.scope.outputs.native_build_reason }}
+      native_matched_file: ${{ steps.scope.outputs.native_matched_file }}
       turboquant_required: ${{ steps.scope.outputs.turboquant_required }}
       turboquant_reason: ${{ steps.scope.outputs.turboquant_reason }}
+      turboquant_matched_file: ${{ steps.scope.outputs.turboquant_matched_file }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -118,6 +123,7 @@ jobs:
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           NAIM_RELEASE_BEFORE: ${{ github.event.before }}
+          NAIM_TURBOQUANT_ARTIFACT_CHECK: always
         run: |
           set -euo pipefail
           bash scripts/ci/detect-release-scope.sh
@@ -148,7 +154,7 @@ jobs:
           set -euo pipefail
           repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
 
   hpc1-build-turboquant:
     name: 2b. hpc1 TurboQuant build
@@ -177,7 +183,7 @@ jobs:
           set -euo pipefail
           repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build-turboquant.sh"
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build-turboquant.sh"
 
   hpc1-knowledge-vault-release-gate:
     name: 2a. hpc1 Knowledge Vault release gate

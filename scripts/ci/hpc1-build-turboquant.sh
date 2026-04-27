@@ -12,6 +12,7 @@ naim_ci_prepare_repo
 naim_ci_ensure_writable_dir build-turboquant
 naim_ci_ensure_writable_dir var/turboquant
 naim_ci_prepare_shared_vcpkg_cache "$(pwd)"
+naim_ci_prepare_compiler_cache "$(pwd)"
 
 export NAIM_BUILD_TYPE
 bash "$(pwd)/scripts/build-turboquant-runtime.sh" linux x64 "${NAIM_BUILD_TYPE}"

@@ -29,8 +29,9 @@ env:
   NAIM_HPC1_REPO_PATH: ${{ vars.NAIM_HPC1_REPO_PATH || '/mnt/shared-storage/naim/repos/naim-node' }}
   NAIM_HPC1_PR_REPO_ROOT: ${{ vars.NAIM_HPC1_PR_REPO_ROOT || '/tmp/naim-pr-gate/naim-node' }}
   NAIM_BUILD_TYPE: ${{ vars.NAIM_BUILD_TYPE || 'Release' }}
-  NAIM_CUDA_ARCHITECTURES: ${{ vars.NAIM_CUDA_ARCHITECTURES || '' }}
+  NAIM_CUDA_ARCHITECTURES: ${{ vars.NAIM_CUDA_ARCHITECTURES || '120a-real' }}
   NAIM_CUDA_NVCC_JOBS: ${{ vars.NAIM_CUDA_NVCC_JOBS || '1' }}
+  NAIM_COMPILER_CACHE: ${{ vars.NAIM_COMPILER_CACHE || 'auto' }}
   NAIM_CMAKE_ARGS: ${{ vars.NAIM_CMAKE_ARGS || '' }}
 
 jobs:
@@ -92,8 +93,12 @@ jobs:
     timeout-minutes: 10
     needs: hpc1-checkout
     outputs:
+      native_build_required: ${{ steps.scope.outputs.native_build_required }}
+      native_build_reason: ${{ steps.scope.outputs.native_build_reason }}
+      native_matched_file: ${{ steps.scope.outputs.native_matched_file }}
       turboquant_required: ${{ steps.scope.outputs.turboquant_required }}
       turboquant_reason: ${{ steps.scope.outputs.turboquant_reason }}
+      turboquant_matched_file: ${{ steps.scope.outputs.turboquant_matched_file }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -112,6 +117,21 @@ jobs:
           set -euo pipefail
           bash scripts/ci/detect-release-scope.sh
 
+  lightweight-checks:
+    name: lightweight checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.NAIM_RELEASE_SHA }}
+          fetch-depth: 0
+      - name: Run lightweight PR checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/pr-lightweight-checks.sh
+
   hpc1-build:
     name: hpc1 build
     runs-on: ubuntu-latest
@@ -119,6 +139,7 @@ jobs:
     needs:
       - hpc1-checkout
       - detect-release-scope
+    if: needs.detect-release-scope.outputs.native_build_required == 'true'
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
@@ -130,7 +151,7 @@ jobs:
           set -euo pipefail
           repo_q="$(printf '%q' "${{ needs.hpc1-checkout.outputs.pr_repo_path }}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
 
   ui-checks:
     name: operator UI checks
@@ -161,6 +182,8 @@ jobs:
     needs:
       - hpc1-checkout
       - hpc1-build
+      - detect-release-scope
+    if: needs.detect-release-scope.outputs.native_build_required == 'true'
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
@@ -182,7 +205,9 @@ jobs:
       - hpc1-checkout
       - hpc1-build
       - detect-release-scope
-    if: needs.detect-release-scope.outputs.turboquant_required == 'true'
+    if: >-
+      needs.detect-release-scope.outputs.native_build_required == 'true' &&
+      needs.detect-release-scope.outputs.turboquant_required == 'true'
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
@@ -194,7 +219,7 @@ jobs:
           set -euo pipefail
           repo_q="$(printf '%q' "${{ needs.hpc1-checkout.outputs.pr_repo_path }}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build-turboquant.sh"
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build-turboquant.sh"
 
   summary:
     name: summary
@@ -204,6 +229,7 @@ jobs:
     needs:
       - hpc1-checkout
       - detect-release-scope
+      - lightweight-checks
       - hpc1-build
       - ui-checks
       - hpc1-knowledge-vault-release-gate
@@ -226,14 +252,24 @@ jobs:
 
           needs = json.loads(os.environ["NEEDS_JSON"])
           report_path = sys.argv[1]
+          scope_outputs = needs.get("detect-release-scope", {}).get("outputs", {})
+          native_required = scope_outputs.get("native_build_required") == "true"
+          turbo_required = scope_outputs.get("turboquant_required") == "true"
           required_success = {
               "hpc1-checkout",
               "detect-release-scope",
-              "hpc1-build",
+              "lightweight-checks",
               "ui-checks",
-              "hpc1-knowledge-vault-release-gate",
           }
-          allowed_skipped = {"hpc1-build-turboquant"}
+          if native_required:
+              required_success.add("hpc1-build")
+              required_success.add("hpc1-knowledge-vault-release-gate")
+          allowed_skipped = set()
+          if not native_required:
+              allowed_skipped.add("hpc1-build")
+              allowed_skipped.add("hpc1-knowledge-vault-release-gate")
+          if not turbo_required or not native_required:
+              allowed_skipped.add("hpc1-build-turboquant")
           failures = []
           lines = [
               "## NAIM PR Gate",
@@ -248,15 +284,22 @@ jobs:
               lines.append(f"| `{name}` | `{result}` |")
               if name in required_success and result != "success":
                   failures.append((name, result))
+              elif result in {"failure", "cancelled", "timed_out", "action_required"}:
+                  failures.append((name, result))
+              elif name in allowed_skipped and result == "skipped":
+                  continue
               elif name not in allowed_skipped and result not in {"success", "skipped"}:
                   failures.append((name, result))
-          turbo = needs.get("detect-release-scope", {}).get("outputs", {})
-          if turbo:
+          if scope_outputs:
               lines.extend([
                   "",
                   "### Release Scope",
-                  f"- TurboQuant required: `{turbo.get('turboquant_required', 'unknown')}`",
-                  f"- Reason: `{turbo.get('turboquant_reason', 'unknown')}`",
+                  f"- Native hpc1 build required: `{scope_outputs.get('native_build_required', 'unknown')}`",
+                  f"- Native reason: `{scope_outputs.get('native_build_reason', 'unknown')}`",
+                  f"- Native matched path: `{scope_outputs.get('native_matched_file', '')}`",
+                  f"- TurboQuant required: `{scope_outputs.get('turboquant_required', 'unknown')}`",
+                  f"- TurboQuant reason: `{scope_outputs.get('turboquant_reason', 'unknown')}`",
+                  f"- TurboQuant matched path: `{scope_outputs.get('turboquant_matched_file', '')}`",
               ])
           if failures:
               lines.extend(["", "### Failed Stages"])

@@ -61,6 +61,7 @@ nlohmann::json DesiredStateV2Projector::ProjectJson() {
 void DesiredStateV2Projector::CollectInstancesAndDisks() {
   infer_instance_ = FindInstance(InstanceRole::Infer);
   app_instance_ = FindInstance(InstanceRole::App);
+  app_instances_ = FindInstances(InstanceRole::App);
   skills_instance_ = FindInstance(InstanceRole::Skills);
   browsing_instance_ = FindInstance(InstanceRole::Browsing);
   worker_instances_ = FindWorkerInstances();
@@ -106,21 +107,31 @@ void DesiredStateV2Projector::ProjectPlacement() {
 }
 
 void DesiredStateV2Projector::ProjectFeatures() {
-  if (!state_.turboquant.has_value()) {
+  if (!state_.turboquant.has_value() && !state_.context_compression.has_value()) {
     return;
   }
-  nlohmann::json turboquant = {
-      {"enabled", state_.turboquant->enabled},
-  };
-  if (state_.turboquant->cache_type_k.has_value()) {
-    turboquant["cache_type_k"] = *state_.turboquant->cache_type_k;
+  nlohmann::json features = nlohmann::json::object();
+  if (state_.turboquant.has_value()) {
+    nlohmann::json turboquant = {
+        {"enabled", state_.turboquant->enabled},
+    };
+    if (state_.turboquant->cache_type_k.has_value()) {
+      turboquant["cache_type_k"] = *state_.turboquant->cache_type_k;
+    }
+    if (state_.turboquant->cache_type_v.has_value()) {
+      turboquant["cache_type_v"] = *state_.turboquant->cache_type_v;
+    }
+    features["turboquant"] = std::move(turboquant);
   }
-  if (state_.turboquant->cache_type_v.has_value()) {
-    turboquant["cache_type_v"] = *state_.turboquant->cache_type_v;
+  if (state_.context_compression.has_value()) {
+    features["context_compression"] = {
+        {"enabled", state_.context_compression->enabled},
+        {"mode", state_.context_compression->mode},
+        {"target", state_.context_compression->target},
+        {"memory_priority", state_.context_compression->memory_priority},
+    };
   }
-  value_["features"] = {
-      {"turboquant", std::move(turboquant)},
-  };
+  value_["features"] = std::move(features);
 }
 
 void DesiredStateV2Projector::ProjectKnowledge() {
@@ -241,6 +252,9 @@ void DesiredStateV2Projector::ProjectInteraction() {
 
   const auto& interaction = *state_.interaction;
   nlohmann::json interaction_json = nlohmann::json::object();
+  if (interaction.image.has_value() && !interaction.image->empty()) {
+    interaction_json["image"] = *interaction.image;
+  }
   if (interaction.system_prompt.has_value() && !interaction.system_prompt->empty()) {
     interaction_json["system_prompt"] = *interaction.system_prompt;
   }
@@ -409,35 +423,74 @@ void DesiredStateV2Projector::ProjectWorker() {
 }
 
 void DesiredStateV2Projector::ProjectApp() {
-  if (app_instance_ == nullptr) {
+  if (app_instances_.empty()) {
     value_["app"] = {{"enabled", false}};
     return;
   }
 
-  nlohmann::json app = {
-      {"enabled", true},
-      {"image", app_instance_->image},
+  nlohmann::json apps = nlohmann::json::array();
+  const bool multi_app = app_instances_.size() > 1;
+  const auto build_app_json = [&](const InstanceSpec& instance, bool primary) {
+    nlohmann::json app = {
+        {"enabled", true},
+        {"image", instance.image},
+    };
+    if (multi_app || !primary) {
+      app["name"] = instance.environment.contains("NAIM_APP_NAME")
+                        ? instance.environment.at("NAIM_APP_NAME")
+                        : instance.name;
+      app["primary"] = primary;
+    }
+    const auto start = ProjectorSupport::ProjectServiceStart(instance, std::string{});
+    if (!start.is_null()) {
+      app["start"] = start;
+    }
+    const auto env = ProjectorSupport::ProjectCustomEnv(instance, true);
+    if (!env.empty()) {
+      app["env"] = env;
+    }
+    const auto publish = ProjectorSupport::ProjectPublishedPorts(instance);
+    if (!publish.empty()) {
+      app["publish"] = publish;
+    }
+    if (instance.node_name != DefaultNodeName()) {
+      app["node"] = instance.node_name;
+    }
+    const auto app_disk = FindDiskByName(instance.private_disk_name);
+    const auto volumes = ProjectorSupport::ProjectAppVolumes(app_disk);
+    if (!volumes.empty()) {
+      app["volumes"] = std::move(volumes);
+    }
+    return app;
   };
-  const auto start = ProjectorSupport::ProjectServiceStart(*app_instance_, std::string{});
-  if (!start.is_null()) {
-    app["start"] = start;
+
+  const InstanceSpec* primary_app = nullptr;
+  for (const auto* instance : app_instances_) {
+    if (instance == nullptr) {
+      continue;
+    }
+    const auto it = instance->environment.find("NAIM_APP_PRIMARY");
+    if (it != instance->environment.end() && it->second == "true") {
+      primary_app = instance;
+      break;
+    }
   }
-  if (!app_instance_->environment.empty()) {
-    app["env"] = app_instance_->environment;
+  if (primary_app == nullptr) {
+    primary_app = app_instances_.front();
   }
-  const auto publish = ProjectorSupport::ProjectPublishedPorts(*app_instance_);
-  if (!publish.empty()) {
-    app["publish"] = publish;
+
+  for (const auto* instance : app_instances_) {
+    if (instance == nullptr) {
+      continue;
+    }
+    apps.push_back(build_app_json(*instance, instance == primary_app));
   }
-  if (app_instance_->node_name != DefaultNodeName()) {
-    app["node"] = app_instance_->node_name;
+
+  if (apps.size() == 1) {
+    value_["app"] = apps.front();
+    return;
   }
-  const auto app_disk = FindDiskByName(app_instance_->private_disk_name);
-  const auto volumes = ProjectorSupport::ProjectAppVolumes(app_disk);
-  if (!volumes.empty()) {
-    app["volumes"] = std::move(volumes);
-  }
-  value_["app"] = std::move(app);
+  value_["apps"] = std::move(apps);
 }
 
 void DesiredStateV2Projector::ProjectSkills() {
@@ -618,6 +671,16 @@ const InstanceSpec* DesiredStateV2Projector::FindInstance(InstanceRole role) con
     }
   }
   return nullptr;
+}
+
+std::vector<const InstanceSpec*> DesiredStateV2Projector::FindInstances(InstanceRole role) const {
+  std::vector<const InstanceSpec*> instances;
+  for (const auto& instance : state_.instances) {
+    if (instance.role == role) {
+      instances.push_back(&instance);
+    }
+  }
+  return instances;
 }
 
 std::vector<const InstanceSpec*> DesiredStateV2Projector::FindWorkerInstances() const {

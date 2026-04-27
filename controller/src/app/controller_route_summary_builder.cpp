@@ -17,6 +17,10 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
       "/api/v1/bundles/apply",
   });
   AppendRoutes(routes, {
+      "/api/v1/protocols",
+      "/api/v1/protocols/<protocol_id>",
+  });
+  AppendRoutes(routes, {
       "/api/v1/model-library",
       "/api/v1/model-library/download",
       "/api/v1/model-library/jobs/stop",
@@ -70,6 +74,11 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
   }
   AppendRoutes(routes, {
       "/api/v1/planes/<plane>/skills",
+      "/api/v1/planes/<plane>/knowledge-vault/blocks",
+      "/api/v1/planes/<plane>/knowledge-vault/source-ingest",
+      "/api/v1/planes/<plane>/knowledge-vault/jobs",
+      "/api/v1/planes/<plane>/knowledge-vault/jobs/<job_id>",
+      "/api/v1/planes/<plane>/knowledge-vault/jobs/<job_id>/events",
       "/api/v1/skills-factory",
       "/api/v1/skills-factory/<skill>",
   });

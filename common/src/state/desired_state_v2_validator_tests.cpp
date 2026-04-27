@@ -170,11 +170,22 @@ int main() {
       Expect(state.turboquant.has_value(), "turboquant-defaults: turboquant missing");
       Expect(state.turboquant->enabled, "turboquant-defaults: turboquant should be enabled");
       Expect(
-          state.turboquant->cache_type_k == std::optional<std::string>("planar3"),
-          "turboquant-defaults: cache_type_k should default to planar3");
+          state.turboquant->cache_type_k == std::optional<std::string>("turbo4"),
+          "turboquant-defaults: cache_type_k should default to turbo4");
       Expect(
-          state.turboquant->cache_type_v == std::optional<std::string>("f16"),
-          "turboquant-defaults: cache_type_v should default to f16");
+          state.turboquant->cache_type_v == std::optional<std::string>("turbo4"),
+          "turboquant-defaults: cache_type_v should default to turbo4");
+      Expect(FindInstance(state, "infer-turboquant-defaults")
+                     .environment.at("NAIM_LLAMA_RUNTIME_FLAVOR") == "turboquant",
+             "turboquant-defaults: infer should use turboquant runtime flavor");
+      Expect(FindInstance(state, "worker-turboquant-defaults")
+                     .environment.at("NAIM_LLAMA_RUNTIME_FLAVOR") == "turboquant",
+             "turboquant-defaults: worker should use turboquant runtime flavor");
+      const auto runtime_config = json::parse(
+          naim::RenderInferRuntimeConfigJsonForInstance(state, "infer-turboquant-defaults"));
+      Expect(runtime_config.at("inference").at("runtime_flavor").get<std::string>() ==
+                 "turboquant",
+             "turboquant-defaults: infer runtime config should use turboquant flavor");
       std::cout << "ok: turboquant-defaults" << '\n';
     }
 
@@ -217,6 +228,85 @@ int main() {
     }
 
     {
+      const json context_compression_defaults{
+          {"version", 2},
+          {"plane_name", "context-compression-defaults"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-context-compression"},
+           }},
+          {"features", {{"context_compression", {{"enabled", true}}}}},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(
+          context_compression_defaults,
+          "context-compression-defaults");
+      Expect(
+          state.context_compression.has_value(),
+          "context-compression-defaults: context_compression missing");
+      Expect(
+          state.context_compression->enabled,
+          "context-compression-defaults: feature should be enabled");
+      Expect(
+          state.context_compression->mode == "auto",
+          "context-compression-defaults: mode should default to auto");
+      Expect(
+          state.context_compression->target == "dialog_and_knowledge",
+          "context-compression-defaults: target should default to dialog_and_knowledge");
+      Expect(
+          state.context_compression->memory_priority == "balanced",
+          "context-compression-defaults: memory_priority should default to balanced");
+      std::cout << "ok: context-compression-defaults" << '\n';
+    }
+
+    {
+      ExpectInvalid(
+          json{
+              {"version", 2},
+              {"plane_name", "context-compression-invalid-mode"},
+              {"plane_mode", "llm"},
+              {"model",
+               {
+                   {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                   {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                   {"served_model_name", "qwen-invalid-mode"},
+               }},
+              {"features",
+               {{"context_compression",
+                 {{"enabled", true},
+                  {"mode", "manual"},
+                  {"target", "dialog_and_knowledge"},
+                  {"memory_priority", "balanced"}}}}},
+              {"runtime",
+               {{"engine", "llama.cpp"},
+                {"distributed_backend", "llama_rpc"},
+                {"workers", 1}}},
+              {"infer", {{"replicas", 1}}},
+              {"app", {{"enabled", false}}},
+          },
+          "context-compression-invalid-mode");
+    }
+
+    {
+      ExpectInvalid(
+          json{
+              {"version", 2},
+              {"plane_name", "context-compression-compute"},
+              {"plane_mode", "compute"},
+              {"features", {{"context_compression", {{"enabled", true}}}}},
+              {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+              {"app", {{"enabled", false}}},
+          },
+          "context-compression-compute");
+    }
+
+    {
       const json state_file_v2{
           {"version", 2},
           {"plane_name", "thinking-flag"},
@@ -230,9 +320,9 @@ int main() {
           {"interaction",
            {
                {"thinking_enabled", true},
-               {"default_response_language", "ru"},
+               {"default_response_language", "es"},
                {"follow_user_language", true},
-               {"supported_response_languages", json::array({"ru", "en"})},
+               {"supported_response_languages", json::array({"es", "en"})},
            }},
           {"runtime",
            {
@@ -306,8 +396,9 @@ int main() {
              "llm-backend-only: local path not rendered");
       Expect(state.worker_group.expected_workers == 1,
              "llm-backend-only: expected_workers should be 1");
-      Expect(state.instances.size() == 3,
-             "llm-backend-only: expected aggregator + leaf infer + worker");
+      Expect(state.instances.size() == 4,
+             "llm-backend-only: expected aggregator + leaf infer + worker + interaction, got " +
+                 std::to_string(state.instances.size()));
       std::cout << "ok: llm-backend-only" << '\n';
     }
 
@@ -473,8 +564,8 @@ int main() {
              "split-topology: source_urls should contain 2 items");
       Expect(state.bootstrap_model->target_filename == std::optional<std::string>("model.gguf"),
              "split-topology: target_filename mismatch");
-      Expect(state.instances.size() == 5,
-             "split-topology: expected aggregator + 2 leaf infers + 2 workers");
+      Expect(state.instances.size() == 6,
+             "split-topology: expected aggregator + 2 leaf infers + 2 workers + interaction");
       Expect(FindInstance(state, "infer-split-backend").node_name == "infer-hostd",
              "split-topology: infer node mismatch");
       Expect(FindInstance(state, "infer-split-backend-a").node_name == "worker-hostd-a",
@@ -555,12 +646,18 @@ int main() {
                      .environment.at("NAIM_WORKER_BOOT_MODE") == "llama-rpc",
              "llama-rpc-backend: worker boot mode mismatch");
       Expect(FindInstance(state, "worker-llama-rpc-backend-a")
+                     .environment.at("NAIM_LLAMA_RUNTIME_FLAVOR") == "default",
+             "llama-rpc-backend: worker runtime flavor mismatch");
+      Expect(FindInstance(state, "worker-llama-rpc-backend-a")
                      .environment.at("NAIM_WORKER_RPC_PORT") ==
                  std::to_string(expected_rpc_port),
              "llama-rpc-backend: worker rpc env mismatch");
       Expect(FindInstance(state, "infer-llama-rpc-backend")
                      .environment.at("NAIM_INFER_RUNTIME_BACKEND") == "llama-rpc-head",
              "llama-rpc-backend: infer backend mismatch");
+      Expect(FindInstance(state, "infer-llama-rpc-backend")
+                     .environment.at("NAIM_LLAMA_RUNTIME_FLAVOR") == "default",
+             "llama-rpc-backend: infer runtime flavor mismatch");
       Expect(FindInstance(state, "infer-llama-rpc-backend")
                      .environment.at("NAIM_INSTANCE_SUBROLE") == "aggregator",
              "llama-rpc-backend: primary infer should be aggregator");
@@ -1038,8 +1135,8 @@ int main() {
            }},
       };
       const auto state = RenderValid(llm_with_app, "llm-with-app");
-      Expect(state.instances.size() == 4,
-             "llm-with-app: expected app + aggregator + leaf infer + worker");
+      Expect(state.instances.size() == 5,
+             "llm-with-app: expected app + aggregator + leaf infer + worker + interaction");
       Expect(FindInstance(state, "app-llm-app").image == "example/app:dev",
              "llm-with-app: app image mismatch");
       std::cout << "ok: llm-with-app" << '\n';
@@ -1128,8 +1225,8 @@ int main() {
       const auto state = RenderValid(llm_with_skills, "llm-with-skills");
       Expect(state.skills.has_value() && state.skills->enabled,
              "llm-with-skills: state.skills.enabled should be true");
-      Expect(state.instances.size() == 4,
-             "llm-with-skills: expected aggregator + leaf infer + worker + skills");
+      Expect(state.instances.size() == 5,
+             "llm-with-skills: expected aggregator + leaf infer + worker + skills + interaction");
       const auto skills = FindInstance(state, "skills-llm-with-skills");
       Expect(skills.role == naim::InstanceRole::Skills,
              "llm-with-skills: skills instance role mismatch");
@@ -1219,8 +1316,8 @@ int main() {
       const auto state = RenderValid(llm_with_browsing, "llm-with-browsing");
       Expect(state.browsing.has_value() && state.browsing->enabled,
              "llm-with-browsing: state.browsing.enabled should be true");
-      Expect(state.instances.size() == 4,
-             "llm-with-browsing: expected aggregator + leaf infer + worker + browsing");
+      Expect(state.instances.size() == 5,
+             "llm-with-browsing: expected aggregator + leaf infer + worker + browsing + interaction");
       const auto browsing = FindInstance(state, "webgateway-llm-with-browsing");
       Expect(browsing.role == naim::InstanceRole::Browsing,
              "llm-with-browsing: browsing instance role mismatch");
@@ -1742,6 +1839,60 @@ int main() {
             {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
         },
         "placement-app-host-rejects-mixed-auth");
+
+    {
+      const json multi_app_plane{
+          {"version", 2},
+          {"plane_name", "multi-app-plane"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-multi-app"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"apps",
+           json::array(
+               {{{"name", "chat"},
+                 {"primary", true},
+                 {"enabled", true},
+                 {"image", "example/app:dev"}},
+                {{"name", "market-ingest"},
+                 {"enabled", true},
+                 {"image", "example/app:dev"},
+                 {"start", {{"type", "script"}, {"script_ref", "node market-collector.js"}}}}})},
+      };
+      const auto state = RenderValid(multi_app_plane, "multi-app-plane");
+      const auto primary = FindInstance(state, "app-multi-app-plane");
+      const auto collector = FindInstance(state, "app-multi-app-plane-market-ingest");
+      Expect(primary.role == naim::InstanceRole::App,
+             "multi-app-plane: primary app role mismatch");
+      Expect(primary.environment.at("NAIM_APP_PRIMARY") == "true",
+             "multi-app-plane: primary app should be flagged");
+      Expect(collector.environment.at("NAIM_APP_NAME") == "market-ingest",
+             "multi-app-plane: collector app env mismatch");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.contains("apps"), "multi-app-plane: projector should emit apps");
+      Expect(projected.at("apps").size() == 2,
+             "multi-app-plane: projector should emit two apps");
+      std::cout << "ok: multi-app-plane" << '\n';
+    }
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "duplicate-app-names"},
+            {"plane_mode", "compute"},
+            {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+            {"apps",
+             json::array(
+                 {{{"name", "collector"}, {"enabled", true}, {"image", "example/app:dev"}},
+                  {{"name", "collector"}, {"enabled", true}, {"image", "example/app:dev"}}})},
+        },
+        "duplicate-app-names");
 
     return 0;
   } catch (const std::exception& ex) {

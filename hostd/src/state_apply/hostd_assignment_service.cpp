@@ -1,5 +1,6 @@
 #include "state_apply/hostd_assignment_service.h"
 
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
@@ -9,6 +10,29 @@
 #include "state_apply/hostd_assignment_lock.h"
 
 namespace naim::hostd {
+
+namespace {
+
+std::filesystem::path SelfUpdateMarkerPath(
+    const std::string& state_root,
+    const std::string& node_name) {
+  return std::filesystem::path(state_root) / "control" /
+         ("hostd-self-update-scheduled-" + node_name);
+}
+
+void WriteSelfUpdateMarker(
+    const std::string& state_root,
+    const std::string& node_name,
+    int assignment_id) {
+  const auto marker_path = SelfUpdateMarkerPath(state_root, node_name);
+  std::filesystem::create_directories(marker_path.parent_path());
+  std::ofstream out(marker_path, std::ios::binary | std::ios::trunc);
+  if (out.is_open()) {
+    out << assignment_id << "\n";
+  }
+}
+
+}  // namespace
 
 HostdAssignmentService::HostdAssignmentService(
     const IHostdBackendFactory& backend_factory,
@@ -224,20 +248,6 @@ void HostdAssignmentService::ApplyNextAssignment(
               std::to_string(assignment->max_attempts));
       return;
     }
-    if (assignment->assignment_type == "runtime-http-proxy") {
-      support_.ExecuteRuntimeHttpProxy(
-          nlohmann::json::parse(assignment->desired_state_json),
-          node_name,
-          backend.get(),
-          assignment->id);
-      backend->TransitionClaimedHostAssignment(
-          assignment->id,
-          naim::HostAssignmentStatus::Applied,
-          "executed runtime HTTP proxy request on attempt " +
-              std::to_string(assignment->attempt_count) + "/" +
-              std::to_string(assignment->max_attempts));
-      return;
-    }
     if (assignment->assignment_type == "knowledge-vault-apply") {
       support_.ApplyKnowledgeVaultService(
           nlohmann::json::parse(assignment->desired_state_json),
@@ -267,8 +277,8 @@ void HostdAssignmentService::ApplyNextAssignment(
               std::to_string(assignment->max_attempts));
       return;
     }
-    if (assignment->assignment_type == "knowledge-vault-http-proxy") {
-      support_.ExecuteKnowledgeVaultHttpProxy(
+    if (assignment->assignment_type == "runtime-http-proxy") {
+      support_.ExecuteRuntimeHttpProxy(
           nlohmann::json::parse(assignment->desired_state_json),
           node_name,
           backend.get(),
@@ -276,9 +286,41 @@ void HostdAssignmentService::ApplyNextAssignment(
       backend->TransitionClaimedHostAssignment(
           assignment->id,
           naim::HostAssignmentStatus::Applied,
-          "executed knowledge vault HTTP proxy request on attempt " +
+          "proxied runtime HTTP request on attempt " +
               std::to_string(assignment->attempt_count) + "/" +
               std::to_string(assignment->max_attempts));
+      return;
+    }
+    if (assignment->assignment_type == "hostd-self-update") {
+      support_.ExecuteHostSelfUpdate(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          host_private_key_path,
+          backend.get(),
+          assignment->id);
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "scheduled hostd self-update on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      support_.AppendHostdEvent(
+          *backend,
+          "host-assignment",
+          "hostd-self-update-scheduled",
+          "scheduled hostd self-update on node " + node_name,
+          nlohmann::json{
+              {"assignment_type", assignment->assignment_type},
+              {"attempt_count", assignment->attempt_count},
+              {"max_attempts", assignment->max_attempts},
+          },
+          assignment->plane_name,
+          node_name,
+          "",
+          assignment->id,
+          std::nullopt,
+          "info");
+      WriteSelfUpdateMarker(state_root, node_name, assignment->id);
       return;
     }
 

@@ -22,14 +22,18 @@ constexpr int kDefaultWorkerPrivateDiskSizeGb = 2;
 constexpr int kDefaultAppPrivateDiskSizeGb = 8;
 constexpr int kDefaultSkillsPrivateDiskSizeGb = 1;
 constexpr int kDefaultWebGatewayPrivateDiskSizeGb = 1;
+constexpr int kDefaultInteractionPrivateDiskSizeGb = 1;
 constexpr int kSkillsContainerPort = 18120;
 constexpr int kSkillsPublishedPortBase = 24000;
 constexpr int kSkillsPublishedPortSpan = 10000;
 constexpr int kWebGatewayContainerPort = 18130;
 constexpr int kWebGatewayPublishedPortBase = 34000;
 constexpr int kWebGatewayPublishedPortSpan = 10000;
-constexpr std::string_view kTurboQuantDefaultCacheTypeK = "planar3";
-constexpr std::string_view kTurboQuantDefaultCacheTypeV = "f16";
+constexpr int kInteractionContainerPort = 18110;
+constexpr int kInteractionPublishedPortBase = 44000;
+constexpr int kInteractionPublishedPortSpan = 10000;
+constexpr std::string_view kTurboQuantDefaultCacheTypeK = "turbo4";
+constexpr std::string_view kTurboQuantDefaultCacheTypeV = "turbo4";
 
 bool HasExplicitPrivateStorage(
     const nlohmann::json& service_json,
@@ -37,6 +41,10 @@ bool HasExplicitPrivateStorage(
   return (service_json.contains("storage") && service_json.at("storage").is_object()) ||
          (service_json.contains(legacy_volume_key) && service_json.at(legacy_volume_key).is_array() &&
           !service_json.at(legacy_volume_key).empty());
+}
+
+std::string LlamaRuntimeFlavor(const DesiredState& state) {
+  return state.turboquant.has_value() && state.turboquant->enabled ? "turboquant" : "default";
 }
 
 std::string PlacementExecutionNodeName(const nlohmann::json& placement) {
@@ -70,9 +78,7 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
           resources_json_.contains("worker") && resources_json_.at("worker").is_object()
               ? resources_json_.at("worker")
               : nlohmann::json::object()),
-      app_json_(
-          value.contains("app") && value.at("app").is_object() ? value.at("app")
-                                                                : nlohmann::json::object()),
+      app_json_(nlohmann::json::object()),
       skills_json_(
           value.contains("skills") && value.at("skills").is_object() ? value.at("skills")
                                                                       : nlohmann::json::object()),
@@ -87,7 +93,29 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
               : nlohmann::json::object()),
       features_json_(
           value.contains("features") && value.at("features").is_object() ? value.at("features")
-                                                                          : nlohmann::json::object()) {}
+                                                                          : nlohmann::json::object()) {
+  if (value.contains("apps") && value.at("apps").is_array()) {
+    for (const auto& item : value.at("apps")) {
+      if (item.is_object()) {
+        apps_json_.push_back(item);
+      }
+    }
+  } else if (value.contains("app") && value.at("app").is_object()) {
+    apps_json_.push_back(value.at("app"));
+  }
+
+  if (!apps_json_.empty()) {
+    const auto primary_it = std::find_if(
+        apps_json_.begin(),
+        apps_json_.end(),
+        [](const nlohmann::json& app_json) {
+          return app_json.value("primary", false);
+        });
+    app_json_ = primary_it != apps_json_.end() ? *primary_it : apps_json_.front();
+  } else {
+    app_json_ = nlohmann::json::object();
+  }
+}
 
 DesiredState DesiredStateV2Renderer::RenderState() {
   RenderIdentity();
@@ -105,6 +133,7 @@ DesiredState DesiredStateV2Renderer::RenderState() {
   RenderAppInstance();
   RenderSkillsInstance();
   RenderWebGatewayInstance();
+  RenderInteractionInstance();
   return state_;
 }
 
@@ -230,23 +259,39 @@ void DesiredStateV2Renderer::RenderPlacement() {
 }
 
 void DesiredStateV2Renderer::RenderFeatures() {
-  if (!features_json_.contains("turboquant") ||
-      !features_json_.at("turboquant").is_object()) {
-    return;
+  if (features_json_.contains("turboquant") &&
+      features_json_.at("turboquant").is_object()) {
+    const auto& turboquant_json = features_json_.at("turboquant");
+    if (turboquant_json.value("enabled", false)) {
+      TurboQuantFeatureSpec turboquant;
+      turboquant.enabled = true;
+      turboquant.cache_type_k = turboquant_json.value(
+          "cache_type_k",
+          std::string(kTurboQuantDefaultCacheTypeK));
+      turboquant.cache_type_v = turboquant_json.value(
+          "cache_type_v",
+          std::string(kTurboQuantDefaultCacheTypeV));
+      state_.turboquant = std::move(turboquant);
+    }
   }
-  const auto& turboquant_json = features_json_.at("turboquant");
-  if (!turboquant_json.value("enabled", false)) {
-    return;
+  if (features_json_.contains("context_compression") &&
+      features_json_.at("context_compression").is_object()) {
+    const auto& context_compression_json = features_json_.at("context_compression");
+    if (context_compression_json.value("enabled", false)) {
+      ContextCompressionFeatureSpec context_compression;
+      context_compression.enabled = true;
+      context_compression.mode = context_compression_json.value(
+          "mode",
+          context_compression.mode);
+      context_compression.target = context_compression_json.value(
+          "target",
+          context_compression.target);
+      context_compression.memory_priority = context_compression_json.value(
+          "memory_priority",
+          context_compression.memory_priority);
+      state_.context_compression = std::move(context_compression);
+    }
   }
-  TurboQuantFeatureSpec turboquant;
-  turboquant.enabled = true;
-  turboquant.cache_type_k = turboquant_json.value(
-      "cache_type_k",
-      std::string(kTurboQuantDefaultCacheTypeK));
-  turboquant.cache_type_v = turboquant_json.value(
-      "cache_type_v",
-      std::string(kTurboQuantDefaultCacheTypeV));
-  state_.turboquant = std::move(turboquant);
 }
 
 void DesiredStateV2Renderer::RenderHooks() {
@@ -356,6 +401,9 @@ void DesiredStateV2Renderer::RenderInteraction() {
 
   InteractionSettings interaction;
   const auto& interaction_json = value_.at("interaction");
+  if (interaction_json.contains("image") && interaction_json.at("image").is_string()) {
+    interaction.image = interaction_json.at("image").get<std::string>();
+  }
   if (interaction_json.contains("system_prompt") && interaction_json.at("system_prompt").is_string()) {
     interaction.system_prompt = interaction_json.at("system_prompt").get<std::string>();
   }
@@ -378,7 +426,7 @@ void DesiredStateV2Renderer::RenderInteraction() {
     interaction.supported_response_languages =
         interaction_json.at("supported_response_languages").get<std::vector<std::string>>();
   } else {
-    interaction.supported_response_languages = {"en", "de", "uk", "ru"};
+    interaction.supported_response_languages = {"en", "es", "pt", "zh"};
   }
   interaction.completion_policy = DefaultCompletionPolicy();
   interaction.long_completion_policy = DefaultLongCompletionPolicy();
@@ -541,6 +589,7 @@ void DesiredStateV2Renderer::RenderInferInstance() {
          infer_index == 0 && infer_count > 1 ? "aggregator" : "infer"},
         {"NAIM_NODE_NAME", infer.node_name},
         {"NAIM_INFER_RUNTIME_BACKEND", DefaultInferRuntimeBackend()},
+        {"NAIM_LLAMA_RUNTIME_FLAVOR", LlamaRuntimeFlavor(state_)},
         {"NAIM_CONTROLLER_URL", "http://controller.internal:18080"},
         {"NAIM_CONTROL_ROOT", state_.control_root},
         {"NAIM_INFER_RUNTIME_CONFIG",
@@ -638,6 +687,7 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
         {"NAIM_INFER_INSTANCE_NAME", InferInstanceNameForWorker(worker_index)},
         {"NAIM_CONTROL_ROOT", state_.control_root},
         {"NAIM_DISTRIBUTED_BACKEND", state_.inference.distributed_backend},
+        {"NAIM_LLAMA_RUNTIME_FLAVOR", LlamaRuntimeFlavor(state_)},
         {"NAIM_SHARED_DISK_PATH", "/naim/shared"},
         {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
         {"NAIM_WORKER_RUNTIME_STATUS_PATH", "/naim/private/worker-runtime-status.json"},
@@ -715,71 +765,88 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
 }
 
 void DesiredStateV2Renderer::RenderAppInstance() {
-  if (!value_.contains("app") || !value_.at("app").is_object() ||
-      !value_.at("app").value("enabled", true)) {
+  if (apps_json_.empty()) {
     return;
   }
 
-  InstanceSpec app;
-  app.name = BuildAppInstanceName();
-  app.role = InstanceRole::App;
-  app.plane_name = state_.plane_name;
-  app.node_name = ResolveAppNodeName();
-  app.image = app_json_.value("image", std::string{});
-  if (app_json_.contains("start") && app_json_.at("start").is_object()) {
-    const auto& start = app_json_.at("start");
-    const auto start_type = start.value("type", std::string("command"));
-    if (start_type == "script") {
-      app.command = BuildAppCommandFromScriptRef(start.value("script_ref", std::string{}));
-    } else {
-      app.command = start.value("command", std::string{});
+  for (std::size_t index = 0; index < apps_json_.size(); ++index) {
+    const auto& app_entry = apps_json_.at(index);
+    if (!app_entry.value("enabled", true)) {
+      continue;
     }
-  }
-  app.private_disk_name = app.name + "-private";
-  app.shared_disk_name = state_.plane_shared_disk_name;
-  if (!infer_names_.empty()) {
-    app.depends_on.push_back(infer_names_.front());
-  }
-  if (app_json_.contains("env") && app_json_.at("env").is_object()) {
-    app.environment = app_json_.at("env").get<std::map<std::string, std::string>>();
-  }
-  app.labels = {
-      {"naim.plane", state_.plane_name},
-      {"naim.role", "app"},
-      {"naim.node", app.node_name},
-  };
-  if (app_json_.contains("publish") && app_json_.at("publish").is_array()) {
-    for (const auto& port_json : app_json_.at("publish")) {
-      app.published_ports.push_back(PublishedPort{
-          port_json.value("host_ip", std::string("127.0.0.1")),
-          port_json.value("host_port", 0),
-          port_json.value("container_port", 0),
-      });
+
+    const bool primary = app_entry.value("primary", false) || index == 0;
+    const std::string app_name =
+        app_entry.value("name", primary ? std::string("primary")
+                                        : "app-" + std::to_string(index));
+
+    InstanceSpec app;
+    app.name = BuildAppInstanceName(app_name, primary);
+    app.role = InstanceRole::App;
+    app.plane_name = state_.plane_name;
+    app.node_name = ResolveAppNodeName(app_entry);
+    app.image = app_entry.value("image", std::string{});
+    if (app_entry.contains("start") && app_entry.at("start").is_object()) {
+      const auto& start = app_entry.at("start");
+      const auto start_type = start.value("type", std::string("command"));
+      if (start_type == "script") {
+        app.command = BuildAppCommandFromScriptRef(start.value("script_ref", std::string{}));
+      } else {
+        app.command = start.value("command", std::string{});
+      }
     }
-  }
-  ApplyExternalAppHostMetadata(&app, "app");
+    app.private_disk_name = app.name + "-private";
+    app.shared_disk_name = state_.plane_shared_disk_name;
+    if (!infer_names_.empty()) {
+      app.depends_on.push_back(infer_names_.front());
+    }
+    if (app_entry.contains("env") && app_entry.at("env").is_object()) {
+      app.environment = app_entry.at("env").get<std::map<std::string, std::string>>();
+    }
+    app.environment["NAIM_APP_NAME"] = app_name;
+    app.environment["NAIM_APP_PRIMARY"] = primary ? "true" : "false";
+    app.labels = {
+        {"naim.plane", state_.plane_name},
+        {"naim.role", "app"},
+        {"naim.node", app.node_name},
+        {"naim.app_name", app_name},
+        {"naim.app_primary", primary ? "true" : "false"},
+    };
+    if (app_entry.contains("publish") && app_entry.at("publish").is_array()) {
+      for (const auto& port_json : app_entry.at("publish")) {
+        app.published_ports.push_back(PublishedPort{
+            port_json.value("host_ip", std::string("127.0.0.1")),
+            port_json.value("host_port", 0),
+            port_json.value("container_port", 0),
+        });
+      }
+    }
+    if (primary) {
+      ApplyExternalAppHostMetadata(&app, "app");
+    }
 
-  const int app_private_disk_size_gb =
-      ExtractPrivateDiskSizeGb(app_json_, kDefaultAppPrivateDiskSizeGb, "volumes");
-  const std::string app_private_mount_path =
-      ExtractPrivateMountPath(app_json_, "/naim/private", "volumes");
-  if (app_json_.contains("volumes") && app_json_.at("volumes").is_array() &&
-      app_json_.at("volumes").size() > 1) {
-    throw std::runtime_error("desired-state v2 currently supports at most one app volume");
-  }
-  app.private_disk_size_gb = app_private_disk_size_gb;
-  state_.instances.push_back(app);
+    const int app_private_disk_size_gb =
+        ExtractPrivateDiskSizeGb(app_entry, kDefaultAppPrivateDiskSizeGb, "volumes");
+    const std::string app_private_mount_path =
+        ExtractPrivateMountPath(app_entry, "/naim/private", "volumes");
+    if (app_entry.contains("volumes") && app_entry.at("volumes").is_array() &&
+        app_entry.at("volumes").size() > 1) {
+      throw std::runtime_error("desired-state v2 currently supports at most one app volume");
+    }
+    app.private_disk_size_gb = app_private_disk_size_gb;
+    state_.instances.push_back(app);
 
-  DiskSpec app_private_disk;
-  app_private_disk.name = app.private_disk_name;
-  app_private_disk.kind = DiskKind::AppPrivate;
-  app_private_disk.plane_name = state_.plane_name;
-  app_private_disk.owner_name = app.name;
-  app_private_disk.node_name = app.node_name;
-  app_private_disk.host_path = BuildInstancePrivateHostPath(app.name);
-  app_private_disk.container_path = app_private_mount_path;
-  app_private_disk.size_gb = app_private_disk_size_gb;
-  state_.disks.push_back(std::move(app_private_disk));
+    DiskSpec app_private_disk;
+    app_private_disk.name = app.private_disk_name;
+    app_private_disk.kind = DiskKind::AppPrivate;
+    app_private_disk.plane_name = state_.plane_name;
+    app_private_disk.owner_name = app.name;
+    app_private_disk.node_name = app.node_name;
+    app_private_disk.host_path = BuildInstancePrivateHostPath(app.name);
+    app_private_disk.container_path = app_private_mount_path;
+    app_private_disk.size_gb = app_private_disk_size_gb;
+    state_.disks.push_back(std::move(app_private_disk));
+  }
 }
 
 void DesiredStateV2Renderer::RenderSkillsInstance() {
@@ -944,6 +1011,64 @@ void DesiredStateV2Renderer::RenderWebGatewayInstance() {
   state_.disks.push_back(std::move(browsing_private_disk));
 }
 
+void DesiredStateV2Renderer::RenderInteractionInstance() {
+  if (state_.plane_mode != PlaneMode::Llm) {
+    return;
+  }
+
+  InstanceSpec interaction;
+  interaction.name = BuildInteractionInstanceName();
+  interaction.role = InstanceRole::Interaction;
+  interaction.plane_name = state_.plane_name;
+  interaction.node_name = ResolveInferNodeName();
+  interaction.image =
+      state_.interaction.has_value() && state_.interaction->image.has_value()
+          ? *state_.interaction->image
+          : std::string("naim/interaction-runtime:dev");
+  interaction.command = "/runtime/bin/naim-interactiond";
+  interaction.private_disk_name = interaction.name + "-private";
+  interaction.shared_disk_name =
+      InstanceNeedsSharedDiskMount(interaction.role) ? state_.plane_shared_disk_name : "";
+  interaction.private_disk_size_gb = kDefaultInteractionPrivateDiskSizeGb;
+  interaction.depends_on.push_back(BuildInferInstanceName());
+  interaction.environment = {
+      {"NAIM_PLANE_NAME", state_.plane_name},
+      {"NAIM_INSTANCE_NAME", interaction.name},
+      {"NAIM_INSTANCE_ROLE", "interaction"},
+      {"NAIM_NODE_NAME", interaction.node_name},
+      {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
+      {"NAIM_INTERACTION_PORT", std::to_string(kInteractionContainerPort)},
+      {"NAIM_INTERACTION_RUNTIME_STATUS_PATH", "/naim/private/interaction-runtime-status.json"},
+      {"NAIM_INTERACTION_UPSTREAM_BASE",
+       "http://" + BuildInferInstanceName() + ":" +
+           std::to_string(state_.gateway.listen_port) + "/v1"},
+      {"NAIM_CONTROLLER_URL", "http://controller.internal:18080"},
+      {"NAIM_CONTROL_ROOT", state_.control_root},
+  };
+  interaction.labels = {
+      {"naim.plane", state_.plane_name},
+      {"naim.role", "interaction"},
+      {"naim.node", interaction.node_name},
+  };
+  interaction.published_ports.push_back(PublishedPort{
+      "127.0.0.1",
+      BuildInteractionHostPort(),
+      kInteractionContainerPort,
+  });
+  state_.instances.push_back(interaction);
+
+  DiskSpec interaction_private_disk;
+  interaction_private_disk.name = interaction.private_disk_name;
+  interaction_private_disk.kind = DiskKind::InteractionPrivate;
+  interaction_private_disk.plane_name = state_.plane_name;
+  interaction_private_disk.owner_name = interaction.name;
+  interaction_private_disk.node_name = interaction.node_name;
+  interaction_private_disk.host_path = BuildInstancePrivateHostPath(interaction.name);
+  interaction_private_disk.container_path = "/naim/private";
+  interaction_private_disk.size_gb = interaction.private_disk_size_gb;
+  state_.disks.push_back(std::move(interaction_private_disk));
+}
+
 bool DesiredStateV2Renderer::InferEnabled() const {
   return infer_json_.value(
       "enabled",
@@ -1019,6 +1144,14 @@ std::string DesiredStateV2Renderer::ResolveAppNodeName() const {
     return *legacy_node_name;
   }
   return ResolveInferNodeName();
+}
+
+std::string DesiredStateV2Renderer::ResolveAppNodeName(const nlohmann::json& app_json) const {
+  if (const auto legacy_node_name = ResolveLegacyServiceNodeName(app_json, "app");
+      legacy_node_name.has_value()) {
+    return *legacy_node_name;
+  }
+  return ResolveAppNodeName();
 }
 
 std::string DesiredStateV2Renderer::ResolveWorkerNodeName(int worker_index) const {
@@ -1177,12 +1310,25 @@ std::string DesiredStateV2Renderer::BuildAppInstanceName() const {
   return "app-" + state_.plane_name;
 }
 
+std::string DesiredStateV2Renderer::BuildAppInstanceName(
+    const std::string& app_name,
+    bool primary) const {
+  if (primary) {
+    return BuildAppInstanceName();
+  }
+  return "app-" + state_.plane_name + "-" + NormalizeAppNameToken(app_name);
+}
+
 std::string DesiredStateV2Renderer::BuildSkillsInstanceName() const {
   return "skills-" + state_.plane_name;
 }
 
 std::string DesiredStateV2Renderer::BuildWebGatewayInstanceName() const {
   return "webgateway-" + state_.plane_name;
+}
+
+std::string DesiredStateV2Renderer::BuildInteractionInstanceName() const {
+  return "interaction-" + state_.plane_name;
 }
 
 std::string DesiredStateV2Renderer::BuildPlaneSharedHostPath() const {
@@ -1207,6 +1353,31 @@ std::string DesiredStateV2Renderer::BuildAppCommandFromScriptRef(
   const std::string filename =
       slash == std::string::npos ? stripped : stripped.substr(slash + 1);
   return "/app/" + filename;
+}
+
+std::string DesiredStateV2Renderer::NormalizeAppNameToken(const std::string& value) {
+  std::string token;
+  token.reserve(value.size());
+  for (char ch : value) {
+    if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+      token.push_back(ch);
+      continue;
+    }
+    if (ch >= 'A' && ch <= 'Z') {
+      token.push_back(static_cast<char>(ch - 'A' + 'a'));
+      continue;
+    }
+    if (ch == '-' || ch == '_') {
+      token.push_back('-');
+    }
+  }
+  while (!token.empty() && token.front() == '-') {
+    token.erase(token.begin());
+  }
+  while (!token.empty() && token.back() == '-') {
+    token.pop_back();
+  }
+  return token.empty() ? std::string("extra") : token;
 }
 
 std::string DesiredStateV2Renderer::BuildCommandFromStartSpec(
@@ -1250,6 +1421,13 @@ int DesiredStateV2Renderer::BuildWebGatewayHostPort() const {
       StablePortHash(state_.plane_name + ":" + BuildWebGatewayInstanceName()) %
       kWebGatewayPublishedPortSpan;
   return kWebGatewayPublishedPortBase + static_cast<int>(offset);
+}
+
+int DesiredStateV2Renderer::BuildInteractionHostPort() const {
+  const uint32_t offset =
+      StablePortHash(state_.plane_name + ":" + BuildInteractionInstanceName()) %
+      kInteractionPublishedPortSpan;
+  return kInteractionPublishedPortBase + static_cast<int>(offset);
 }
 
 std::string DesiredStateV2Renderer::DefaultInferRuntimeBackend() const {

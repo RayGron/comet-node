@@ -39,20 +39,43 @@ import {
   isBuiltinSkillsFactoryGroupPath,
   sortSkillsFactoryItems,
 } from "./skillsFactory.js";
+import { KnowledgeCubeGraph } from "./KnowledgeCubeGraph.jsx";
+import {
+  areKnowledgeGraphsEqual,
+  buildPlaneKnowledgeGraphRequest,
+  buildKnowledgeGraphRequest,
+  KNOWLEDGE_GRAPH_LIMIT,
+  normalizeKnowledgeResults,
+  summarizeKnowledgeGraph,
+} from "./knowledgeVault.js";
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
+const FLEET_REFRESH_MS = 2000;
 const MODEL_LIBRARY_ACTIVE_POLL_MS = 1000;
 const MODEL_LIBRARY_BACKGROUND_POLL_MS = 10000;
 const EVENT_LIMIT = 24;
+const REFRESH_EVENT_NAMES = [
+  "host-observation.reported",
+  "host-registry.provisioned",
+  "host-registry.registered",
+  "host-registry.revoked",
+  "host-registry.rotated-key",
+  "host-registry.reset-onboarding",
+  "host-registry.session-opened",
+  "host-registry.storage-role-updated",
+  "host-assignment.applied",
+  "host-assignment.failed",
+  "model-library.downloaded",
+];
 const MODEL_LIBRARY_PAGE_SIZE = 24;
 const MODEL_LIBRARY_JOB_PAGE_SIZE = 8;
 const METRIC_HISTORY_MAX_POINTS = 72;
 const CHAT_LANGUAGE_OPTIONS = [
   { value: "en", label: "English" },
-  { value: "de", label: "Deutsch" },
-  { value: "uk", label: "Українська" },
-  { value: "ru", label: "Русский" },
+  { value: "es", label: "Español" },
+  { value: "pt", label: "Português" },
+  { value: "zh", label: "中文" },
 ];
 
 class HttpError extends Error {
@@ -106,12 +129,24 @@ function modelLibraryJobsPath() {
   return "/api/v1/model-library/jobs";
 }
 
+function knowledgeVaultPath(suffix = "") {
+  return suffix ? `/api/v1/knowledge-vault/${suffix}` : "/api/v1/knowledge-vault/status";
+}
+
+function planeKnowledgeVaultPath(planeName, suffix = "") {
+  return planePath(planeName, `knowledge-vault/${suffix}`);
+}
+
 function hostdHostsPath(nodeName = "") {
   return queryPath("/api/v1/hostd/hosts", { node: nodeName });
 }
 
 function skillsFactoryPath(suffix = "") {
   return suffix ? `/api/v1/skills-factory/${suffix}` : "/api/v1/skills-factory";
+}
+
+function protocolsPath(suffix = "") {
+  return suffix ? `/api/v1/protocols/${suffix}` : "/api/v1/protocols";
 }
 
 function interactionPath(planeName, suffix) {
@@ -328,6 +363,18 @@ function formatTimestamp(value) {
     pad(date.getMonth() + 1),
     date.getFullYear(),
   ].join("/") + ` ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function formatTimeOfDay(value) {
+  if (!value) {
+    return "--:--";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 function yesNo(value) {
@@ -869,6 +916,58 @@ function browsingTraceCompact(browsing) {
     .join(" · ");
 }
 
+function selectedKnowledgeIdsFromDesiredState(desiredState) {
+  return Array.isArray(desiredState?.knowledge?.selected_knowledge_ids)
+    ? desiredState.knowledge.selected_knowledge_ids.filter((item) => typeof item === "string" && item.trim())
+    : [];
+}
+
+function knowledgeContextPolicyFromDesiredState(desiredState) {
+  return desiredState?.knowledge?.context_policy || {};
+}
+
+function compactSkillList(items) {
+  const skills = Array.isArray(items) ? items : [];
+  return skills
+    .map((item) => item?.name || item?.id || item?.skill_id || "")
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(", ");
+}
+
+function buildChatEnrichmentMeta(payload = {}, session = {}, previous = null) {
+  const appliedSkills = payload.applied_skills || session.applied_skills || previous?.appliedSkills || [];
+  const autoAppliedSkills =
+    payload.auto_applied_skills || session.auto_applied_skills || previous?.autoAppliedSkills || [];
+  const knowledge =
+    payload.knowledge ||
+    payload.knowledge_context ||
+    session.knowledge ||
+    session.knowledge_context ||
+    previous?.knowledge ||
+    null;
+  const compression =
+    payload.compression ||
+    payload.compression_state ||
+    session.compression ||
+    session.compression_state ||
+    previous?.compression ||
+    null;
+  const hasPayload =
+    (Array.isArray(appliedSkills) && appliedSkills.length > 0) ||
+    (Array.isArray(autoAppliedSkills) && autoAppliedSkills.length > 0) ||
+    Boolean(knowledge) ||
+    Boolean(compression);
+  return hasPayload
+    ? {
+        appliedSkills,
+        autoAppliedSkills,
+        knowledge,
+        compression,
+      }
+    : previous;
+}
+
 function observedStateForObservation(observation) {
   return observation?.observed_state || {};
 }
@@ -1145,44 +1244,65 @@ export function PlaneEditorDialog({
           </button>
         </div>
         <p className="editor-copy">{editorCopy}</p>
-        {dialog.error ? <div className="error-banner">{dialog.error}</div> : null}
-        {formValidation.errors.length > 0 ? (
-          <div className="error-banner">
-            <strong>Form validation</strong>
-            <ul className="banner-list">
-              {formValidation.errors.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {formValidation.warnings.length > 0 ? (
-          <div className="warning-banner">
-            <strong>Warnings</strong>
-            <ul className="banner-list">
-              {formValidation.warnings.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {showFormBuilder ? (
-          <PlaneV2FormBuilder
-            dialog={dialog}
-            setDialog={setDialog}
-            languageOptions={CHAT_LANGUAGE_OPTIONS}
-            modelLibraryItems={modelLibraryItems || []}
-            hostdHosts={hostdHosts || []}
-            peerLinks={peerLinks || null}
-            skillsFactoryItems={skillsFactoryItems || []}
-            skillsFactoryGroups={skillsFactoryGroups || []}
-            onResetLtCypherDeployment={onResetLtCypherDeployment}
-          />
-        ) : null}
-        {showFormBuilder ? (
-          <details className="plane-advanced-section">
-            <summary className="plane-advanced-summary">Generated JSON</summary>
-            <div className="plane-advanced-body">
+        <div className="plane-editor-scroll">
+          {dialog.error ? <div className="error-banner">{dialog.error}</div> : null}
+          {formValidation.errors.length > 0 ? (
+            <div className="error-banner">
+              <strong>Form validation</strong>
+              <ul className="banner-list">
+                {formValidation.errors.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {formValidation.warnings.length > 0 ? (
+            <div className="warning-banner">
+              <strong>Warnings</strong>
+              <ul className="banner-list">
+                {formValidation.warnings.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {showFormBuilder ? (
+            <PlaneV2FormBuilder
+              dialog={dialog}
+              setDialog={setDialog}
+              languageOptions={CHAT_LANGUAGE_OPTIONS}
+              modelLibraryItems={modelLibraryItems || []}
+              hostdHosts={hostdHosts || []}
+              peerLinks={peerLinks || null}
+              skillsFactoryItems={skillsFactoryItems || []}
+              skillsFactoryGroups={skillsFactoryGroups || []}
+              onResetLtCypherDeployment={onResetLtCypherDeployment}
+            />
+          ) : null}
+          {showFormBuilder ? (
+            <details className="plane-advanced-section plane-generated-json-section">
+              <summary className="plane-advanced-summary">Generated JSON</summary>
+              <div className="plane-advanced-body">
+                <label className="field-label" htmlFor="plane-editor-json">
+                  {desiredStateLabel}
+                </label>
+                <textarea
+                  id="plane-editor-json"
+                  className="editor-textarea"
+                  value={dialog.text}
+                  onChange={(event) =>
+                    setDialog((current) => ({
+                      ...current,
+                      text: event.target.value,
+                    }))
+                  }
+                  readOnly
+                  spellCheck="false"
+                />
+              </div>
+            </details>
+          ) : (
+            <>
               <label className="field-label" htmlFor="plane-editor-json">
                 {desiredStateLabel}
               </label>
@@ -1196,31 +1316,12 @@ export function PlaneEditorDialog({
                     text: event.target.value,
                   }))
                 }
-                readOnly
+                readOnly={readOnly || showFormBuilder}
                 spellCheck="false"
               />
-            </div>
-          </details>
-        ) : (
-          <>
-            <label className="field-label" htmlFor="plane-editor-json">
-              {desiredStateLabel}
-            </label>
-            <textarea
-              id="plane-editor-json"
-              className="editor-textarea"
-              value={dialog.text}
-              onChange={(event) =>
-                setDialog((current) => ({
-                  ...current,
-                  text: event.target.value,
-                }))
-              }
-              readOnly={readOnly || showFormBuilder}
-              spellCheck="false"
-            />
-          </>
-        )}
+            </>
+          )}
+        </div>
         <div className="toolbar">
           {readOnly ? (
             <button
@@ -1781,6 +1882,43 @@ function nodeStatusLabel(runtimeLaunchReady, runtimePhase, health) {
   return health || "unknown";
 }
 
+function nodeConnectivityStatus(host) {
+  const registry = host?.registry || host || {};
+  const runtimeStatus = host?.runtime_status || null;
+  const runtimeAvailable = runtimeStatus?.available === true;
+  const runtimePhase = runtimeStatus?.phase || "";
+  const health = String(host?.status || "").toLowerCase();
+  const sessionState = String(registry?.session_state || "").toLowerCase();
+  const registrationState = String(registry?.registration_state || "").toLowerCase();
+  const onboardingState = String(registry?.onboarding_state || "").toLowerCase();
+
+  if (runtimeAvailable) {
+    return { indicatorClass: "is-healthy", label: "ready" };
+  }
+  if (runtimePhase === "starting" || runtimePhase === "stopping" || runtimePhase === "pending") {
+    return {
+      indicatorClass: runtimeIndicatorClass(false, health),
+      label: runtimePhase,
+    };
+  }
+  if (health === "stale" || health === "failed" || health === "error") {
+    return { indicatorClass: "is-critical", label: health };
+  }
+  if (sessionState === "connected") {
+    return { indicatorClass: "is-healthy", label: "connected" };
+  }
+  if (sessionState === "disconnected") {
+    return { indicatorClass: "is-warning", label: "disconnected" };
+  }
+  if (onboardingState === "pending" || registrationState === "provisioned") {
+    return { indicatorClass: "is-booting", label: "onboarding" };
+  }
+  return {
+    indicatorClass: hostObservationStatusClass(health),
+    label: health || sessionState || registrationState || "unknown",
+  };
+}
+
 function App() {
   const initialPlane = new URLSearchParams(window.location.search).get("plane") || "";
   const initialPage = new URLSearchParams(window.location.search).get("page") || "dashboard";
@@ -1790,7 +1928,7 @@ function App() {
   const [planes, setPlanes] = useState([]);
   const [selectedPlane, setSelectedPlane] = useState(initialPlane);
   const [selectedPage, setSelectedPage] = useState(
-    ["dashboard", "planes", "models", "skills-factory", "access"].includes(initialPage)
+    ["dashboard", "planes", "models", "knowledge-vault", "protocols", "skills-factory", "access"].includes(initialPage)
       ? initialPage
       : "dashboard",
   );
@@ -1821,12 +1959,31 @@ function App() {
   const [hostObservations, setHostObservations] = useState(null);
   const [globalHostObservations, setGlobalHostObservations] = useState(null);
   const [hostdHosts, setHostdHosts] = useState([]);
+  const [protocolRegistry, setProtocolRegistry] = useState({ items: [], summary: {} });
   const [selectedHostNodeName, setSelectedHostNodeName] = useState("");
   const [diskState, setDiskState] = useState(null);
   const [rolloutState, setRolloutState] = useState(null);
   const [rebalancePlan, setRebalancePlan] = useState(null);
   const [events, setEvents] = useState([]);
   const [interactionStatus, setInteractionStatus] = useState(null);
+  const [knowledgeVaultStatus, setKnowledgeVaultStatus] = useState(null);
+  const [knowledgeVaultGraph, setKnowledgeVaultGraph] = useState({
+    nodes: [],
+    edges: [],
+    warnings: [],
+  });
+  const [knowledgeVaultGraphBusy, setKnowledgeVaultGraphBusy] = useState(false);
+  const [knowledgeVaultGraphError, setKnowledgeVaultGraphError] = useState("");
+  const [planeKnowledge, setPlaneKnowledge] = useState({
+    results: [],
+    graph: { nodes: [], edges: [], warnings: [] },
+    busy: false,
+    error: "",
+    resolverPrompt: "",
+    resolverResult: null,
+    resolverBusy: false,
+    resolverError: "",
+  });
   const [modelLibrary, setModelLibrary] = useState({ items: [], roots: [], jobs: [], nodes: [] });
   const [skillsFactory, setSkillsFactory] = useState({
     items: [],
@@ -1843,7 +2000,7 @@ function App() {
   const [selectedTab, setSelectedTab] = useState("status");
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
-  const [chatLanguage, setChatLanguage] = useState("ru");
+  const [chatLanguage, setChatLanguage] = useState("en");
   const [chatBusy, setChatBusy] = useState(false);
   const [chatError, setChatError] = useState("");
   const [metricHistory, setMetricHistory] = useState({});
@@ -1927,6 +2084,20 @@ function App() {
     setRebalancePlan(null);
     setEvents([]);
     setInteractionStatus(null);
+    setKnowledgeVaultStatus(null);
+    setKnowledgeVaultGraph({ nodes: [], edges: [], warnings: [] });
+    setKnowledgeVaultGraphBusy(false);
+    setKnowledgeVaultGraphError("");
+    setPlaneKnowledge({
+      results: [],
+      graph: { nodes: [], edges: [], warnings: [] },
+      busy: false,
+      error: "",
+      resolverPrompt: "",
+      resolverResult: null,
+      resolverBusy: false,
+      resolverError: "",
+    });
     setModelLibrary({ items: [], roots: [], jobs: [], nodes: [] });
     setModelsTab("library");
     setSkillsFactory({
@@ -2089,6 +2260,168 @@ function App() {
     }
   }
 
+  async function refreshKnowledgeVaultGraph() {
+    setKnowledgeVaultGraphBusy(true);
+    setKnowledgeVaultGraphError("");
+    try {
+      const searchPayload = await fetchJson(knowledgeVaultPath("search"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: "",
+          list_all: true,
+          limit: KNOWLEDGE_GRAPH_LIMIT,
+        }),
+      });
+      const results = normalizeKnowledgeResults(searchPayload?.results);
+      const graphRequest = buildKnowledgeGraphRequest(results, [], KNOWLEDGE_GRAPH_LIMIT);
+      if (graphRequest.knowledge_ids.length === 0) {
+        const emptyGraph = { nodes: [], edges: [], warnings: [] };
+        setKnowledgeVaultGraph((current) =>
+          areKnowledgeGraphsEqual(current, emptyGraph) ? current : emptyGraph,
+        );
+        return;
+      }
+      const graphPayload = await fetchJson(knowledgeVaultPath("graph-neighborhood"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(graphRequest),
+      });
+      const nextGraph = {
+        nodes: Array.isArray(graphPayload?.nodes) ? graphPayload.nodes : [],
+        edges: Array.isArray(graphPayload?.edges) ? graphPayload.edges : [],
+        warnings: Array.isArray(graphPayload?.warnings) ? graphPayload.warnings : [],
+      };
+      setKnowledgeVaultGraph((current) =>
+        areKnowledgeGraphsEqual(current, nextGraph) ? current : nextGraph,
+      );
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setKnowledgeVaultGraphError(error.message || String(error));
+      const emptyGraph = { nodes: [], edges: [], warnings: [] };
+      setKnowledgeVaultGraph((current) =>
+        areKnowledgeGraphsEqual(current, emptyGraph) ? current : emptyGraph,
+      );
+    } finally {
+      setKnowledgeVaultGraphBusy(false);
+    }
+  }
+
+  async function refreshPlaneKnowledge() {
+    if (!selectedPlane) {
+      return;
+    }
+    setPlaneKnowledge((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      const searchPayload = await fetchJson(planeKnowledgeVaultPath(selectedPlane, "search"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: "",
+          list_all: true,
+          limit: KNOWLEDGE_GRAPH_LIMIT,
+        }),
+      });
+      const results = normalizeKnowledgeResults(searchPayload?.results);
+      const selectedKnowledgeIds = selectedKnowledgeIdsFromDesiredState(desiredStateV2 || desiredState);
+      const graphRequest = buildPlaneKnowledgeGraphRequest(
+        results,
+        selectedKnowledgeIds,
+        KNOWLEDGE_GRAPH_LIMIT,
+      );
+      let graph = { nodes: [], edges: [], warnings: [] };
+      if (graphRequest.knowledge_ids.length > 0) {
+        const graphPayload = await fetchJson(
+          planeKnowledgeVaultPath(selectedPlane, "graph-neighborhood"),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(graphRequest),
+          },
+        );
+        graph = {
+          nodes: Array.isArray(graphPayload?.nodes) ? graphPayload.nodes : [],
+          edges: Array.isArray(graphPayload?.edges) ? graphPayload.edges : [],
+          warnings: Array.isArray(graphPayload?.warnings) ? graphPayload.warnings : [],
+        };
+      }
+      setPlaneKnowledge((current) => ({
+        ...current,
+        results,
+        graph,
+        busy: false,
+        error: "",
+      }));
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setPlaneKnowledge((current) => ({
+        ...current,
+        results: [],
+        graph: { nodes: [], edges: [], warnings: [] },
+        busy: false,
+        error: error.message || String(error),
+      }));
+    }
+  }
+
+  async function resolvePlaneEnrichment() {
+    if (!selectedPlane || !planeKnowledge.resolverPrompt.trim()) {
+      return;
+    }
+    setPlaneKnowledge((current) => ({
+      ...current,
+      resolverBusy: true,
+      resolverError: "",
+      resolverResult: null,
+    }));
+    try {
+      const payload = await fetchJson(skillsPath(selectedPlane, "resolve-context"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "user",
+              content: planeKnowledge.resolverPrompt.trim(),
+            },
+          ],
+        }),
+      });
+      setPlaneKnowledge((current) => ({
+        ...current,
+        resolverBusy: false,
+        resolverResult: payload,
+        resolverError: "",
+      }));
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setPlaneKnowledge((current) => ({
+        ...current,
+        resolverBusy: false,
+        resolverError: error.message || String(error),
+      }));
+    }
+  }
+
   async function refreshSkillsFactory() {
     try {
       const payload = await fetchJson(skillsFactoryPath());
@@ -2131,11 +2464,24 @@ function App() {
         }),
       );
       const hostdHostsRequest = fetchJson(hostdHostsPath());
+      const knowledgeVaultStatusRequest = fetchJson(knowledgeVaultPath());
+      const protocolRegistryRequest = fetchJson(protocolsPath()).catch(() => ({
+        items: [],
+        summary: {},
+      }));
       if (!planeName) {
-        const [dashboardPayload, globalHostObservationsPayload, hostdHostsPayload] = await Promise.all([
+        const [
+          dashboardPayload,
+          globalHostObservationsPayload,
+          hostdHostsPayload,
+          knowledgeVaultStatusPayload,
+          protocolRegistryPayload,
+        ] = await Promise.all([
           fetchJson(queryPath("/api/v1/dashboard", { stale_after: 30 })),
           globalHostObservationsRequest,
           hostdHostsRequest,
+          knowledgeVaultStatusRequest,
+          protocolRegistryRequest,
         ]);
         const globalObservationItems = hostObservationItemsFromPayload(
           globalHostObservationsPayload,
@@ -2146,6 +2492,8 @@ function App() {
         setHostObservations(null);
         setGlobalHostObservations(globalHostObservationsPayload);
         setHostdHosts(Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : []);
+        setKnowledgeVaultStatus(knowledgeVaultStatusPayload);
+        setProtocolRegistry(protocolRegistryPayload);
         setMetricHistory((current) =>
           appendMetricHistory(
             current,
@@ -2177,6 +2525,8 @@ function App() {
         eventsPayload,
         interactionPayload,
         hostdHostsPayload,
+        knowledgeVaultStatusPayload,
+        protocolRegistryPayload,
       ] = await Promise.all([
         fetchJson(planePath(planeName)),
         fetchJson(planePath(planeName, "dashboard")),
@@ -2203,6 +2553,8 @@ function App() {
         ),
         fetchJson(interactionPath(planeName, "status")),
         hostdHostsRequest,
+        knowledgeVaultStatusRequest,
+        protocolRegistryRequest,
       ]);
 
       setPlaneDetail(planePayload);
@@ -2210,11 +2562,13 @@ function App() {
       setHostObservations(hostObservationsPayload);
       setGlobalHostObservations(globalHostObservationsPayload);
       setHostdHosts(Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : []);
+      setProtocolRegistry(protocolRegistryPayload);
       setDiskState(diskPayload);
       setRolloutState(rolloutPayload);
       setRebalancePlan(rebalancePayload);
       setEvents(Array.isArray(eventsPayload.events) ? eventsPayload.events : []);
       setInteractionStatus(interactionPayload);
+      setKnowledgeVaultStatus(knowledgeVaultStatusPayload);
       const globalObservationItems = hostObservationItemsFromPayload(
         globalHostObservationsPayload,
       );
@@ -2524,6 +2878,39 @@ function App() {
         }),
       });
       await Promise.all([refreshAll(selectedPlane), refreshModelLibrary()]);
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function setHostKnowledgeVault(host, enabled) {
+    const nodeName = host?.node_name;
+    if (!nodeName) {
+      return;
+    }
+    const confirmation = enabled
+      ? `Start Knowledge Vault on ${nodeName}?`
+      : `Stop Knowledge Vault on ${nodeName}?`;
+    if (!window.confirm(confirmation)) {
+      return;
+    }
+    setActionBusy(`knowledge-vault:${nodeName}`);
+    try {
+      await fetchJson(knowledgeVaultPath(enabled ? "apply" : "stop"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          service_id: "kv_default",
+          node_name: nodeName,
+        }),
+      });
+      const [statusPayload] = await Promise.all([
+        fetchJson(knowledgeVaultPath()),
+        refreshAll(selectedPlane),
+      ]);
+      setKnowledgeVaultStatus(statusPayload);
     } finally {
       setActionBusy("");
     }
@@ -2905,6 +3292,7 @@ function App() {
         error: "",
         session: null,
         browsing: null,
+        enrichment: null,
       },
     ]);
     setChatInput("");
@@ -3047,6 +3435,7 @@ function App() {
                 ? {
                     ...item,
                     browsing: payload.browsing || session.browsing || item.browsing || null,
+                    enrichment: buildChatEnrichmentMeta(payload, session, item.enrichment),
                     metrics: {
                       latencyMs,
                       completionTokens,
@@ -3089,6 +3478,7 @@ function App() {
                     ...item,
                     error: message,
                     browsing: payload.browsing || payload.session?.browsing || item.browsing || null,
+                    enrichment: buildChatEnrichmentMeta(payload, payload.session || {}, item.enrichment),
                     session: {
                       ...(item.session || {}),
                       status: payload.status || "failed",
@@ -3156,11 +3546,30 @@ function App() {
     if (!authState.authenticated) {
       return undefined;
     }
+    const refreshDelay = selectedPage === "dashboard" ? FLEET_REFRESH_MS : AUTO_REFRESH_MS;
     const timer = setInterval(() => {
       refreshAll(selectedPlane);
+    }, refreshDelay);
+    return () => clearInterval(timer);
+  }, [authState.authenticated, selectedPlane, selectedPage]);
+
+  useEffect(() => {
+    if (!authState.authenticated || selectedPage !== "knowledge-vault") {
+      return undefined;
+    }
+    refreshKnowledgeVaultGraph();
+    const timer = setInterval(() => {
+      refreshKnowledgeVaultGraph();
     }, AUTO_REFRESH_MS);
     return () => clearInterval(timer);
-  }, [authState.authenticated, selectedPlane]);
+  }, [authState.authenticated, selectedPage]);
+
+  useEffect(() => {
+    if (!authState.authenticated || !selectedPlane || selectedTab !== "knowledge") {
+      return;
+    }
+    refreshPlaneKnowledge();
+  }, [authState.authenticated, selectedPlane, selectedTab, planeDetail]);
 
   const hasActiveModelJobsForPolling = Array.isArray(modelLibrary.jobs)
     ? modelLibrary.jobs.some((job) => {
@@ -3187,7 +3596,7 @@ function App() {
   }, [authState.authenticated, hasActiveModelJobsForPolling, selectedPage]);
 
   useEffect(() => {
-    if (!authState.authenticated || !selectedPlane) {
+    if (!authState.authenticated) {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
@@ -3198,7 +3607,6 @@ function App() {
 
     const source = new EventSource(
       queryPath("/api/v1/events/stream", {
-        plane: selectedPlane,
         limit: EVENT_LIMIT,
       }),
     );
@@ -3211,12 +3619,19 @@ function App() {
     source.onerror = () => {
       setStreamHealthy(false);
     };
-    source.onmessage = (event) => {
+    const handleRefreshEvent = (event) => {
       setLastEventName(event.type || "message");
       scheduleRefresh(selectedPlane);
     };
+    source.onmessage = handleRefreshEvent;
+    for (const eventName of REFRESH_EVENT_NAMES) {
+      source.addEventListener(eventName, handleRefreshEvent);
+    }
 
     return () => {
+      for (const eventName of REFRESH_EVENT_NAMES) {
+        source.removeEventListener(eventName, handleRefreshEvent);
+      }
       source.close();
       if (eventSourceRef.current === source) {
         eventSourceRef.current = null;
@@ -3228,6 +3643,14 @@ function App() {
     setSelectedTab("status");
     setChatMessages([]);
     setChatError("");
+    setPlaneKnowledge((current) => ({
+      ...current,
+      results: [],
+      graph: { nodes: [], edges: [], warnings: [] },
+      error: "",
+      resolverResult: null,
+      resolverError: "",
+    }));
     if (chatAbortRef.current) {
       chatAbortRef.current.abort();
       chatAbortRef.current = null;
@@ -3288,6 +3711,10 @@ function App() {
     Boolean(desiredStateV2?.skills?.enabled) || Boolean(desiredState?.skills?.enabled);
   const browsingEnabled =
     Boolean(desiredStateV2?.browsing?.enabled) || Boolean(desiredState?.browsing?.enabled);
+  const knowledgeEnabled =
+    Boolean(desiredStateV2?.knowledge?.enabled) || Boolean(desiredState?.knowledge?.enabled);
+  const selectedKnowledgeIds = selectedKnowledgeIdsFromDesiredState(desiredStateV2 || desiredState);
+  const knowledgeContextPolicy = knowledgeContextPolicyFromDesiredState(desiredStateV2 || desiredState);
   const dashboardSkillsSummary = dashboard?.skills || {
     enabled: skillsEnabled,
     enabled_count: 0,
@@ -3440,7 +3867,7 @@ function App() {
   const modelLibraryNodes = Array.isArray(modelLibrary.nodes) ? modelLibrary.nodes : [];
   const storageModelNodes = modelLibraryNodes.filter(
     (node) =>
-      node?.storage_role_enabled === true &&
+      node?.role_eligible === true &&
       node?.registration_state === "registered" &&
       node?.session_state === "connected" &&
       node?.storage_root,
@@ -3508,6 +3935,19 @@ function App() {
   const modelsNavMeta = activeModelJobs > 0
     ? `${activeModelJobs} download job${activeModelJobs === 1 ? "" : "s"}`
     : `${activeModelCount} discovered model${activeModelCount === 1 ? "" : "s"}`;
+  const knowledgeGraphSummary = summarizeKnowledgeGraph(knowledgeVaultGraph);
+  const knowledgeVaultStatusText = String(knowledgeVaultStatus?.status || "inactive");
+  const knowledgeVaultStatusLower = knowledgeVaultStatusText.toLowerCase();
+  const knowledgeVaultNavClass = knowledgeVaultGraphError
+    ? "is-critical"
+    : knowledgeVaultGraphBusy
+      ? "is-warning"
+      : ["active", "ready", "running", "healthy"].includes(knowledgeVaultStatusLower)
+        ? "is-healthy"
+        : "is-booting";
+  const knowledgeVaultNavMeta = knowledgeVaultStatus?.node_name
+    ? `node ${knowledgeVaultStatus.node_name}`
+    : `${knowledgeGraphSummary.nodeCount} record${knowledgeGraphSummary.nodeCount === 1 ? "" : "s"}`;
   function handleModelLibraryScroll(event) {
     const node = event.currentTarget;
     if (!hasMoreModelItems) {
@@ -4042,6 +4482,57 @@ function App() {
     return items;
   }
 
+  function normalizedHostRole(host) {
+    const registry = host?.registry || host || {};
+    return String(registry?.derived_role || "").toLowerCase();
+  }
+
+  function isAutoStorageRole(host) {
+    return normalizedHostRole(host) === "storage";
+  }
+
+  function isManualStorageRole(host) {
+    const registry = host?.registry || host || {};
+    return registry?.storage_role_enabled === true;
+  }
+
+  function isStorageRoleSelected(host) {
+    return isAutoStorageRole(host) || isManualStorageRole(host);
+  }
+
+  function isStorageRoleEligible(host) {
+    const registry = host?.registry || host || {};
+    const capacity = registry?.capacity_summary || {};
+    return (
+      registry?.storage_role_eligible === true ||
+      isStorageRoleSelected(host) ||
+      Boolean(capacity.storage_root || registry?.storage_root)
+    );
+  }
+
+  function isKnowledgeVaultServiceActive() {
+    const status = String(knowledgeVaultStatus?.status || "").toLowerCase();
+    return status !== "" && status !== "stopped" && status !== "deleted";
+  }
+
+  function isKnowledgeVaultSelectedForHost(host) {
+    const registry = host?.registry || host || {};
+    return (
+      isKnowledgeVaultServiceActive() &&
+      knowledgeVaultStatus?.node_name === registry?.node_name
+    );
+  }
+
+  function knowledgeVaultServiceLabel(host) {
+    if (isKnowledgeVaultSelectedForHost(host)) {
+      return `active: ${knowledgeVaultStatus?.status || "unknown"}`;
+    }
+    if (isKnowledgeVaultServiceActive()) {
+      return `assigned to ${knowledgeVaultStatus?.node_name || "another node"}`;
+    }
+    return "not assigned";
+  }
+
   function nodeRoleLabels(host) {
     const registry = host?.registry || host || {};
     const capacity = registry?.capacity_summary || {};
@@ -4049,10 +4540,7 @@ function App() {
     if (String(registry?.derived_role || "").toLowerCase() === "worker") {
       roles.push("worker");
     }
-    if (
-      registry?.storage_role_enabled === true ||
-      String(registry?.derived_role || "").toLowerCase() === "storage"
-    ) {
+    if (isStorageRoleSelected(host)) {
       roles.push("storage");
     }
     if (roles.length === 0 && Number(capacity.gpu_count || 0) > 0) {
@@ -4099,24 +4587,106 @@ function App() {
     setSelectedHostNodeName("");
   }
 
+  function renderHostServiceControls(host) {
+    const registry = host?.registry || host || {};
+    if (!registry?.node_name) {
+      return null;
+    }
+    const nodeName = registry.node_name;
+    const autoStorage = isAutoStorageRole(host);
+    const manualStorage = isManualStorageRole(host);
+    const storageSelected = isStorageRoleSelected(host);
+    const storageEligible = isStorageRoleEligible(host);
+    const storageBusy = actionBusy === `storage-role:${nodeName}`;
+    const knowledgeBusy = actionBusy === `knowledge-vault:${nodeName}`;
+    const canManageRoles = authState.user?.role === "admin";
+    const knowledgeSelected = isKnowledgeVaultSelectedForHost(host);
+    const knowledgeOwnedByOtherNode =
+      isKnowledgeVaultServiceActive() &&
+      knowledgeVaultStatus?.node_name &&
+      knowledgeVaultStatus.node_name !== nodeName;
+    const storageDetail = autoStorage
+      ? "auto-assigned"
+      : manualStorage
+        ? "manual override"
+        : storageEligible
+          ? "eligible"
+          : "not eligible";
+    const storageDisabled =
+      autoStorage ||
+      storageBusy ||
+      !canManageRoles ||
+      (!manualStorage && !storageEligible);
+    const knowledgeDisabled =
+      knowledgeBusy ||
+      !canManageRoles ||
+      !storageSelected ||
+      knowledgeOwnedByOtherNode;
+
+    return (
+      <div className="node-service-controls">
+        <label
+          className={`node-service-checkbox ${storageSelected ? "is-active" : ""}`}
+          title={
+            autoStorage
+              ? "Storage role is derived automatically from node inventory"
+              : !canManageRoles
+                ? "Admin role required"
+                : storageEligible
+                  ? "Select this node for storage-capable services"
+                  : "Host has not reported a usable storage root yet"
+          }
+        >
+          <input
+            type="checkbox"
+            checked={storageSelected}
+            disabled={storageDisabled}
+            onChange={(event) => setHostStorageRole(registry, event.target.checked)}
+          />
+          <span>
+            <strong>Storage</strong>
+            <small>{storageBusy ? "updating" : storageDetail}</small>
+          </span>
+        </label>
+        <label
+          className={`node-service-checkbox ${knowledgeSelected ? "is-active" : ""}`}
+          title={
+            !canManageRoles
+              ? "Admin role required"
+              : !storageSelected
+                ? "Requires selected or auto-assigned storage role"
+                : knowledgeOwnedByOtherNode
+                  ? "Knowledge Vault is assigned to another node"
+                  : "Run canonical Knowledge Vault as a separate service container on this storage node"
+          }
+        >
+          <input
+            type="checkbox"
+            checked={knowledgeSelected}
+            disabled={knowledgeDisabled}
+            onChange={(event) => setHostKnowledgeVault(registry, event.target.checked)}
+          />
+          <span>
+            <strong>Knowledge Vault</strong>
+            <small>{knowledgeBusy ? "updating" : knowledgeVaultServiceLabel(host)}</small>
+          </span>
+        </label>
+      </div>
+    );
+  }
+
   function renderHostCards(items) {
     return (
       <div className="plane-list">
         {items.map((host) => {
           const cpu = host?.cpu_telemetry?.summary || {};
           const gpu = host?.gpu_telemetry?.summary || {};
-          const runtimeAvailable = host?.runtime_status?.available === true;
-          const runtimePhase = host?.runtime_status?.phase || "pending";
-          const indicatorClass = runtimeIndicatorClass(runtimeAvailable, host?.status);
+          const connectivity = nodeConnectivityStatus(host);
           const registry = host?.registry || null;
           const storageCapacity = registry?.capacity_summary || {};
           const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
           const totalMemoryBytes = Number(cpu.total_memory_bytes || storageCapacity.total_memory_bytes || 0);
           const gpuDeviceCount = Number(gpu.device_count || storageCapacity.gpu_count || 0);
-          const storageEnabled = registry?.storage_role_enabled === true;
-          const storageEligible = registry?.storage_role_eligible !== false;
-          const storageBusy = actionBusy === `storage-role:${host?.node_name}`;
-          const canManageStorageRole = authState.user?.role === "admin";
           const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
           const directLanPeers = lanPeers.filter((peer) => peer?.tcp_reachable === true);
           const storageTotalBytes = Number(storageCapacity.storage_total_bytes || 0);
@@ -4131,9 +4701,9 @@ function App() {
               >
                 <div className="card-row">
                   <strong>{host?.node_name || "unknown-host"}</strong>
-                  <div className={`pill ${indicatorClass}`}>
-                    {statusDot(indicatorClass)}
-                    <span>{nodeStatusLabel(runtimeAvailable, runtimePhase, host?.status)}</span>
+                  <div className={`pill ${connectivity.indicatorClass}`}>
+                    {statusDot(connectivity.indicatorClass)}
+                    <span>{connectivity.label}</span>
                   </div>
                 </div>
                 {renderNodeRoleBadges(host)}
@@ -4145,29 +4715,7 @@ function App() {
                 <div className="metric-row"><span>LAN peers</span><strong>{lanPeers.length > 0 ? `${directLanPeers.length}/${lanPeers.length} direct` : "n/a"}</strong></div>
                 <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at)}</strong></div>
               </div>
-              {registry ? (
-                <div className="toolbar">
-                  <button
-                    className={`ghost-button compact-button ${storageEnabled ? "warning-button" : ""}`}
-                    type="button"
-                    disabled={
-                      storageBusy ||
-                      !canManageStorageRole ||
-                      (!storageEnabled && !storageEligible)
-                    }
-                    onClick={() => setHostStorageRole(registry, !storageEnabled)}
-                    title={
-                      !canManageStorageRole
-                        ? "Admin role required"
-                        : storageEligible
-                        ? "Toggle model storage role"
-                        : "Host has not reported a usable storage root yet"
-                    }
-                  >
-                    {storageEnabled ? "Disable storage" : "Enable storage"}
-                  </button>
-                </div>
-              ) : null}
+              {registry ? renderHostServiceControls(host) : null}
             </article>
           );
         })}
@@ -4183,20 +4731,22 @@ function App() {
     const cpu = host?.cpu_telemetry?.summary || {};
     const gpu = host?.gpu_telemetry?.summary || {};
     const capacity = registry?.capacity_summary || {};
-    const runtimeAvailable = host?.runtime_status?.available === true;
-    const runtimePhase = host?.runtime_status?.phase || "pending";
-    const indicatorClass = runtimeIndicatorClass(runtimeAvailable, host?.status);
-    const storageEnabled = registry?.storage_role_enabled === true;
-    const storageEligible = registry?.storage_role_eligible !== false;
-    const storageBusy = actionBusy === `storage-role:${host?.node_name}`;
-    const canManageStorageRole = authState.user?.role === "admin";
+    const connectivity = nodeConnectivityStatus(host);
+    const storageSelected = isStorageRoleSelected(host);
+    const storageEligible = isStorageRoleEligible(host);
     const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
     const gpuDeviceCount = Number(gpu.device_count || capacity.gpu_count || 0);
     const totalMemoryBytes = Number(cpu.total_memory_bytes || capacity.total_memory_bytes || 0);
     const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
     const storageTotalBytes = Number(capacity.storage_total_bytes || 0);
     const storageFreeBytes = Number(capacity.storage_free_bytes || 0);
-    const showStorageDetails = storageEnabled || storageEligible || storageTotalBytes > 0;
+    const showStorageDetails = storageSelected || storageEligible || storageTotalBytes > 0;
+    const transportCapabilities = registry?.transport_capabilities || {};
+    const supportedControlTransports = Array.isArray(
+      transportCapabilities.supported_control_transports,
+    )
+      ? transportCapabilities.supported_control_transports.join(", ")
+      : "http-long-poll";
 
     return (
       <div className="modal-backdrop" role="presentation" onClick={closeHostOverview}>
@@ -4212,9 +4762,9 @@ function App() {
               <h2>{host?.node_name || "unknown-host"}</h2>
               {renderNodeRoleBadges(host)}
             </div>
-            <div className={`pill ${indicatorClass}`}>
-              {statusDot(indicatorClass)}
-              <span>{nodeStatusLabel(runtimeAvailable, runtimePhase, host?.status)}</span>
+            <div className={`pill ${connectivity.indicatorClass}`}>
+              {statusDot(connectivity.indicatorClass)}
+              <span>{connectivity.label}</span>
             </div>
           </div>
           <div className="metric-grid">
@@ -4226,6 +4776,9 @@ function App() {
             <div className="metric-row"><span>Role reason</span><strong>{registry?.role_reason || "n/a"}</strong></div>
             <div className="metric-row"><span>Execution</span><strong>{registry?.execution_mode || "n/a"}</strong></div>
             <div className="metric-row"><span>Transport</span><strong>{registry?.transport_mode || "n/a"}</strong></div>
+            <div className="metric-row"><span>Control</span><strong>{transportCapabilities.preferred_control_transport || "http-long-poll"}</strong></div>
+            <div className="metric-row"><span>Supported control</span><strong>{supportedControlTransports}</strong></div>
+            <div className="metric-row"><span>Resumable bulk</span><strong>{yesNo(transportCapabilities.supports_resumable_transfer)}</strong></div>
             <div className="metric-row"><span>Advertised</span><strong>{registry?.advertised_address || "n/a"}</strong></div>
             <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at || registry?.last_heartbeat_at)}</strong></div>
           </div>
@@ -4246,10 +4799,11 @@ function App() {
               <div className="metric-row"><span>CPU temp</span><strong>{cpu.temperature_available ? formatTemperature(cpu.max_temperature_c ?? cpu.temperature_c) : "n/a"}</strong></div>
               {showStorageDetails ? (
                 <>
-                  <div className="metric-row"><span>Storage role</span><strong>{storageEnabled ? "enabled" : "disabled"}</strong></div>
+                  <div className="metric-row"><span>Storage role</span><strong>{storageSelected ? "selected" : "available"}</strong></div>
                   <div className="metric-row"><span>Storage root</span><strong>{capacity.storage_root || "n/a"}</strong></div>
                   <div className="metric-row"><span>Storage total</span><strong>{storageTotalBytes > 0 ? compactBytes(storageTotalBytes) : "n/a"}</strong></div>
                   <div className="metric-row"><span>Storage free</span><strong>{storageFreeBytes > 0 ? compactBytes(storageFreeBytes) : "n/a"}</strong></div>
+                  <div className="metric-row"><span>Knowledge Vault</span><strong>{knowledgeVaultServiceLabel(host)}</strong></div>
                 </>
               ) : null}
             </div>
@@ -4274,20 +4828,7 @@ function App() {
             </section>
           ) : null}
           <div className="toolbar">
-            {registry?.node_name ? (
-              <button
-                className={`ghost-button compact-button ${storageEnabled ? "warning-button" : ""}`}
-                type="button"
-                disabled={
-                  storageBusy ||
-                  !canManageStorageRole ||
-                  (!storageEnabled && !storageEligible)
-                }
-                onClick={() => setHostStorageRole(registry, !storageEnabled)}
-              >
-                {storageEnabled ? "Disable storage" : "Enable storage"}
-              </button>
-            ) : null}
+            {registry?.node_name ? renderHostServiceControls(host) : null}
             <button className="ghost-button" type="button" onClick={closeHostOverview}>
               Close
             </button>
@@ -4491,6 +5032,170 @@ function App() {
     );
   }
 
+  function renderPlaneKnowledgeTab() {
+    const graphSummary = summarizeKnowledgeGraph(planeKnowledge.graph);
+    const resolverSelectedSkills = Array.isArray(planeKnowledge.resolverResult?.selected_skills)
+      ? planeKnowledge.resolverResult.selected_skills
+      : [];
+    return (
+      <div className="dashboard-plane-detail-scroll">
+        <div className="summary-grid">
+          <SummaryCard
+            label="Knowledge"
+            value={knowledgeEnabled ? "enabled" : "disabled"}
+            meta={`${selectedKnowledgeIds.length} selected`}
+          />
+          <SummaryCard
+            label="Graph nodes"
+            value={graphSummary.nodeCount}
+            meta={`${graphSummary.edgeCount} relations`}
+          />
+          <SummaryCard
+            label="Context budget"
+            value={knowledgeContextPolicy.token_budget ?? "default"}
+            meta={`graph ${knowledgeContextPolicy.include_graph === false ? "off" : "on"} / depth ${knowledgeContextPolicy.max_graph_depth ?? 1}`}
+          />
+        </div>
+
+        {planeKnowledge.error ? <div className="error-banner">{planeKnowledge.error}</div> : null}
+        {!knowledgeEnabled ? (
+          <EmptyState
+            title="Knowledge Base disabled"
+            detail="Enable Knowledge Base in the plane editor to attach canonical records to interaction context."
+          />
+        ) : null}
+
+        <div className="panel-grid plane-knowledge-grid">
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Selected records</h3>
+              <span className="subpanel-meta">{selectedKnowledgeIds.length} id(s)</span>
+            </div>
+            <div className="toolbar">
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={refreshPlaneKnowledge}
+                disabled={planeKnowledge.busy}
+              >
+                Refresh knowledge
+              </button>
+            </div>
+            <div className="list-column">
+              {selectedKnowledgeIds.length === 0 ? (
+                <EmptyState
+                  title="No selected records"
+                  detail="The graph falls back to plane-scoped search results."
+                />
+              ) : (
+                selectedKnowledgeIds.map((knowledgeId) => (
+                  <article className="list-card" key={knowledgeId}>
+                    <div className="factory-skill-table-id">{knowledgeId}</div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Plane Knowledge Graph</h3>
+              <span className="subpanel-meta">
+                {planeKnowledge.busy ? "loading" : `${graphSummary.nodeCount} node(s)`}
+              </span>
+            </div>
+            <div className="knowledge-vault-graph-panel">
+              <KnowledgeCubeGraph graph={planeKnowledge.graph} variant="lattice" />
+            </div>
+          </section>
+
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Search results</h3>
+              <span className="subpanel-meta">{planeKnowledge.results.length} item(s)</span>
+            </div>
+            <div className="list-column">
+              {planeKnowledge.results.length === 0 ? (
+                <EmptyState title="No plane knowledge records" />
+              ) : (
+                planeKnowledge.results.slice(0, 12).map((item) => (
+                  <article className="list-card" key={`${item.knowledge_id || item.id}:${item.block_id || ""}`}>
+                    <div className="card-row">
+                      <strong>{item.title || item.knowledge_id || item.block_id}</strong>
+                      <span className="tag">{item.type || "knowledge"}</span>
+                    </div>
+                    <div className="list-detail">
+                      <div className="factory-skill-table-id">{item.knowledge_id || item.id || item.block_id}</div>
+                      <div>{item.summary || "No summary"}</div>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Enrichment resolver</h3>
+              <span className="subpanel-meta">Plane-owned SkillsFactory replica</span>
+            </div>
+            <textarea
+              className="editor-textarea plane-form-textarea"
+              value={planeKnowledge.resolverPrompt}
+              onChange={(event) =>
+                setPlaneKnowledge((current) => ({
+                  ...current,
+                  resolverPrompt: event.target.value,
+                }))
+              }
+              placeholder="Type a prompt to see which plane skills would be selected"
+            />
+            <div className="toolbar">
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={planeKnowledge.resolverBusy || !planeKnowledge.resolverPrompt.trim()}
+                onClick={resolvePlaneEnrichment}
+              >
+                Resolve enrichment
+              </button>
+            </div>
+            {planeKnowledge.resolverError ? (
+              <div className="error-banner">{planeKnowledge.resolverError}</div>
+            ) : null}
+            {planeKnowledge.resolverResult ? (
+              <div className="list-card">
+                <div className="metric-grid compact-metric-grid">
+                  <div className="metric-row"><span>Mode</span><strong>{planeKnowledge.resolverResult.skill_resolution_mode || "none"}</strong></div>
+                  <div className="metric-row"><span>Candidates</span><strong>{planeKnowledge.resolverResult.candidate_count ?? 0}</strong></div>
+                  <div className="metric-row"><span>Selected</span><strong>{resolverSelectedSkills.length}</strong></div>
+                </div>
+                <div className="list-column">
+                  {resolverSelectedSkills.length === 0 ? (
+                    <EmptyState title="No skills matched" detail="This prompt should not trigger Skills enrichment." />
+                  ) : (
+                    resolverSelectedSkills.map((skill) => (
+                      <article className="list-card" key={skill.id}>
+                        <div className="card-row">
+                          <strong>{skill.name || skill.id}</strong>
+                          <span className="tag">{skill.score ?? 0}</span>
+                        </div>
+                        <div className="list-detail">
+                          <div className="factory-skill-table-id">{skill.id}</div>
+                          <div>{skill.rationale || "No rationale"}</div>
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      </div>
+    );
+  }
+
   function renderDashboardPlaneDetailModal() {
     if (!selectedPlane || !planeRecord || !dashboard) {
       return null;
@@ -4591,6 +5296,18 @@ function App() {
               >
                 <span className="tab-button-title">Interaction</span>
                 <span className="tab-button-meta">Chat with the running model</span>
+              </button>
+            ) : null}
+            {llmPlane ? (
+              <button
+                className={`tab-button ${selectedTab === "knowledge" ? "is-active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={selectedTab === "knowledge"}
+                onClick={() => setSelectedTab("knowledge")}
+              >
+                <span className="tab-button-title">Knowledge</span>
+                <span className="tab-button-meta">Vault graph and enrichment</span>
               </button>
             ) : null}
           </div>
@@ -5022,6 +5739,8 @@ function App() {
                 </section>
               </div>
             </div>
+          ) : selectedTab === "knowledge" ? (
+            renderPlaneKnowledgeTab()
           ) : (
             <div className="dashboard-plane-detail-scroll">
               <div
@@ -5103,6 +5822,18 @@ function App() {
                               {browsingTraceCompact(message.browsing) ? (
                                 <span className="chat-browsing-trace">{browsingTraceCompact(message.browsing)}</span>
                               ) : null}
+                            </div>
+                          ) : null}
+                          {message.role === "assistant" && message.enrichment ? (
+                            <div className="chat-enrichment-line">
+                              {compactSkillList(message.enrichment.appliedSkills) ? (
+                                <span>skills {compactSkillList(message.enrichment.appliedSkills)}</span>
+                              ) : null}
+                              {compactSkillList(message.enrichment.autoAppliedSkills) ? (
+                                <span>auto {compactSkillList(message.enrichment.autoAppliedSkills)}</span>
+                              ) : null}
+                              {message.enrichment.knowledge ? <span>knowledge context attached</span> : null}
+                              {message.enrichment.compression ? <span>compression active</span> : null}
                             </div>
                           ) : null}
                           <p className="chat-message-text">
@@ -5191,6 +5922,60 @@ function App() {
       showCreateButton: true,
       emptyContent: <OnboardingCard onCreatePlane={() => openPlaneDialog("new")} />,
     });
+  }
+
+  function renderKnowledgeVaultPage() {
+    return (
+      <section className="panel page-panel knowledge-vault-page-panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Knowledge Vault</div>
+            <h2>Canonical Knowledge Vault</h2>
+          </div>
+          <div className="toolbar">
+            <span className={`tag ${knowledgeVaultNavClass}`}>
+              {statusDot(knowledgeVaultNavClass)}
+              <span>{knowledgeVaultStatusText}</span>
+            </span>
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={refreshKnowledgeVaultGraph}
+              disabled={knowledgeVaultGraphBusy}
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {knowledgeVaultGraphError ? (
+          <div className="error-banner">{knowledgeVaultGraphError}</div>
+        ) : null}
+
+        <div className="knowledge-vault-overview-grid">
+          <article className="summary-card">
+            <span>Active molecules</span>
+            <strong>{knowledgeGraphSummary.nodeCount}</strong>
+          </article>
+          <article className="summary-card">
+            <span>Relations</span>
+            <strong>{knowledgeGraphSummary.edgeCount}</strong>
+          </article>
+          <article className="summary-card">
+            <span>Service</span>
+            <strong>{knowledgeVaultStatusText}</strong>
+          </article>
+          <article className="summary-card">
+            <span>Node</span>
+            <strong>{knowledgeVaultStatus?.node_name || "unassigned"}</strong>
+          </article>
+        </div>
+
+        <div className="knowledge-vault-graph-panel">
+          <KnowledgeCubeGraph graph={knowledgeVaultGraph} variant="lattice" />
+        </div>
+      </section>
+    );
   }
 
   function renderModelsLibrary() {
@@ -5952,67 +6737,160 @@ function App() {
           </article>
         </div>
         <div className="panel-grid skills-factory-page-grid">
-          <section className="subpanel">
-            <div className="subpanel-header">
-              <div>
-                <div className="section-label">Groups</div>
-                <h3>Browse tree</h3>
+          <div className="skills-factory-side-stack">
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <div>
+                  <div className="section-label">Groups</div>
+                  <h3>Browse tree</h3>
+                </div>
               </div>
-            </div>
-            <div className="toolbar">
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={skillsFactory.busy}
-                onClick={createFactoryGroup}
-              >
-                New group
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={skillsFactory.busy || !skillsFactory.selectedGroupPath || selectedBuiltinGroup}
-                onClick={renameFactoryGroup}
-              >
-                Rename group
-              </button>
-              <button
-                className="ghost-button danger-button"
-                type="button"
-                disabled={skillsFactory.busy || !skillsFactory.selectedGroupPath || selectedBuiltinGroup}
-                onClick={deleteFactoryGroup}
-              >
-                Delete group
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={!skillsFactory.selectedGroupPath}
-                onClick={() =>
-                  setSkillsFactory((current) => ({ ...current, selectedGroupPath: "" }))
-                }
-              >
-                Show all skills
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                onClick={() => setExpandedGroupPaths(availableTreePaths)}
-              >
-                Expand all
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                onClick={() => setExpandedGroupPaths([""])}
-              >
-                Collapse tree
-              </button>
-            </div>
-            <div className="skills-factory-group-tree">
-              {renderGroupNode(groupTree)}
-            </div>
-          </section>
+              <div className="toolbar">
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={skillsFactory.busy}
+                  onClick={createFactoryGroup}
+                >
+                  New group
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={skillsFactory.busy || !skillsFactory.selectedGroupPath || selectedBuiltinGroup}
+                  onClick={renameFactoryGroup}
+                >
+                  Rename group
+                </button>
+                <button
+                  className="ghost-button danger-button"
+                  type="button"
+                  disabled={skillsFactory.busy || !skillsFactory.selectedGroupPath || selectedBuiltinGroup}
+                  onClick={deleteFactoryGroup}
+                >
+                  Delete group
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={!skillsFactory.selectedGroupPath}
+                  onClick={() =>
+                    setSkillsFactory((current) => ({ ...current, selectedGroupPath: "" }))
+                  }
+                >
+                  Show all skills
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => setExpandedGroupPaths(availableTreePaths)}
+                >
+                  Expand all
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => setExpandedGroupPaths([""])}
+                >
+                  Collapse tree
+                </button>
+              </div>
+              <div className="skills-factory-group-tree">
+                {renderGroupNode(groupTree)}
+              </div>
+            </section>
+            <section className="subpanel skills-factory-editor-panel">
+              <div className="subpanel-header">
+                <h3>{editing ? "Edit / rename factory skill" : "Create factory skill"}</h3>
+              </div>
+              <div className="plane-form-grid">
+                <label className="field-label">
+                  <span className="field-label-title">Name</span>
+                  <input
+                    className="text-input"
+                    value={form.name}
+                    onChange={(event) => updateFactorySkillFormField("name", event.target.value)}
+                  />
+                </label>
+                <label className="field-label">
+                  <span className="field-label-title">Id</span>
+                  <input className="text-input" value={form.id} readOnly />
+                </label>
+                <label className="field-label">
+                  <span className="field-label-title">Group path</span>
+                  <input
+                    className="text-input"
+                    value={form.groupPath}
+                    onChange={(event) => updateFactorySkillFormField("groupPath", event.target.value)}
+                    placeholder="code-agent/debugging"
+                  />
+                </label>
+              </div>
+              <div className="plane-form-section-meta">
+                Use slash-separated groups. Skill ids stay stable; rename and regroup through this
+                form.
+              </div>
+              <label className="field-label plane-checkbox">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.internal)}
+                  onChange={(event) => updateFactorySkillFormField("internal", event.target.checked)}
+                />
+                <span>
+                  Mark as internal support-layer skill
+                </span>
+              </label>
+              <label className="field-label">
+                <span className="field-label-title">Description</span>
+                <textarea
+                  className="editor-textarea"
+                  rows={4}
+                  value={form.description}
+                  onChange={(event) => updateFactorySkillFormField("description", event.target.value)}
+                />
+              </label>
+              <label className="field-label">
+                <span className="field-label-title">Content</span>
+                <textarea
+                  className="editor-textarea"
+                  rows={12}
+                  value={form.content}
+                  onChange={(event) => updateFactorySkillFormField("content", event.target.value)}
+                />
+              </label>
+              <label className="field-label">
+                <span className="field-label-title">Match terms</span>
+                <textarea
+                  className="editor-textarea plane-form-textarea match-terms-textarea"
+                  rows={6}
+                  value={form.matchTermsText}
+                  onChange={(event) => updateFactorySkillFormField("matchTermsText", event.target.value)}
+                  placeholder={"One term per line\nlogin\nlogout\naccess cookie"}
+                />
+              </label>
+              <div className="plane-form-section-meta">
+                These terms drive contextual skill matching. One term per line.
+              </div>
+              <div className="toolbar">
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={skillsFactory.busy}
+                  onClick={saveFactorySkillForm}
+                >
+                  {editing ? "Save skill" : "Create skill"}
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={skillsFactory.busy}
+                  onClick={startCreateFactorySkill}
+                >
+                  {editing ? "Cancel edit" : "Reset form"}
+                </button>
+              </div>
+            </section>
+          </div>
           <section className="subpanel">
             <div className="subpanel-header">
               <div>
@@ -6112,97 +6990,85 @@ function App() {
               )}
             </div>
           </section>
-          <section className="subpanel skills-factory-editor-panel">
+        </div>
+      </section>
+    );
+  }
+
+  function renderProtocolsPage() {
+    const items = Array.isArray(protocolRegistry.items) ? protocolRegistry.items : [];
+    const summary = protocolRegistry.summary || {};
+    const selectedTransport = interactionStatus?.naim?.transport || interactionStatus?.transport || null;
+
+    return (
+      <section className="panel page-panel protocol-registry-page-panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Network</div>
+            <h2>Protocol Registry</h2>
+          </div>
+          <div className="toolbar">
+            <span className="tag">{summary.total ?? items.length} protocols</span>
+            <span className="tag">Direct {summary.direct ?? 0}</span>
+            <span className="tag">Optional {summary.optional ?? 0}</span>
+          </div>
+        </div>
+
+        {selectedTransport ? (
+          <section className="subpanel">
             <div className="subpanel-header">
-              <h3>{editing ? "Edit / rename factory skill" : "Create factory skill"}</h3>
+              <h3>Selected plane transport</h3>
+              <span className="subpanel-meta">{selectedPlane || "fleet"}</span>
             </div>
-            <div className="plane-form-grid">
-              <label className="field-label">
-                <span className="field-label-title">Name</span>
-                <input
-                  className="text-input"
-                  value={form.name}
-                  onChange={(event) => updateFactorySkillFormField("name", event.target.value)}
-                />
-              </label>
-              <label className="field-label">
-                <span className="field-label-title">Id</span>
-                <input className="text-input" value={form.id} readOnly />
-              </label>
-              <label className="field-label">
-                <span className="field-label-title">Group path</span>
-                <input
-                  className="text-input"
-                  value={form.groupPath}
-                  onChange={(event) => updateFactorySkillFormField("groupPath", event.target.value)}
-                  placeholder="code-agent/debugging"
-                />
-              </label>
-            </div>
-            <div className="plane-form-section-meta">
-              Use slash-separated groups. Skill ids stay stable; rename and regroup through this
-              form.
-            </div>
-            <label className="field-label plane-checkbox">
-              <input
-                type="checkbox"
-                checked={Boolean(form.internal)}
-                onChange={(event) => updateFactorySkillFormField("internal", event.target.checked)}
-              />
-              <span>
-                Mark as internal support-layer skill
+            <div className="transport-badge-row">
+              <span className={`tag ${selectedTransport.degraded ? "is-warning" : "is-healthy"}`}>
+                {selectedTransport.mode || "unknown"}
               </span>
-            </label>
-            <label className="field-label">
-              <span className="field-label-title">Description</span>
-              <textarea
-                className="editor-textarea"
-                rows={4}
-                value={form.description}
-                onChange={(event) => updateFactorySkillFormField("description", event.target.value)}
-              />
-            </label>
-            <label className="field-label">
-              <span className="field-label-title">Content</span>
-              <textarea
-                className="editor-textarea"
-                rows={12}
-                value={form.content}
-                onChange={(event) => updateFactorySkillFormField("content", event.target.value)}
-              />
-            </label>
-            <label className="field-label">
-              <span className="field-label-title">Match terms</span>
-              <textarea
-                className="editor-textarea plane-form-textarea match-terms-textarea"
-                rows={6}
-                value={form.matchTermsText}
-                onChange={(event) => updateFactorySkillFormField("matchTermsText", event.target.value)}
-                placeholder={"One term per line\nlogin\nlogout\naccess cookie"}
-              />
-            </label>
-            <div className="plane-form-section-meta">
-              These terms drive contextual skill matching. One term per line.
-            </div>
-            <div className="toolbar">
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={skillsFactory.busy}
-                onClick={saveFactorySkillForm}
-              >
-                {editing ? "Save skill" : "Create skill"}
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={skillsFactory.busy}
-                onClick={startCreateFactorySkill}
-              >
-                {editing ? "Cancel edit" : "Reset form"}
-              </button>
+              <span className="tag">{selectedTransport.protocol_id || "protocol n/a"}</span>
+              {selectedTransport.supports_sse ? <span className="tag">SSE</span> : null}
+              {selectedTransport.supports_rpc ? <span className="tag">RPC</span> : null}
             </div>
           </section>
+        ) : null}
+
+        <div className="protocol-registry-grid">
+          {items.length === 0 ? (
+            <EmptyState title="No protocol registry data" />
+          ) : (
+            items.map((item) => {
+              const capabilities = item.capabilities || {};
+              const capabilityLabels = Object.entries(capabilities)
+                .filter(([, value]) => value === true)
+                .map(([key]) => key.replace(/^supports_/, "").replaceAll("_", " "));
+              return (
+                <article className="list-card protocol-card" key={item.protocol_id}>
+                  <div className="card-row">
+                    <strong>{item.protocol_id}</strong>
+                    <span className={`tag ${item.status === "active" ? "is-healthy" : "is-booting"}`}>
+                      {item.status || "unknown"}
+                    </span>
+                  </div>
+                  <div className="metric-grid">
+                    <div className="metric-row"><span>Owner</span><strong>{item.owner || "n/a"}</strong></div>
+                    <div className="metric-row"><span>Transport</span><strong>{item.transport || "n/a"}</strong></div>
+                    <div className="metric-row"><span>Latency</span><strong>{item.latency_class || "n/a"}</strong></div>
+                    <div className="metric-row"><span>Timeout</span><strong>{item.timeout || "n/a"}</strong></div>
+                  </div>
+                  <div className="list-detail">
+                    <div><strong>Fallback:</strong> {item.fallback || "n/a"}</div>
+                    <div><strong>SLO:</strong> {item.slo || "n/a"}</div>
+                  </div>
+                  {capabilityLabels.length > 0 ? (
+                    <div className="transport-badge-row">
+                      {capabilityLabels.map((label) => (
+                        <span className="tag" key={`${item.protocol_id}:${label}`}>{label}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })
+          )}
         </div>
       </section>
     );
@@ -6480,11 +7346,11 @@ function App() {
     const nextDefault =
       normalizeChatLanguage(desiredState?.interaction?.default_response_language) ||
       normalizeChatLanguage(interactionStatus?.default_response_language) ||
-      "ru";
+      "en";
     const options = supportedChatLanguageOptions(desiredState, interactionStatus);
     const allowed = options.some((option) => option.value === nextDefault)
       ? nextDefault
-      : options[0]?.value || "ru";
+      : options[0]?.value || "en";
     setChatLanguage((current) => (options.some((option) => option.value === current) ? current : allowed));
   }, [desiredState, interactionStatus]);
 
@@ -6532,7 +7398,7 @@ function App() {
   }, [activeModelCount]);
 
   useEffect(() => {
-    if (!llmPlane && selectedTab === "interaction") {
+    if (!llmPlane && (selectedTab === "interaction" || selectedTab === "knowledge")) {
       setSelectedTab("status");
     }
   }, [llmPlane, selectedTab]);
@@ -6594,6 +7460,13 @@ function App() {
     return renderAuthShell();
   }
 
+  const streamLabel = streamHealthy ? "Events live" : "Events reconnecting";
+  const streamTitle = selectedPlane
+    ? `Global controller event stream; refreshing fleet and selected plane ${selectedPlane}.`
+    : "Global controller event stream; refreshing fleet data.";
+  const lastRefreshTitle = `Last refresh: ${formatTimestamp(lastRefreshAt)}`;
+  const lastEventTitle = `Last event: ${lastEventName || "none"}`;
+
   return (
     <div className="app-shell">
       <div className="starfield" aria-hidden="true" />
@@ -6607,27 +7480,25 @@ function App() {
           </p>
         </div>
         <div className="hero-meta">
-          <div className="meta-card">
-            <span className="meta-label">Signed in as</span>
-            <span className="meta-value">
-              {authState.user?.username || "n/a"} ({authState.user?.role || "n/a"})
+          <div className="meta-card hero-status-card">
+            <span className="hero-status-user" title="Signed in as">
+              {authState.user?.username || "n/a"}
+              <span>{authState.user?.role || "n/a"}</span>
             </span>
-          </div>
-          <div className="status-chip">
-            {statusDot(apiHealthy ? "is-healthy" : apiError ? "is-critical" : "is-booting")}
-            <span>{apiHealthy ? "API ready" : apiError ? "API error" : "API pending"}</span>
-          </div>
-          <div className="status-chip">
-            {statusDot(streamHealthy ? "is-healthy" : selectedPlane ? "is-warning" : "is-booting")}
-            <span>{streamHealthy ? "Stream live" : selectedPlane ? "Stream reconnecting" : "Stream idle"}</span>
-          </div>
-          <div className="meta-card">
-            <span className="meta-label">Last refresh</span>
-            <span className="meta-value">{formatTimestamp(lastRefreshAt)}</span>
-          </div>
-          <div className="meta-card">
-            <span className="meta-label">Last event</span>
-            <span className="meta-value">{lastEventName}</span>
+            <span className="status-chip" title={apiError || "Controller API status"}>
+              {statusDot(apiHealthy ? "is-healthy" : apiError ? "is-critical" : "is-booting")}
+              <span>{apiHealthy ? "API" : apiError ? "API error" : "API..."}</span>
+            </span>
+            <span className="status-chip" title={streamTitle}>
+              {statusDot(streamHealthy ? "is-healthy" : selectedPlane ? "is-warning" : "is-booting")}
+              <span>{streamLabel}</span>
+            </span>
+            <span className="hero-status-time" title={lastRefreshTitle}>
+              Refresh {formatTimeOfDay(lastRefreshAt)}
+            </span>
+            <span className="hero-status-time" title={lastEventTitle}>
+              Event {lastEventName || "none"}
+            </span>
           </div>
         </div>
       </header>
@@ -6678,6 +7549,33 @@ function App() {
               </span>
             </button>
             <button
+              className={`side-menu-item ${selectedPage === "knowledge-vault" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setSelectedPage("knowledge-vault")}
+            >
+              <div className="side-menu-copy">
+                <span className="side-menu-title">Knowledge Vault</span>
+                <span className="side-menu-meta">{knowledgeVaultNavMeta}</span>
+              </div>
+              <span className={`tag ${knowledgeVaultNavClass}`}>
+                {statusDot(knowledgeVaultNavClass)}
+                <span>{knowledgeGraphSummary.nodeCount} items</span>
+              </span>
+            </button>
+            <button
+              className={`side-menu-item ${selectedPage === "protocols" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setSelectedPage("protocols")}
+            >
+              <div className="side-menu-copy">
+                <span className="side-menu-title">Protocols</span>
+                <span className="side-menu-meta">Network registry and plane transport</span>
+              </div>
+              <span className="tag">
+                <span>{protocolRegistry.summary?.total ?? protocolRegistry.items?.length ?? 0} items</span>
+              </span>
+            </button>
+            <button
               className={`side-menu-item ${selectedPage === "skills-factory" ? "is-active" : ""}`}
               type="button"
               onClick={() => setSelectedPage("skills-factory")}
@@ -6713,6 +7611,10 @@ function App() {
           renderPlanesRegistry()
         ) : selectedPage === "models" ? (
           renderModelsLibrary()
+        ) : selectedPage === "knowledge-vault" ? (
+          renderKnowledgeVaultPage()
+        ) : selectedPage === "protocols" ? (
+          renderProtocolsPage()
         ) : selectedPage === "skills-factory" ? (
           renderSkillsFactoryPage()
         ) : selectedPage === "access" ? (

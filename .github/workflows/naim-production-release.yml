@@ -1,0 +1,358 @@
+name: NAIM production release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: naim-production-main
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NAIM_RELEASE_SHA: ${{ github.sha }}
+  NAIM_RELEASE_TAG: ${{ github.sha }}
+  NAIM_RELEASE_BRANCH: main
+  NAIM_HPC1_SSH: ${{ vars.NAIM_HPC1_SSH || 'baal@195.168.22.186' }}
+  NAIM_HPC1_SSH_PORT: ${{ vars.NAIM_HPC1_SSH_PORT || '2222' }}
+  NAIM_HPC1_REPO_PATH: ${{ vars.NAIM_HPC1_REPO_PATH || '/mnt/shared-storage/naim/repos/naim-node' }}
+  NAIM_MAIN_SSH: ${{ vars.NAIM_MAIN_SSH || 'baal@51.68.181.52' }}
+  NAIM_REGISTRY: ${{ vars.NAIM_REGISTRY || 'chainzano.com' }}
+  NAIM_REGISTRY_PROJECT: ${{ vars.NAIM_REGISTRY_PROJECT || 'naim' }}
+  NAIM_REGISTRY_USERNAME: ${{ secrets.NAIM_REGISTRY_USERNAME || vars.NAIM_REGISTRY_USERNAME || 'admin' }}
+  NAIM_BUILD_TYPE: ${{ vars.NAIM_BUILD_TYPE || 'Release' }}
+  NAIM_CUDA_ARCHITECTURES: ${{ vars.NAIM_CUDA_ARCHITECTURES || '' }}
+  NAIM_CUDA_NVCC_JOBS: ${{ vars.NAIM_CUDA_NVCC_JOBS || '1' }}
+  NAIM_CMAKE_ARGS: ${{ vars.NAIM_CMAKE_ARGS || '' }}
+  NAIM_MIGRATION_TIMEOUT_SEC: ${{ vars.NAIM_MIGRATION_TIMEOUT_SEC || '600' }}
+
+jobs:
+  hpc1-pull:
+    name: 1. hpc1 pull main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0700 -d "${HOME}/.ssh"
+          key_path="${HOME}/.ssh/naim_ci_deploy"
+          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
+          chmod 0600 "${key_path}"
+          {
+            echo "NAIM_CI_SSH_KEY=${key_path}"
+            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+          } >> "${GITHUB_ENV}"
+      - name: Pull commit on hpc1
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_RELEASE_BRANCH='${NAIM_RELEASE_BRANCH}' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          retry_git_fetch() {
+            local remote="$1"
+            local branch="$2"
+            local attempt=1
+            local max_attempts=5
+            local delay_sec=5
+
+            while (( attempt <= max_attempts )); do
+              if git fetch --prune "${remote}" "${branch}"; then
+                return 0
+              fi
+              if (( attempt == max_attempts )); then
+                echo "error: git fetch ${remote} ${branch} failed after ${max_attempts} attempts" >&2
+                return 1
+              fi
+              echo "warning: git fetch ${remote} ${branch} failed on attempt ${attempt}/${max_attempts}; retrying in ${delay_sec}s" >&2
+              sleep "${delay_sec}"
+              delay_sec=$(( delay_sec * 2 ))
+              attempt=$(( attempt + 1 ))
+            done
+          }
+
+          git config http.version HTTP/1.1 >/dev/null 2>&1 || true
+          retry_git_fetch origin "${NAIM_RELEASE_BRANCH}"
+
+          if git show-ref --verify --quiet "refs/heads/${NAIM_RELEASE_BRANCH}"; then
+            git checkout -f "${NAIM_RELEASE_BRANCH}"
+          else
+            git checkout -B "${NAIM_RELEASE_BRANCH}" "origin/${NAIM_RELEASE_BRANCH}"
+          fi
+
+          git reset --hard "origin/${NAIM_RELEASE_BRANCH}"
+
+          current_sha="$(git rev-parse HEAD)"
+          if [[ "${current_sha}" != "${NAIM_RELEASE_SHA}" ]]; then
+            echo "error: ${NAIM_RELEASE_BRANCH} resolved to ${current_sha}, expected ${NAIM_RELEASE_SHA}" >&2
+            exit 1
+          fi
+
+          echo "hpc1 repository is at ${current_sha}"
+          REMOTE
+
+  detect-release-scope:
+    name: 1a. detect release scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: hpc1-pull
+    outputs:
+      turboquant_required: ${{ steps.scope.outputs.turboquant_required }}
+      turboquant_reason: ${{ steps.scope.outputs.turboquant_reason }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - id: scope
+        name: Detect TurboQuant-sensitive changes
+        shell: bash
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          NAIM_RELEASE_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          bash scripts/ci/detect-release-scope.sh
+
+  hpc1-build:
+    name: 2. hpc1 build
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs:
+      - hpc1-pull
+      - detect-release-scope
+    steps:
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0700 -d "${HOME}/.ssh"
+          key_path="${HOME}/.ssh/naim_ci_deploy"
+          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
+          chmod 0600 "${key_path}"
+          {
+            echo "NAIM_CI_SSH_KEY=${key_path}"
+            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+          } >> "${GITHUB_ENV}"
+      - name: Build on hpc1
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
+
+  hpc1-build-turboquant:
+    name: 2b. hpc1 TurboQuant build
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs:
+      - hpc1-build
+      - detect-release-scope
+    if: needs.detect-release-scope.outputs.turboquant_required == 'true'
+    steps:
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0700 -d "${HOME}/.ssh"
+          key_path="${HOME}/.ssh/naim_ci_deploy"
+          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
+          chmod 0600 "${key_path}"
+          {
+            echo "NAIM_CI_SSH_KEY=${key_path}"
+            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+          } >> "${GITHUB_ENV}"
+      - name: Build TurboQuant runtime on hpc1
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build-turboquant.sh"
+
+  hpc1-knowledge-vault-release-gate:
+    name: 2a. hpc1 Knowledge Vault release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: hpc1-build
+    steps:
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0700 -d "${HOME}/.ssh"
+          key_path="${HOME}/.ssh/naim_ci_deploy"
+          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
+          chmod 0600 "${key_path}"
+          {
+            echo "NAIM_CI_SSH_KEY=${key_path}"
+            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+          } >> "${GITHUB_ENV}"
+      - name: Run Knowledge Vault release gate on hpc1
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' bash scripts/ci/knowledge-vault-release-gate.sh"
+
+  hpc1-build-push-harbor:
+    name: 3. hpc1 build containers and push Harbor
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs:
+      - detect-release-scope
+      - hpc1-knowledge-vault-release-gate
+      - hpc1-build-turboquant
+    if: >-
+      always() &&
+      needs.detect-release-scope.result == 'success' &&
+      needs.hpc1-knowledge-vault-release-gate.result == 'success' &&
+      (needs.hpc1-build-turboquant.result == 'success' || needs.hpc1-build-turboquant.result == 'skipped')
+    steps:
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0700 -d "${HOME}/.ssh"
+          key_path="${HOME}/.ssh/naim_ci_deploy"
+          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
+          chmod 0600 "${key_path}"
+          {
+            echo "NAIM_CI_SSH_KEY=${key_path}"
+            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+          } >> "${GITHUB_ENV}"
+      - name: Build and push images from hpc1
+        shell: bash
+        env:
+          NAIM_REGISTRY_PASSWORD: ${{ secrets.NAIM_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
+          password_file="/tmp/naim-registry-password-${GITHUB_RUN_ID}-${GITHUB_JOB}"
+          cleanup() {
+            ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+              "rm -f $(printf '%q' "${password_file}")" || true
+          }
+          trap cleanup EXIT
+          if [[ -n "${NAIM_REGISTRY_PASSWORD}" ]]; then
+            printf '%s' "${NAIM_REGISTRY_PASSWORD}" | ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+              "umask 077; cat > $(printf '%q' "${password_file}")"
+            password_env="NAIM_REGISTRY_PASSWORD_FILE='${password_file}'"
+          else
+            password_env=""
+          fi
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_RELEASE_TAG='${NAIM_RELEASE_TAG}' NAIM_REGISTRY='${NAIM_REGISTRY}' NAIM_REGISTRY_PROJECT='${NAIM_REGISTRY_PROJECT}' NAIM_REGISTRY_USERNAME='${NAIM_REGISTRY_USERNAME}' ${password_env} bash scripts/ci/hpc1-build-push-harbor.sh"
+
+  main-register-release:
+    name: 4. main register Harbor release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: hpc1-build-push-harbor
+    if: >-
+      always() &&
+      needs.hpc1-build-push-harbor.result == 'success'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Fetch release manifest from hpc1
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
+          manifest_remote="${NAIM_HPC1_REPO_PATH}/var/release-manifest-${NAIM_RELEASE_TAG}.json"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cat $(printf '%q' "${manifest_remote}")" > "${RUNNER_TEMP}/release-manifest.json"
+      - name: Register release on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NAIM_SSH_OPTS="${NAIM_CI_SSH_OPTS}"
+          export NAIM_MAIN_SSH
+          export NAIM_IMAGE_TAG="${NAIM_RELEASE_TAG}"
+          bash scripts/ci/register-release-on-main.sh \
+            --manifest "${RUNNER_TEMP}/release-manifest.json" \
+            --tag "${NAIM_RELEASE_TAG}"
+
+  main-bootstrap-controller-update:
+    name: 5. main bootstrap controller update
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: main-register-release
+    if: >-
+      always() &&
+      needs.main-register-release.result == 'success'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Bootstrap main controller update and managed rollout
+        shell: bash
+        env:
+          NAIM_REGISTRY_PASSWORD: ${{ secrets.NAIM_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          password_file=""
+          if [[ -n "${NAIM_REGISTRY_PASSWORD}" ]]; then
+            password_file="${RUNNER_TEMP}/registry-password"
+            printf '%s' "${NAIM_REGISTRY_PASSWORD}" > "${password_file}"
+            chmod 0600 "${password_file}"
+            export NAIM_REGISTRY_PASSWORD_FILE="${password_file}"
+          fi
+          export NAIM_SSH_OPTS="${NAIM_CI_SSH_OPTS}"
+          export NAIM_MAIN_SSH
+          export NAIM_HPC1_SSH
+          export NAIM_HPC1_SSH_PORT
+          export NAIM_REGISTRY
+          export NAIM_REGISTRY_PROJECT
+          export NAIM_REGISTRY_USERNAME
+          export NAIM_IMAGE_TAG="${NAIM_RELEASE_TAG}"
+          export NAIM_RELEASE_TAG
+          export NAIM_MIGRATION_TIMEOUT_SEC
+          bash scripts/ci/main-bootstrap-controller-update.sh --tag "${NAIM_RELEASE_TAG}"
+
+  migration-report:
+    name: 6. migration report
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: main-bootstrap-controller-update
+    if: >-
+      always() &&
+      needs.main-bootstrap-controller-update.result == 'success'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Fetch release manifest from hpc1
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_remote="${NAIM_HPC1_REPO_PATH}/var/release-manifest-${NAIM_RELEASE_TAG}.json"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cat $(printf '%q' "${manifest_remote}")" > "${RUNNER_TEMP}/release-manifest.json"
+      - name: Write short migration report
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NAIM_SSH_OPTS="${NAIM_CI_SSH_OPTS}"
+          export NAIM_MAIN_SSH
+          export NAIM_RELEASE_TAG
+          bash scripts/ci/fetch-main-release-report.sh \
+            --tag "${NAIM_RELEASE_TAG}" \
+            --manifest "${RUNNER_TEMP}/release-manifest.json" \
+            --output "${RUNNER_TEMP}/migration-report.md"
+          cat "${RUNNER_TEMP}/migration-report.md" >> "${GITHUB_STEP_SUMMARY}"

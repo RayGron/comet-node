@@ -1,10 +1,69 @@
 #include "interaction/interaction_http_support.h"
 
+#include <chrono>
+#include <thread>
+
 #include "app/controller_composition_support.h"
 #include "interaction/interaction_payload_builder.h"
+#include "interaction/interaction_runtime_request_codec.h"
 #include "skills/plane_skills_service.h"
 
 using nlohmann::json;
+
+namespace {
+
+bool IsLoopbackHost(const std::string& host) {
+  return host == "127.0.0.1" || host == "localhost" || host == "::1";
+}
+
+json BuildHeaderArray(
+    const std::vector<std::pair<std::string, std::string>>& headers) {
+  json result = json::array();
+  for (const auto& [key, value] : headers) {
+    result.push_back(json::array({key, value}));
+  }
+  return result;
+}
+
+HttpResponse BuildProxyErrorResponse(
+    int status_code,
+    const std::string& code,
+    const std::string& message) {
+  return naim::controller::composition_support::BuildJsonResponse(
+      status_code,
+      json{{"status", "error"}, {"code", code}, {"message", message}},
+      {});
+}
+
+HttpResponse ParseProxyResponsePayload(const json& progress) {
+  if (!progress.is_object() || !progress.contains("response") ||
+      !progress.at("response").is_object()) {
+    return BuildProxyErrorResponse(
+        502,
+        "runtime_proxy_response_missing",
+        "hostd runtime proxy did not return an upstream response");
+  }
+  const auto& response_payload = progress.at("response");
+  HttpResponse response;
+  response.status_code = response_payload.value("status_code", 502);
+  response.content_type =
+      response_payload.value("content_type", std::string("application/json"));
+  response.body = response_payload.value("body", std::string{});
+  if (response_payload.contains("headers") &&
+      response_payload.at("headers").is_object()) {
+    for (const auto& [key, value] : response_payload.at("headers").items()) {
+      if (value.is_string()) {
+        response.headers[key] = value.get<std::string>();
+      }
+    }
+  }
+  if (!response.content_type.empty()) {
+    response.headers["Content-Type"] = response.content_type;
+  }
+  return response;
+}
+
+}  // namespace
 
 InteractionHttpSupport::InteractionHttpSupport(
     const naim::controller::ControllerRuntimeSupportService& runtime_support_service,
@@ -32,6 +91,23 @@ std::string InteractionHttpSupport::BuildInteractionUpstreamBody(
     bool structured_output_json) const {
   return naim::controller::BuildInteractionUpstreamBodyPayload(
       resolution, std::move(payload), force_stream, resolved_policy, structured_output_json);
+}
+
+std::string InteractionHttpSupport::BuildInteractionRuntimeRequestBody(
+    const naim::controller::PlaneInteractionResolution& resolution,
+    json payload,
+    bool force_stream,
+    const naim::controller::ResolvedInteractionPolicy& resolved_policy,
+    bool structured_output_json) const {
+  return naim::controller::InteractionRuntimeRequestCodec{}.Serialize(
+      naim::controller::InteractionRuntimeExecutionRequest{
+          resolution.desired_state,
+          resolution.status_payload,
+          std::move(payload),
+          resolved_policy,
+          structured_output_json,
+          force_stream,
+      });
 }
 
 std::optional<std::string> InteractionHttpSupport::FindInferInstanceName(
@@ -70,6 +146,13 @@ InteractionHttpSupport::ParseInteractionTarget(
       fallback_port);
 }
 
+std::optional<naim::controller::ControllerEndpointTarget>
+InteractionHttpSupport::ResolvePlaneLocalInteractionTarget(
+    const naim::DesiredState& desired_state) const {
+  return interaction_runtime_support_service_.ResolvePlaneLocalInteractionTarget(
+      desired_state);
+}
+
 int InteractionHttpSupport::CountReadyWorkerMembers(
     naim::ControllerStore& store,
     const naim::DesiredState& desired_state) const {
@@ -84,15 +167,6 @@ int InteractionHttpSupport::CountReadyWorkerMembers(
 bool InteractionHttpSupport::ProbeControllerTargetOk(
     const std::optional<naim::controller::ControllerEndpointTarget>& target,
     const std::string& path) const {
-  if (target.has_value() && target->use_hostd_runtime_relay) {
-    try {
-      const HttpResponse response =
-          hostd_runtime_relay_service_.Send(*target, "GET", path, "", {});
-      return response.status_code >= 200 && response.status_code < 300;
-    } catch (const std::exception&) {
-      return false;
-    }
-  }
   return interaction_runtime_support_service_.ProbeControllerTargetOk(target, path);
 }
 
@@ -110,10 +184,124 @@ HttpResponse InteractionHttpSupport::SendControllerHttpRequest(
     const std::string& path,
     const std::string& body,
     const std::vector<std::pair<std::string, std::string>>& headers) const {
-  if (target.use_hostd_runtime_relay) {
-    return hostd_runtime_relay_service_.Send(target, method, path, body, headers);
-  }
   return ::SendControllerHttpRequest(target, method, path, body, headers);
+}
+
+HttpResponse InteractionHttpSupport::SendRuntimeHttpRequest(
+    const naim::controller::PlaneInteractionResolution& resolution,
+    const naim::controller::ControllerEndpointTarget& target,
+    const std::string& method,
+    const std::string& path,
+    const std::string& body,
+    const std::string& request_id,
+    const std::vector<std::pair<std::string, std::string>>& headers) const {
+  if (target.route_via_hostd_proxy) {
+    return SendHostdRuntimeProxyRequest(
+        resolution.db_path,
+        target.node_name,
+        resolution.desired_state.plane_name,
+        target,
+        method,
+        path,
+        body,
+        request_id,
+        headers,
+        "runtime");
+  }
+  return SendControllerHttpRequest(target, method, path, body, headers);
+}
+
+HttpResponse InteractionHttpSupport::SendHostdRuntimeProxyRequest(
+    const std::string& db_path,
+    const std::string& node_name,
+    const std::string& plane_name,
+    const naim::controller::ControllerEndpointTarget& target,
+    const std::string& method,
+    const std::string& path,
+    const std::string& body,
+    const std::string& request_id,
+    const std::vector<std::pair<std::string, std::string>>& headers,
+    const std::string& policy) const {
+  if (db_path.empty() || node_name.empty()) {
+    return BuildProxyErrorResponse(
+        502,
+        "runtime_proxy_route_missing",
+        "runtime target requires hostd proxy routing but has no node binding");
+  }
+  if (!IsLoopbackHost(target.host)) {
+    return BuildProxyErrorResponse(
+        502,
+        "runtime_proxy_target_rejected",
+        "hostd runtime proxy only accepts node-local loopback targets");
+  }
+
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  const std::string proxy_plane_name =
+      "runtime-http-proxy:" + plane_name + ":" + request_id;
+  naim::HostAssignment assignment;
+  assignment.node_name = node_name;
+  assignment.plane_name = proxy_plane_name;
+  assignment.desired_generation = 0;
+  assignment.max_attempts = 1;
+  assignment.assignment_type = "runtime-http-proxy";
+  assignment.desired_state_json =
+      json{
+          {"target_host", target.host},
+          {"target_port", target.port},
+          {"method", method},
+          {"path", path},
+          {"body", body},
+          {"headers", BuildHeaderArray(headers)},
+          {"request_id", request_id},
+          {"policy", policy},
+      }
+          .dump();
+  assignment.artifacts_root = "";
+  assignment.status = naim::HostAssignmentStatus::Pending;
+  assignment.status_message = "proxy runtime HTTP request";
+  store.EnqueueHostAssignments({assignment}, "superseded runtime HTTP proxy request");
+
+  const auto assignments = store.LoadHostAssignments(
+      node_name,
+      std::nullopt,
+      proxy_plane_name);
+  if (assignments.empty()) {
+    return BuildProxyErrorResponse(
+        500,
+        "runtime_proxy_queue_failed",
+        "failed to queue hostd runtime proxy assignment");
+  }
+  const int assignment_id = assignments.back().id;
+  const auto started_at = std::chrono::steady_clock::now();
+  while (std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now() - started_at)
+             .count() < 30000) {
+    const auto current = store.LoadHostAssignment(assignment_id);
+    if (!current.has_value()) {
+      return BuildProxyErrorResponse(
+          500,
+          "runtime_proxy_assignment_missing",
+          "hostd runtime proxy assignment disappeared");
+    }
+    if (current->status == naim::HostAssignmentStatus::Applied) {
+      const auto progress = json::parse(current->progress_json, nullptr, false);
+      return ParseProxyResponsePayload(progress);
+    }
+    if (current->status == naim::HostAssignmentStatus::Failed) {
+      return BuildProxyErrorResponse(
+          502,
+          "runtime_proxy_failed",
+          current->status_message.empty()
+              ? "hostd runtime proxy request failed"
+              : current->status_message);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  return BuildProxyErrorResponse(
+      504,
+      "runtime_proxy_timeout",
+      "timed out waiting for hostd runtime proxy response");
 }
 
 void InteractionHttpSupport::SendHttpResponse(

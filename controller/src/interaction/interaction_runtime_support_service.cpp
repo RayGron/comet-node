@@ -31,10 +31,52 @@ InteractionRuntimeSupportService::ParseInteractionTarget(
   return ParseControllerEndpointTarget(host + ":" + std::to_string(port));
 }
 
+std::optional<ControllerEndpointTarget>
+InteractionRuntimeSupportService::ResolvePlaneLocalInteractionTarget(
+    const naim::DesiredState& desired_state) const {
+  const auto interaction_instance_name = FindInteractionInstanceName(desired_state);
+  if (!interaction_instance_name.has_value()) {
+    return std::nullopt;
+  }
+  const auto instance_it = std::find_if(
+      desired_state.instances.begin(),
+      desired_state.instances.end(),
+      [&](const naim::InstanceSpec& instance) {
+        return instance.name == *interaction_instance_name &&
+               instance.role == naim::InstanceRole::Interaction;
+      });
+  if (instance_it == desired_state.instances.end()) {
+    return std::nullopt;
+  }
+  const auto published = std::find_if(
+      instance_it->published_ports.begin(),
+      instance_it->published_ports.end(),
+      [](const naim::PublishedPort& port) { return port.host_port > 0; });
+  if (published == instance_it->published_ports.end()) {
+    return std::nullopt;
+  }
+  ControllerEndpointTarget target;
+  target.host = NormalizeInteractionHost(published->host_ip);
+  target.port = published->host_port;
+  target.raw = "http://" + target.host + ":" + std::to_string(target.port);
+  return target;
+}
+
 std::optional<std::string> InteractionRuntimeSupportService::FindInferInstanceName(
     const naim::DesiredState& desired_state) const {
   for (const auto& instance : desired_state.instances) {
     if (instance.role == naim::InstanceRole::Infer &&
+        instance.plane_name == desired_state.plane_name) {
+      return instance.name;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> InteractionRuntimeSupportService::FindInteractionInstanceName(
+    const naim::DesiredState& desired_state) const {
+  for (const auto& instance : desired_state.instances) {
+    if (instance.role == naim::InstanceRole::Interaction &&
         instance.plane_name == desired_state.plane_name) {
       return instance.name;
     }
@@ -146,9 +188,9 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
   if (desired_state.turboquant.has_value() && desired_state.turboquant->enabled) {
     runtime.turboquant_enabled = true;
     runtime.active_cache_type_k =
-        desired_state.turboquant->cache_type_k.value_or("planar3");
+        desired_state.turboquant->cache_type_k.value_or("turbo4");
     runtime.active_cache_type_v =
-        desired_state.turboquant->cache_type_v.value_or("f16");
+        desired_state.turboquant->cache_type_v.value_or("turbo4");
   }
   if (desired_state.bootstrap_model.has_value()) {
     runtime.active_model_id = desired_state.bootstrap_model->model_id;

@@ -415,48 +415,6 @@ void HostdAppAssignmentSupport::BuildModelArtifactManifest(
       });
 }
 
-void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
-    const nlohmann::json& payload,
-    const std::string& node_name,
-    HostdBackend* backend,
-    const std::optional<int>& assignment_id) const {
-  if (backend == nullptr || !assignment_id.has_value()) {
-    throw std::runtime_error("runtime-http-proxy requires a controller assignment");
-  }
-  const std::string method = payload.value("method", std::string{});
-  const std::string path = payload.value("path", std::string{});
-  const std::string host = payload.value("target_host", std::string("127.0.0.1"));
-  const int port = payload.value("target_port", 0);
-  const std::string body = payload.value("body", std::string{});
-  const std::map<std::string, std::string> headers =
-      runtime_http_proxy_.ParseProxyHeaders(payload.value("headers", nlohmann::json::array()));
-
-  const HostdRuntimeHttpResponse response = runtime_http_proxy_.Send(
-      host,
-      port,
-      method,
-      path,
-      body,
-      headers,
-      HostdRuntimeProxyPolicy::Runtime);
-  backend->UpdateHostAssignmentProgress(
-      *assignment_id,
-      nlohmann::json{
-          {"phase", "response-ready"},
-          {"title", "Runtime proxy response ready"},
-          {"detail", "Hostd executed the runtime HTTP request locally."},
-          {"percent", 100},
-          {"request_id", payload.value("request_id", std::string{})},
-          {"plane_name", payload.value("plane_name", std::string{})},
-          {"node_name", node_name},
-          {"method", method},
-          {"path", path},
-          {"status_code", response.status_code},
-          {"content_type", response.content_type},
-          {"headers", response.headers},
-          {"body", response.body}});
-}
-
 void HostdAppAssignmentSupport::ApplyKnowledgeVaultService(
     const nlohmann::json& payload,
     const std::string& node_name,
@@ -514,7 +472,7 @@ void HostdAppAssignmentSupport::ApplyKnowledgeVaultService(
       << docker << " run -d"
       << " --name " << quote(container_name)
       << " --restart unless-stopped"
-      << " -p 127.0.0.1:" << port << ":" << port
+      << " -p 0.0.0.0:" << port << ":" << port
       << " -v " << quote(service_root.string()) << ":/naim/knowledge"
       << " -e " << quote("NAIM_KNOWLEDGE_SERVICE_ID=" + service_id)
       << " -e " << quote("NAIM_NODE_NAME=" + node_name)
@@ -538,7 +496,7 @@ void HostdAppAssignmentSupport::ApplyKnowledgeVaultService(
           "/health",
           "",
           {},
-          HostdRuntimeProxyPolicy::KnowledgeVault);
+          HostdRuntimeProxyPolicy::Runtime);
       if (health.status_code >= 200 && health.status_code < 300) {
         ready = true;
         break;
@@ -595,46 +553,150 @@ void HostdAppAssignmentSupport::StopKnowledgeVaultService(
           {"container_name", container_name}});
 }
 
-void HostdAppAssignmentSupport::ExecuteKnowledgeVaultHttpProxy(
+void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
     const nlohmann::json& payload,
     const std::string& node_name,
     HostdBackend* backend,
     const std::optional<int>& assignment_id) const {
   if (backend == nullptr || !assignment_id.has_value()) {
-    throw std::runtime_error("knowledge-vault-http-proxy requires a controller assignment");
+    throw std::runtime_error("runtime-http-proxy requires a controller assignment");
   }
+
+  const std::string host = payload.value("target_host", std::string{});
+  const int port = payload.value("target_port", 0);
   const std::string method = payload.value("method", std::string{});
   const std::string path = payload.value("path", std::string{});
-  const std::string host = payload.value("target_host", std::string("127.0.0.1"));
-  const int port = payload.value("target_port", 0);
   const std::string body = payload.value("body", std::string{});
-  const std::map<std::string, std::string> headers =
-      runtime_http_proxy_.ParseProxyHeaders(payload.value("headers", nlohmann::json::array()));
+  const std::string policy_name = payload.value("policy", std::string("runtime"));
+  HostdRuntimeProxyPolicy policy = HostdRuntimeProxyPolicy::Runtime;
+  if (policy_name == "knowledge-vault") {
+    policy = HostdRuntimeProxyPolicy::KnowledgeVault;
+  } else if (policy_name == "skills") {
+    policy = HostdRuntimeProxyPolicy::Skills;
+  }
+  const auto headers = runtime_http_proxy_.ParseProxyHeaders(
+      payload.value("headers", nlohmann::json::array()));
 
-  const HostdRuntimeHttpResponse response = runtime_http_proxy_.Send(
-      host,
-      port,
-      method,
-      path,
-      body,
-      headers,
-      HostdRuntimeProxyPolicy::KnowledgeVault);
   backend->UpdateHostAssignmentProgress(
       *assignment_id,
       nlohmann::json{
-          {"phase", "response-ready"},
-          {"title", "Knowledge vault proxy response ready"},
-          {"detail", "Hostd executed the knowledge vault HTTP request locally."},
-          {"percent", 100},
-          {"relay_id", payload.value("relay_id", std::string{})},
-          {"service_id", payload.value("service_id", std::string{})},
+          {"phase", "proxying"},
+          {"title", "Proxying runtime HTTP"},
+          {"detail", "Hostd is forwarding a controller request to a node-local runtime."},
+          {"percent", 50},
           {"node_name", node_name},
+          {"request_id", payload.value("request_id", std::string{})},
+          {"target_host", host},
+          {"target_port", port},
           {"method", method},
           {"path", path},
-          {"status_code", response.status_code},
-          {"content_type", response.content_type},
-          {"headers", response.headers},
-          {"body", response.body}});
+          {"policy", policy_name}});
+
+  const HostdRuntimeHttpResponse response =
+      runtime_http_proxy_.Send(host, port, method, path, body, headers, policy);
+  nlohmann::json response_headers = nlohmann::json::object();
+  for (const auto& [key, value] : response.headers) {
+    response_headers[key] = value;
+  }
+  backend->UpdateHostAssignmentProgress(
+      *assignment_id,
+      nlohmann::json{
+          {"phase", "completed"},
+          {"title", "Runtime HTTP proxied"},
+          {"detail", "Hostd received the runtime HTTP response."},
+          {"percent", 100},
+          {"node_name", node_name},
+          {"request_id", payload.value("request_id", std::string{})},
+          {"response",
+           nlohmann::json{
+               {"status_code", response.status_code},
+               {"content_type", response.content_type},
+               {"body", response.body},
+               {"headers", response_headers}}}});
+}
+
+void HostdAppAssignmentSupport::ExecuteHostSelfUpdate(
+    const nlohmann::json& payload,
+    const std::string& node_name,
+    const std::optional<std::string>& host_private_key_path,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id) const {
+  if (backend == nullptr || !assignment_id.has_value()) {
+    throw std::runtime_error("hostd-self-update requires a controller assignment");
+  }
+  if (!host_private_key_path.has_value() || host_private_key_path->empty()) {
+    throw std::runtime_error("hostd-self-update requires --host-private-key");
+  }
+
+  const std::string release_tag = payload.value("release_tag", std::string{});
+  const std::string hostd_image = payload.value("hostd_image", std::string{});
+  if (release_tag.empty() || hostd_image.empty()) {
+    throw std::runtime_error("hostd-self-update payload must contain release_tag and hostd_image");
+  }
+
+  const std::filesystem::path hostd_root =
+      install_layout_support_.ResolveHostdRootFromPrivateKeyPath(*host_private_key_path);
+  if (hostd_root.empty()) {
+    throw std::runtime_error("failed to derive hostd root from host private key path");
+  }
+  const std::filesystem::path compose_file =
+      payload.contains("compose_file_path") && payload.at("compose_file_path").is_string()
+          ? std::filesystem::path(payload.at("compose_file_path").get<std::string>())
+          : hostd_root / "docker-compose.yml";
+  if (!std::filesystem::exists(compose_file)) {
+    throw std::runtime_error("hostd-self-update compose file does not exist: " +
+                             compose_file.string());
+  }
+
+  const std::filesystem::path registry_config_dir =
+      payload.contains("registry_config_dir") && payload.at("registry_config_dir").is_string()
+          ? std::filesystem::path(payload.at("registry_config_dir").get<std::string>())
+          : hostd_root / "install-state" / "registry-docker";
+  const std::filesystem::path update_script =
+      hostd_root / "install-state" / "hostd-self-update.sh";
+  const std::filesystem::path update_log =
+      hostd_root / "logs" / ("hostd-self-update-" + release_tag + ".log");
+  const std::string docker_socket_group_id = command_support_.Trim(
+      command_support_.RunCommandCapture("stat -c %g /var/run/docker.sock 2>/dev/null"));
+
+  const auto update_plan = self_update_support_.BuildPlan(
+      HostdSelfUpdateRequest{
+          release_tag,
+          node_name,
+          hostd_image,
+          hostd_root,
+          compose_file,
+          registry_config_dir,
+          update_script,
+          update_log,
+          docker_socket_group_id,
+          std::filesystem::exists(registry_config_dir / "config.json"),
+      });
+
+  file_support_.WriteTextFile(update_script.string(), update_plan.script_content);
+  if (!command_support_.RunCommandOk(
+          "chmod 0700 " + command_support_.ShellQuote(update_script.string()))) {
+    throw std::runtime_error("failed to chmod hostd self-update script");
+  }
+
+  backend->UpdateHostAssignmentProgress(
+      *assignment_id,
+      nlohmann::json{
+          {"phase", "scheduled"},
+          {"title", "Hostd self-update scheduled"},
+          {"detail", "Hostd queued its own container refresh via docker compose."},
+          {"percent", 90},
+          {"node_name", node_name},
+          {"release_tag", release_tag},
+          {"hostd_image", hostd_image},
+          {"compose_file_path", compose_file.string()},
+          {"script_path", update_script.string()},
+          {"log_path", update_log.string()},
+          {"helper_container", update_plan.helper_container_name}});
+
+  if (!command_support_.RunCommandOk(update_plan.launch_command)) {
+    throw std::runtime_error("failed to launch hostd self-update helper container");
+  }
 }
 
 void HostdAppAssignmentSupport::ShowDemoOps(

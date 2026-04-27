@@ -21,6 +21,7 @@
 #include "browsing/browsing_server.h"
 #undef private
 
+
 namespace {
 
 void Expect(bool condition, const std::string& message) {
@@ -63,6 +64,7 @@ std::vector<nlohmann::json> ReadAuditLog(const std::filesystem::path& audit_path
   }
   return entries;
 }
+
 
 void TestPolicyParsing() {
   const auto policy = naim::browsing::BrowsingServer::ParsePolicyJson(

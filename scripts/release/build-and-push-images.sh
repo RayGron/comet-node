@@ -77,6 +77,54 @@ image_ref() {
   printf '%s/%s/%s:%s' "${registry}" "${project}" "${image}" "${tag}"
 }
 
+latest_image_ref() {
+  local image="$1"
+  printf '%s/%s/%s:latest' "${registry}" "${project}" "${image}"
+}
+
+delete_remote_latest_tag() {
+  local image="$1"
+  local username="${NAIM_REGISTRY_USERNAME:-}"
+  local password_file="${NAIM_REGISTRY_PASSWORD_FILE:-}"
+  if [[ -z "${username}" || -z "${password_file}" || ! -f "${password_file}" ]]; then
+    return 0
+  fi
+
+  python3 - "${registry}" "${project}" "${image}" "${username}" "${password_file}" <<'PY'
+import base64
+import ssl
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+registry, project, image, username, password_file = sys.argv[1:6]
+password = open(password_file, encoding="utf-8").read().strip()
+auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+base = f"https://{registry}/api/v2.0"
+repository = urllib.parse.quote(image, safe="")
+tag = urllib.parse.quote("latest", safe="")
+request = urllib.request.Request(
+    f"{base}/projects/{project}/repositories/{repository}/artifacts/latest/tags/{tag}",
+    headers={"Authorization": "Basic " + auth},
+    method="DELETE",
+)
+try:
+    with urllib.request.urlopen(request, context=ssl._create_unverified_context(), timeout=30):
+        pass
+except urllib.error.HTTPError as error:
+    if error.code == 403:
+        print(
+            f"warning: registry user cannot delete old latest tag for {image}; "
+            "moving latest by push",
+            file=sys.stderr,
+        )
+    elif error.code not in (404,):
+        detail = error.read().decode("utf-8", "replace")
+        raise SystemExit(f"failed to delete remote latest tag for {image}: HTTP {error.code} {detail}")
+PY
+}
+
 base_ref="$(image_ref base-runtime)"
 infer_ref="$(image_ref infer-runtime)"
 worker_ref="$(image_ref worker-runtime)"
@@ -84,6 +132,7 @@ web_ui_ref="$(image_ref web-ui)"
 skills_ref="$(image_ref skills-runtime)"
 knowledge_ref="$(image_ref knowledge-runtime)"
 webgateway_ref="$(image_ref webgateway-runtime)"
+interaction_ref="$(image_ref interaction-runtime)"
 controller_ref="$(image_ref controller)"
 hostd_ref="$(image_ref hostd)"
 
@@ -94,6 +143,7 @@ build_args=(
   "${web_ui_ref}"
   "${skills_ref}"
   "${webgateway_ref}"
+  "${interaction_ref}"
   "${controller_ref}"
   "${hostd_ref}"
   "${knowledge_ref}"
@@ -114,6 +164,7 @@ declare -a image_names=(
   skills-runtime
   knowledge-runtime
   webgateway-runtime
+  interaction-runtime
 )
 if [[ "${skip_web_ui}" != "yes" ]]; then
   image_names+=(web-ui)
@@ -131,6 +182,11 @@ for image in "${image_names[@]}"; do
     repo_digest="${ref}"
   fi
   json_entries+=("$(printf '    \"%s\": \"%s\"' "${image}" "${repo_digest}")")
+  latest_ref="$(latest_image_ref "${image}")"
+  echo "moving ${latest_ref} to ${ref}"
+  delete_remote_latest_tag "${image}"
+  docker tag "${ref}" "${latest_ref}"
+  docker push "${latest_ref}"
 done
 
 {

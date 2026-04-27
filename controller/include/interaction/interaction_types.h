@@ -19,10 +19,9 @@ struct ControllerEndpointTarget {
   std::string host;
   int port = 0;
   std::string base_path;
-  bool use_hostd_runtime_relay = false;
-  std::string relay_db_path;
-  std::string relay_node_name;
-  std::string relay_plane_name;
+  std::string node_name;
+  bool route_via_hostd_proxy = false;
+  std::string route_mode = "direct-runtime";
 };
 
 struct PlaneInteractionResolution {
@@ -65,6 +64,15 @@ struct ResolvedInteractionPolicy {
   bool long_form = false;
 };
 
+struct InteractionRuntimeExecutionRequest {
+  naim::DesiredState desired_state;
+  nlohmann::json status_payload = nlohmann::json::object();
+  nlohmann::json payload = nlohmann::json::object();
+  ResolvedInteractionPolicy resolved_policy;
+  bool structured_output_json = false;
+  bool force_stream = false;
+};
+
 struct InteractionSegmentSummary {
   int index = 0;
   int continuation_index = 0;
@@ -81,6 +89,11 @@ struct StreamedInteractionSegmentResult {
   InteractionSegmentSummary summary;
   std::string model;
   std::string cleaned_text;
+  bool context_compression_enabled = false;
+  std::string context_compression_status = "none";
+  int dialog_estimate_before = 0;
+  int dialog_estimate_after = 0;
+  double context_compression_ratio = 1.0;
 };
 
 struct InteractionSessionResult {
@@ -97,6 +110,11 @@ struct InteractionSessionResult {
   std::string stop_reason;
   std::string final_finish_reason = "stop";
   bool marker_seen = false;
+  bool context_compression_enabled = false;
+  std::string context_compression_status = "none";
+  int dialog_estimate_before = 0;
+  int dialog_estimate_after = 0;
+  double context_compression_ratio = 1.0;
 };
 
 struct InteractionRequestContext {
@@ -158,6 +176,7 @@ struct InteractionStreamResolutionResult {
 
 struct InteractionStreamingUpstreamConnection {
   bool chunked_transfer = false;
+  std::map<std::string, std::string> headers;
   std::string initial_body;
   std::function<std::string()> read_next_chunk;
   std::function<void()> close;

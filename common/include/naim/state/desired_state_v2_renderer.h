@@ -30,6 +30,7 @@ class DesiredStateV2Renderer final {
   void RenderAppInstance();
   void RenderSkillsInstance();
   void RenderWebGatewayInstance();
+  void RenderInteractionInstance();
 
   bool InferEnabled() const;
   int InferReplicaCount() const;
@@ -41,6 +42,7 @@ class DesiredStateV2Renderer final {
   std::string ResolveInferNodeName() const;
   std::string ResolveInferNodeName(int infer_index) const;
   std::string ResolveAppNodeName() const;
+  std::string ResolveAppNodeName(const nlohmann::json& app_json) const;
   std::string ResolveWorkerNodeName(int worker_index) const;
   std::optional<std::string> ResolveWorkerGpuDevice(int worker_index) const;
   std::optional<std::string> ResolveLegacyServiceNodeName(
@@ -56,13 +58,16 @@ class DesiredStateV2Renderer final {
   std::string BuildPlaneSharedDiskName() const;
   std::string BuildInferInstanceName(int infer_index = 0) const;
   std::string BuildAppInstanceName() const;
+  std::string BuildAppInstanceName(const std::string& app_name, bool primary) const;
   std::string BuildSkillsInstanceName() const;
   std::string BuildWebGatewayInstanceName() const;
+  std::string BuildInteractionInstanceName() const;
   int BuildInferApiPort(int infer_index) const;
   int BuildInferGatewayPort(int infer_index) const;
   int BuildInferLlamaPort(int infer_index) const;
   int BuildSkillsHostPort() const;
   int BuildWebGatewayHostPort() const;
+  int BuildInteractionHostPort() const;
   std::string BuildReplicaUpstreams(const std::vector<InstanceSpec>& infer_instances) const;
   std::string InferInstanceNameForWorker(int worker_index) const;
   std::string BuildPlaneSharedHostPath() const;
@@ -76,6 +81,7 @@ class DesiredStateV2Renderer final {
       const std::string& binding) const;
   std::string DefaultInferRuntimeBackend() const;
   std::string DefaultWorkerBootMode() const;
+  static std::string NormalizeAppNameToken(const std::string& value);
   void NormalizeInferenceSettings();
 
   int ExtractPrivateDiskSizeGb(
@@ -97,6 +103,7 @@ class DesiredStateV2Renderer final {
   nlohmann::json resources_json_;
   nlohmann::json worker_resources_json_;
   nlohmann::json app_json_;
+  std::vector<nlohmann::json> apps_json_;
   nlohmann::json skills_json_;
   nlohmann::json browsing_json_;
   nlohmann::json knowledge_json_;

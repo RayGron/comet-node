@@ -41,6 +41,49 @@ std::string RelationSearchText(const nlohmann::json& relation) {
       relation.value("to_block_id", std::string{}));
 }
 
+std::vector<std::string> QueryTerms(const std::string& query) {
+  static const std::set<std::string> kIgnoredTerms = {
+      "a", "an", "and", "are", "for", "in", "is", "of", "on", "or", "the",
+      "to", "with",
+  };
+  std::vector<std::string> terms;
+  std::set<std::string> seen;
+  std::string current;
+  const auto flush = [&]() {
+    if (current.size() >= 2 && kIgnoredTerms.find(current) == kIgnoredTerms.end() &&
+        seen.insert(current).second) {
+      terms.push_back(current);
+    }
+    current.clear();
+  };
+  for (unsigned char ch : query) {
+    if (std::isalnum(ch)) {
+      current.push_back(static_cast<char>(std::tolower(ch)));
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return terms;
+}
+
+int TokenSearchScore(
+    const std::string& lowered_query,
+    const std::vector<std::string>& query_terms,
+    const std::string& text,
+    int token_weight) {
+  if (lowered_query.empty()) {
+    return 0;
+  }
+  int score = text.find(lowered_query) != std::string::npos ? 100 : 0;
+  for (const auto& term : query_terms) {
+    if (text.find(term) != std::string::npos) {
+      score += token_weight;
+    }
+  }
+  return score;
+}
+
 }  // namespace
 
 KnowledgeStore::KnowledgeStore(std::filesystem::path store_path)
@@ -217,7 +260,8 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
   }
   const int limit = std::max(1, std::min(100, payload.value("limit", 20)));
   const std::string lowered_query = KnowledgeTextProcessor::Lowercase(query);
-  nlohmann::json results = nlohmann::json::array();
+  const auto query_terms = QueryTerms(query);
+  std::vector<std::pair<int, nlohmann::json>> scored_results;
   for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
     const std::string knowledge_id = block.value("knowledge_id", std::string{});
     if (!StringSetContains(selected_filter, knowledge_id)) {
@@ -225,40 +269,35 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
     }
     const auto neighbors = Neighbors(block.value("block_id", std::string{}))
                                .value("neighbors", nlohmann::json::array());
-    bool matched = query.empty() || BlockSearchText(block).find(lowered_query) != std::string::npos;
+    int score = query.empty() || list_all
+                    ? 1
+                    : TokenSearchScore(lowered_query, query_terms, BlockSearchText(block), 10);
     for (const auto& relation : neighbors) {
-      if (matched) {
-        break;
-      }
-      if (RelationSearchText(relation).find(lowered_query) != std::string::npos) {
-        matched = true;
-        break;
-      }
+      score += TokenSearchScore(lowered_query, query_terms, RelationSearchText(relation), 5);
       const std::string from = relation.value("from_block_id", std::string{});
       const std::string to = relation.value("to_block_id", std::string{});
       const std::string neighbor_id =
           from == block.value("block_id", std::string{}) ? to : from;
       const auto neighbor = repository_->GetJson("blocks:" + neighbor_id);
-      if (neighbor.has_value() &&
-          BlockSearchText(*neighbor).find(lowered_query) != std::string::npos) {
-        matched = true;
-        break;
+      if (neighbor.has_value()) {
+        score += TokenSearchScore(lowered_query, query_terms, BlockSearchText(*neighbor), 3);
       }
     }
-    if (!matched) {
+    if (score <= 0) {
       continue;
     }
     const auto scope_ids = block.value("scope_ids", nlohmann::json::array());
     if (!ScopeAllowed(scope_ids, requested_scopes)) {
-      results.push_back(nlohmann::json{
+      scored_results.push_back({score, nlohmann::json{
           {"block_id", block.value("block_id", std::string{})},
           {"knowledge_id", knowledge_id},
+          {"score", score},
           {"mode", "redacted"},
           {"redaction", nlohmann::json{{"reason", "out_of_scope"}}},
-      });
+      }});
     } else {
       const std::string body = block.value("body", std::string{});
-      results.push_back(nlohmann::json{
+      scored_results.push_back({score, nlohmann::json{
           {"block_id", block.value("block_id", std::string{})},
           {"knowledge_id", knowledge_id},
           {"version_id", block.value("version_id", std::string{})},
@@ -266,15 +305,30 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
           {"type", block.value("type", std::string("note"))},
           {"scope_ids", scope_ids},
           {"summary", body.substr(0, 240)},
-          {"score", 1.0},
+          {"score", score},
           {"confidence", block.value("confidence", 1.0)},
           {"freshness", "current"},
           {"relation_count", neighbors.size()},
           {"shard_id", std::string(KnowledgeStoreKeys::kDefaultShardId)},
           {"content_hash", block.value("content_hash", std::string{})},
           {"redaction", nullptr},
-      });
+      }});
     }
+  }
+  std::sort(
+      scored_results.begin(),
+      scored_results.end(),
+      [](const auto& left, const auto& right) {
+        if (left.first != right.first) {
+          return left.first > right.first;
+        }
+        return left.second.value("block_id", std::string{}) <
+               right.second.value("block_id", std::string{});
+      });
+  nlohmann::json results = nlohmann::json::array();
+  for (const auto& [score, result] : scored_results) {
+    (void)score;
+    results.push_back(result);
     if (static_cast<int>(results.size()) >= limit) {
       break;
     }
@@ -1025,7 +1079,6 @@ nlohmann::json KnowledgeStore::MarkdownExport(const nlohmann::json& payload) con
     const auto scope_ids = block.value("scope_ids", nlohmann::json::array());
     if (!ScopeAllowed(scope_ids, requested_scopes)) {
       warnings.push_back(nlohmann::json{
-          {"block_id", block.value("block_id", std::string{})},
           {"warning", "restricted_export_skipped"},
       });
       continue;

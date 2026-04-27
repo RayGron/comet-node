@@ -14,6 +14,7 @@ enum class InstanceRole {
   App,
   Skills,
   Browsing,
+  Interaction,
 };
 
 enum class DiskKind {
@@ -23,6 +24,7 @@ enum class DiskKind {
   AppPrivate,
   SkillsPrivate,
   BrowsingPrivate,
+  InteractionPrivate,
 };
 
 inline bool IsPrivateDiskKind(DiskKind kind) {
@@ -30,7 +32,8 @@ inline bool IsPrivateDiskKind(DiskKind kind) {
          kind == DiskKind::WorkerPrivate ||
          kind == DiskKind::AppPrivate ||
          kind == DiskKind::SkillsPrivate ||
-         kind == DiskKind::BrowsingPrivate;
+         kind == DiskKind::BrowsingPrivate ||
+         kind == DiskKind::InteractionPrivate;
 }
 
 inline bool IsNodeLocalDiskKind(DiskKind kind) {
@@ -40,14 +43,16 @@ inline bool IsNodeLocalDiskKind(DiskKind kind) {
 inline bool InstanceNeedsSharedDiskMount(InstanceRole role) {
   return role == InstanceRole::Infer ||
          role == InstanceRole::Worker ||
-         role == InstanceRole::App;
+         role == InstanceRole::App ||
+         role == InstanceRole::Interaction;
 }
 
 inline bool InstanceNeedsPrivateDisk(InstanceRole role) {
   return role == InstanceRole::Worker ||
          role == InstanceRole::App ||
          role == InstanceRole::Skills ||
-         role == InstanceRole::Browsing;
+         role == InstanceRole::Browsing ||
+         role == InstanceRole::Interaction;
 }
 
 struct PublishedPort {
@@ -262,6 +267,7 @@ struct InteractionSettings {
     std::optional<std::string> semantic_goal;
   };
 
+  std::optional<std::string> image;
   std::optional<std::string> system_prompt;
   std::optional<std::string> analysis_system_prompt;
   bool thinking_enabled = false;
@@ -320,6 +326,13 @@ struct TurboQuantFeatureSpec {
   std::optional<std::string> cache_type_v;
 };
 
+struct ContextCompressionFeatureSpec {
+  bool enabled = false;
+  std::string mode = "auto";
+  std::string target = "dialog_and_knowledge";
+  std::string memory_priority = "balanced";
+};
+
 using WebGatewayPolicySettings = BrowsingPolicySettings;
 using WebGatewaySettings = BrowsingSettings;
 
@@ -344,6 +357,7 @@ struct DesiredState {
   std::optional<BrowsingSettings> browsing;
   std::optional<KnowledgeSettings> knowledge;
   std::optional<TurboQuantFeatureSpec> turboquant;
+  std::optional<ContextCompressionFeatureSpec> context_compression;
   std::optional<ExternalAppHostConfig> app_host;
   InferenceRuntimeSettings inference;
   WorkerGroupSpec worker_group;

@@ -47,6 +47,41 @@ std::optional<KnowledgeVaultServiceRecord> KnowledgeVaultServiceRepository::Load
   return record;
 }
 
+std::vector<KnowledgeVaultServiceRecord> KnowledgeVaultServiceRepository::LoadServices(
+    const std::string& db_path) const {
+  EnsureControllerSchema(db_path);
+  sqlite3* db = nullptr;
+  if (sqlite3_open(db_path.c_str(), &db) != SQLITE_OK) {
+    return {};
+  }
+
+  std::vector<KnowledgeVaultServiceRecord> records;
+  {
+    naim::SqliteStatement statement(
+        db,
+        "SELECT service_id, node_name, image, endpoint_host, endpoint_port, desired_state_json, "
+        "status, status_message, schema_version, index_epoch, latest_event_sequence "
+        "FROM knowledge_vault_services ORDER BY service_id;");
+    while (statement.StepRow()) {
+      KnowledgeVaultServiceRecord record;
+      record.service_id = ToText(statement.raw(), 0);
+      record.node_name = ToText(statement.raw(), 1);
+      record.image = ToText(statement.raw(), 2);
+      record.endpoint_host = ToText(statement.raw(), 3);
+      record.endpoint_port = sqlite3_column_int(statement.raw(), 4);
+      record.desired_state_json = ToText(statement.raw(), 5);
+      record.status = ToText(statement.raw(), 6);
+      record.status_message = ToText(statement.raw(), 7);
+      record.schema_version = ToText(statement.raw(), 8);
+      record.index_epoch = ToText(statement.raw(), 9);
+      record.latest_event_sequence = sqlite3_column_int(statement.raw(), 10);
+      records.push_back(std::move(record));
+    }
+  }
+  sqlite3_close(db);
+  return records;
+}
+
 void KnowledgeVaultServiceRepository::UpsertService(
     const std::string& db_path,
     const KnowledgeVaultServiceRecord& record) const {
@@ -59,12 +94,15 @@ void KnowledgeVaultServiceRepository::UpsertService(
     naim::SqliteStatement statement(
         db,
         "INSERT INTO knowledge_vault_services(service_id, node_name, image, endpoint_host, "
-        "endpoint_port, desired_state_json, status, status_message, updated_at) "
-        "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP) "
+        "endpoint_port, desired_state_json, status, status_message, schema_version, index_epoch, "
+        "latest_event_sequence, updated_at) "
+        "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP) "
         "ON CONFLICT(service_id) DO UPDATE SET node_name=excluded.node_name, "
         "image=excluded.image, endpoint_host=excluded.endpoint_host, "
         "endpoint_port=excluded.endpoint_port, desired_state_json=excluded.desired_state_json, "
-        "status=excluded.status, status_message=excluded.status_message, updated_at=CURRENT_TIMESTAMP;");
+        "status=excluded.status, status_message=excluded.status_message, "
+        "schema_version=excluded.schema_version, index_epoch=excluded.index_epoch, "
+        "latest_event_sequence=excluded.latest_event_sequence, updated_at=CURRENT_TIMESTAMP;");
     statement.BindText(1, record.service_id);
     statement.BindText(2, record.node_name);
     statement.BindText(3, record.image);
@@ -73,6 +111,9 @@ void KnowledgeVaultServiceRepository::UpsertService(
     statement.BindText(6, record.desired_state_json);
     statement.BindText(7, record.status);
     statement.BindText(8, record.status_message);
+    statement.BindText(9, record.schema_version);
+    statement.BindText(10, record.index_epoch);
+    statement.BindInt(11, record.latest_event_sequence);
     statement.StepDone();
   }
   sqlite3_close(db);

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -136,6 +137,20 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
     Expect(rerendered.turboquant->cache_type_v == rendered.turboquant->cache_type_v,
            name + ": turboquant.cache_type_v mismatch");
   }
+  if (rendered.context_compression.has_value()) {
+    Expect(rerendered.context_compression.has_value(),
+           name + ": context_compression missing after rerender");
+    Expect(rerendered.context_compression->enabled == rendered.context_compression->enabled,
+           name + ": context_compression.enabled mismatch");
+    Expect(rerendered.context_compression->mode == rendered.context_compression->mode,
+           name + ": context_compression.mode mismatch");
+    Expect(rerendered.context_compression->target == rendered.context_compression->target,
+           name + ": context_compression.target mismatch");
+    Expect(
+        rerendered.context_compression->memory_priority ==
+            rendered.context_compression->memory_priority,
+        name + ": context_compression.memory_priority mismatch");
+  }
   if (source.contains("features") && source.at("features").contains("turboquant")) {
     Expect(projected.contains("features"), name + ": features block missing after projection");
     Expect(projected.at("features").contains("turboquant"),
@@ -153,6 +168,14 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
       Expect(projected_turboquant.at("cache_type_v") == source_turboquant.at("cache_type_v"),
              name + ": turboquant.cache_type_v mismatch");
     }
+  }
+  if (source.contains("features") && source.at("features").contains("context_compression")) {
+    Expect(projected.contains("features"), name + ": features block missing after projection");
+    Expect(projected.at("features").contains("context_compression"),
+           name + ": context_compression block missing after projection");
+    Expect(projected.at("features").at("context_compression") ==
+               source.at("features").at("context_compression"),
+           name + ": context_compression projection mismatch");
   }
   if (source.contains("skills")) {
     Expect(projected.contains("skills"), name + ": skills block missing after projection");
@@ -190,6 +213,13 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
     Expect(projected.at("knowledge").at("selected_knowledge_ids") ==
                source.at("knowledge").at("selected_knowledge_ids"),
            name + ": knowledge.selected_knowledge_ids mismatch");
+  }
+  if (source.contains("interaction")) {
+    Expect(projected.contains("interaction"), name + ": interaction block missing after projection");
+    if (source.at("interaction").contains("image")) {
+      Expect(projected.at("interaction").at("image") == source.at("interaction").at("image"),
+             name + ": interaction.image mismatch");
+    }
   }
   const auto* webgateway_source =
       source.contains("webgateway")
@@ -295,13 +325,117 @@ int main() {
              }},
             {"features",
              {{"turboquant",
-               {{"enabled", true}, {"cache_type_k", "planar3"}, {"cache_type_v", "f16"}}}}},
+               {{"enabled", true}, {"cache_type_k", "turbo4"}, {"cache_type_v", "turbo4"}}}}},
             {"runtime",
              {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
             {"infer", {{"replicas", 1}}},
             {"app", {{"enabled", false}}},
         },
         "turboquant-enabled");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "context-compression-enabled"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-context-compression"},
+             }},
+            {"features",
+             {{"context_compression",
+               {{"enabled", true},
+                {"mode", "auto"},
+                {"target", "dialog_and_knowledge"},
+                {"memory_priority", "balanced"}}}}},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", false}}},
+        },
+        "context-compression-enabled");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "combined-features"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-combined"},
+             }},
+            {"features",
+             {{"context_compression",
+               {{"enabled", true},
+                {"mode", "auto"},
+                {"target", "dialog_and_knowledge"},
+                {"memory_priority", "balanced"}}},
+              {"turboquant",
+               {{"enabled", true}, {"cache_type_k", "turbo4"}, {"cache_type_v", "turbo4"}}}}},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", false}}},
+        },
+        "combined-features");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "interaction-image-override"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-interaction-image"},
+             }},
+            {"interaction",
+             {
+                 {"image",
+                  "chainzano.com/naim/interaction-runtime@sha256:feedface"},
+                 {"thinking_enabled", false},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", false}}},
+        },
+        "interaction-image-override");
+
+    {
+      const auto rendered = naim::DesiredStateV2Renderer::Render(
+          json{
+              {"version", 2},
+              {"plane_name", "interaction-shared-disk"},
+              {"plane_mode", "llm"},
+              {"model",
+               {
+                   {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                   {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                   {"served_model_name", "qwen-interaction-shared"},
+               }},
+              {"runtime",
+               {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+              {"infer", {{"replicas", 1}}},
+              {"app", {{"enabled", false}}},
+          });
+      const auto interaction_it = std::find_if(
+          rendered.instances.begin(),
+          rendered.instances.end(),
+          [](const naim::InstanceSpec& instance) {
+            return instance.role == naim::InstanceRole::Interaction;
+          });
+      Expect(interaction_it != rendered.instances.end(),
+             "interaction-shared-disk: interaction instance missing");
+      Expect(interaction_it->shared_disk_name == rendered.plane_shared_disk_name,
+             "interaction-shared-disk: interaction instance must mount plane shared disk");
+      std::cout << "ok-roundtrip: interaction-shared-disk\n";
+    }
 
     ExpectRoundTrip(
         json{
@@ -595,6 +729,51 @@ int main() {
             {"skills", {{"enabled", true}, {"image", "example/skills:dev"}}},
         },
         "execution-node-clean");
+
+    {
+      const json multi_app_plane{
+          {"version", 2},
+          {"plane_name", "multi-app-plane"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-multi-app"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"apps",
+           json::array(
+               {{{"name", "chat"},
+                 {"primary", true},
+                 {"enabled", true},
+                 {"image", "example/app:dev"},
+                 {"start", {{"type", "script"}, {"script_ref", "node server.js"}}}},
+                {{"name", "market-ingest"},
+                 {"enabled", true},
+                 {"image", "example/app:dev"},
+                 {"start", {{"type", "script"}, {"script_ref", "node market-collector.js"}}}}})},
+      };
+      const auto rendered = naim::DesiredStateV2Renderer::Render(multi_app_plane);
+      const auto projected = naim::DesiredStateV2Projector::Project(rendered);
+      Expect(projected.contains("apps"), "multi-app-plane: apps should project");
+      Expect(projected.at("apps").is_array(), "multi-app-plane: apps should be array");
+      Expect(projected.at("apps").size() == 2, "multi-app-plane: expected two apps");
+      Expect(!projected.contains("app"), "multi-app-plane: legacy app should be suppressed");
+      const auto& primary_app = projected.at("apps").at(0);
+      Expect(primary_app.at("name").get<std::string>() == "chat",
+             "multi-app-plane: primary app name mismatch");
+      Expect(primary_app.value("primary", false),
+             "multi-app-plane: primary app flag mismatch");
+      const auto& collector_app = projected.at("apps").at(1);
+      Expect(collector_app.at("name").get<std::string>() == "market-ingest",
+             "multi-app-plane: collector app name mismatch");
+      Expect(!collector_app.value("primary", false),
+             "multi-app-plane: collector should not be primary");
+      ExpectRoundTrip(multi_app_plane, "multi-app-plane");
+    }
 
     return 0;
   } catch (const std::exception& ex) {

@@ -50,11 +50,39 @@ int main() {
   });
   Expect(duplicate.value("status", std::string{}) == "duplicate", "source ingest should deduplicate");
 
+  const auto restricted = store.IngestSource(nlohmann::json{
+      {"source_kind", "document"},
+      {"source_ref", "doc://restricted-store-test"},
+      {"content", "restricted.example.internal should never leak into public export warnings."},
+      {"scope_ids", nlohmann::json::array({"scope.private"})},
+      {"metadata", nlohmann::json{{"title", "Restricted Store Test"}}},
+  });
+  Expect(restricted.value("status", std::string{}) == "accepted", "restricted source ingest should accept");
+
   const auto search = store.Search(nlohmann::json{
       {"query", "scheduled merge"},
       {"scope_id", "scope.default"},
   });
   Expect(!search.value("results", nlohmann::json::array()).empty(), "search should return result");
+
+  store.WriteBlock(nlohmann::json{
+      {"block_id", "lt-cypher-ai.market.assets"},
+      {"knowledge_id", "lt-cypher-ai.market.assets"},
+      {"title", "lt-cypher-ai market asset memory"},
+      {"body", "BTC latest price and bitcoin market observations from LocalTrade and CoinGecko."},
+      {"scope_ids", nlohmann::json::array({"scope.default"})},
+  });
+  const auto token_search = store.Search(nlohmann::json{
+      {"query", "bitcoin market BTC LocalTrade"},
+      {"scope_id", "scope.default"},
+      {"limit", 5},
+  });
+  const auto token_results = token_search.value("results", nlohmann::json::array());
+  Expect(!token_results.empty(), "token search should find deterministic market blocks");
+  Expect(
+      token_results.front().value("block_id", std::string{}) ==
+          "lt-cypher-ai.market.assets",
+      "token search should rank the matching deterministic market block first");
 
   const auto redacted = store.Search(nlohmann::json{
       {"query", "scheduled merge"},
@@ -155,6 +183,13 @@ int main() {
       {"scope_ids", nlohmann::json::array({"scope.default"})},
   });
   Expect(!markdown.value("files", nlohmann::json::array()).empty(), "markdown export should produce files");
+  const std::string markdown_text = markdown.dump();
+  Expect(
+      markdown_text.find(restricted.value("source_block_id", std::string{})) == std::string::npos,
+      "markdown export warnings should not leak restricted block ids");
+  Expect(
+      markdown_text.find("restricted.example.internal") == std::string::npos,
+      "markdown export should not leak restricted content");
   Expect(
       markdown.at("files").front().value("content", std::string{}).find("related:") != std::string::npos,
       "markdown export should include Obsidian-compatible frontmatter");

@@ -22,6 +22,18 @@ void TestSanitizesReasoningAndThinkBlocks() {
   std::cout << "ok: interaction-text-sanitizes-reasoning" << '\n';
 }
 
+void TestSanitizesModelReasoningPreambleLeak() {
+  const naim::controller::InteractionTextPostProcessor processor;
+  const std::string text =
+      "The user's prompt explicitly states: \"Reply in English.\"\n\n"
+      "Therefore, despite the user's request to reply in Russian, I must follow the system instruction.\n\n"
+      "Final market answer.";
+  Expect(
+      processor.SanitizeInteractionText(text) == "Final market answer.",
+      "processor should strip leaked reasoning preambles from model output");
+  std::cout << "ok: interaction-text-sanitizes-model-reasoning-preamble" << '\n';
+}
+
 void TestRemovesCompletionMarkers() {
   const naim::controller::InteractionTextPostProcessor processor;
   bool marker_seen = false;
@@ -32,6 +44,14 @@ void TestRemovesCompletionMarkers() {
   Expect(marker_seen, "processor should detect completion markers");
   Expect(cleaned == "part  end ", "processor should remove all completion markers");
   std::cout << "ok: interaction-text-removes-markers" << '\n';
+}
+
+void TestSanitizesBareCompletionMarker() {
+  const naim::controller::InteractionTextPostProcessor processor;
+  Expect(
+      processor.SanitizeInteractionText("[[TASK_COMPLETE]]").empty(),
+      "processor should strip a bare completion marker from visible text");
+  std::cout << "ok: interaction-text-sanitizes-bare-marker" << '\n';
 }
 
 void TestConsumesSplitCompletionMarker() {
@@ -61,14 +81,29 @@ void TestUtf8SafeSuffixAvoidsBrokenPrefix() {
   std::cout << "ok: interaction-text-utf8-safe-suffix" << '\n';
 }
 
+void TestCollapsesAdjacentDuplicateSentences() {
+  const naim::controller::InteractionTextPostProcessor processor;
+  const std::string text =
+      "I am Jex AI, the LocalTrade assistant.I am Jex AI, the LocalTrade assistant."
+      "I am Jex AI, the LocalTrade assistant.";
+  Expect(
+      processor.SanitizeInteractionText(text) ==
+          "I am Jex AI, the LocalTrade assistant.",
+      "processor should collapse adjacent duplicate sentences");
+  std::cout << "ok: interaction-text-collapses-duplicate-sentences" << '\n';
+}
+
 }  // namespace
 
 int main() {
   try {
     TestSanitizesReasoningAndThinkBlocks();
+    TestSanitizesModelReasoningPreambleLeak();
     TestRemovesCompletionMarkers();
+    TestSanitizesBareCompletionMarker();
     TestConsumesSplitCompletionMarker();
     TestUtf8SafeSuffixAvoidsBrokenPrefix();
+    TestCollapsesAdjacentDuplicateSentences();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "interaction_text_post_processor_tests failed: "

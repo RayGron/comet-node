@@ -1,21 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { KnowledgeCubeGraph } from "./KnowledgeCubeGraph.jsx";
-
-function knowledgeIdFromItem(item) {
-  return item?.knowledge_id || item?.id || "";
-}
-
-function normalizeKnowledgeResults(items) {
-  const byKnowledgeId = new Map();
-  for (const item of Array.isArray(items) ? items : []) {
-    const knowledgeId = knowledgeIdFromItem(item);
-    if (!knowledgeId || byKnowledgeId.has(knowledgeId)) {
-      continue;
-    }
-    byKnowledgeId.set(knowledgeId, item);
-  }
-  return [...byKnowledgeId.values()];
-}
+import {
+  buildKnowledgeGraphRequest,
+  KNOWLEDGE_GRAPH_LIMIT,
+  knowledgeIdFromItem,
+  normalizeKnowledgeResults,
+} from "./knowledgeVault.js";
 
 function InlineHint({ message, severity = "warning" }) {
   if (!message) {
@@ -57,7 +47,7 @@ export function KnowledgeBaseSelectorModal({
           body: JSON.stringify({
             query,
             list_all: !query.trim(),
-            limit: 100,
+            limit: KNOWLEDGE_GRAPH_LIMIT,
           }),
           signal: controller.signal,
         });
@@ -86,13 +76,8 @@ export function KnowledgeBaseSelectorModal({
     if (!open) {
       return undefined;
     }
-    const knowledgeIds = [
-      ...new Set([
-        ...results.map(knowledgeIdFromItem).filter(Boolean),
-        ...selectedSet,
-      ]),
-    ].slice(0, 80);
-    if (knowledgeIds.length === 0) {
+    const graphRequest = buildKnowledgeGraphRequest(results, [...selectedSet], KNOWLEDGE_GRAPH_LIMIT);
+    if (graphRequest.knowledge_ids.length === 0) {
       setGraph({ nodes: [], edges: [] });
       return undefined;
     }
@@ -105,10 +90,7 @@ export function KnowledgeBaseSelectorModal({
             Accept: "application/json",
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            knowledge_ids: knowledgeIds,
-            depth: 1,
-          }),
+          body: JSON.stringify(graphRequest),
           signal: controller.signal,
         });
         const payload = await response.json().catch(() => ({}));

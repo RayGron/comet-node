@@ -173,64 +173,49 @@ bool HostdRuntimeHttpProxy::IsAllowedRuntimeProxyPath(
   return false;
 }
 
-bool HostdRuntimeHttpProxy::IsAllowedKnowledgeVaultProxyPath(
-    const std::string& method,
-    const std::string& path) {
-  const std::string route = path.substr(0, path.find('?'));
-  if (method == "GET" && route == "/health") {
-    return true;
-  }
-  if (method == "GET" && route == "/v1/status") {
-    return true;
-  }
-  if (method == "GET" && route.rfind("/v1/blocks/", 0) == 0) {
-    return true;
-  }
-  if (method == "GET" && route.rfind("/v1/heads/", 0) == 0) {
-    return true;
-  }
-  if (method == "GET" && route.rfind("/v1/capsules/", 0) == 0) {
-    return true;
-  }
-  if (method == "GET" && (route == "/v1/reviews" || route == "/v1/catalog")) {
-    return true;
-  }
-  if (method == "GET" && route == "/v1/replica-merges/status") {
-    return true;
-  }
-  if (method == "POST" &&
-      (route == "/v1/blocks" || route == "/v1/relations" || route == "/v1/search" ||
-       route == "/v1/context" || route == "/v1/query-route" ||
-       route == "/v1/source-ingest" || route == "/v1/capsules" ||
-       route == "/v1/overlays" || route == "/v1/replica-merges/trigger" ||
-       route == "/v1/replica-merges/schedule" || route == "/v1/replica-merges/run-due" ||
-       route == "/v1/replica-merges/reconcile-daily" || route == "/v1/repair" ||
-       route == "/v1/markdown-export" || route == "/v1/markdown-import" ||
-       route == "/v1/graph-neighborhood" || route == "/v1/catalog")) {
-    return true;
-  }
-  if (method == "PUT" &&
-      (route.rfind("/v1/heads/", 0) == 0 || route.rfind("/v1/reviews/", 0) == 0)) {
-    return true;
-  }
-  return false;
-}
-
 bool HostdRuntimeHttpProxy::IsAllowedProxyPath(
     HostdRuntimeProxyPolicy policy,
     const std::string& method,
     const std::string& path) {
+  const std::string route = path.substr(0, path.find('?'));
+  if (policy == HostdRuntimeProxyPolicy::Skills) {
+    if (method == "GET" && route == "/health") {
+      return true;
+    }
+    if (route == "/v1/skills" && (method == "GET" || method == "POST")) {
+      return true;
+    }
+    if (route == "/v1/skills/resolve" && method == "POST") {
+      return true;
+    }
+    if (route.rfind("/v1/skills/", 0) == 0 &&
+        (method == "GET" || method == "PUT" || method == "PATCH" ||
+         method == "DELETE")) {
+      return true;
+    }
+    return false;
+  }
   if (policy == HostdRuntimeProxyPolicy::KnowledgeVault) {
-    return IsAllowedKnowledgeVaultProxyPath(method, path);
+    if (method == "GET" && route == "/health") {
+      return true;
+    }
+    if ((method == "GET" || method == "POST" || method == "PUT") &&
+        route.rfind("/v1/", 0) == 0) {
+      return true;
+    }
+    return false;
   }
   return IsAllowedRuntimeProxyPath(method, path);
 }
 
 std::string HostdRuntimeHttpProxy::PolicyLabel(HostdRuntimeProxyPolicy policy) {
-  if (policy == HostdRuntimeProxyPolicy::KnowledgeVault) {
-    return "knowledge-vault-http-proxy";
+  if (policy == HostdRuntimeProxyPolicy::Skills) {
+    return "skills-runtime-http";
   }
-  return "runtime-http-proxy";
+  if (policy == HostdRuntimeProxyPolicy::KnowledgeVault) {
+    return "knowledge-vault-http";
+  }
+  return "runtime-direct-http";
 }
 
 HostdRuntimeHttpResponse HostdRuntimeHttpProxy::ParseHttpResponse(

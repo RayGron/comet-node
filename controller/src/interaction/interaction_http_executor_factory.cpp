@@ -35,6 +35,9 @@ InteractionPlaneResolver InteractionHttpExecutorFactory::MakePlaneResolver() con
       [&](const std::string& gateway_listen, int fallback_port) {
         return support_.ParseInteractionTarget(gateway_listen, fallback_port);
       },
+      [&](const naim::DesiredState& desired_state) {
+        return support_.ResolvePlaneLocalInteractionTarget(desired_state);
+      },
       [&](naim::ControllerStore& store,
           const naim::DesiredState& desired_state) {
         return support_.CountReadyWorkerMembers(store, desired_state);
@@ -57,21 +60,24 @@ InteractionSessionExecutor InteractionHttpExecutorFactory::MakeSessionExecutor()
           bool force_stream,
           const ResolvedInteractionPolicy& resolved_policy,
           bool structured_output_json) {
-        return support_.BuildInteractionUpstreamBody(
+        return support_.BuildInteractionRuntimeRequestBody(
             resolution,
             std::move(payload),
             force_stream,
             resolved_policy,
             structured_output_json);
       },
-      [&](const ControllerEndpointTarget& target,
+      [&](const PlaneInteractionResolution& resolution,
+          const ControllerEndpointTarget& target,
           const std::string& request_id,
           const std::string& body) {
-        const ::HttpResponse response = support_.SendControllerHttpRequest(
+        const ::HttpResponse response = support_.SendRuntimeHttpRequest(
+            resolution,
             target,
             "POST",
             "/v1/chat/completions",
             body,
+            request_id,
             {{"Accept", "application/json"},
              {"X-Naim-Request-Id", request_id}});
         return InteractionUpstreamResponse{
@@ -128,7 +134,7 @@ InteractionHttpExecutorFactory::MakeStreamSegmentExecutor() const {
           bool force_stream,
           const ResolvedInteractionPolicy& resolved_policy,
           bool structured_output_json) {
-        return support_.BuildInteractionUpstreamBody(
+        return support_.BuildInteractionRuntimeRequestBody(
             resolution,
             std::move(payload),
             force_stream,
@@ -140,14 +146,17 @@ InteractionHttpExecutorFactory::MakeStreamSegmentExecutor() const {
          const std::string& body) {
         return ::OpenInteractionStreamRequest(target, request_id, body);
       },
-      [&](const ControllerEndpointTarget& target,
+      [&](const PlaneInteractionResolution& resolution,
+          const ControllerEndpointTarget& target,
           const std::string& request_id,
           const std::string& body) {
-        const ::HttpResponse response = support_.SendControllerHttpRequest(
+        const ::HttpResponse response = support_.SendRuntimeHttpRequest(
+            resolution,
             target,
             "POST",
             "/v1/chat/completions",
             body,
+            request_id,
             {{"Accept", "application/json"},
              {"X-Naim-Request-Id", request_id}});
         return InteractionUpstreamResponse{
@@ -183,23 +192,26 @@ InteractionProxyExecutor InteractionHttpExecutorFactory::MakeProxyExecutor(
           bool force_stream,
           const ResolvedInteractionPolicy& resolved_policy,
           bool structured_output_json) {
-        return support_.BuildInteractionUpstreamBody(
+        return support_.BuildInteractionRuntimeRequestBody(
             resolution,
             std::move(payload),
             force_stream,
             resolved_policy,
             structured_output_json);
       },
-      [&](const ControllerEndpointTarget& target,
+      [&](const PlaneInteractionResolution& resolution,
+          const ControllerEndpointTarget& target,
           const std::string& method,
           const std::string& path,
           const std::string& body,
           const std::string& request_id) {
-        const ::HttpResponse response = support_.SendControllerHttpRequest(
+        const ::HttpResponse response = support_.SendRuntimeHttpRequest(
+            resolution,
             target,
             method,
             path,
             body,
+            request_id,
             {{"Accept", "application/json"},
              {"X-Naim-Request-Id", request_id}});
         return InteractionUpstreamResponse{

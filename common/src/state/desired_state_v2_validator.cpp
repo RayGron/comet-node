@@ -15,18 +15,14 @@ bool FieldEnabledByDefault(const nlohmann::json& service_json, bool default_valu
   return service_json.value("enabled", default_value);
 }
 
-constexpr std::string_view kTurboQuantDefaultCacheTypeK = "planar3";
-constexpr std::string_view kTurboQuantDefaultCacheTypeV = "f16";
+constexpr std::string_view kTurboQuantDefaultCacheTypeK = "turbo4";
+constexpr std::string_view kTurboQuantDefaultCacheTypeV = "turbo4";
 
 bool IsSupportedTurboQuantCacheType(const std::string& value) {
   static const std::set<std::string> kSupportedTypes = {
       "f16",
       "turbo3",
       "turbo4",
-      "planar3",
-      "planar4",
-      "iso3",
-      "iso4",
   };
   return kSupportedTypes.find(value) != kSupportedTypes.end();
 }
@@ -227,51 +223,97 @@ void DesiredStateV2Validator::ValidateFeatures() const {
   }
   RequireObject("features");
   const auto& features = value_.at("features");
-  if (!features.contains("turboquant")) {
-    return;
-  }
-  if (!features.at("turboquant").is_object()) {
-    throw std::runtime_error("desired-state v2 features.turboquant must be an object");
-  }
-  const auto& turboquant = features.at("turboquant");
-  const bool enabled = turboquant.value("enabled", false);
-  if (turboquant.contains("cache_type_k") && !turboquant.at("cache_type_k").is_string() &&
-      !turboquant.at("cache_type_k").is_null()) {
-    throw std::runtime_error(
-        "desired-state v2 features.turboquant.cache_type_k must be a string");
-  }
-  if (turboquant.contains("cache_type_v") && !turboquant.at("cache_type_v").is_string() &&
-      !turboquant.at("cache_type_v").is_null()) {
-    throw std::runtime_error(
-        "desired-state v2 features.turboquant.cache_type_v must be a string");
-  }
-  if (!enabled) {
-    return;
-  }
   const std::string plane_mode = value_.value("plane_mode", std::string("llm"));
-  const auto& runtime = value_.at("runtime");
-  const std::string engine = runtime.value("engine", std::string{});
-  const std::string distributed_backend =
-      runtime.value("distributed_backend", engine == "llama.cpp" ? std::string("llama_rpc")
-                                                                  : std::string("local"));
-  if (plane_mode != "llm" || engine != "llama.cpp" || distributed_backend != "llama_rpc") {
-    throw std::runtime_error(
-        "desired-state v2 features.turboquant requires plane_mode=llm with "
-        "runtime.engine=llama.cpp and runtime.distributed_backend=llama_rpc");
+  if (features.contains("turboquant")) {
+    if (!features.at("turboquant").is_object()) {
+      throw std::runtime_error("desired-state v2 features.turboquant must be an object");
+    }
+    const auto& turboquant = features.at("turboquant");
+    const bool enabled = turboquant.value("enabled", false);
+    if (turboquant.contains("cache_type_k") && !turboquant.at("cache_type_k").is_string() &&
+        !turboquant.at("cache_type_k").is_null()) {
+      throw std::runtime_error(
+          "desired-state v2 features.turboquant.cache_type_k must be a string");
+    }
+    if (turboquant.contains("cache_type_v") && !turboquant.at("cache_type_v").is_string() &&
+        !turboquant.at("cache_type_v").is_null()) {
+      throw std::runtime_error(
+          "desired-state v2 features.turboquant.cache_type_v must be a string");
+    }
+    if (enabled) {
+      const auto& runtime = value_.at("runtime");
+      const std::string engine = runtime.value("engine", std::string{});
+      const std::string distributed_backend =
+          runtime.value("distributed_backend", engine == "llama.cpp" ? std::string("llama_rpc")
+                                                                      : std::string("local"));
+      if (plane_mode != "llm" || engine != "llama.cpp" || distributed_backend != "llama_rpc") {
+        throw std::runtime_error(
+            "desired-state v2 features.turboquant requires plane_mode=llm with "
+            "runtime.engine=llama.cpp and runtime.distributed_backend=llama_rpc");
+      }
+      const std::string cache_type_k = turboquant.value(
+          "cache_type_k",
+          std::string(kTurboQuantDefaultCacheTypeK));
+      const std::string cache_type_v = turboquant.value(
+          "cache_type_v",
+          std::string(kTurboQuantDefaultCacheTypeV));
+      if (!IsSupportedTurboQuantCacheType(cache_type_k)) {
+        throw std::runtime_error(
+            "desired-state v2 features.turboquant.cache_type_k has unsupported value");
+      }
+      if (!IsSupportedTurboQuantCacheType(cache_type_v)) {
+        throw std::runtime_error(
+            "desired-state v2 features.turboquant.cache_type_v has unsupported value");
+      }
+    }
   }
-  const std::string cache_type_k = turboquant.value(
-      "cache_type_k",
-      std::string(kTurboQuantDefaultCacheTypeK));
-  const std::string cache_type_v = turboquant.value(
-      "cache_type_v",
-      std::string(kTurboQuantDefaultCacheTypeV));
-  if (!IsSupportedTurboQuantCacheType(cache_type_k)) {
-    throw std::runtime_error(
-        "desired-state v2 features.turboquant.cache_type_k has unsupported value");
-  }
-  if (!IsSupportedTurboQuantCacheType(cache_type_v)) {
-    throw std::runtime_error(
-        "desired-state v2 features.turboquant.cache_type_v has unsupported value");
+  if (features.contains("context_compression")) {
+    if (!features.at("context_compression").is_object()) {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression must be an object");
+    }
+    const auto& context_compression = features.at("context_compression");
+    const bool enabled = context_compression.value("enabled", false);
+    if (context_compression.contains("mode") &&
+        !context_compression.at("mode").is_string() &&
+        !context_compression.at("mode").is_null()) {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.mode must be a string");
+    }
+    if (context_compression.contains("target") &&
+        !context_compression.at("target").is_string() &&
+        !context_compression.at("target").is_null()) {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.target must be a string");
+    }
+    if (context_compression.contains("memory_priority") &&
+        !context_compression.at("memory_priority").is_string() &&
+        !context_compression.at("memory_priority").is_null()) {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.memory_priority must be a string");
+    }
+    if (enabled && plane_mode != "llm") {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression requires plane_mode=llm");
+    }
+    const std::string mode =
+        context_compression.value("mode", std::string("auto"));
+    const std::string target =
+        context_compression.value("target", std::string("dialog_and_knowledge"));
+    const std::string memory_priority =
+        context_compression.value("memory_priority", std::string("balanced"));
+    if (mode != "auto") {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.mode supports auto only");
+    }
+    if (target != "dialog_and_knowledge") {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.target supports dialog_and_knowledge only");
+    }
+    if (memory_priority != "balanced") {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.memory_priority supports balanced only");
+    }
   }
 }
 
@@ -550,27 +592,70 @@ void DesiredStateV2Validator::ValidateWorkerResources() const {
 }
 
 void DesiredStateV2Validator::ValidateApp() const {
-  if (!value_.contains("app")) {
+  const bool has_legacy_app = value_.contains("app");
+  const bool has_apps = value_.contains("apps");
+  if (has_legacy_app && has_apps) {
+    throw std::runtime_error("desired-state v2 cannot mix app and apps");
+  }
+  if (!has_legacy_app && !has_apps) {
     return;
   }
-  RequireObject("app");
-  const auto& app = value_.at("app");
+
+  if (has_legacy_app) {
+    RequireObject("app");
+    ValidateSingleAppSpec(value_.at("app"), "app", false);
+    return;
+  }
+
+  if (!value_.at("apps").is_array() || value_.at("apps").empty()) {
+    throw std::runtime_error("desired-state v2 apps must be a non-empty array");
+  }
+  int primary_count = 0;
+  std::set<std::string> names;
+  for (const auto& app : value_.at("apps")) {
+    if (!app.is_object()) {
+      throw std::runtime_error("desired-state v2 apps entries must be objects");
+    }
+    ValidateSingleAppSpec(app, "apps[]", true);
+    if (app.value("primary", false)) {
+      ++primary_count;
+    }
+    const auto name = app.value("name", std::string{});
+    if (!name.empty() && !names.insert(name).second) {
+      throw std::runtime_error("desired-state v2 apps names must be unique");
+    }
+  }
+  if (primary_count > 1) {
+    throw std::runtime_error("desired-state v2 apps supports at most one primary app");
+  }
+}
+
+void DesiredStateV2Validator::ValidateSingleAppSpec(
+    const nlohmann::json& app,
+    const char* field_name,
+    bool require_name) const {
   if (!FieldEnabledByDefault(app, true)) {
     return;
   }
+  if (require_name) {
+    const auto name = app.value("name", std::string{});
+    if (name.empty()) {
+      throw std::runtime_error(std::string("desired-state v2 ") + field_name + " requires name");
+    }
+  }
   if (app.contains("node") && !app.at("node").is_string()) {
-    throw std::runtime_error("desired-state v2 app.node must be a string");
+    throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".node must be a string");
   }
   if (app.contains("node") && app.at("node").is_string()) {
     ValidateNodeRoleCompatibility(app.at("node").get<std::string>(), "app", "app");
   }
   if (app.value("image", std::string{}).empty()) {
-    throw std::runtime_error("desired-state v2 enabled app requires image");
+    throw std::runtime_error(std::string("desired-state v2 enabled ") + field_name + " requires image");
   }
   ValidateStartBlock(app, "app");
   if (app.contains("volumes")) {
     if (!app.at("volumes").is_array()) {
-      throw std::runtime_error("desired-state v2 app.volumes must be an array");
+      throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".volumes must be an array");
     }
     if (app.at("volumes").size() > 1) {
       throw std::runtime_error("desired-state v2 currently supports at most one app volume");

@@ -75,11 +75,6 @@ class IHostdAssignmentSupport {
       const std::string& node_name,
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const = 0;
-  virtual void ExecuteRuntimeHttpProxy(
-      const nlohmann::json& payload,
-      const std::string& node_name,
-      HostdBackend* backend,
-      const std::optional<int>& assignment_id) const = 0;
   virtual void ApplyKnowledgeVaultService(
       const nlohmann::json& payload,
       const std::string& node_name,
@@ -91,9 +86,15 @@ class IHostdAssignmentSupport {
       const std::string& node_name,
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const = 0;
-  virtual void ExecuteKnowledgeVaultHttpProxy(
+  virtual void ExecuteRuntimeHttpProxy(
       const nlohmann::json& payload,
       const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const = 0;
+  virtual void ExecuteHostSelfUpdate(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      const std::optional<std::string>& host_private_key_path,
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const = 0;
   virtual void ShowDemoOps(

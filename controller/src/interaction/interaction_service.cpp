@@ -7,7 +7,6 @@
 #include "interaction/interaction_request_identity_support.h"
 #include "interaction/interaction_replica_group_summary_builder.h"
 #include "interaction/interaction_runtime_text_support.h"
-#include "interaction/interaction_target_relay_policy.h"
 #include "interaction/interaction_text_post_processor.h"
 #include "interaction/interaction_upstream_event_parser.h"
 #include <algorithm>
@@ -21,6 +20,114 @@
 #include "naim/state/worker_group_topology.h"
 
 namespace naim::controller {
+
+namespace {
+
+std::optional<std::string> FindHeaderValue(
+    const std::map<std::string, std::string>& headers,
+    const std::string& key) {
+  const auto it = headers.find(key);
+  if (it == headers.end() || it->second.empty()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+bool ParseBoolHeader(
+    const std::map<std::string, std::string>& headers,
+    const std::string& key,
+    bool fallback) {
+  if (const auto value = FindHeaderValue(headers, key); value.has_value()) {
+    return *value == "true" || *value == "1";
+  }
+  return fallback;
+}
+
+bool IsLoopbackRuntimeHost(const std::string& host) {
+  return host == "127.0.0.1" || host == "localhost" || host == "::1";
+}
+
+bool IsControllerLocalNode(const std::string& node_name) {
+  return node_name == "local-hostd" || node_name == "controller-local";
+}
+
+int ParseIntHeader(
+    const std::map<std::string, std::string>& headers,
+    const std::string& key,
+    int fallback) {
+  if (const auto value = FindHeaderValue(headers, key); value.has_value()) {
+    try {
+      return std::stoi(*value);
+    } catch (const std::exception&) {
+    }
+  }
+  return fallback;
+}
+
+double ParseDoubleHeader(
+    const std::map<std::string, std::string>& headers,
+    const std::string& key,
+    double fallback) {
+  if (const auto value = FindHeaderValue(headers, key); value.has_value()) {
+    try {
+      return std::stod(*value);
+    } catch (const std::exception&) {
+    }
+  }
+  return fallback;
+}
+
+naim::controller::InteractionSegmentSummary EffectiveSegmentUsage(
+    const naim::controller::InteractionSessionResult& result) {
+  if (!result.segments.empty()) {
+    return result.segments.back();
+  }
+  naim::controller::InteractionSegmentSummary summary;
+  summary.prompt_tokens = result.total_prompt_tokens;
+  summary.completion_tokens = result.total_completion_tokens;
+  summary.total_tokens = result.total_tokens;
+  return summary;
+}
+
+std::string NormalizeContinuationText(const std::string& value) {
+  std::string normalized;
+  normalized.reserve(value.size());
+  bool previous_space = false;
+  for (unsigned char ch : value) {
+    if (std::isspace(ch) != 0) {
+      if (!previous_space) {
+        normalized.push_back(' ');
+      }
+      previous_space = true;
+      continue;
+    }
+    normalized.push_back(static_cast<char>(std::tolower(ch)));
+    previous_space = false;
+  }
+  while (!normalized.empty() && normalized.front() == ' ') {
+    normalized.erase(normalized.begin());
+  }
+  while (!normalized.empty() && normalized.back() == ' ') {
+    normalized.pop_back();
+  }
+  return normalized;
+}
+
+bool IsDuplicateContinuationSegment(
+    const std::vector<naim::controller::InteractionSegmentSummary>& segments,
+    const std::string& candidate_text) {
+  if (segments.empty()) {
+    return false;
+  }
+  const std::string candidate = NormalizeContinuationText(candidate_text);
+  if (candidate.empty()) {
+    return false;
+  }
+  const std::string previous =
+      NormalizeContinuationText(segments.back().text);
+  return !previous.empty() && previous == candidate;
+}
+}  // namespace
 
 nlohmann::json InteractionRequestValidator::ParsePayload(
     const std::string& body) const {
@@ -162,6 +269,7 @@ InteractionRequestValidator::ValidateAndNormalizeRequest(
 
 nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
     const InteractionSessionResult& result) const {
+  const InteractionSegmentSummary effective_usage = EffectiveSegmentUsage(result);
   nlohmann::json segments = nlohmann::json::array();
   for (const auto& segment : result.segments) {
     segments.push_back(nlohmann::json{
@@ -178,6 +286,10 @@ nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
         {"marker_seen", segment.marker_seen},
     });
   }
+  int upstream_latency_ms = 0;
+  for (const auto& segment : result.segments) {
+    upstream_latency_ms += segment.latency_ms;
+  }
   return nlohmann::json{
       {"id", result.session_id},
       {"status", result.completion_status},
@@ -187,11 +299,25 @@ nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
       {"finish_reason", result.final_finish_reason},
       {"usage",
        nlohmann::json{
+           {"prompt_tokens", effective_usage.prompt_tokens},
+           {"completion_tokens", effective_usage.completion_tokens},
+           {"total_tokens", effective_usage.total_tokens},
+       }},
+      {"cumulative_usage",
+       nlohmann::json{
            {"prompt_tokens", result.total_prompt_tokens},
            {"completion_tokens", result.total_completion_tokens},
            {"total_tokens", result.total_tokens},
        }},
       {"latency_ms", result.total_latency_ms},
+      {"latency_breakdown",
+       nlohmann::json{
+           {"runtime_routing_ms", 0},
+           {"upstream_generation_ms", upstream_latency_ms},
+           {"controller_overhead_ms",
+            std::max(0, result.total_latency_ms - upstream_latency_ms)},
+           {"total_ms", result.total_latency_ms},
+       }},
       {"marker_seen", result.marker_seen},
       {"segments", std::move(segments)},
   };
@@ -620,6 +746,7 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
           resolved_policy,
           request_context.structured_output_json);
       upstream = send_interaction_request_(
+          resolution,
           *resolution.target,
           request_context.request_id,
           upstream_body);
@@ -668,6 +795,11 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
             segment_finished_at - segment_started_at)
             .count());
     summary.marker_seen = marker_seen_in_segment;
+    if (IsDuplicateContinuationSegment(result.segments, clean_text)) {
+      result.completion_status = "completed";
+      result.stop_reason = "duplicate_continuation_segment";
+      break;
+    }
     result.model = upstream_payload.value("model", result.model);
     result.content += clean_text;
     result.segments.push_back(summary);
@@ -680,6 +812,18 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
             .count());
     result.final_finish_reason = summary.finish_reason;
     result.marker_seen = result.marker_seen || marker_seen_in_segment;
+    result.context_compression_enabled = ParseBoolHeader(
+        upstream.headers, "x-naim-context-compression-enabled", false);
+    result.context_compression_status = FindHeaderValue(
+                                            upstream.headers,
+                                            "x-naim-context-compression-status")
+                                            .value_or("none");
+    result.dialog_estimate_before = ParseIntHeader(
+        upstream.headers, "x-naim-dialog-estimate-before", 0);
+    result.dialog_estimate_after = ParseIntHeader(
+        upstream.headers, "x-naim-dialog-estimate-after", 0);
+    result.context_compression_ratio = ParseDoubleHeader(
+        upstream.headers, "x-naim-context-compression-ratio", 1.0);
 
     if (result.marker_seen &&
         session_reached_target_length_(policy, result.total_completion_tokens)) {
@@ -687,10 +831,14 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
       result.stop_reason = "semantic_completion_marker";
       break;
     }
-    if (can_complete_on_natural_stop_(policy, summary) &&
-        session_reached_target_length_(policy, result.total_completion_tokens)) {
+    if (can_complete_on_natural_stop_(policy, summary)) {
       result.completion_status = "completed";
       result.stop_reason = "natural_stop";
+      break;
+    }
+    if (completion_policy_support.ShouldTreatLengthAsNaturalStop(policy, summary)) {
+      result.completion_status = "completed";
+      result.stop_reason = "length_but_short_natural_stop";
       break;
     }
 
@@ -823,7 +971,7 @@ InteractionProxyResult InteractionProxyExecutor::Execute(
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
       try {
         upstream = send_proxy_request_(
-            *resolution.target, method, path, upstream_body, request_id);
+            resolution, *resolution.target, method, path, upstream_body, request_id);
         if (upstream.status_code < 500 || attempt + 1 == kMaxAttempts) {
           break;
         }
@@ -1039,6 +1187,7 @@ InteractionSessionResult InteractionStreamSessionExecutor::Execute(
     SendDoneFn send_done) const {
   const InteractionCompletionPolicy& policy = resolved_policy.policy;
   const nlohmann::json& original_payload = request_context.payload;
+  const InteractionCompletionPolicySupport completion_policy_support;
   InteractionSessionResult session;
   session.session_id = session_id;
   const auto session_started_at = std::chrono::steady_clock::now();
@@ -1082,6 +1231,17 @@ InteractionSessionResult InteractionStreamSessionExecutor::Execute(
               .count());
       session.final_finish_reason = segment.summary.finish_reason;
       session.marker_seen = session.marker_seen || segment.summary.marker_seen;
+      session.context_compression_enabled = segment.context_compression_enabled;
+      session.context_compression_status = segment.context_compression_status;
+      session.dialog_estimate_before = segment.dialog_estimate_before;
+      session.dialog_estimate_after = segment.dialog_estimate_after;
+      session.context_compression_ratio = segment.context_compression_ratio;
+
+      if (IsDuplicateContinuationSegment(session.segments, segment.summary.text)) {
+        session.completion_status = "completed";
+        session.stop_reason = "duplicate_continuation_segment";
+        break;
+      }
 
       if (!send_event(
               "segment_complete",
@@ -1096,10 +1256,15 @@ InteractionSessionResult InteractionStreamSessionExecutor::Execute(
         session.stop_reason = "semantic_completion_marker";
         break;
       }
-      if (can_complete_on_natural_stop_(policy, segment.summary) &&
-          session_reached_target_length_(policy, session.total_completion_tokens)) {
+      if (can_complete_on_natural_stop_(policy, segment.summary)) {
         session.completion_status = "completed";
         session.stop_reason = "natural_stop";
+        break;
+      }
+      if (completion_policy_support.ShouldTreatLengthAsNaturalStop(
+              policy, segment.summary)) {
+        session.completion_status = "completed";
+        session.stop_reason = "length_but_short_natural_stop";
         break;
       }
       if (session.total_completion_tokens >= policy.max_total_completion_tokens) {
@@ -1333,6 +1498,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
   const auto run_non_stream_fallback = [&](bool assign_only = false)
       -> std::optional<StreamedInteractionSegmentResult> {
     const InteractionUpstreamResponse fallback = send_fallback_request_(
+        resolution,
         *resolution.target,
         request_id,
         build_interaction_upstream_body_(
@@ -1344,8 +1510,24 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
     if (fallback.status_code != 200 || fallback.body.empty()) {
       return std::nullopt;
     }
-    return flush_fallback_response(
-        nlohmann::json::parse(fallback.body), assign_only);
+    auto fallback_result =
+        flush_fallback_response(nlohmann::json::parse(fallback.body), assign_only);
+    if (!fallback_result.has_value()) {
+      return std::nullopt;
+    }
+    fallback_result->context_compression_enabled = ParseBoolHeader(
+        fallback.headers, "x-naim-context-compression-enabled", false);
+    fallback_result->context_compression_status = FindHeaderValue(
+                                                      fallback.headers,
+                                                      "x-naim-context-compression-status")
+                                                      .value_or("none");
+    fallback_result->dialog_estimate_before = ParseIntHeader(
+        fallback.headers, "x-naim-dialog-estimate-before", 0);
+    fallback_result->dialog_estimate_after = ParseIntHeader(
+        fallback.headers, "x-naim-dialog-estimate-after", 0);
+    fallback_result->context_compression_ratio = ParseDoubleHeader(
+        fallback.headers, "x-naim-context-compression-ratio", 1.0);
+    return fallback_result;
   };
 
   try {
@@ -1359,6 +1541,18 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
                 true,
                 resolved_policy,
                 request_context.structured_output_json));
+    result.context_compression_enabled = ParseBoolHeader(
+        stream.headers, "x-naim-context-compression-enabled", false);
+    result.context_compression_status = FindHeaderValue(
+                                            stream.headers,
+                                            "x-naim-context-compression-status")
+                                            .value_or("none");
+    result.dialog_estimate_before = ParseIntHeader(
+        stream.headers, "x-naim-dialog-estimate-before", 0);
+    result.dialog_estimate_after = ParseIntHeader(
+        stream.headers, "x-naim-dialog-estimate-after", 0);
+    result.context_compression_ratio = ParseDoubleHeader(
+        stream.headers, "x-naim-context-compression-ratio", 1.0);
     const auto close_stream = [&]() {
       if (stream.close) {
         stream.close();
@@ -1660,6 +1854,7 @@ InteractionPlaneResolver::InteractionPlaneResolver(
     ObservationMatchesPlaneFn observation_matches_plane,
     BuildPlaneScopedRuntimeStatusFn build_plane_scoped_runtime_status,
     ParseInteractionTargetFn parse_interaction_target,
+    ResolvePlaneLocalInteractionTargetFn resolve_plane_local_interaction_target,
     CountReadyWorkerMembersFn count_ready_worker_members,
     ProbeControllerTargetOkFn probe_controller_target_ok,
     DescribeUnsupportedControllerLocalRuntimeFn
@@ -1669,6 +1864,8 @@ InteractionPlaneResolver::InteractionPlaneResolver(
       observation_matches_plane_(std::move(observation_matches_plane)),
       build_plane_scoped_runtime_status_(std::move(build_plane_scoped_runtime_status)),
       parse_interaction_target_(std::move(parse_interaction_target)),
+      resolve_plane_local_interaction_target_(
+          std::move(resolve_plane_local_interaction_target)),
       count_ready_worker_members_(std::move(count_ready_worker_members)),
       probe_controller_target_ok_(std::move(probe_controller_target_ok)),
       describe_unsupported_controller_local_runtime_(
@@ -1689,6 +1886,8 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   resolution.desired_state = *desired_state;
   resolution.plane_record = store.LoadPlane(plane_name);
   const std::string primary_node = desired_state->inference.primary_infer_node;
+  const auto plane_local_interaction_target =
+      resolve_plane_local_interaction_target_(*desired_state);
   bool observation_matches_plane = false;
   if (!primary_node.empty()) {
     resolution.observation = store.LoadHostObservation(primary_node);
@@ -1730,17 +1929,16 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
         resolution.runtime_status = observed_runtime;
       }
     }
-    if (resolution.runtime_status.has_value()) {
+    if (resolution.runtime_status.has_value() &&
+        !plane_local_interaction_target.has_value()) {
       resolution.target = parse_interaction_target_(
           resolution.runtime_status->gateway_listen,
           desired_state->gateway.listen_port);
-      InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
-          store,
-          db_path,
-          primary_node,
-          plane_name,
-          &resolution.target);
     }
+  }
+
+  if (plane_local_interaction_target.has_value()) {
+    resolution.target = plane_local_interaction_target;
   }
 
   const bool llm_plane = desired_state->plane_mode == naim::PlaneMode::Llm;
@@ -1751,7 +1949,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const auto skills_target = skills_service.ResolveTarget(*desired_state);
   const bool skills_ready =
       skills_enabled && running_plane && skills_target.has_value() &&
-      probe_controller_target_ok_(skills_target, "/health");
+      skills_service.ProbeTargetOk(db_path, *desired_state, "/health");
   const auto skills_instance = std::find_if(
       desired_state->instances.begin(),
       desired_state->instances.end(),
@@ -1828,12 +2026,19 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
         desired_state->gateway.listen_host + ":" +
             std::to_string(desired_state->gateway.listen_port),
         desired_state->gateway.listen_port);
-    InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
-        store,
-        db_path,
-        primary_node,
-        plane_name,
-        &resolution.target);
+  }
+  if (resolution.target.has_value()) {
+    const std::string route_node =
+        resolution.runtime_status.has_value() &&
+                !resolution.runtime_status->node_name.empty()
+            ? resolution.runtime_status->node_name
+            : primary_node;
+    resolution.target->node_name = route_node;
+    if (!IsControllerLocalNode(route_node) &&
+        IsLoopbackRuntimeHost(resolution.target->host)) {
+      resolution.target->route_via_hostd_proxy = true;
+      resolution.target->route_mode = "hostd-runtime-proxy";
+    }
   }
 
   if (!resolution.runtime_status.has_value() && resolution.target.has_value()) {
@@ -2250,6 +2455,34 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
                  resolution.target->host + ":" +
                  std::to_string(resolution.target->port))
            : nlohmann::json(nullptr)},
+      {"transport",
+       resolution.target.has_value()
+           ? nlohmann::json{
+                 {"protocol_id", "NAIM-RUNTIME-HTTP"},
+                 {"mode", resolution.target->route_mode.empty()
+                              ? "direct-runtime"
+                              : resolution.target->route_mode},
+                 {"supports_sse", !resolution.target->route_via_hostd_proxy},
+                 {"supports_rpc", false},
+                 {"supports_keep_alive", !resolution.target->route_via_hostd_proxy},
+                 {"supports_direct_routing", !resolution.target->route_via_hostd_proxy},
+                 {"supports_hostd_proxy", resolution.target->route_via_hostd_proxy},
+                 {"degraded", false},
+                 {"target", resolution.target->raw},
+                 {"node_name", resolution.target->node_name.empty()
+                                   ? nlohmann::json(nullptr)
+                                   : nlohmann::json(resolution.target->node_name)},
+             }
+           : nlohmann::json{
+                 {"protocol_id", "NAIM-RUNTIME-HTTP"},
+                 {"mode", "not_selected"},
+                 {"supports_sse", true},
+                 {"supports_rpc", false},
+                 {"supports_keep_alive", true},
+                 {"supports_direct_routing", false},
+                 {"supports_hostd_proxy", false},
+                 {"degraded", false},
+             }},
       {"runtime_status",
        resolution.runtime_status.has_value()
            ? nlohmann::json::parse(

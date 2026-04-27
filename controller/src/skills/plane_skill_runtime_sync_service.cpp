@@ -8,6 +8,7 @@
 #include "naim/state/sqlite_store.h"
 #include "http/controller_http_transport.h"
 #include "skills/plane_skills_service.h"
+#include "skills/plane_skills_target_resolver.h"
 
 namespace naim::controller {
 
@@ -65,8 +66,14 @@ bool PlaneSkillRuntimeSyncService::IsReadyForSync(
     return false;
   }
   try {
-    const auto response = SendControllerHttpRequest(
-        *target, "GET", "/health", "", DefaultJsonHeaders());
+    const auto response = PlaneSkillsTargetResolver::SendPlaneLocalRequest(
+        db_path,
+        desired_state.plane_name,
+        *target,
+        "GET",
+        "/health",
+        "",
+        DefaultJsonHeaders());
     return response.status_code == 200;
   } catch (const std::exception&) {
     return false;
@@ -93,8 +100,14 @@ bool PlaneSkillRuntimeSyncService::SyncPlane(
 
   std::set<std::string> remote_ids;
   try {
-    const auto response = SendControllerHttpRequest(
-        *target, "GET", "/v1/skills", "", DefaultJsonHeaders());
+    const auto response = PlaneSkillsTargetResolver::SendPlaneLocalRequest(
+        db_path,
+        desired_state.plane_name,
+        *target,
+        "GET",
+        "/v1/skills",
+        "",
+        DefaultJsonHeaders());
     if (response.status_code == 200) {
       const auto payload = response.body.empty() ? json::object() : json::parse(response.body);
       if (payload.contains("skills") && payload.at("skills").is_array()) {
@@ -116,7 +129,9 @@ bool PlaneSkillRuntimeSyncService::SyncPlane(
     }
     const auto binding = store.LoadPlaneSkillBinding(desired_state.plane_name, skill_id);
     try {
-      const auto response = SendControllerHttpRequest(
+      const auto response = PlaneSkillsTargetResolver::SendPlaneLocalRequest(
+          db_path,
+          desired_state.plane_name,
           *target,
           "PUT",
           "/v1/skills/" + skill_id,
@@ -133,7 +148,9 @@ bool PlaneSkillRuntimeSyncService::SyncPlane(
 
   for (const auto& stale_skill_id : remote_ids) {
     try {
-      const auto response = SendControllerHttpRequest(
+      const auto response = PlaneSkillsTargetResolver::SendPlaneLocalRequest(
+          db_path,
+          desired_state.plane_name,
           *target,
           "DELETE",
           "/v1/skills/" + stale_skill_id,

@@ -16,6 +16,17 @@ namespace naim::controller {
 
 using nlohmann::json;
 
+namespace {
+
+int EffectivePromptTokens(const InteractionSessionResult& result) {
+  if (!result.segments.empty()) {
+    return result.segments.back().prompt_tokens;
+  }
+  return result.total_prompt_tokens;
+}
+
+}  // namespace
+
 std::optional<InteractionValidationError> InteractionConversationService::PrepareRequest(
     const std::string& db_path,
     const PlaneInteractionResolution& resolution,
@@ -200,6 +211,15 @@ std::optional<InteractionValidationError> InteractionConversationService::Persis
                                    .is_object()
                            ? context->payload.at(kInteractionSessionContextStatePayloadKey)
                            : context->session_context_state;
+  context_state["context_compression"] = json{
+      {"enabled", result.context_compression_enabled},
+      {"status", result.context_compression_status},
+      {"dialog_estimate_before", result.dialog_estimate_before},
+      {"dialog_estimate_after", result.dialog_estimate_after},
+      {"compression_ratio", result.context_compression_ratio},
+      {"compressor_id", "context-compression-v1"},
+      {"policy_version", "v1"},
+  };
   json applied_skill_ids = json::array();
   if (context->payload.contains(PlaneSkillsService::kAppliedSkillsPayloadKey) &&
       context->payload.at(PlaneSkillsService::kAppliedSkillsPayloadKey).is_array()) {
@@ -231,11 +251,18 @@ std::optional<InteractionValidationError> InteractionConversationService::Persis
   updated.archive_codec = session.has_value() ? session->archive_codec : "";
   updated.archive_sha256 = session.has_value() ? session->archive_sha256 : "";
   updated.context_state_json = payload_builder.JsonString(context_state);
-  updated.latest_prompt_tokens = result.total_prompt_tokens;
+  updated.latest_prompt_tokens = EffectivePromptTokens(result);
   updated.estimated_context_tokens =
       payload_builder.EstimateTokensForJson(
           context->payload.value("messages", json::array()));
-  updated.compression_state = summary_records.empty() ? "none" : "compressed";
+  const json compression = context_state.value("context_compression", json::object());
+  if (compression.is_object()) {
+    updated.compression_state = compression.value(
+        "status",
+        summary_records.empty() ? std::string("none") : std::string("compressed"));
+  } else {
+    updated.compression_state = summary_records.empty() ? "none" : "compressed";
+  }
   updated.version = session.has_value() ? session->version + 1 : 1;
   updated.created_at = session.has_value() ? session->created_at : now;
   updated.updated_at = now;

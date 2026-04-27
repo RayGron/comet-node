@@ -11,7 +11,6 @@
 #include "app/controller_time_support.h"
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
-#include "interaction/interaction_hostd_runtime_relay_service.h"
 #include "interaction/interaction_runtime_support_service.h"
 #include "interaction/interaction_types.h"
 #include "infra/controller_network_manager.h"
@@ -41,6 +40,12 @@ class InteractionHttpSupport final {
       bool force_stream,
       const naim::controller::ResolvedInteractionPolicy& resolved_policy,
       bool structured_output_json) const;
+  std::string BuildInteractionRuntimeRequestBody(
+      const naim::controller::PlaneInteractionResolution& resolution,
+      nlohmann::json payload,
+      bool force_stream,
+      const naim::controller::ResolvedInteractionPolicy& resolved_policy,
+      bool structured_output_json) const;
   std::optional<std::string> FindInferInstanceName(const naim::DesiredState& desired_state) const;
   std::vector<naim::RuntimeProcessStatus> ParseInstanceRuntimeStatuses(
       const naim::HostObservation& observation) const;
@@ -53,6 +58,8 @@ class InteractionHttpSupport final {
   std::optional<naim::controller::ControllerEndpointTarget> ParseInteractionTarget(
       const std::string& gateway_listen,
       int fallback_port) const;
+  std::optional<naim::controller::ControllerEndpointTarget> ResolvePlaneLocalInteractionTarget(
+      const naim::DesiredState& desired_state) const;
   int CountReadyWorkerMembers(
       naim::ControllerStore& store,
       const naim::DesiredState& desired_state) const;
@@ -68,6 +75,14 @@ class InteractionHttpSupport final {
       const std::string& path,
       const std::string& body,
       const std::vector<std::pair<std::string, std::string>>& headers) const;
+  HttpResponse SendRuntimeHttpRequest(
+      const naim::controller::PlaneInteractionResolution& resolution,
+      const naim::controller::ControllerEndpointTarget& target,
+      const std::string& method,
+      const std::string& path,
+      const std::string& body,
+      const std::string& request_id,
+      const std::vector<std::pair<std::string, std::string>>& headers) const;
   void SendHttpResponse(
       naim::platform::SocketHandle client_fd,
       const HttpResponse& response) const;
@@ -78,10 +93,21 @@ class InteractionHttpSupport final {
   bool SendAll(naim::platform::SocketHandle fd, const std::string& payload) const;
 
  private:
+  HttpResponse SendHostdRuntimeProxyRequest(
+      const std::string& db_path,
+      const std::string& node_name,
+      const std::string& plane_name,
+      const naim::controller::ControllerEndpointTarget& target,
+      const std::string& method,
+      const std::string& path,
+      const std::string& body,
+      const std::string& request_id,
+      const std::vector<std::pair<std::string, std::string>>& headers,
+      const std::string& policy) const;
+
   const naim::controller::ControllerRuntimeSupportService& runtime_support_service_;
   const naim::controller::DesiredStatePolicyService& desired_state_policy_service_;
   const naim::controller::InteractionRuntimeSupportService&
       interaction_runtime_support_service_;
-  naim::controller::InteractionHostdRuntimeRelayService hostd_runtime_relay_service_;
   naim::controller::PlaneObservationMatcher plane_observation_matcher_;
 };

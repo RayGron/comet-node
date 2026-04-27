@@ -201,28 +201,159 @@ describe("planeV2Form SkillsFactory mapping", () => {
     form.planeName = "turboquant-plane";
     form.modelPath = "/models/qwen";
     form.turboquantEnabled = true;
-    form.turboquantCacheTypeK = "planar3";
-    form.turboquantCacheTypeV = "f16";
+    form.turboquantCacheTypeK = "turbo4";
+    form.turboquantCacheTypeV = "turbo4";
 
     const desiredState = buildDesiredStateV2FromForm(form);
     expect(desiredState.features).toEqual({
       turboquant: {
         enabled: true,
-        cache_type_k: "planar3",
-        cache_type_v: "f16",
+        cache_type_k: "turbo4",
+        cache_type_v: "turbo4",
       },
     });
 
     const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
     expect(reparsed.turboquantEnabled).toBe(true);
-    expect(reparsed.turboquantCacheTypeK).toBe("planar3");
-    expect(reparsed.turboquantCacheTypeV).toBe("f16");
+    expect(reparsed.turboquantCacheTypeK).toBe("turbo4");
+    expect(reparsed.turboquantCacheTypeV).toBe("turbo4");
+  });
+
+  it("round-trips context compression capability through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "compression-plane";
+    form.modelPath = "/models/qwen";
+    form.contextCompressionEnabled = true;
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.features).toEqual({
+      context_compression: {
+        enabled: true,
+        mode: "auto",
+        target: "dialog_and_knowledge",
+        memory_priority: "balanced",
+      },
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.contextCompressionEnabled).toBe(true);
+    expect(reparsed.contextCompressionMode).toBe("auto");
+    expect(reparsed.contextCompressionTarget).toBe("dialog_and_knowledge");
+    expect(reparsed.contextCompressionMemoryPriority).toBe("balanced");
+  });
+
+  it("preserves interaction runtime image through desired state v2 round-trip", () => {
+    const desiredState = {
+      ...buildDesiredStateV2FromForm(buildNewPlaneFormState()),
+      plane_name: "interaction-image-plane",
+      model: {
+        source: { type: "library", ref: "Qwen/Qwen3.6-35B-A3B" },
+        materialization: { mode: "prepare_on_worker" },
+        served_model_name: "interaction-image-plane",
+      },
+      interaction: {
+        image: "chainzano.com/naim/interaction-runtime@sha256:feedface",
+        system_prompt: "Preserve interaction image",
+        thinking_enabled: false,
+        default_response_language: "ru",
+        supported_response_languages: ["en", "de", "uk", "ru"],
+        follow_user_language: true,
+      },
+    };
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    const rebuilt = buildDesiredStateV2FromForm(reparsed);
+    expect(rebuilt.interaction.image).toBe(
+      "chainzano.com/naim/interaction-runtime@sha256:feedface",
+    );
+  });
+
+  it("round-trips multiple feature toggles through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "combined-feature-plane";
+    form.modelPath = "/models/qwen";
+    form.contextCompressionEnabled = true;
+    form.turboquantEnabled = true;
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.features).toEqual({
+      context_compression: {
+        enabled: true,
+        mode: "auto",
+        target: "dialog_and_knowledge",
+        memory_priority: "balanced",
+      },
+      turboquant: {
+        enabled: true,
+        cache_type_k: "turbo4",
+        cache_type_v: "turbo4",
+      },
+    });
+  });
+
+  it("round-trips multiple app containers through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "multi-app-plane";
+    form.modelPath = "/models/qwen";
+    form.appEnabled = true;
+    form.appImage = "example/app:dev";
+    form.appStartType = "script";
+    form.appStartValue = "node server.js";
+    form.extraApps = [
+      {
+        name: "market-ingest",
+        enabled: true,
+        image: "example/app:dev",
+        startType: "script",
+        startValue: "node market-collector.js",
+        hostPort: "",
+        containerPort: "",
+        node: "hpc1",
+        envText: "CYPHER_MARKET_COLLECTOR_ENABLED=true",
+        volumeEnabled: true,
+        volumeName: "market-ingest-data",
+        volumeSizeGb: "5",
+        volumeMountPath: "/naim/private",
+      },
+    ];
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.app).toBeUndefined();
+    expect(desiredState.apps).toHaveLength(2);
+    expect(desiredState.apps[0]).toMatchObject({
+      primary: true,
+      enabled: true,
+      image: "example/app:dev",
+    });
+    expect(desiredState.apps[1]).toMatchObject({
+      name: "market-ingest",
+      primary: false,
+      enabled: true,
+      image: "example/app:dev",
+      node: "hpc1",
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.appEnabled).toBe(true);
+    expect(reparsed.extraApps).toHaveLength(1);
+    expect(reparsed.extraApps[0].name).toBe("market-ingest");
+    expect(reparsed.extraApps[0].startValue).toBe("node market-collector.js");
+    expect(reparsed.extraApps[0].node).toBe("hpc1");
   });
 
   it("does not serialize turboquant for compute planes", () => {
     const form = buildNewPlaneFormState();
     form.planeMode = "compute";
     form.turboquantEnabled = true;
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.features).toBeUndefined();
+  });
+
+  it("does not serialize context compression for compute planes", () => {
+    const form = buildNewPlaneFormState();
+    form.planeMode = "compute";
+    form.contextCompressionEnabled = true;
 
     const desiredState = buildDesiredStateV2FromForm(form);
     expect(desiredState.features).toBeUndefined();
@@ -409,6 +540,7 @@ describe("PlaneEditorDialog", () => {
 
     expect(html).toContain("New plane");
     expect(html).toContain("Isolated Browsing");
+    expect(html).toContain("Context Compression");
     expect(html).toContain("TurboQuant");
     expect(html).toContain("Generated JSON");
     expect(html).not.toContain("Runtime engine");

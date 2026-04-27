@@ -4,10 +4,15 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  install-single-node.sh [--build-type Debug|Release] [--listen-port <port>] [--node <name>] [--with-web-ui] [--skip-prereqs] [--skip-image-build]
+  install-single-node.sh [--build-type Debug|Release] [--listen-port <port>] [--node <name>] [--with-web-ui] [--no-cuda] [--skip-prereqs] [--skip-image-build]
 
 Builds naim-node on the current Linux host, installs controller+local-hostd as systemd services,
 and starts them.
+
+By default the installer builds CUDA runtime artifacts for the local GPU architecture only.
+Set NAIM_CUDA_NATIVE=OFF and NAIM_CUDA_ARCHITECTURES=<list> before running the installer if you
+need portable runtime images for multiple GPU generations.
+Pass --no-cuda to build CPU-only runtime binaries and skip CUDA toolkit checks.
 EOF
 }
 
@@ -20,6 +25,24 @@ node_name="local-hostd"
 with_web_ui="no"
 skip_prereqs="no"
 skip_image_build="no"
+enable_cuda="${NAIM_ENABLE_CUDA:-ON}"
+
+normalize_on_off() {
+  case "${1:-}" in
+    1|ON|On|on|TRUE|True|true|YES|Yes|yes)
+      printf 'ON\n'
+      ;;
+    0|OFF|Off|off|FALSE|False|false|NO|No|no)
+      printf 'OFF\n'
+      ;;
+    *)
+      echo "error: expected ON/OFF boolean value, got '${1:-}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
+enable_cuda="$(normalize_on_off "${enable_cuda}")"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,6 +60,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --with-web-ui)
       with_web_ui="yes"
+      shift
+      ;;
+    --no-cuda|--cpu)
+      enable_cuda="OFF"
+      shift
+      ;;
+    --with-cuda|--cuda)
+      enable_cuda="ON"
       shift
       ;;
     --skip-prereqs)
@@ -83,11 +114,27 @@ run_as_invoking_user() {
     sudo -u "${SUDO_USER}" env \
       PATH="${PATH}" \
       HOME="${user_home}" \
+      DOCKER_CONTEXT="${DOCKER_CONTEXT:-}" \
+      DOCKER_HOST="${DOCKER_HOST:-}" \
       VCPKG_ROOT="${VCPKG_ROOT:-}" \
+      XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
+      NAIM_ENABLE_CUDA="${NAIM_ENABLE_CUDA:-}" \
+      NAIM_CUDA_NATIVE="${NAIM_CUDA_NATIVE:-}" \
+      NAIM_CUDA_ARCHITECTURES="${NAIM_CUDA_ARCHITECTURES:-}" \
+      NAIM_CUDA_NVCC_JOBS="${NAIM_CUDA_NVCC_JOBS:-}" \
       "$@"
     return
   fi
   "$@"
+}
+
+docker_cli_available() {
+  if command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local windows_docker="/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe"
+  [[ -x "${windows_docker}" ]]
 }
 
 wait_for_http() {
@@ -160,21 +207,25 @@ install_prereqs_if_needed() {
     cmake
     git
     jq
-    nodejs
-    npm
+    libssl-dev
     ninja-build
     pkg-config
+    rsync
     sqlite3
-  )
-  local docker_packages=(
-    docker.io
-    docker-compose-plugin
   )
 
   echo "[install-single-node] installing apt prerequisites"
   run_as_root apt-get update
   run_as_root apt-get install -y "${packages[@]}"
-  run_as_root apt-get install -y "${docker_packages[@]}" || run_as_root apt-get install -y docker.io || true
+  if docker_cli_available; then
+    echo "[install-single-node] Docker CLI already exists; skipping apt Docker package installation"
+  else
+    local docker_packages=(
+      docker.io
+      docker-compose-plugin
+    )
+    run_as_root apt-get install -y "${docker_packages[@]}" || run_as_root apt-get install -y docker.io || true
+  fi
   run_as_root apt-get clean || true
 }
 
@@ -242,38 +293,22 @@ install_cuda_toolkit_if_needed() {
   run_as_root apt-get clean || true
 }
 
-ensure_operator_ui_deps_if_needed() {
-  local ui_root="${repo_root}/ui/operator-react"
-  local required_package="${ui_root}/node_modules/@simplewebauthn/server/package.json"
-
-  if [[ ! -f "${ui_root}/package.json" ]] || [[ ! -f "${ui_root}/package-lock.json" ]]; then
-    return
-  fi
-
-  if [[ -f "${required_package}" ]]; then
-    return
-  fi
-
-  if ! command -v node >/dev/null 2>&1; then
-    echo "error: node is required to install operator-react dependencies for WebAuthn" >&2
-    exit 1
-  fi
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "error: npm is required to install operator-react dependencies for WebAuthn" >&2
-    exit 1
-  fi
-
-  echo "[install-single-node] installing operator-react dependencies for WebAuthn helper"
-  run_as_invoking_user bash -lc "cd '${ui_root}' && npm ci"
-}
-
 config_summary="$("${repo_root}/scripts/naim-devtool.sh" config-summary --config "${repo_root}/config/naim-node-config.json")"
 storage_root="$(printf '%s\n' "${config_summary}" | sed -n '1p')"
 model_cache_root="$(printf '%s\n' "${config_summary}" | sed -n '2p')"
 
 install_prereqs_if_needed
-install_cuda_toolkit_if_needed
-ensure_operator_ui_deps_if_needed
+export NAIM_ENABLE_CUDA="${enable_cuda}"
+
+if [[ "${NAIM_ENABLE_CUDA}" == "ON" ]]; then
+  install_cuda_toolkit_if_needed
+else
+  echo "[install-single-node] skipping CUDA toolkit install because --no-cuda was requested"
+fi
+
+if [[ "${NAIM_ENABLE_CUDA}" == "ON" && -z "${NAIM_CUDA_NATIVE:-}" && -z "${NAIM_CUDA_ARCHITECTURES:-}" ]]; then
+  export NAIM_CUDA_NATIVE=ON
+fi
 
 echo "[install-single-node] building host binaries (${build_type})"
 run_as_invoking_user "${script_dir}/build-host.sh" "${build_type}"
@@ -284,7 +319,7 @@ if [[ "${skip_image_build}" != "yes" ]]; then
   if [[ "${with_web_ui}" != "yes" ]]; then
     image_build_args+=(--skip-web-ui)
   fi
-  run_as_root env PATH="${PATH}" HOME="${HOME}" "${script_dir}/build-runtime-images.sh" "${image_build_args[@]}"
+  run_as_invoking_user "${script_dir}/build-runtime-images.sh" "${image_build_args[@]}"
 fi
 
 build_dir="$("${script_dir}/print-build-dir.sh")"

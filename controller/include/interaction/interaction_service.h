@@ -120,6 +120,7 @@ class InteractionSessionExecutor {
       const ResolvedInteractionPolicy&,
       bool)>;
   using SendInteractionRequestFn = std::function<InteractionUpstreamResponse(
+      const PlaneInteractionResolution&,
       const ControllerEndpointTarget&,
       const std::string&,
       const std::string&)>;
@@ -181,6 +182,7 @@ class InteractionProxyExecutor {
       const ResolvedInteractionPolicy&,
       bool)>;
   using SendProxyRequestFn = std::function<InteractionUpstreamResponse(
+      const PlaneInteractionResolution&,
       const ControllerEndpointTarget&,
       const std::string&,
       const std::string&,
@@ -289,6 +291,7 @@ class InteractionStreamSegmentExecutor {
           const std::string&,
           const std::string&)>;
   using SendFallbackRequestFn = std::function<InteractionUpstreamResponse(
+      const PlaneInteractionResolution&,
       const ControllerEndpointTarget&,
       const std::string&,
       const std::string&)>;
@@ -348,6 +351,8 @@ class InteractionPlaneResolver {
           const naim::DesiredState&, const naim::HostObservation&)>;
   using ParseInteractionTargetFn =
       std::function<std::optional<ControllerEndpointTarget>(const std::string&, int)>;
+  using ResolvePlaneLocalInteractionTargetFn =
+      std::function<std::optional<ControllerEndpointTarget>(const naim::DesiredState&)>;
   using CountReadyWorkerMembersFn =
       std::function<int(naim::ControllerStore&, const naim::DesiredState&)>;
   using ProbeControllerTargetOkFn =
@@ -361,6 +366,7 @@ class InteractionPlaneResolver {
       ObservationMatchesPlaneFn observation_matches_plane,
       BuildPlaneScopedRuntimeStatusFn build_plane_scoped_runtime_status,
       ParseInteractionTargetFn parse_interaction_target,
+      ResolvePlaneLocalInteractionTargetFn resolve_plane_local_interaction_target,
       CountReadyWorkerMembersFn count_ready_worker_members,
       ProbeControllerTargetOkFn probe_controller_target_ok,
       DescribeUnsupportedControllerLocalRuntimeFn
@@ -376,6 +382,7 @@ class InteractionPlaneResolver {
   ObservationMatchesPlaneFn observation_matches_plane_;
   BuildPlaneScopedRuntimeStatusFn build_plane_scoped_runtime_status_;
   ParseInteractionTargetFn parse_interaction_target_;
+  ResolvePlaneLocalInteractionTargetFn resolve_plane_local_interaction_target_;
   CountReadyWorkerMembersFn count_ready_worker_members_;
   ProbeControllerTargetOkFn probe_controller_target_ok_;
   DescribeUnsupportedControllerLocalRuntimeFn

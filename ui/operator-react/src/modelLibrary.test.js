@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  defaultModelDownloadTarget,
   detectModelSourceFormat,
+  eligibleModelStorageNodes,
   modelLibraryJobProgress,
   normalizeModelDownloadSourceUrls,
   shouldShowGgufConversionOptions,
@@ -41,6 +43,47 @@ describe("model library uploader helpers", () => {
     expect(shouldShowGgufConversionOptions("safetensors", "gguf")).toBe(true);
     expect(shouldShowGgufConversionOptions("gguf", "gguf")).toBe(false);
     expect(shouldShowGgufConversionOptions("safetensors", "safetensors")).toBe(false);
+  });
+
+  it("selects the only connected storage-capable node as the default target", () => {
+    expect(
+      defaultModelDownloadTarget({
+        roots: ["/models"],
+        nodes: [
+          {
+            node_name: "local-hostd",
+            role_eligible: true,
+            registration_state: "registered",
+            session_state: "connected",
+            storage_root: "/srv/naim",
+          },
+        ],
+      }),
+    ).toEqual({ targetNodeName: "local-hostd", targetRoot: "" });
+  });
+
+  it("falls back to a manual root when storage node selection is ambiguous", () => {
+    const nodes = [
+      {
+        node_name: "node-a",
+        role_eligible: true,
+        registration_state: "registered",
+        session_state: "connected",
+        storage_root: "/srv/a",
+      },
+      {
+        node_name: "node-b",
+        role_eligible: true,
+        registration_state: "registered",
+        session_state: "connected",
+        storage_root: "/srv/b",
+      },
+    ];
+    expect(eligibleModelStorageNodes(nodes)).toHaveLength(2);
+    expect(defaultModelDownloadTarget({ roots: ["/models"], nodes })).toEqual({
+      targetNodeName: "",
+      targetRoot: "/models",
+    });
   });
 
   it("calculates progress for acquiring model download jobs", () => {

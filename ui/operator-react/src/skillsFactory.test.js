@@ -4,8 +4,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   buildDesiredStateV2FromForm,
+  buildHostNodeOptions,
   buildNewPlaneFormState,
   buildPlaneFormStateFromDesiredStateV2,
+  chooseDefaultPlaneNode,
   validatePlaneV2Form,
 } from "./planeV2Form.jsx";
 import { PlaneEditorDialog } from "./App.jsx";
@@ -403,6 +405,48 @@ describe("planeV2Form SkillsFactory mapping", () => {
     });
 
     expect(form.executionNode).toBe("worker-node-a");
+  });
+
+  it("prefers the connected local node for single-machine plane defaults", () => {
+    const hosts = [
+      {
+        node_name: "storage1",
+        state: "connected",
+        roles: ["storage"],
+      },
+      {
+        node_name: "hostd-node",
+        state: "connected",
+        roles: ["storage", "worker"],
+        gpu_count: 1,
+      },
+    ];
+
+    expect(buildHostNodeOptions(hosts).map((host) => host.node_name)).toEqual([
+      "hostd-node",
+      "storage1",
+    ]);
+    expect(chooseDefaultPlaneNode(hosts, "execution")).toBe("hostd-node");
+    expect(chooseDefaultPlaneNode(hosts, "storage")).toBe("hostd-node");
+  });
+
+  it("keeps single-machine defaults on the connected local node even with stale remote storage", () => {
+    const hosts = [
+      {
+        node_name: "storage1",
+        state: "connected",
+        roles: ["storage"],
+      },
+      {
+        node_name: "local-hostd",
+        state: "connected",
+        roles: ["worker"],
+        gpu_count: 1,
+      },
+    ];
+
+    expect(chooseDefaultPlaneNode(hosts, "execution")).toBe("local-hostd");
+    expect(chooseDefaultPlaneNode(hosts, "storage")).toBe("local-hostd");
   });
 
   it("does not emit legacy node-placement fields when topology is disabled", () => {

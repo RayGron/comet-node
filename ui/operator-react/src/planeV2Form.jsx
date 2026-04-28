@@ -338,13 +338,114 @@ function findLtCypherModelItem(items) {
   }) || null;
 }
 
-function applyLtCypherPresetToForm(form, modelLibraryItems) {
+function normalizeNodeName(value) {
+  return String(value || "").trim();
+}
+
+function isLocalNodeName(value) {
+  const name = normalizeNodeName(value).toLowerCase();
+  return name === "local-hostd" || name === "hostd-node" || name === "localhost";
+}
+
+export function buildHostNodeOptions(hostdHosts) {
+  const byName = new Map();
+  for (const host of Array.isArray(hostdHosts) ? hostdHosts : []) {
+    const name = hostName(host);
+    if (!name || byName.has(name)) {
+      continue;
+    }
+    byName.set(name, host);
+  }
+  return [...byName.values()].sort((left, right) => {
+    const leftConnected = hostConnected(left) ? 0 : 1;
+    const rightConnected = hostConnected(right) ? 0 : 1;
+    if (leftConnected !== rightConnected) {
+      return leftConnected - rightConnected;
+    }
+    const leftLocal = isLocalNodeName(hostName(left)) ? 0 : 1;
+    const rightLocal = isLocalNodeName(hostName(right)) ? 0 : 1;
+    if (leftLocal !== rightLocal) {
+      return leftLocal - rightLocal;
+    }
+    return hostName(left).localeCompare(hostName(right));
+  });
+}
+
+function hostHasStorageCapability(host) {
+  const roles = hostRoles(host);
+  return (
+    roles.includes("storage") ||
+    host?.role_eligible === true ||
+    Boolean(host?.storage_root || host?.capabilities?.storage_root)
+  );
+}
+
+function hostHasExecutionCapability(host) {
+  const roles = hostRoles(host);
+  return (
+    roles.includes("worker") ||
+    roles.includes("infer") ||
+    roles.includes("compute") ||
+    hostGpuCount(host) > 0 ||
+    hostConnected(host)
+  );
+}
+
+export function chooseDefaultPlaneNode(hostdHosts, purpose = "execution") {
+  const hosts = buildHostNodeOptions(hostdHosts);
+  const connectedLocal = hosts.find((host) => hostConnected(host) && isLocalNodeName(hostName(host)));
+  if (connectedLocal) {
+    return hostName(connectedLocal);
+  }
+  const matchesPurpose = (host) =>
+    purpose === "storage" ? hostHasStorageCapability(host) : hostHasExecutionCapability(host);
+  const candidates = hosts.filter(matchesPurpose);
+  const connectedCandidates = candidates.filter(hostConnected);
+  if (connectedCandidates.length > 0) {
+    return hostName(connectedCandidates[0]);
+  }
+  const localCandidate = candidates.find((host) => isLocalNodeName(hostName(host)));
+  if (localCandidate) {
+    return hostName(localCandidate);
+  }
+  if (candidates.length > 0) {
+    return hostName(candidates[0]);
+  }
+  const anyLocal = hosts.find((host) => isLocalNodeName(hostName(host)));
+  if (anyLocal) {
+    return hostName(anyLocal);
+  }
+  return hosts[0] ? hostName(hosts[0]) : "local-hostd";
+}
+
+function buildNodeInputListId(fieldName) {
+  return `plane-node-options-${fieldName}`;
+}
+
+function NodeNameDatalist({ id, hostdHosts }) {
+  const options = buildHostNodeOptions(hostdHosts);
+  if (options.length === 0) {
+    return null;
+  }
+  return (
+    <datalist id={id}>
+      {options.map((host) => (
+        <option key={hostName(host)} value={hostName(host)}>
+          {hostConnected(host) ? "connected" : "seen"} / {hostRoles(host).join(",") || "no roles"}
+        </option>
+      ))}
+    </datalist>
+  );
+}
+
+function applyLtCypherPresetToForm(form, modelLibraryItems, hostdHosts = []) {
   const modelItem = findLtCypherModelItem(modelLibraryItems);
   const sourcePaths = modelLibraryPaths(modelItem);
-  const fallbackSourcePath = "/mnt/array/naim/storage/gguf/Qwen/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-Q8_0.gguf";
-  const sourcePath = String(modelItem?.path || sourcePaths[0] || fallbackSourcePath).trim();
+  const sourcePath = String(modelItem?.path || sourcePaths[0] || form.modelPath || "").trim();
   const sourceFormat = inferModelFormat(modelItem) || "gguf";
   const sourceQuantization = inferModelQuantization(modelItem) || "Q8_0";
+  const storageNode = normalizeNodeName(modelItem?.node_name) || chooseDefaultPlaneNode(hostdHosts, "storage");
+  const executionNode = chooseDefaultPlaneNode(hostdHosts, "execution");
   const appEnv = {
     CYPHER_ACTION_AUDIT_LOG_FILE: "/naim/private/action-audit.log",
     CYPHER_API_BASE: "http://interaction-lt-cypher-ai:18110/v1",
@@ -376,7 +477,7 @@ function applyLtCypherPresetToForm(form, modelLibraryItems) {
     modelPath: sourcePath,
     materializationMode: "prepare_on_worker",
     materializationLocalPath: sourcePath,
-    materializationSourceNodeName: modelItem?.node_name || "storage1",
+    materializationSourceNodeName: storageNode,
     materializationSourcePaths: sourcePaths.length > 0 ? sourcePaths : sourcePath ? [sourcePath] : [],
     materializationSourceFormat: sourceFormat,
     materializationSourceQuantization: sourceQuantization,
@@ -385,7 +486,7 @@ function applyLtCypherPresetToForm(form, modelLibraryItems) {
     modelKeepSource: false,
     modelWritebackEnabled: false,
     modelWritebackIfMissing: true,
-    modelWritebackTargetNodeName: modelItem?.node_name || "storage1",
+    modelWritebackTargetNodeName: storageNode,
     servedModelName: "qwen3.6-35b-a3b-jex",
     servedModelNameManual: true,
     modelTargetFilename: "Qwen3.6-35B-A3B-Q8_0.gguf",
@@ -400,15 +501,15 @@ function applyLtCypherPresetToForm(form, modelLibraryItems) {
     maxModelLen: 8192,
     maxNumSeqs: 4,
     gpuMemoryUtilization: 0.85,
-    executionNode: "hpc1",
-    topologyEnabled: true,
-    topologyNodes: [{ name: "hpc1", executionMode: "mixed", gpuMemoryText: "0=24576,1=24576,2=24576,3=24576" }],
-    inferNode: "hpc1",
-    workerNode: "hpc1",
-    appNode: "hpc1",
+    executionNode,
+    topologyEnabled: false,
+    topologyNodes: [],
+    inferNode: "",
+    workerNode: "",
+    appNode: "",
     workerGpuDevice: "0",
-    workerAssignmentsEnabled: true,
-    workerAssignments: [{ node: "hpc1", gpuDevice: "0" }],
+    workerAssignmentsEnabled: false,
+    workerAssignments: [],
     placementMode: "manual",
     shareMode: "exclusive",
     gpuFraction: 1,
@@ -439,7 +540,7 @@ function applyLtCypherPresetToForm(form, modelLibraryItems) {
         startType: "command",
         startValue: "node market-collector.js",
         envText: renderEnvText(collectorEnv),
-        node: "hpc1",
+        node: "",
         volumeEnabled: true,
       }),
     ],
@@ -1653,11 +1754,16 @@ function buildLtCypherPreflight({ form, modelLibraryItems, hostdHosts, peerLinks
   const push = (key, label, passed, detail) => {
     results.push({ key, label, passed, detail });
   };
-  const hpc1 = findHost(hostdHosts, "hpc1");
-  const storage1 = findHost(hostdHosts, "storage1");
+  const executionNode = normalizeNodeName(form.executionNode) || chooseDefaultPlaneNode(hostdHosts, "execution");
   const selectedModel =
     (Array.isArray(modelLibraryItems) ? modelLibraryItems : []).find((item) => item.path === form.modelPath) ||
     findLtCypherModelItem(modelLibraryItems);
+  const sourceNode =
+    normalizeNodeName(selectedModel?.node_name) ||
+    normalizeNodeName(form.materializationSourceNodeName) ||
+    chooseDefaultPlaneNode(hostdHosts, "storage");
+  const executionHost = findHost(hostdHosts, executionNode);
+  const storageHost = findHost(hostdHosts, sourceNode);
   const selectedFormat = inferModelFormat(selectedModel);
   const selectedQuantization = inferModelQuantization(selectedModel);
   const image = String(form.appImage || "").trim();
@@ -1666,34 +1772,36 @@ function buildLtCypherPreflight({ form, modelLibraryItems, hostdHosts, peerLinks
     : "";
   push("controller", "Controller reachable", true, "The operator UI has an active API session.");
   push(
-    "hpc1",
-    "hpc1 worker online with 4 GPUs",
-    hostConnected(hpc1) && hostRoles(hpc1).includes("worker") && hostGpuCount(hpc1) >= 4,
-    hpc1
-      ? `state=${hpc1.state || hpc1.status || "seen"}, roles=${hostRoles(hpc1).join(",") || "n/a"}, gpus=${hostGpuCount(hpc1)}`
-      : "hpc1 is not present in /api/v1/hostd/hosts",
+    "execution-node",
+    `Execution node ${executionNode} online`,
+    hostConnected(executionHost),
+    executionHost
+      ? `state=${executionHost.state || executionHost.status || "seen"}, roles=${hostRoles(executionHost).join(",") || "n/a"}, gpus=${hostGpuCount(executionHost)}`
+      : `${executionNode} is not present in /api/v1/hostd/hosts`,
   );
   push(
-    "storage1",
-    "storage1 storage online",
-    hostConnected(storage1) && hostRoles(storage1).includes("storage"),
-    storage1
-      ? `state=${storage1.state || storage1.status || "seen"}, roles=${hostRoles(storage1).join(",") || "n/a"}`
-      : "storage1 is not present in /api/v1/hostd/hosts",
+    "storage-node",
+    `Storage node ${sourceNode} online`,
+    hostConnected(storageHost) && hostHasStorageCapability(storageHost),
+    storageHost
+      ? `state=${storageHost.state || storageHost.status || "seen"}, roles=${hostRoles(storageHost).join(",") || "n/a"}`
+      : `${sourceNode} is not present in /api/v1/hostd/hosts`,
   );
   push(
-    "lan",
-    "hpc1 <-> storage1 LAN direct",
-    peerLinkIsDirect(peerLinks, "hpc1", "storage1"),
-    peerLinkIsDirect(peerLinks, "hpc1", "storage1")
-      ? "Fresh bidirectional LAN peer link is available."
-      : "No fresh direct peer link in dashboard peer_links.",
+    "placement-link",
+    executionNode === sourceNode ? "Single-node placement" : `${executionNode} <-> ${sourceNode} direct link`,
+    executionNode === sourceNode || peerLinkIsDirect(peerLinks, executionNode, sourceNode),
+    executionNode === sourceNode
+      ? "Model storage and plane runtime are colocated on the same node."
+      : peerLinkIsDirect(peerLinks, executionNode, sourceNode)
+        ? "Fresh bidirectional LAN peer link is available."
+        : "No fresh direct peer link in dashboard peer_links.",
   );
   push(
     "model",
-    "Qwen3.6-35B-A3B Q8 model readable on storage1",
+    `Qwen3.6-35B-A3B Q8 model readable on ${sourceNode}`,
     Boolean(selectedModel) &&
-      String(selectedModel?.node_name || form.materializationSourceNodeName || "") === "storage1" &&
+      String(selectedModel?.node_name || form.materializationSourceNodeName || "") === sourceNode &&
       selectedFormat === "gguf" &&
       selectedQuantization === "Q8_0" &&
       modelLibraryPaths(selectedModel).length > 0,
@@ -1857,6 +1965,9 @@ export function PlaneV2FormBuilder({
   const activeAssignments = workerAssignments.filter(
     (assignment) => String(assignment?.node || "").trim() || String(assignment?.gpuDevice || "").trim(),
   );
+  const nodeOptionsListId = buildNodeInputListId("hostd");
+  const defaultExecutionNode = chooseDefaultPlaneNode(hostdHosts, "execution");
+  const defaultStorageNode = chooseDefaultPlaneNode(hostdHosts, "storage");
   const topologySummary =
     activeTopologyNodes.length > 0
       ? `${activeTopologyNodes.length} node(s), ${activeTopologyNodes.filter((node) => node.executionMode === "worker-only").length} worker-only, ${activeTopologyNodes.filter((node) => node.executionMode === "infer-only").length} infer-only`
@@ -2130,7 +2241,7 @@ export function PlaneV2FormBuilder({
   function enableSingleHostLayout() {
     updatePlaneDialogForm(setDialog, (current) => ({
       ...current,
-      executionNode: "local-hostd",
+      executionNode: chooseDefaultPlaneNode(hostdHosts, "execution"),
       topologyEnabled: false,
       topologyNodes: [],
       inferNode: "",
@@ -2206,7 +2317,7 @@ export function PlaneV2FormBuilder({
 
   function applyLtCypherPreset() {
     updatePlaneDialogForm(setDialog, (current) =>
-      applyLtCypherPresetToForm(current, modelLibraryItems),
+      applyLtCypherPresetToForm(current, modelLibraryItems, hostdHosts),
     );
     setLtCypherPreflight(null);
   }
@@ -2316,14 +2427,39 @@ export function PlaneV2FormBuilder({
 
   return (
     <div className="plane-form-builder">
+      <NodeNameDatalist id={nodeOptionsListId} hostdHosts={hostdHosts} />
       <div className="plane-form-toggle">
         <div className="plane-form-section-header">
-          <InfoLabel info="Fill the form for the UI-only LocalTrade Jex deployment flow. The preset uses storage1 as model source, hpc1 as worker, Harbor image contract, and root ingress mode.">
-            Deploy preset
+          <InfoLabel info="Fill the form for the UI-only LocalTrade Jex deployment flow. The preset uses the selected Model Library artifact node and the connected local node by default. Network layouts remain editable in the placement section.">
+            LocalTrade preset
           </InfoLabel>
           <p className="plane-form-section-copy">
-            Use this for a clean lt-cypher-ai run: Qwen3.6-35B-A3B Q8 from storage1, hpc1 GPU 0, app on 127.0.0.1:18110, public base path /.
+            Uses Model Library Qwen3.6-35B-A3B Q8 when present, storage node {defaultStorageNode}, execution node {defaultExecutionNode}, app on 127.0.0.1:18110, public base path /.
           </p>
+        </div>
+        <div className="plane-form-grid">
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.sourceStorageNode}>Storage node</InfoLabel>
+            <input
+              className={inputClassName(
+                Boolean(fieldError("Source storage node is required for worker model preparation")),
+              )}
+              list={nodeOptionsListId}
+              value={form.materializationSourceNodeName}
+              onChange={bindText("materializationSourceNodeName")}
+              placeholder={defaultStorageNode}
+            />
+          </label>
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.executionNode}>Execution node</InfoLabel>
+            <input
+              className={inputClassName(Boolean(fieldError("Execution node is required.")))}
+              list={nodeOptionsListId}
+              value={form.executionNode}
+              onChange={bindText("executionNode")}
+              placeholder={defaultExecutionNode}
+            />
+          </label>
         </div>
         <SectionActions>
           <button className="ghost-button" type="button" onClick={applyLtCypherPreset}>
@@ -2343,8 +2479,8 @@ export function PlaneV2FormBuilder({
           ) : null}
         </SectionActions>
         {ltCypherPreflight ? (
-          <div className="model-library-picker">
-            <div className="model-library-picker-head">
+          <div className="model-library-picker preset-preflight">
+            <div className="model-library-picker-head preset-preflight-head">
               <div>Check</div>
               <div>Status</div>
               <div>Detail</div>
@@ -2352,7 +2488,7 @@ export function PlaneV2FormBuilder({
             <div className="model-library-picker-body">
               {ltCypherPreflight.map((item) => (
                 <div
-                  className={`model-library-picker-row${item.passed ? " is-selected" : ""}`}
+                  className={`model-library-picker-row preset-preflight-row${item.passed ? " is-selected" : ""}`}
                   key={item.key}
                 >
                   <strong>{item.label}</strong>
@@ -3009,6 +3145,7 @@ export function PlaneV2FormBuilder({
                           className={inputClassName(
                             Boolean(fieldError("Source storage node is required for worker model preparation")),
                           )}
+                          list={nodeOptionsListId}
                           value={form.materializationSourceNodeName}
                           onChange={bindText("materializationSourceNodeName")}
                         />
@@ -3096,6 +3233,7 @@ export function PlaneV2FormBuilder({
                       <span className="field-label-title">Writeback target node</span>
                       <input
                         className="text-input"
+                        list={nodeOptionsListId}
                         value={form.modelWritebackTargetNodeName}
                         onChange={bindText("modelWritebackTargetNodeName")}
                         placeholder="Defaults to source storage node"
@@ -3195,6 +3333,7 @@ export function PlaneV2FormBuilder({
             <InfoLabel info={FIELD_INFO.executionNode}>Execution node</InfoLabel>
             <input
               className={inputClassName(Boolean(fieldError("Execution node is required.")))}
+              list={nodeOptionsListId}
               value={form.executionNode}
               onChange={bindText("executionNode")}
             />

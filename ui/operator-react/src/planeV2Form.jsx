@@ -376,7 +376,7 @@ function hostHasStorageCapability(host) {
   return (
     roles.includes("storage") ||
     host?.role_eligible === true ||
-    Boolean(host?.storage_root || host?.capabilities?.storage_root)
+    Boolean(host?.storage_root || host?.capabilities?.storage_root || host?.capacity_summary?.storage_root)
   );
 }
 
@@ -391,6 +391,28 @@ function hostHasExecutionCapability(host) {
   );
 }
 
+function hostPurposeRank(host, purpose) {
+  const roles = hostRoles(host);
+  if (purpose === "storage") {
+    if (roles.includes("storage") || host?.storage_role_enabled === true) {
+      return 0;
+    }
+    if (Boolean(host?.storage_root || host?.capabilities?.storage_root || host?.capacity_summary?.storage_root)) {
+      return 1;
+    }
+    return 2;
+  }
+  if (
+    roles.includes("worker") ||
+    roles.includes("infer") ||
+    roles.includes("compute") ||
+    hostGpuCount(host) > 0
+  ) {
+    return 0;
+  }
+  return 1;
+}
+
 export function chooseDefaultPlaneNode(hostdHosts, purpose = "execution") {
   const hosts = buildHostNodeOptions(hostdHosts);
   const connectedLocal = hosts.find((host) => hostConnected(host) && isLocalNodeName(hostName(host)));
@@ -400,7 +422,16 @@ export function chooseDefaultPlaneNode(hostdHosts, purpose = "execution") {
   const matchesPurpose = (host) =>
     purpose === "storage" ? hostHasStorageCapability(host) : hostHasExecutionCapability(host);
   const candidates = hosts.filter(matchesPurpose);
-  const connectedCandidates = candidates.filter(hostConnected);
+  const connectedCandidates = candidates
+    .filter(hostConnected)
+    .sort((left, right) => {
+      const leftRank = hostPurposeRank(left, purpose);
+      const rightRank = hostPurposeRank(right, purpose);
+      if (leftRank !== rightRank) {
+        return leftRank - rightRank;
+      }
+      return hostName(left).localeCompare(hostName(right));
+    });
   if (connectedCandidates.length > 0) {
     return hostName(connectedCandidates[0]);
   }
@@ -444,8 +475,11 @@ function applyLtCypherPresetToForm(form, modelLibraryItems, hostdHosts = []) {
   const sourcePath = String(modelItem?.path || sourcePaths[0] || form.modelPath || "").trim();
   const sourceFormat = inferModelFormat(modelItem) || "gguf";
   const sourceQuantization = inferModelQuantization(modelItem) || "Q8_0";
-  const storageNode = normalizeNodeName(modelItem?.node_name) || chooseDefaultPlaneNode(hostdHosts, "storage");
-  const executionNode = chooseDefaultPlaneNode(hostdHosts, "execution");
+  const executionNode = normalizeNodeName(form.executionNode) || chooseDefaultPlaneNode(hostdHosts, "execution");
+  const storageNode =
+    normalizeNodeName(form.materializationSourceNodeName) ||
+    chooseDefaultPlaneNode(hostdHosts, "storage") ||
+    normalizeNodeName(modelItem?.node_name);
   const appEnv = {
     CYPHER_ACTION_AUDIT_LOG_FILE: "/naim/private/action-audit.log",
     CYPHER_API_BASE: "http://interaction-lt-cypher-ai:18110/v1",
@@ -507,7 +541,7 @@ function applyLtCypherPresetToForm(form, modelLibraryItems, hostdHosts = []) {
     inferNode: "",
     workerNode: "",
     appNode: "",
-    workerGpuDevice: "0",
+    workerGpuDevice: form.workerGpuDevice || "0",
     workerAssignmentsEnabled: false,
     workerAssignments: [],
     placementMode: "manual",
@@ -783,6 +817,18 @@ export function buildNewPlaneFormState() {
     sharedDiskGb: 40,
     postDeployScript: "bundle://deploy/scripts/post-deploy.sh",
   });
+}
+
+export function buildNewPlaneFormStateWithNodes(hostdHosts = []) {
+  const form = buildNewPlaneFormState();
+  const executionNode = chooseDefaultPlaneNode(hostdHosts, "execution");
+  const storageNode = chooseDefaultPlaneNode(hostdHosts, "storage");
+  return {
+    ...form,
+    executionNode,
+    materializationSourceNodeName: storageNode,
+    modelWritebackTargetNodeName: storageNode,
+  };
 }
 
 export function buildPlaneFormStateFromDesiredStateV2(value) {
@@ -1691,6 +1737,12 @@ function hostRoles(host) {
   if (host?.role) {
     roles.push(host.role);
   }
+  if (host?.derived_role) {
+    roles.push(host.derived_role);
+  }
+  if (host?.storage_role_enabled) {
+    roles.push("storage");
+  }
   if (host?.is_worker || host?.worker) {
     roles.push("Worker");
   }
@@ -1728,10 +1780,22 @@ function hostConnected(host) {
     return false;
   }
   const state = String(host.state || host.status || host.health || "").toLowerCase();
-  if (["offline", "missing", "stale", "critical", "error"].includes(state)) {
+  const sessionState = String(host.session_state || "").toLowerCase();
+  if (
+    ["offline", "missing", "stale", "critical", "error"].includes(state) ||
+    ["offline", "missing", "stale", "disconnected", "expired"].includes(sessionState)
+  ) {
     return false;
   }
-  return host.connected === true || host.ready === true || state === "connected" || state === "ready" || Boolean(host.last_seen_at || host.updated_at);
+  return (
+    host.connected === true ||
+    host.ready === true ||
+    state === "connected" ||
+    state === "ready" ||
+    state === "online" ||
+    sessionState === "connected" ||
+    Boolean(host.last_seen_at || host.updated_at || host.last_heartbeat_at || host.last_session_at)
+  );
 }
 
 function peerLinkIsDirect(peerLinks, leftNode, rightNode) {

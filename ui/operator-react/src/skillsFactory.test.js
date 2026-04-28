@@ -6,6 +6,7 @@ import {
   buildDesiredStateV2FromForm,
   buildHostNodeOptions,
   buildNewPlaneFormState,
+  buildNewPlaneFormStateWithNodes,
   buildPlaneFormStateFromDesiredStateV2,
   chooseDefaultPlaneNode,
   validatePlaneV2Form,
@@ -447,6 +448,36 @@ describe("planeV2Form SkillsFactory mapping", () => {
 
     expect(chooseDefaultPlaneNode(hosts, "execution")).toBe("local-hostd");
     expect(chooseDefaultPlaneNode(hosts, "storage")).toBe("local-hostd");
+  });
+
+  it("uses role-specific defaults for distributed production nodes", () => {
+    const hosts = [
+      {
+        node_name: "hpc1",
+        session_state: "connected",
+        derived_role: "worker",
+        capacity_summary: {
+          gpu_count: 4,
+          storage_root: "/mnt/shared-storage/naim/storage",
+        },
+      },
+      {
+        node_name: "storage1",
+        session_state: "connected",
+        derived_role: "storage",
+        capacity_summary: {
+          gpu_count: 0,
+          storage_root: "/mnt/array/naim/storage",
+        },
+      },
+    ];
+
+    expect(chooseDefaultPlaneNode(hosts, "execution")).toBe("hpc1");
+    expect(chooseDefaultPlaneNode(hosts, "storage")).toBe("storage1");
+
+    const form = buildNewPlaneFormStateWithNodes(hosts);
+    expect(form.executionNode).toBe("hpc1");
+    expect(form.materializationSourceNodeName).toBe("storage1");
   });
 
   it("does not emit legacy node-placement fields when topology is disabled", () => {

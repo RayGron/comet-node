@@ -13,7 +13,9 @@ import {
 } from "recharts";
 import {
   buildDesiredStateV2FromForm,
+  buildHostNodeOptions,
   buildNewPlaneFormState,
+  buildNewPlaneFormStateWithNodes,
   buildPlaneFormStateFromDesiredStateV2,
   isDesiredStateV2,
   PlaneV2FormBuilder,
@@ -3127,7 +3129,22 @@ function App() {
     setApiError("");
     try {
       if (mode === "new") {
-        const form = buildNewPlaneFormState();
+        let latestHostdHosts = hostdHosts || [];
+        if (!Array.isArray(latestHostdHosts) || latestHostdHosts.length === 0) {
+          try {
+            const hostdHostsPayload = await fetchJson(hostdHostsPath());
+            latestHostdHosts = Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : [];
+            setHostdHosts(latestHostdHosts);
+          } catch {
+            latestHostdHosts = [];
+          }
+        }
+        const form = buildNewPlaneFormStateWithNodes(
+          buildHostNodeOptions([
+            ...(Array.isArray(latestHostdHosts) ? latestHostdHosts : []),
+            ...(Array.isArray(modelLibrary.nodes) ? modelLibrary.nodes : []),
+          ]),
+        );
         setPlaneDialog({
           open: true,
           mode,
@@ -3868,6 +3885,10 @@ function App() {
   const visibleModelItems = (modelLibrary.items || []).slice(0, visibleModelCount);
   const hasMoreModelItems = activeModelCount > visibleModelCount;
   const modelLibraryNodes = Array.isArray(modelLibrary.nodes) ? modelLibrary.nodes : [];
+  const planeNodeOptions = buildHostNodeOptions([
+    ...(Array.isArray(hostdHosts) ? hostdHosts : []),
+    ...modelLibraryNodes,
+  ]);
   const storageModelNodes = eligibleModelStorageNodes(modelLibraryNodes);
   const modelLibraryJobs = Array.isArray(modelLibrary.jobs) ? modelLibrary.jobs : [];
   const downloadModelJobs = modelLibraryJobs.filter(
@@ -7914,7 +7935,7 @@ function App() {
         }
         onSave={savePlaneDialog}
         modelLibraryItems={modelLibrary.items || []}
-        hostdHosts={hostdHosts || []}
+        hostdHosts={planeNodeOptions}
         peerLinks={dashboard?.peer_links || null}
         skillsFactoryItems={skillsFactory.items || []}
         skillsFactoryGroups={skillsFactory.groups || []}

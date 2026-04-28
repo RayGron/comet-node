@@ -304,6 +304,12 @@ ComposeService BuildComposeService(
       direct_model_cache.has_value()) {
     service.volumes.push_back(*direct_model_cache);
   }
+  for (const auto& model_mount : instance.app_model_mounts) {
+    if (!model_mount.host_path.empty() && !model_mount.mount_path.empty()) {
+      service.volumes.push_back(
+          ComposeVolume{model_mount.host_path, model_mount.mount_path, true});
+    }
+  }
 
   return service;
 }

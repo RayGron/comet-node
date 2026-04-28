@@ -1307,6 +1307,16 @@ body {
   color: #ffeaa0;
 }
 
+.preset-preflight-head,
+.preset-preflight-row {
+  grid-template-columns: minmax(10rem, 1fr) minmax(6rem, 0.35fr) minmax(12rem, 1.6fr);
+}
+
+.preset-preflight-row {
+  min-height: 0;
+  cursor: default;
+}
+
 .plane-form-rows {
   display: grid;
   gap: 10px;

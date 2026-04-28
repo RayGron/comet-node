@@ -95,6 +95,17 @@ struct DiskSpec {
   int size_gb = 0;
 };
 
+struct AppModelMountSpec {
+  std::string name;
+  std::string source_path;
+  std::string source_node_name;
+  std::vector<std::string> source_paths;
+  std::string host_path;
+  std::string mount_path;
+  std::string env_var;
+  bool required = true;
+};
+
 struct InstanceSpec {
   std::string name;
   InstanceRole role;
@@ -116,6 +127,7 @@ struct InstanceSpec {
   bool preemptible = false;
   std::optional<int> memory_cap_mb;
   int private_disk_size_gb = 0;
+  std::vector<AppModelMountSpec> app_model_mounts;
 };
 
 struct NodeInventory {

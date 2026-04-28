@@ -50,6 +50,26 @@ int main() {
     }
 
     {
+      const auto loop0 = naim::hostd::HostdDiskRuntimeSupport::ParseLoopDeviceMinor(
+          "/dev/loop0");
+      const auto loop128 = naim::hostd::HostdDiskRuntimeSupport::ParseLoopDeviceMinor(
+          "/dev/loop128");
+      Expect(loop0.has_value() && *loop0 == 0, "ParseLoopDeviceMinor should parse loop0");
+      Expect(
+          loop128.has_value() && *loop128 == 128,
+          "ParseLoopDeviceMinor should parse multi-digit loop devices");
+      Expect(
+          !naim::hostd::HostdDiskRuntimeSupport::ParseLoopDeviceMinor("/dev/loop").has_value(),
+          "ParseLoopDeviceMinor should reject missing minor");
+      Expect(
+          !naim::hostd::HostdDiskRuntimeSupport::ParseLoopDeviceMinor("/dev/loop-control").has_value(),
+          "ParseLoopDeviceMinor should reject loop-control");
+      Expect(
+          !naim::hostd::HostdDiskRuntimeSupport::ParseLoopDeviceMinor("/tmp/loop8").has_value(),
+          "ParseLoopDeviceMinor should reject non-/dev loop paths");
+    }
+
+    {
       naim::DesiredState state;
       state.plane_name = "plane-a";
       state.disks.push_back(BuildDisk("plane-a", "node-a", "shared", "/tmp/shared"));
@@ -84,6 +104,7 @@ int main() {
     }
 
     std::cout << "ok: hostd-disk-runtime-support-split-key\n";
+    std::cout << "ok: hostd-disk-runtime-support-loop-minor-parse\n";
     std::cout << "ok: hostd-disk-runtime-support-find-disk\n";
     std::cout << "ok: hostd-disk-runtime-support-realize-disk\n";
     return 0;

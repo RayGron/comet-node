@@ -1881,6 +1881,72 @@ int main() {
       std::cout << "ok: multi-app-plane" << '\n';
     }
 
+    {
+      const json app_model_plane{
+          {"version", 2},
+          {"plane_name", "app-model-plane"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-app-model"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"apps",
+           json::array(
+               {{{"name", "chat"},
+                 {"primary", true},
+                 {"enabled", true},
+                 {"image", "example/app:dev"}},
+                {{"name", "voice-asr"},
+                 {"enabled", true},
+                 {"image", "example/voice-asr:dev"},
+                 {"models",
+                  json::array(
+                      {{{"name", "whisper"},
+                        {"source",
+                         {{"type", "library"},
+                          {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"}}},
+                        {"mount_path", "/models/whisper/ggml-base.bin"},
+                        {"env", "WHISPER_MODEL_PATH"},
+                        {"required", true}}})}}})},
+      };
+      const auto state = RenderValid(app_model_plane, "app-model-plane");
+      const auto voice = FindInstance(state, "app-app-model-plane-voice-asr");
+      Expect(voice.app_model_mounts.size() == 1,
+             "app-model-plane: voice app should have one model mount");
+      Expect(voice.environment.at("WHISPER_MODEL_PATH") == "/models/whisper/ggml-base.bin",
+             "app-model-plane: model env should point to container mount path");
+      Expect(voice.app_model_mounts.front().source_path ==
+                 "/mnt/shared-storage/models/whisper/ggml-base.bin",
+             "app-model-plane: source path should be retained");
+      const auto compose_plans = naim::BuildNodeComposePlans(state);
+      const auto& service = *std::find_if(
+          compose_plans.front().services.begin(),
+          compose_plans.front().services.end(),
+          [](const naim::ComposeService& candidate) {
+            return candidate.name == "app-app-model-plane-voice-asr";
+          });
+      const auto mount_it = std::find_if(
+          service.volumes.begin(),
+          service.volumes.end(),
+          [](const naim::ComposeVolume& volume) {
+            return volume.target == "/models/whisper/ggml-base.bin";
+          });
+      Expect(mount_it != service.volumes.end(),
+             "app-model-plane: compose should include model mount");
+      Expect(mount_it->read_only, "app-model-plane: model mount should be read-only");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.at("apps").at(1).contains("models"),
+             "app-model-plane: projector should preserve app models");
+      Expect(!projected.at("apps").at(1).value("env", json::object()).contains("WHISPER_MODEL_PATH"),
+             "app-model-plane: projector should not duplicate generated model env");
+      std::cout << "ok: app-model-plane" << '\n';
+    }
+
     ExpectInvalid(
         json{
             {"version", 2},
@@ -1893,6 +1959,23 @@ int main() {
                   {{"name", "collector"}, {"enabled", true}, {"image", "example/app:dev"}}})},
         },
         "duplicate-app-names");
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-app-model-source"},
+            {"plane_mode", "compute"},
+            {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+            {"app",
+             {{"enabled", true},
+              {"image", "example/app:dev"},
+              {"models",
+               json::array(
+                   {{{"name", "whisper"},
+                     {"source", {{"type", "url"}, {"path", "/models/ggml-base.bin"}}},
+                     {"mount_path", "/models/whisper/ggml-base.bin"}}})}}},
+        },
+        "bad-app-model-source");
 
     return 0;
   } catch (const std::exception& ex) {

@@ -44,6 +44,29 @@ std::optional<std::string> PlacementExecutionNodeName(const nlohmann::json& plac
   return std::nullopt;
 }
 
+bool IsAbsolutePath(const std::string& value) {
+  return !value.empty() && value.front() == '/';
+}
+
+bool IsValidEnvName(const std::string& value) {
+  if (value.empty()) {
+    return false;
+  }
+  const auto is_alpha = [](char ch) {
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+  };
+  const auto is_digit = [](char ch) { return ch >= '0' && ch <= '9'; };
+  if (!is_alpha(value.front()) && value.front() != '_') {
+    return false;
+  }
+  for (const char ch : value) {
+    if (!is_alpha(ch) && !is_digit(ch) && ch != '_') {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 void DesiredStateV2Validator::ValidateOrThrow(const nlohmann::json& value) {
@@ -659,6 +682,67 @@ void DesiredStateV2Validator::ValidateSingleAppSpec(
     }
     if (app.at("volumes").size() > 1) {
       throw std::runtime_error("desired-state v2 currently supports at most one app volume");
+    }
+  }
+  if (app.contains("models")) {
+    if (!app.at("models").is_array()) {
+      throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models must be an array");
+    }
+    std::set<std::string> seen_names;
+    std::set<std::string> seen_mount_paths;
+    for (const auto& model : app.at("models")) {
+      if (!model.is_object()) {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models items must be objects");
+      }
+      const std::string name = model.value("name", std::string{});
+      if (name.empty()) {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[] requires name");
+      }
+      if (!seen_names.insert(name).second) {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[] names must be unique");
+      }
+      if (!model.contains("source") || !model.at("source").is_object()) {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[].source must be an object");
+      }
+      const auto& source = model.at("source");
+      const std::string source_type = source.value("type", std::string{});
+      if (source_type != "library") {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[].source.type must be library");
+      }
+      const std::string source_path = source.value("path", std::string{});
+      if (!IsAbsolutePath(source_path)) {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[].source.path must be an absolute path");
+      }
+      if (source.contains("paths")) {
+        if (!source.at("paths").is_array()) {
+          throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[].source.paths must be an array");
+        }
+        for (const auto& path : source.at("paths")) {
+          if (!path.is_string() || !IsAbsolutePath(path.get<std::string>())) {
+            throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[].source.paths items must be absolute paths");
+          }
+        }
+      }
+      if (source.contains("node") && !source.at("node").is_string()) {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[].source.node must be a string");
+      }
+      const std::string mount_path = model.value("mount_path", std::string{});
+      if (!IsAbsolutePath(mount_path)) {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[].mount_path must be an absolute path");
+      }
+      if (!seen_mount_paths.insert(mount_path).second) {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[].mount_path values must be unique");
+      }
+      if (model.contains("env") && !model.at("env").is_string()) {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[].env must be a string");
+      }
+      const std::string env_name = model.value("env", std::string{});
+      if (!env_name.empty() && !IsValidEnvName(env_name)) {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[].env must be a valid environment variable name");
+      }
+      if (model.contains("required") && !model.at("required").is_boolean()) {
+        throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".models[].required must be a boolean");
+      }
     }
   }
 }

@@ -181,6 +181,7 @@ json StateJsonRuntimeCodecs::ToJson(const InstanceSpec& instance) {
       {"priority", instance.priority},
       {"preemptible", instance.preemptible},
       {"private_disk_size_gb", instance.private_disk_size_gb},
+      {"app_model_mounts", json::array()},
   };
   if (instance.gpu_device.has_value()) {
     result["gpu_device"] = *instance.gpu_device;
@@ -190,6 +191,18 @@ json StateJsonRuntimeCodecs::ToJson(const InstanceSpec& instance) {
   }
   for (const auto& port : instance.published_ports) {
     result["published_ports"].push_back(ToJson(port));
+  }
+  for (const auto& mount : instance.app_model_mounts) {
+    result["app_model_mounts"].push_back(json{
+        {"name", mount.name},
+        {"source_path", mount.source_path},
+        {"source_node_name", mount.source_node_name},
+        {"source_paths", mount.source_paths},
+        {"host_path", mount.host_path},
+        {"mount_path", mount.mount_path},
+        {"env_var", mount.env_var},
+        {"required", mount.required},
+    });
   }
   return result;
 }
@@ -352,6 +365,23 @@ InstanceSpec StateJsonRuntimeCodecs::InstanceSpecFromJson(
     instance.memory_cap_mb = value.at("memory_cap_mb").get<int>();
   }
   instance.private_disk_size_gb = value.value("private_disk_size_gb", 0);
+  if (value.contains("app_model_mounts") && value.at("app_model_mounts").is_array()) {
+    for (const auto& item : value.at("app_model_mounts")) {
+      if (!item.is_object()) {
+        continue;
+      }
+      AppModelMountSpec mount;
+      mount.name = item.value("name", std::string{});
+      mount.source_path = item.value("source_path", std::string{});
+      mount.source_node_name = item.value("source_node_name", std::string{});
+      mount.source_paths = item.value("source_paths", std::vector<std::string>{});
+      mount.host_path = item.value("host_path", std::string{});
+      mount.mount_path = item.value("mount_path", std::string{});
+      mount.env_var = item.value("env_var", std::string{});
+      mount.required = item.value("required", true);
+      instance.app_model_mounts.push_back(std::move(mount));
+    }
+  }
   return instance;
 }
 

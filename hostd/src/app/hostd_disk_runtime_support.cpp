@@ -6,8 +6,10 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include "naim/core/platform_compat.h"
@@ -168,6 +170,59 @@ std::string HostdDiskRuntimeSupport::NormalizeMountPointPath(
   return NormalizeManagedPath(mount_point);
 }
 
+std::optional<unsigned int> HostdDiskRuntimeSupport::ParseLoopDeviceMinor(
+    const std::string& device_path) {
+  constexpr std::string_view prefix = "/dev/loop";
+  if (device_path.rfind(prefix, 0) != 0 || device_path.size() == prefix.size()) {
+    return std::nullopt;
+  }
+  unsigned long long value = 0;
+  for (std::size_t index = prefix.size(); index < device_path.size(); ++index) {
+    const char ch = device_path[index];
+    if (!std::isdigit(static_cast<unsigned char>(ch))) {
+      return std::nullopt;
+    }
+    value = value * 10 + static_cast<unsigned long long>(ch - '0');
+    if (value > std::numeric_limits<unsigned int>::max()) {
+      return std::nullopt;
+    }
+  }
+  return static_cast<unsigned int>(value);
+}
+
+void HostdDiskRuntimeSupport::EnsureLoopDeviceNodeExists(
+    const std::string& device_path) const {
+  if (std::filesystem::exists(device_path)) {
+    return;
+  }
+  const auto minor = ParseLoopDeviceMinor(device_path);
+  if (!minor.has_value()) {
+    return;
+  }
+  if (!HostCanManageRealDisks()) {
+    return;
+  }
+  const std::string quoted_path = command_support_.ShellQuote(device_path);
+  const std::string minor_text = std::to_string(*minor);
+  const bool created = command_support_.RunCommandOk(
+      "if [ ! -e " + quoted_path + " ]; then mknod -m 660 " + quoted_path +
+      " b 7 " + minor_text + "; fi");
+  if (!created || !std::filesystem::exists(device_path)) {
+    throw std::runtime_error(
+        "failed to create loop device node '" + device_path + "'");
+  }
+  command_support_.RunCommandOk(
+      "chown root:disk " + quoted_path + " >/dev/null 2>&1 || true");
+}
+
+void HostdDiskRuntimeSupport::EnsureNextLoopDeviceNodeExists() const {
+  const std::string next_device = command_support_.Trim(
+      command_support_.RunCommandCapture("/usr/sbin/losetup -f 2>/dev/null || true"));
+  if (!next_device.empty()) {
+    EnsureLoopDeviceNodeExists(next_device);
+  }
+}
+
 std::optional<std::string> HostdDiskRuntimeSupport::DetectExistingLoopDevice(
     const std::string& image_path) const {
   const std::array<std::string, 2> candidates = {
@@ -201,15 +256,30 @@ std::string HostdDiskRuntimeSupport::RequireLoopDeviceForImage(
     return *existing;
   }
   const std::string attach_path = NormalizeLoopImagePath(image_path);
-  const std::string output =
-      command_support_.RunCommandCapture(
-          "/usr/sbin/losetup --find --show " + command_support_.ShellQuote(attach_path) +
-          " 2>/dev/null");
-  const std::string loop_device = command_support_.Trim(output);
-  if (loop_device.empty()) {
-    throw std::runtime_error("failed to attach loop device for image '" + image_path + "'");
+
+  std::string last_output;
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    EnsureNextLoopDeviceNodeExists();
+    const std::string output =
+        command_support_.RunCommandCapture(
+            "/usr/sbin/losetup --find --show " + command_support_.ShellQuote(attach_path) +
+            " 2>&1");
+    const std::string loop_device = command_support_.Trim(output);
+    if (ParseLoopDeviceMinor(loop_device).has_value()) {
+      EnsureLoopDeviceNodeExists(loop_device);
+      return loop_device;
+    }
+    last_output = loop_device;
+    if (attempt == 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
   }
-  return loop_device;
+
+  std::string message = "failed to attach loop device for image '" + image_path + "'";
+  if (!last_output.empty()) {
+    message += ": " + last_output;
+  }
+  throw std::runtime_error(message);
 }
 
 std::string HostdDiskRuntimeSupport::DetectFilesystemTypeForDevice(

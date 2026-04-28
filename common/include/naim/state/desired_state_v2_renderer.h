@@ -72,6 +72,11 @@ class DesiredStateV2Renderer final {
   std::string InferInstanceNameForWorker(int worker_index) const;
   std::string BuildPlaneSharedHostPath() const;
   std::string BuildInstancePrivateHostPath(const std::string& instance_name) const;
+  std::string BuildAppModelHostPath(
+      const std::string& instance_name,
+      const std::string& model_name,
+      const std::string& mount_path,
+      const std::string& source_path) const;
   std::string BuildAppCommandFromScriptRef(const std::string& script_ref) const;
   std::string BuildCommandFromStartSpec(
       const nlohmann::json& start,

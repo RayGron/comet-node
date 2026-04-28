@@ -514,11 +514,12 @@ HttpResponse ModelLibraryService::EnqueueDownload(
              {"message", "failed to detect source format from source_urls"}},
         {});
   }
-  if (desired_output_format != "gguf" && desired_output_format != "safetensors") {
+  if (desired_output_format != "gguf" && desired_output_format != "safetensors" &&
+      desired_output_format != "whisper.cpp") {
     return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
-             {"message", "format must be gguf, safetensors, or source"}},
+             {"message", "format must be gguf, safetensors, whisper.cpp, or source"}},
         {});
   }
   if (detected_source_format == "gguf" && desired_output_format != "gguf") {
@@ -526,6 +527,13 @@ HttpResponse ModelLibraryService::EnqueueDownload(
         400,
         json{{"status", "bad_request"},
              {"message", "gguf sources can only retain GGUF output format"}},
+        {});
+  }
+  if (detected_source_format == "whisper.cpp" && desired_output_format != "whisper.cpp") {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"},
+             {"message", "whisper.cpp sources can only retain whisper.cpp output format"}},
         {});
   }
 
@@ -1662,16 +1670,28 @@ ModelLibraryService::BuildReferenceMap(const std::string& db_path) const {
   const auto desired_states = store.LoadDesiredStates();
   std::map<std::string, std::vector<std::string>> references;
   for (const auto& desired_state : desired_states) {
-    if (!desired_state.bootstrap_model.has_value() ||
-        !desired_state.bootstrap_model->local_path.has_value()) {
-      continue;
+    if (desired_state.bootstrap_model.has_value() &&
+        desired_state.bootstrap_model->local_path.has_value()) {
+      const std::string& local_path = *desired_state.bootstrap_model->local_path;
+      if (IsUsableAbsoluteHostPath(local_path)) {
+        references[NormalizePathString(local_path)].push_back(
+            desired_state.plane_name);
+      }
     }
-    const std::string& local_path = *desired_state.bootstrap_model->local_path;
-    if (!IsUsableAbsoluteHostPath(local_path)) {
-      continue;
+    for (const auto& instance : desired_state.instances) {
+      for (const auto& mount : instance.app_model_mounts) {
+        if (IsUsableAbsoluteHostPath(mount.source_path)) {
+          references[NormalizePathString(mount.source_path)].push_back(
+              desired_state.plane_name + ":" + instance.name);
+        }
+        for (const auto& source_path : mount.source_paths) {
+          if (IsUsableAbsoluteHostPath(source_path)) {
+            references[NormalizePathString(source_path)].push_back(
+                desired_state.plane_name + ":" + instance.name);
+          }
+        }
+      }
     }
-    references[NormalizePathString(local_path)].push_back(
-        desired_state.plane_name);
   }
   return references;
 }
@@ -1913,11 +1933,33 @@ ModelLibraryService::ScanEntries(const std::string& db_path) const {
         continue;
       }
       error.clear();
-      if (!EndsWithIgnoreCase(current_name, ".gguf")) {
+      const bool current_is_whisper_cpp =
+          EndsWithIgnoreCase(current_name, ".bin") &&
+          (Lowercase(current_name).rfind("ggml-", 0) == 0 ||
+           Lowercase(current_name).find("whisper") != std::string::npos);
+      if (!EndsWithIgnoreCase(current_name, ".gguf") && !current_is_whisper_cpp) {
         continue;
       }
       const auto normalized_file_path = NormalizePathString(current_path);
       if (pending_downloads.target_paths.count(normalized_file_path) != 0) {
+        continue;
+      }
+      if (current_is_whisper_cpp) {
+        ModelLibraryEntry entry;
+        entry.path = normalized_file_path;
+        entry.name = current_name;
+        entry.kind = "file";
+        entry.format = "whisper.cpp";
+        entry.quantization = "base";
+        entry.root = root_text;
+        entry.paths = {entry.path};
+        entry.size_bytes = iterator->file_size(error);
+        const auto reference_it = reference_map.find(entry.path);
+        if (reference_it != reference_map.end()) {
+          entry.referenced_by = reference_it->second;
+          entry.deletable = false;
+        }
+        entries_by_path[entry.path] = std::move(entry);
         continue;
       }
       std::string multipart_prefix;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -805,6 +806,33 @@ void DesiredStateV2Renderer::RenderAppInstance() {
     }
     app.environment["NAIM_APP_NAME"] = app_name;
     app.environment["NAIM_APP_PRIMARY"] = primary ? "true" : "false";
+    if (app_entry.contains("models") && app_entry.at("models").is_array()) {
+      for (const auto& model_entry : app_entry.at("models")) {
+        const auto& source = model_entry.at("source");
+        AppModelMountSpec model_mount;
+        model_mount.name = model_entry.value("name", std::string{});
+        model_mount.source_path = source.value("path", std::string{});
+        model_mount.source_node_name = source.value("node", std::string{});
+        if (source.contains("paths") && source.at("paths").is_array()) {
+          model_mount.source_paths = source.at("paths").get<std::vector<std::string>>();
+        }
+        if (model_mount.source_paths.empty()) {
+          model_mount.source_paths.push_back(model_mount.source_path);
+        }
+        model_mount.mount_path = model_entry.value("mount_path", std::string{});
+        model_mount.env_var = model_entry.value("env", std::string{});
+        model_mount.required = model_entry.value("required", true);
+        model_mount.host_path = BuildAppModelHostPath(
+            app.name,
+            model_mount.name,
+            model_mount.mount_path,
+            model_mount.source_path);
+        if (!model_mount.env_var.empty()) {
+          app.environment[model_mount.env_var] = model_mount.mount_path;
+        }
+        app.app_model_mounts.push_back(std::move(model_mount));
+      }
+    }
     app.labels = {
         {"naim.plane", state_.plane_name},
         {"naim.role", "app"},
@@ -1338,6 +1366,22 @@ std::string DesiredStateV2Renderer::BuildPlaneSharedHostPath() const {
 std::string DesiredStateV2Renderer::BuildInstancePrivateHostPath(
     const std::string& instance_name) const {
   return "/var/lib/naim/disks/instances/" + instance_name + "/private";
+}
+
+std::string DesiredStateV2Renderer::BuildAppModelHostPath(
+    const std::string& instance_name,
+    const std::string& model_name,
+    const std::string& mount_path,
+    const std::string& source_path) const {
+  std::string filename = std::filesystem::path(mount_path).filename().string();
+  if (filename.empty()) {
+    filename = std::filesystem::path(source_path).filename().string();
+  }
+  if (filename.empty()) {
+    filename = "model";
+  }
+  return BuildPlaneSharedHostPath() + "/app-models/" + instance_name + "/" +
+         NormalizeAppNameToken(model_name) + "/" + filename;
 }
 
 std::string DesiredStateV2Renderer::BuildAppCommandFromScriptRef(

@@ -1203,7 +1203,8 @@ export function PlaneEditorDialog({
 
   const readOnly = dialog.mode === "view";
   const showFormBuilder = !readOnly && Boolean(dialog.form);
-  const formValidation = showFormBuilder
+  const showValidation = Boolean(dialog.showValidation);
+  const formValidation = showFormBuilder && showValidation
     ? validatePlaneV2Form(dialog.form || buildNewPlaneFormState())
     : { errors: [], warnings: [] };
   const desiredStateLabel = showFormBuilder
@@ -1280,6 +1281,7 @@ export function PlaneEditorDialog({
               peerLinks={peerLinks || null}
               skillsFactoryItems={skillsFactoryItems || []}
               skillsFactoryGroups={skillsFactoryGroups || []}
+              showValidation={showValidation}
               onResetLtCypherDeployment={onResetLtCypherDeployment}
             />
           ) : null}
@@ -2055,6 +2057,7 @@ function App() {
     text: "",
     form: null,
     originalSkillsEnabled: false,
+    showValidation: false,
     busy: false,
     error: "",
   });
@@ -3153,6 +3156,7 @@ function App() {
           text: JSON.stringify(buildDesiredStateV2FromForm(form), null, 2),
           form,
           originalSkillsEnabled: false,
+          showValidation: false,
           busy: false,
           error: "",
         });
@@ -3172,6 +3176,7 @@ function App() {
           ? buildPlaneFormStateFromDesiredStateV2(payload.desired_state_v2)
           : null,
         originalSkillsEnabled: Boolean(payload?.desired_state_v2?.skills?.enabled),
+        showValidation: false,
         busy: false,
         error: "",
       });
@@ -3181,7 +3186,7 @@ function App() {
   }
 
   async function savePlaneDialog() {
-    setPlaneDialog((current) => ({ ...current, busy: true, error: "" }));
+    setPlaneDialog((current) => ({ ...current, busy: true, error: "", showValidation: true }));
     try {
       if (planeDialog.form) {
         const validation = validatePlaneV2Form(planeDialog.form);
@@ -3252,6 +3257,7 @@ function App() {
         text: "",
         form: null,
         originalSkillsEnabled: false,
+        showValidation: false,
         busy: false,
         error: "",
       });
@@ -7929,6 +7935,7 @@ function App() {
             text: "",
             form: null,
             originalSkillsEnabled: false,
+            showValidation: false,
             busy: false,
             error: "",
           })

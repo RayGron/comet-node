@@ -9,6 +9,7 @@ import {
   buildNewPlaneFormStateWithNodes,
   buildPlaneFormStateFromDesiredStateV2,
   chooseDefaultPlaneNode,
+  updatePlaneDialogForm,
   validatePlaneV2Form,
 } from "./planeV2Form.jsx";
 import { PlaneEditorDialog } from "./App.jsx";
@@ -142,6 +143,25 @@ describe("planeV2Form SkillsFactory mapping", () => {
 
     const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
     expect(reparsed.factorySkillIds).toEqual(["skill-alpha", "skill-beta"]);
+  });
+
+  it("clears stale plane dialog errors when the form changes", () => {
+    let dialog = {
+      form: buildNewPlaneFormState(),
+      text: "",
+      error: "Model Library selection is required when model source type is library.",
+    };
+    const setDialog = (updater) => {
+      dialog = typeof updater === "function" ? updater(dialog) : updater;
+    };
+
+    updatePlaneDialogForm(setDialog, (current) => ({
+      ...current,
+      planeName: "updated-plane",
+    }));
+
+    expect(dialog.error).toBe("");
+    expect(dialog.text).toContain('"plane_name": "updated-plane"');
   });
 
   it("warns when factory selections exist while Skills is disabled", () => {

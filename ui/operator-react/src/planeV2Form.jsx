@@ -1598,6 +1598,7 @@ export function updatePlaneDialogForm(setDialog, update) {
       ...current,
       form: nextForm,
       text: JSON.stringify(buildDesiredStateV2FromForm(nextForm), null, 2),
+      error: "",
     };
   });
 }
@@ -2014,10 +2015,12 @@ export function PlaneV2FormBuilder({
   skillsFactoryGroups = [],
   hostdHosts = [],
   peerLinks = null,
+  showValidation = false,
   onResetLtCypherDeployment,
 }) {
   const form = dialog.form || buildNewPlaneFormState();
-  const validation = validatePlaneV2Form(form);
+  const rawValidation = validatePlaneV2Form(form);
+  const validation = showValidation ? rawValidation : { errors: [], warnings: [] };
   const [ltCypherPreflight, setLtCypherPreflight] = useState(null);
   const [factorySkillFilter, setFactorySkillFilter] = useState("");
   const [knowledgeSelectorOpen, setKnowledgeSelectorOpen] = useState(false);

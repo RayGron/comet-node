@@ -445,9 +445,42 @@ void DesiredStateV2Projector::ProjectApp() {
     if (!start.is_null()) {
       app["start"] = start;
     }
-    const auto env = ProjectorSupport::ProjectCustomEnv(instance, true);
+    auto env = ProjectorSupport::ProjectCustomEnv(instance, true);
+    for (const auto& model_mount : instance.app_model_mounts) {
+      if (!model_mount.env_var.empty()) {
+        env.erase(model_mount.env_var);
+      }
+    }
     if (!env.empty()) {
       app["env"] = env;
+    }
+    if (!instance.app_model_mounts.empty()) {
+      nlohmann::json models = nlohmann::json::array();
+      for (const auto& model_mount : instance.app_model_mounts) {
+        nlohmann::json source = {
+            {"type", "library"},
+            {"path", model_mount.source_path},
+        };
+        if (!model_mount.source_node_name.empty()) {
+          source["node"] = model_mount.source_node_name;
+        }
+        if (!model_mount.source_paths.empty() &&
+            !(model_mount.source_paths.size() == 1 &&
+              model_mount.source_paths.front() == model_mount.source_path)) {
+          source["paths"] = model_mount.source_paths;
+        }
+        nlohmann::json model = {
+            {"name", model_mount.name},
+            {"source", source},
+            {"mount_path", model_mount.mount_path},
+            {"required", model_mount.required},
+        };
+        if (!model_mount.env_var.empty()) {
+          model["env"] = model_mount.env_var;
+        }
+        models.push_back(std::move(model));
+      }
+      app["models"] = std::move(models);
     }
     const auto publish = ProjectorSupport::ProjectPublishedPorts(instance);
     if (!publish.empty()) {

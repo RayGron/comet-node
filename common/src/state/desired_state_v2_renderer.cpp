@@ -851,7 +851,8 @@ void DesiredStateV2Renderer::RenderAppInstance() {
       app.environment["NAIM_VOICE_LISTENER_WAKE_PHRASE"] = state_.voice_listener->wake_phrase;
     }
     if (app_entry.contains("env") && app_entry.at("env").is_object()) {
-      app.environment = app_entry.at("env").get<std::map<std::string, std::string>>();
+      const auto app_env = app_entry.at("env").get<std::map<std::string, std::string>>();
+      app.environment.insert(app_env.begin(), app_env.end());
     }
     app.environment["NAIM_APP_NAME"] = app_name;
     app.environment["NAIM_APP_PRIMARY"] = primary ? "true" : "false";

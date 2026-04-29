@@ -1961,7 +1961,10 @@ int main() {
           {"runtime",
            {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
           {"infer", {{"replicas", 1}}},
-          {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
+          {"app",
+           {{"enabled", true},
+            {"image", "example/app:dev"},
+            {"env", {{"APP_MODE", "voice-test"}}}}},
           {"features",
            {{"voice_listener",
              {{"enabled", true},
@@ -1990,6 +1993,8 @@ int main() {
       Expect(app.environment.at("NAIM_VOICE_LISTENER_BASE") ==
                  "http://voice-module-voice-listener-plane:18140/v1",
              "voice-listener-plane: primary app should receive voice feature base");
+      Expect(app.environment.at("APP_MODE") == "voice-test",
+             "voice-listener-plane: primary app should preserve explicit app env");
       const auto projected = naim::DesiredStateV2Projector::Project(state);
       Expect(projected.at("features").at("voice_listener").at("wake_phrase") == "Hey Jex",
              "voice-listener-plane: projector should preserve wake phrase");

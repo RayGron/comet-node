@@ -128,7 +128,6 @@ int main() {
 
       naim::controller::SkillsFactoryService factory_service(
           MakeMutationService(),
-          naim::controller::PlaneSkillRuntimeSyncService(),
           [](const std::string&, const std::string&, const std::string& fallback) {
             return fallback;
           });
@@ -230,7 +229,6 @@ int main() {
       });
       naim::controller::SkillsFactoryService factory_service(
           MakeMutationService(),
-          naim::controller::PlaneSkillRuntimeSyncService(),
           [](const std::string&, const std::string&, const std::string& fallback) {
             return fallback;
           });
@@ -285,7 +283,6 @@ int main() {
 
       naim::controller::PlaneSkillCatalogService catalog_service(
           MakeMutationService(),
-          naim::controller::PlaneSkillRuntimeSyncService(),
           [](const std::string&, const std::string&, const std::string& fallback) {
             return fallback;
           });

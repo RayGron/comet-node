@@ -6,8 +6,10 @@ import {
   buildDesiredStateV2FromForm,
   buildHostNodeOptions,
   buildNewPlaneFormState,
+  buildNewPlaneFormStateWithNodes,
   buildPlaneFormStateFromDesiredStateV2,
   chooseDefaultPlaneNode,
+  updatePlaneDialogForm,
   validatePlaneV2Form,
 } from "./planeV2Form.jsx";
 import { PlaneEditorDialog } from "./App.jsx";
@@ -141,6 +143,25 @@ describe("planeV2Form SkillsFactory mapping", () => {
 
     const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
     expect(reparsed.factorySkillIds).toEqual(["skill-alpha", "skill-beta"]);
+  });
+
+  it("clears stale plane dialog errors when the form changes", () => {
+    let dialog = {
+      form: buildNewPlaneFormState(),
+      text: "",
+      error: "Model Library selection is required when model source type is library.",
+    };
+    const setDialog = (updater) => {
+      dialog = typeof updater === "function" ? updater(dialog) : updater;
+    };
+
+    updatePlaneDialogForm(setDialog, (current) => ({
+      ...current,
+      planeName: "updated-plane",
+    }));
+
+    expect(dialog.error).toBe("");
+    expect(dialog.text).toContain('"plane_name": "updated-plane"');
   });
 
   it("warns when factory selections exist while Skills is disabled", () => {
@@ -447,6 +468,36 @@ describe("planeV2Form SkillsFactory mapping", () => {
 
     expect(chooseDefaultPlaneNode(hosts, "execution")).toBe("local-hostd");
     expect(chooseDefaultPlaneNode(hosts, "storage")).toBe("local-hostd");
+  });
+
+  it("uses role-specific defaults for distributed production nodes", () => {
+    const hosts = [
+      {
+        node_name: "hpc1",
+        session_state: "connected",
+        derived_role: "worker",
+        capacity_summary: {
+          gpu_count: 4,
+          storage_root: "/mnt/shared-storage/naim/storage",
+        },
+      },
+      {
+        node_name: "storage1",
+        session_state: "connected",
+        derived_role: "storage",
+        capacity_summary: {
+          gpu_count: 0,
+          storage_root: "/mnt/array/naim/storage",
+        },
+      },
+    ];
+
+    expect(chooseDefaultPlaneNode(hosts, "execution")).toBe("hpc1");
+    expect(chooseDefaultPlaneNode(hosts, "storage")).toBe("storage1");
+
+    const form = buildNewPlaneFormStateWithNodes(hosts);
+    expect(form.executionNode).toBe("hpc1");
+    expect(form.materializationSourceNodeName).toBe("storage1");
   });
 
   it("does not emit legacy node-placement fields when topology is disabled", () => {

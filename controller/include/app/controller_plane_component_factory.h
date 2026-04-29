@@ -28,7 +28,6 @@ class ControllerPlaneComponentFactory final {
   const ControllerPrintService& ControllerPrintServiceInstance() const;
   const BundleCliService& BundleCliServiceInstance() const;
   const PlaneMutationService& PlaneMutationServiceInstance() const;
-  const PlaneSkillRuntimeSyncService& PlaneSkillRuntimeSyncServiceInstance() const;
   const PlaneSkillCatalogService& PlaneSkillCatalogServiceInstance() const;
   const ControllerStateService& ControllerStateServiceInstance() const;
   const SchedulerViewService& SchedulerViewServiceInstance() const;

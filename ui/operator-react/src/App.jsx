@@ -13,7 +13,9 @@ import {
 } from "recharts";
 import {
   buildDesiredStateV2FromForm,
+  buildHostNodeOptions,
   buildNewPlaneFormState,
+  buildNewPlaneFormStateWithNodes,
   buildPlaneFormStateFromDesiredStateV2,
   isDesiredStateV2,
   PlaneV2FormBuilder,
@@ -1201,7 +1203,8 @@ export function PlaneEditorDialog({
 
   const readOnly = dialog.mode === "view";
   const showFormBuilder = !readOnly && Boolean(dialog.form);
-  const formValidation = showFormBuilder
+  const showValidation = Boolean(dialog.showValidation);
+  const formValidation = showFormBuilder && showValidation
     ? validatePlaneV2Form(dialog.form || buildNewPlaneFormState())
     : { errors: [], warnings: [] };
   const desiredStateLabel = showFormBuilder
@@ -1278,6 +1281,7 @@ export function PlaneEditorDialog({
               peerLinks={peerLinks || null}
               skillsFactoryItems={skillsFactoryItems || []}
               skillsFactoryGroups={skillsFactoryGroups || []}
+              showValidation={showValidation}
               onResetLtCypherDeployment={onResetLtCypherDeployment}
             />
           ) : null}
@@ -2053,6 +2057,7 @@ function App() {
     text: "",
     form: null,
     originalSkillsEnabled: false,
+    showValidation: false,
     busy: false,
     error: "",
   });
@@ -3127,7 +3132,22 @@ function App() {
     setApiError("");
     try {
       if (mode === "new") {
-        const form = buildNewPlaneFormState();
+        let latestHostdHosts = hostdHosts || [];
+        if (!Array.isArray(latestHostdHosts) || latestHostdHosts.length === 0) {
+          try {
+            const hostdHostsPayload = await fetchJson(hostdHostsPath());
+            latestHostdHosts = Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : [];
+            setHostdHosts(latestHostdHosts);
+          } catch {
+            latestHostdHosts = [];
+          }
+        }
+        const form = buildNewPlaneFormStateWithNodes(
+          buildHostNodeOptions([
+            ...(Array.isArray(latestHostdHosts) ? latestHostdHosts : []),
+            ...(Array.isArray(modelLibrary.nodes) ? modelLibrary.nodes : []),
+          ]),
+        );
         setPlaneDialog({
           open: true,
           mode,
@@ -3136,6 +3156,7 @@ function App() {
           text: JSON.stringify(buildDesiredStateV2FromForm(form), null, 2),
           form,
           originalSkillsEnabled: false,
+          showValidation: false,
           busy: false,
           error: "",
         });
@@ -3155,6 +3176,7 @@ function App() {
           ? buildPlaneFormStateFromDesiredStateV2(payload.desired_state_v2)
           : null,
         originalSkillsEnabled: Boolean(payload?.desired_state_v2?.skills?.enabled),
+        showValidation: false,
         busy: false,
         error: "",
       });
@@ -3164,7 +3186,7 @@ function App() {
   }
 
   async function savePlaneDialog() {
-    setPlaneDialog((current) => ({ ...current, busy: true, error: "" }));
+    setPlaneDialog((current) => ({ ...current, busy: true, error: "", showValidation: true }));
     try {
       if (planeDialog.form) {
         const validation = validatePlaneV2Form(planeDialog.form);
@@ -3235,6 +3257,7 @@ function App() {
         text: "",
         form: null,
         originalSkillsEnabled: false,
+        showValidation: false,
         busy: false,
         error: "",
       });
@@ -3868,6 +3891,10 @@ function App() {
   const visibleModelItems = (modelLibrary.items || []).slice(0, visibleModelCount);
   const hasMoreModelItems = activeModelCount > visibleModelCount;
   const modelLibraryNodes = Array.isArray(modelLibrary.nodes) ? modelLibrary.nodes : [];
+  const planeNodeOptions = buildHostNodeOptions([
+    ...(Array.isArray(hostdHosts) ? hostdHosts : []),
+    ...modelLibraryNodes,
+  ]);
   const storageModelNodes = eligibleModelStorageNodes(modelLibraryNodes);
   const modelLibraryJobs = Array.isArray(modelLibrary.jobs) ? modelLibrary.jobs : [];
   const downloadModelJobs = modelLibraryJobs.filter(
@@ -7908,13 +7935,14 @@ function App() {
             text: "",
             form: null,
             originalSkillsEnabled: false,
+            showValidation: false,
             busy: false,
             error: "",
           })
         }
         onSave={savePlaneDialog}
         modelLibraryItems={modelLibrary.items || []}
-        hostdHosts={hostdHosts || []}
+        hostdHosts={planeNodeOptions}
         peerLinks={dashboard?.peer_links || null}
         skillsFactoryItems={skillsFactory.items || []}
         skillsFactoryGroups={skillsFactory.groups || []}

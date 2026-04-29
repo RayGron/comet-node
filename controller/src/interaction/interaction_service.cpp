@@ -1947,9 +1947,11 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const PlaneSkillsService skills_service;
   const bool skills_enabled = skills_service.IsEnabled(*desired_state);
   const auto skills_target = skills_service.ResolveTarget(*desired_state);
+  // Do not probe the skills runtime while resolving the interaction target.
+  // Request-time skill resolution performs the runtime health check only when
+  // auto skills or explicit skill ids are actually requested.
   const bool skills_ready =
-      skills_enabled && running_plane && skills_target.has_value() &&
-      skills_service.ProbeTargetOk(db_path, *desired_state, "/health");
+      skills_enabled && running_plane && skills_target.has_value();
   const auto skills_instance = std::find_if(
       desired_state->instances.begin(),
       desired_state->instances.end(),

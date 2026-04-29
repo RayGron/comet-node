@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <csignal>
 #include <fstream>
 #include <filesystem>
@@ -16,6 +17,9 @@
 namespace naim::skills {
 
 namespace {
+
+constexpr auto kControllerSyncInterval = std::chrono::hours(1);
+constexpr auto kControllerSyncStopPollInterval = std::chrono::seconds(1);
 
 std::atomic<bool>* g_stop_requested = nullptr;
 
@@ -62,7 +66,7 @@ int SkillsServer::Run() {
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
 
-  SyncFromController();
+  StartControllerSyncLoop();
 
   listen_fd_ = naim::controller::ControllerNetworkManager::CreateListenSocket(
       config_.listen_host,
@@ -77,6 +81,9 @@ int SkillsServer::Run() {
     SetReadyFile(false);
     naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
     listen_fd_ = naim::platform::kInvalidSocket;
+    if (controller_sync_thread_.joinable()) {
+      controller_sync_thread_.join();
+    }
     throw;
   }
 
@@ -84,6 +91,9 @@ int SkillsServer::Run() {
   SetReadyFile(false);
   naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
   listen_fd_ = naim::platform::kInvalidSocket;
+  if (controller_sync_thread_.joinable()) {
+    controller_sync_thread_.join();
+  }
   return 0;
 }
 
@@ -93,6 +103,10 @@ void SkillsServer::RequestStop() {
     WriteRuntimeStatus("stopping", false);
     SetReadyFile(false);
     naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
+  }
+  if (controller_sync_thread_.joinable() &&
+      controller_sync_thread_.get_id() != std::this_thread::get_id()) {
+    controller_sync_thread_.join();
   }
 }
 
@@ -259,6 +273,21 @@ HttpResponse SkillsServer::BuildJsonResponse(int status_code, const nlohmann::js
   response.content_type = "application/json";
   response.body = payload.dump();
   return response;
+}
+
+void SkillsServer::StartControllerSyncLoop() {
+  if (controller_sync_thread_.joinable()) {
+    return;
+  }
+  controller_sync_thread_ = std::thread([this]() {
+    while (!stop_requested_.load()) {
+      SyncFromController();
+      const auto deadline = std::chrono::steady_clock::now() + kControllerSyncInterval;
+      while (!stop_requested_.load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(kControllerSyncStopPollInterval);
+      }
+    }
+  });
 }
 
 void SkillsServer::SyncFromController() {

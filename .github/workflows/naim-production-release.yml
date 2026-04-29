@@ -56,6 +56,27 @@ jobs:
             "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_RELEASE_BRANCH='${NAIM_RELEASE_BRANCH}' bash -s" <<'REMOTE'
           set -euo pipefail
 
+          ensure_shared_git_permissions() {
+            local git_dir
+            local group_name
+
+            git_dir="$(git rev-parse --git-dir)"
+            group_name="$(id -gn)"
+
+            git config core.sharedRepository group >/dev/null 2>&1 || true
+            git config core.filemode false >/dev/null 2>&1 || true
+
+            if sudo -n true >/dev/null 2>&1; then
+              sudo chgrp -R "${group_name}" "${git_dir}" || true
+              sudo chmod -R g+rwX "${git_dir}" || true
+              sudo find "${git_dir}" -type d -exec chmod g+s {} + || true
+            else
+              chgrp -R "${group_name}" "${git_dir}" 2>/dev/null || true
+              chmod -R g+rwX "${git_dir}" 2>/dev/null || true
+              find "${git_dir}" -type d -exec chmod g+s {} + 2>/dev/null || true
+            fi
+          }
+
           retry_git_fetch() {
             local remote="$1"
             local branch="$2"
@@ -79,6 +100,7 @@ jobs:
           }
 
           git config http.version HTTP/1.1 >/dev/null 2>&1 || true
+          ensure_shared_git_permissions
           retry_git_fetch origin "${NAIM_RELEASE_BRANCH}"
 
           if git show-ref --verify --quiet "refs/heads/${NAIM_RELEASE_BRANCH}"; then

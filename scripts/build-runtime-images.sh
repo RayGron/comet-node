@@ -119,6 +119,7 @@ cp -R "${repo_root}/runtime" "${image_context}/runtime"
 for binary in naim-controller naim-hostd naim-node naim-inferctl naim-workerd naim-skillsd naim-knowledged naim-webgatewayd naim-interactiond; do
   cp "${build_dir}/${binary}" "${image_context}/build/linux/x64/${binary}"
 done
+cp "${build_dir}/naim-voice-moduled" "${image_context}/build/linux/x64/naim-voice-moduled"
 cp "${build_dir}/bin/llama-server" "${image_context}/build/linux/x64/bin/llama-server"
 cp "${build_dir}/bin/rpc-server" "${image_context}/build/linux/x64/bin/rpc-server"
 copy_turboquant_binary() {
@@ -253,7 +254,7 @@ echo "building ${voice_module_tag}"
 "${docker_cmd[@]}" build \
   -f "${image_context}/runtime/voice/Dockerfile" \
   -t "${voice_module_tag}" \
-  "${image_context}/runtime/voice"
+  "${image_context}"
 
 if [[ "${skip_web_ui}" != "yes" ]]; then
   echo "building ${web_ui_tag}"

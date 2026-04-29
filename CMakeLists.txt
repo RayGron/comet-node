@@ -11,6 +11,9 @@ option(NAIM_ENABLE_LLAMA_RUNTIME
        ON)
 option(NAIM_ENABLE_CUDA "Build llama.cpp runtime with CUDA backend" ON)
 option(NAIM_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
+option(NAIM_ENABLE_VOICE_MODULE
+       "Configure whisper.cpp-backed Voice Listener runtime target"
+       ON)
 set(NAIM_CEF_ROOT "" CACHE PATH "Path to an unpacked CEF binary distribution")
 set(NAIM_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribution archive")
 
@@ -1676,4 +1679,46 @@ if(NOT WIN32)
       # llama
   )
   naim_enable_strict_warnings(naim-workerd)
+
+  if(NAIM_ENABLE_VOICE_MODULE)
+    set(NAIM_WHISPER_CPP_GIT_TAG "v1.8.1" CACHE STRING
+        "Pinned whisper.cpp release used for the NAIM voice-module runtime")
+    set(NAIM_CPP_HTTPLIB_GIT_TAG "v0.26.0" CACHE STRING
+        "Pinned cpp-httplib release used for the NAIM voice-module runtime")
+    include(ExternalProject)
+
+    set(_naim_voice_module_build_dir "${CMAKE_BINARY_DIR}/runtime/voice-module-build")
+    set(_naim_voice_module_output "${CMAKE_BINARY_DIR}/naim-voice-moduled")
+    set(_naim_voice_module_cmake_args
+        "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+        "-DNAIM_WHISPER_CPP_GIT_TAG=${NAIM_WHISPER_CPP_GIT_TAG}"
+        "-DNAIM_CPP_HTTPLIB_GIT_TAG=${NAIM_CPP_HTTPLIB_GIT_TAG}"
+    )
+    if(CMAKE_C_COMPILER)
+      list(APPEND _naim_voice_module_cmake_args "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}")
+    endif()
+    if(CMAKE_CXX_COMPILER)
+      list(APPEND _naim_voice_module_cmake_args "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
+    endif()
+
+    ExternalProject_Add(
+      naim-voice-module-runtime
+      SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/runtime/voice"
+      BINARY_DIR "${_naim_voice_module_build_dir}"
+      CMAKE_ARGS ${_naim_voice_module_cmake_args}
+      BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --target naim-voice-moduled
+      INSTALL_COMMAND
+        "${CMAKE_COMMAND}" -E copy_if_different
+        "<BINARY_DIR>/naim-voice-moduled"
+        "${_naim_voice_module_output}"
+      BUILD_BYPRODUCTS "${_naim_voice_module_output}"
+    )
+
+    add_custom_target(
+      naim-voice-module-runtime-all
+      ALL
+      DEPENDS naim-voice-module-runtime
+    )
+    unset(_naim_voice_module_cmake_args)
+  endif()
 endif()

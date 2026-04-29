@@ -1,4 +1,5 @@
-FROM ubuntu:24.04
+ARG BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
+FROM ${BASE_IMAGE}
 
 ENV HOST=0.0.0.0 \
     PORT=18140 \

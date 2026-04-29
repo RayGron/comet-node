@@ -11,6 +11,9 @@ option(NAIM_ENABLE_LLAMA_RUNTIME
        ON)
 option(NAIM_ENABLE_CUDA "Build llama.cpp runtime with CUDA backend" ON)
 option(NAIM_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
+option(NAIM_ENABLE_VOICE_MODULE
+       "Configure whisper.cpp-backed Voice Listener runtime target"
+       ON)
 set(NAIM_CEF_ROOT "" CACHE PATH "Path to an unpacked CEF binary distribution")
 set(NAIM_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribution archive")
 
@@ -65,6 +68,49 @@ project(
 )
 
 find_package(Threads REQUIRED)
+
+if(NAIM_ENABLE_VOICE_MODULE AND NOT WIN32)
+  include(FetchContent)
+
+  if(DEFINED BUILD_SHARED_LIBS)
+    set(_naim_voice_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
+    set(_naim_voice_restore_build_shared_libs ON)
+  else()
+    set(_naim_voice_restore_build_shared_libs OFF)
+  endif()
+
+  set(NAIM_WHISPER_CPP_GIT_TAG "v1.8.1" CACHE STRING
+      "Pinned whisper.cpp release used for the NAIM voice-module runtime")
+  set(NAIM_CPP_HTTPLIB_GIT_TAG "v0.26.0" CACHE STRING
+      "Pinned cpp-httplib release used for the NAIM voice-module runtime")
+
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static whisper.cpp for the NAIM voice-module runtime" FORCE)
+  set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+
+  FetchContent_Declare(
+    whisper_cpp
+    GIT_REPOSITORY https://github.com/ggml-org/whisper.cpp.git
+    GIT_TAG ${NAIM_WHISPER_CPP_GIT_TAG}
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_Declare(
+    cpp_httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG ${NAIM_CPP_HTTPLIB_GIT_TAG}
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(whisper_cpp cpp_httplib)
+
+  if(_naim_voice_restore_build_shared_libs)
+    set(BUILD_SHARED_LIBS "${_naim_voice_saved_build_shared_libs}" CACHE BOOL "" FORCE)
+  else()
+    unset(BUILD_SHARED_LIBS CACHE)
+  endif()
+  unset(_naim_voice_saved_build_shared_libs)
+  unset(_naim_voice_restore_build_shared_libs)
+endif()
 
 function(naim_enable_strict_warnings target_name)
   if(MSVC)
@@ -1616,6 +1662,27 @@ if(NOT WIN32)
     target_link_libraries(naim-knowledged PRIVATE ws2_32)
   endif()
   naim_enable_strict_warnings(naim-knowledged)
+
+  if(NAIM_ENABLE_VOICE_MODULE)
+    add_executable(
+      naim-voice-moduled
+      runtime/voice/src/main.cpp
+    )
+    target_include_directories(
+      naim-voice-moduled
+      PRIVATE
+        "${whisper_cpp_SOURCE_DIR}/include"
+        "${whisper_cpp_SOURCE_DIR}/ggml/include"
+        "${cpp_httplib_SOURCE_DIR}"
+    )
+    target_link_libraries(
+      naim-voice-moduled
+      PRIVATE
+        whisper
+        Threads::Threads
+    )
+    naim_enable_strict_warnings(naim-voice-moduled)
+  endif()
 
   add_executable(
     naim-inferctl

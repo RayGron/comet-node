@@ -452,7 +452,7 @@ int main() {
 
   server.Get("/health", [&](const httplib::Request &, httplib::Response &res) {
     res.set_content(
-      "{\"status\":\"ok\",\"engine\":\"whisper.cpp\",\"api_owner\":\"lt-cypher-ai\",\"model_path\":\"" +
+      "{\"status\":\"ok\",\"engine\":\"whisper.cpp\",\"api_owner\":\"naim\",\"model_path\":\"" +
         json_escape(config.model_path) + "\"}",
       "application/json"
     );

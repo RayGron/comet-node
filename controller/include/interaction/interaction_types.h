@@ -82,6 +82,10 @@ struct InteractionSegmentSummary {
   int completion_tokens = 0;
   int total_tokens = 0;
   int latency_ms = 0;
+  int prompt_build_ms = 0;
+  int upstream_request_ms = 0;
+  int response_parse_ms = 0;
+  int stream_first_delta_ms = 0;
   bool marker_seen = false;
 };
 

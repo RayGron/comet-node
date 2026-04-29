@@ -283,12 +283,30 @@ nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
              {"total_tokens", segment.total_tokens},
          }},
         {"latency_ms", segment.latency_ms},
+        {"timing",
+         nlohmann::json{
+             {"prompt_build_ms", segment.prompt_build_ms},
+             {"upstream_request_ms", segment.upstream_request_ms},
+             {"response_parse_ms", segment.response_parse_ms},
+             {"stream_first_delta_ms", segment.stream_first_delta_ms},
+         }},
         {"marker_seen", segment.marker_seen},
     });
   }
   int upstream_latency_ms = 0;
+  int prompt_build_ms = 0;
+  int upstream_request_ms = 0;
+  int response_parse_ms = 0;
+  int first_delta_ms = 0;
   for (const auto& segment : result.segments) {
     upstream_latency_ms += segment.latency_ms;
+    prompt_build_ms += segment.prompt_build_ms;
+    upstream_request_ms += segment.upstream_request_ms;
+    response_parse_ms += segment.response_parse_ms;
+    if (first_delta_ms == 0 || (segment.stream_first_delta_ms > 0 &&
+                                segment.stream_first_delta_ms < first_delta_ms)) {
+      first_delta_ms = segment.stream_first_delta_ms;
+    }
   }
   return nlohmann::json{
       {"id", result.session_id},
@@ -314,6 +332,10 @@ nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
        nlohmann::json{
            {"runtime_routing_ms", 0},
            {"upstream_generation_ms", upstream_latency_ms},
+           {"prompt_build_ms", prompt_build_ms},
+           {"upstream_request_ms", upstream_request_ms},
+           {"response_parse_ms", response_parse_ms},
+           {"stream_first_delta_ms", first_delta_ms},
            {"controller_overhead_ms",
             std::max(0, result.total_latency_ms - upstream_latency_ms)},
            {"total_ms", result.total_latency_ms},
@@ -540,6 +562,13 @@ nlohmann::json InteractionStreamPresenter::BuildSegmentCompleteEvent(
            {"total_tokens", summary.total_tokens},
        }},
       {"latency_ms", summary.latency_ms},
+      {"timing",
+       nlohmann::json{
+           {"prompt_build_ms", summary.prompt_build_ms},
+           {"upstream_request_ms", summary.upstream_request_ms},
+           {"response_parse_ms", summary.response_parse_ms},
+           {"stream_first_delta_ms", summary.stream_first_delta_ms},
+       }},
       {"marker_seen", summary.marker_seen},
   };
 }
@@ -737,19 +766,33 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
     const auto segment_started_at = std::chrono::steady_clock::now();
     InteractionUpstreamResponse upstream;
     std::string upstream_body;
+    int prompt_build_ms = 0;
+    int upstream_request_ms = 0;
     constexpr int kMaxAttempts = 3;
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+      const auto prompt_build_started_at = std::chrono::steady_clock::now();
       upstream_body = build_interaction_upstream_body_(
           resolution,
           current_payload,
           false,
           resolved_policy,
           request_context.structured_output_json);
+      const auto prompt_build_finished_at = std::chrono::steady_clock::now();
+      prompt_build_ms += static_cast<int>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              prompt_build_finished_at - prompt_build_started_at)
+              .count());
+      const auto upstream_request_started_at = std::chrono::steady_clock::now();
       upstream = send_interaction_request_(
           resolution,
           *resolution.target,
           request_context.request_id,
           upstream_body);
+      const auto upstream_request_finished_at = std::chrono::steady_clock::now();
+      upstream_request_ms += static_cast<int>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              upstream_request_finished_at - upstream_request_started_at)
+              .count());
       if (upstream.status_code == 200 || upstream.status_code < 500 ||
           attempt + 1 == kMaxAttempts) {
         break;
@@ -774,6 +817,12 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
                                                 ? nlohmann::json::object()
                                                 : nlohmann::json::parse(upstream.body);
     const auto segment_finished_at = std::chrono::steady_clock::now();
+    const int segment_total_ms = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            segment_finished_at - segment_started_at)
+            .count());
+    const int response_parse_ms =
+        std::max(0, segment_total_ms - prompt_build_ms - upstream_request_ms);
     const nlohmann::json usage = extract_interaction_usage_(upstream_payload);
     bool marker_seen_in_segment = false;
     const std::string clean_text = remove_completion_markers_(
@@ -794,6 +843,9 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             segment_finished_at - segment_started_at)
             .count());
+    summary.prompt_build_ms = prompt_build_ms;
+    summary.upstream_request_ms = upstream_request_ms;
+    summary.response_parse_ms = response_parse_ms;
     summary.marker_seen = marker_seen_in_segment;
     if (IsDuplicateContinuationSegment(result.segments, clean_text)) {
       result.completion_status = "completed";
@@ -1453,6 +1505,14 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
   result.summary.index = segment_index;
   result.summary.continuation_index = segment_index;
   const auto segment_started_at = std::chrono::steady_clock::now();
+  const auto mark_first_delta = [&]() {
+    if (result.summary.stream_first_delta_ms == 0) {
+      result.summary.stream_first_delta_ms = static_cast<int>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - segment_started_at)
+              .count());
+    }
+  };
 
   const auto flush_fallback_response =
       [&](const nlohmann::json& fallback_payload,
@@ -1488,6 +1548,10 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 segment_finished_at - segment_started_at)
                 .count());
+        result.summary.response_parse_ms = std::max(
+            0,
+            result.summary.latency_ms - result.summary.prompt_build_ms -
+                result.summary.upstream_request_ms);
         result.summary.marker_seen = marker_seen_in_fallback;
         if (result.model.empty()) {
           result.model = fallback_payload.value("model", std::string{});
@@ -1497,16 +1561,29 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
 
   const auto run_non_stream_fallback = [&](bool assign_only = false)
       -> std::optional<StreamedInteractionSegmentResult> {
+    const auto prompt_build_started_at = std::chrono::steady_clock::now();
+    const std::string fallback_body = build_interaction_upstream_body_(
+        resolution,
+        payload,
+        false,
+        resolved_policy,
+        request_context.structured_output_json);
+    const auto prompt_build_finished_at = std::chrono::steady_clock::now();
+    result.summary.prompt_build_ms += static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            prompt_build_finished_at - prompt_build_started_at)
+            .count());
+    const auto upstream_request_started_at = std::chrono::steady_clock::now();
     const InteractionUpstreamResponse fallback = send_fallback_request_(
         resolution,
         *resolution.target,
         request_id,
-        build_interaction_upstream_body_(
-            resolution,
-            payload,
-            false,
-            resolved_policy,
-            request_context.structured_output_json));
+        fallback_body);
+    const auto upstream_request_finished_at = std::chrono::steady_clock::now();
+    result.summary.upstream_request_ms += static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            upstream_request_finished_at - upstream_request_started_at)
+            .count());
     if (fallback.status_code != 200 || fallback.body.empty()) {
       return std::nullopt;
     }
@@ -1531,16 +1608,29 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
   };
 
   try {
+    const auto prompt_build_started_at = std::chrono::steady_clock::now();
+    const std::string upstream_body = build_interaction_upstream_body_(
+        resolution,
+        payload,
+        true,
+        resolved_policy,
+        request_context.structured_output_json);
+    const auto prompt_build_finished_at = std::chrono::steady_clock::now();
+    result.summary.prompt_build_ms += static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            prompt_build_finished_at - prompt_build_started_at)
+            .count());
+    const auto upstream_request_started_at = std::chrono::steady_clock::now();
     InteractionStreamingUpstreamConnection stream =
         open_streaming_request_(
             *resolution.target,
             request_id,
-            build_interaction_upstream_body_(
-                resolution,
-                payload,
-                true,
-                resolved_policy,
-                request_context.structured_output_json));
+            upstream_body);
+    const auto upstream_request_finished_at = std::chrono::steady_clock::now();
+    result.summary.upstream_request_ms += static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            upstream_request_finished_at - upstream_request_started_at)
+            .count());
     result.context_compression_enabled = ParseBoolHeader(
         stream.headers, "x-naim-context-compression-enabled", false);
     result.context_compression_status = FindHeaderValue(
@@ -1624,6 +1714,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
             }
             openai_stream_emitted_text = visible_text;
             result.cleaned_text += delta;
+            mark_first_delta();
             if (!send_delta(model_name, delta)) {
               throw std::runtime_error("failed to write downstream delta");
             }
@@ -1709,6 +1800,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
               false);
           if (!filtered.empty()) {
             result.cleaned_text += filtered;
+            mark_first_delta();
             if (!send_delta(
                     delta_payload.value("model", std::string{}), filtered)) {
               throw std::runtime_error("failed to write downstream delta");
@@ -1777,6 +1869,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
           true);
       if (!final_filtered.empty()) {
         result.cleaned_text += final_filtered;
+        mark_first_delta();
         if (!send_delta(std::string{}, final_filtered)) {
           throw std::runtime_error("failed to flush downstream delta");
         }
@@ -1824,6 +1917,10 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
               std::chrono::duration_cast<std::chrono::milliseconds>(
                   segment_finished_at - segment_started_at)
                   .count()));
+      result.summary.response_parse_ms = std::max(
+          0,
+          result.summary.latency_ms - result.summary.prompt_build_ms -
+              result.summary.upstream_request_ms);
       result.summary.marker_seen = filter_state.marker_seen;
       if (result.model.empty()) {
         result.model = complete_payload.value("model", std::string{});

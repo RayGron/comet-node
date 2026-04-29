@@ -353,6 +353,7 @@ managed_images = {
     ("browsing", "image"): images.get("webgateway-runtime", ""),
 }
 interaction_image = images.get("interaction-runtime", "")
+voice_module_image = images.get("voice-module", "")
 
 def is_managed_image(value: object) -> bool:
     if not isinstance(value, str):
@@ -400,6 +401,15 @@ for row in rows:
             if current != interaction_image:
                 interaction["image"] = interaction_image
                 changed = True
+    features = payload.get("features")
+    if isinstance(features, dict) and voice_module_image:
+        voice_listener = features.get("voice_listener")
+        if isinstance(voice_listener, dict) and voice_listener.get("enabled") is True:
+            current = voice_listener.get("image")
+            if current is None or is_managed_image(current):
+                if current != voice_module_image:
+                    voice_listener["image"] = voice_module_image
+                    changed = True
     if not changed:
         continue
     state_path = output_dir / f"{row['name']}.desired-state.v2.json"

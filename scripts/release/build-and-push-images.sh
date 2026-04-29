@@ -133,6 +133,7 @@ skills_ref="$(image_ref skills-runtime)"
 knowledge_ref="$(image_ref knowledge-runtime)"
 webgateway_ref="$(image_ref webgateway-runtime)"
 interaction_ref="$(image_ref interaction-runtime)"
+voice_module_ref="$(image_ref voice-module)"
 controller_ref="$(image_ref controller)"
 hostd_ref="$(image_ref hostd)"
 
@@ -147,6 +148,7 @@ build_args=(
   "${controller_ref}"
   "${hostd_ref}"
   "${knowledge_ref}"
+  "${voice_module_ref}"
 )
 
 if [[ "${skip_web_ui}" == "yes" ]]; then
@@ -165,6 +167,7 @@ declare -a image_names=(
   knowledge-runtime
   webgateway-runtime
   interaction-runtime
+  voice-module
 )
 if [[ "${skip_web_ui}" != "yes" ]]; then
   image_names+=(web-ui)

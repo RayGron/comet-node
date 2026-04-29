@@ -101,6 +101,7 @@ interaction_tag="${7:-naim/interaction-runtime:dev}"
 controller_tag="${8:-naim/controller:dev}"
 hostd_tag="${9:-naim/hostd:dev}"
 knowledge_tag="${10:-naim/knowledge-runtime:dev}"
+voice_module_tag="${11:-naim/voice-module:dev}"
 
 build_dir="$("${script_dir}/print-build-dir.sh")"
 turboquant_build_dir="${NAIM_TURBOQUANT_BUILD_DIR:-${repo_root}/build-turboquant/linux/x64}"
@@ -248,6 +249,12 @@ echo "building ${interaction_tag}"
   -t "${interaction_tag}" \
   "${image_context}"
 
+echo "building ${voice_module_tag}"
+"${docker_cmd[@]}" build \
+  -f "${image_context}/runtime/voice/Dockerfile" \
+  -t "${voice_module_tag}" \
+  "${image_context}/runtime/voice"
+
 if [[ "${skip_web_ui}" != "yes" ]]; then
   echo "building ${web_ui_tag}"
   build_web_ui_image
@@ -264,6 +271,7 @@ echo "  skills=${skills_tag}"
 echo "  knowledge=${knowledge_tag}"
 echo "  webgateway=${webgateway_tag}"
 echo "  interaction=${interaction_tag}"
+echo "  voice_module=${voice_module_tag}"
 if [[ "${skip_web_ui}" != "yes" ]]; then
   echo "  web_ui=${web_ui_tag}"
 fi

@@ -1693,12 +1693,26 @@ if(NOT WIN32)
         "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
         "-DNAIM_WHISPER_CPP_GIT_TAG=${NAIM_WHISPER_CPP_GIT_TAG}"
         "-DNAIM_CPP_HTTPLIB_GIT_TAG=${NAIM_CPP_HTTPLIB_GIT_TAG}"
+        "-DNAIM_ENABLE_CUDA=${NAIM_ENABLE_CUDA}"
+        "-DNAIM_CUDA_NATIVE=${NAIM_CUDA_NATIVE}"
+        "-DNAIM_CUDA_ARCHITECTURES=${NAIM_CUDA_ARCHITECTURES}"
+        "-DNAIM_CUDA_NVCC_JOBS=${NAIM_CUDA_NVCC_JOBS}"
     )
     if(CMAKE_C_COMPILER)
       list(APPEND _naim_voice_module_cmake_args "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}")
     endif()
     if(CMAKE_CXX_COMPILER)
       list(APPEND _naim_voice_module_cmake_args "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
+    endif()
+    if(CUDAToolkit_ROOT)
+      list(APPEND _naim_voice_module_cmake_args "-DCUDAToolkit_ROOT=${CUDAToolkit_ROOT}")
+    endif()
+    if(CMAKE_CUDA_COMPILER)
+      list(APPEND _naim_voice_module_cmake_args "-DCMAKE_CUDA_COMPILER=${CMAKE_CUDA_COMPILER}")
+    endif()
+    if(CMAKE_CUDA_COMPILER_LAUNCHER)
+      list(APPEND _naim_voice_module_cmake_args
+           "-DCMAKE_CUDA_COMPILER_LAUNCHER=${CMAKE_CUDA_COMPILER_LAUNCHER}")
     endif()
 
     ExternalProject_Add(

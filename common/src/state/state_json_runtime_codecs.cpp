@@ -35,6 +35,9 @@ DiskKind StateJsonRuntimeCodecs::ParseDiskKind(const std::string& value) {
   if (value == "interaction-private") {
     return DiskKind::InteractionPrivate;
   }
+  if (value == "voice-module-private") {
+    return DiskKind::VoiceModulePrivate;
+  }
   throw std::runtime_error("unknown disk kind '" + value + "'");
 }
 
@@ -60,6 +63,9 @@ InstanceRole StateJsonRuntimeCodecs::ParseInstanceRole(
   }
   if (value == "interaction") {
     return InstanceRole::Interaction;
+  }
+  if (value == "voice-module") {
+    return InstanceRole::VoiceModule;
   }
   throw std::runtime_error("unknown instance role '" + value + "'");
 }

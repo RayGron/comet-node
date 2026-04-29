@@ -1947,6 +1947,69 @@ int main() {
       std::cout << "ok: app-model-plane" << '\n';
     }
 
+    {
+      const json voice_listener_plane{
+          {"version", 2},
+          {"plane_name", "voice-listener-plane"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-voice-listener"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
+          {"features",
+           {{"voice_listener",
+             {{"enabled", true},
+              {"wake_phrase", "Hey Jex"},
+              {"language", "auto"},
+              {"model",
+               {{"name", "whisper"},
+                {"source",
+                 {{"type", "library"},
+                  {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"},
+                  {"node", "storage1"},
+                  {"paths", json::array({"/mnt/shared-storage/models/whisper/ggml-base.bin"})}}},
+                {"mount_path", "/models/whisper/ggml-base.bin"},
+                {"env", "WHISPER_MODEL_PATH"},
+                {"required", true}}}}}}}
+      };
+      const auto state = RenderValid(voice_listener_plane, "voice-listener-plane");
+      const auto voice = FindInstance(state, "voice-module-voice-listener-plane");
+      Expect(voice.role == naim::InstanceRole::VoiceModule,
+             "voice-listener-plane: voice module role mismatch");
+      Expect(voice.environment.at("NAIM_VOICE_LISTENER_WAKE_PHRASE") == "Hey Jex",
+             "voice-listener-plane: wake phrase env mismatch");
+      Expect(voice.app_model_mounts.size() == 1,
+             "voice-listener-plane: voice module should mount whisper model");
+      const auto app = FindInstance(state, "app-voice-listener-plane");
+      Expect(app.environment.at("NAIM_VOICE_LISTENER_BASE") ==
+                 "http://voice-module-voice-listener-plane:18140/v1",
+             "voice-listener-plane: primary app should receive voice feature base");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.at("features").at("voice_listener").at("wake_phrase") == "Hey Jex",
+             "voice-listener-plane: projector should preserve wake phrase");
+      std::cout << "ok: voice-listener-plane" << '\n';
+    }
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-voice-listener"},
+            {"plane_mode", "llm"},
+            {"model",
+             {{"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+              {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+              {"served_model_name", "qwen"}}},
+            {"runtime", {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"features", {{"voice_listener", {{"enabled", true}, {"wake_phrase", ""}}}}},
+        },
+        "bad-voice-listener");
+
     ExpectInvalid(
         json{
             {"version", 2},

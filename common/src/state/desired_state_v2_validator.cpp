@@ -1,5 +1,6 @@
 #include "naim/state/desired_state_v2_validator.h"
 
+#include <cmath>
 #include <map>
 #include <optional>
 #include <set>
@@ -67,6 +68,70 @@ bool IsValidEnvName(const std::string& value) {
   return true;
 }
 
+void ValidateGpuResourceBlock(
+    const nlohmann::json& resources,
+    const std::string& field_name,
+    bool allow_enabled_flags) {
+  if (!resources.is_object()) {
+    throw std::runtime_error("desired-state v2 " + field_name + " must be an object");
+  }
+  if (allow_enabled_flags) {
+    if (resources.contains("enabled") && !resources.at("enabled").is_boolean()) {
+      throw std::runtime_error("desired-state v2 " + field_name + ".enabled must be a boolean");
+    }
+    if (resources.contains("gpu_enabled") && !resources.at("gpu_enabled").is_boolean()) {
+      throw std::runtime_error(
+          "desired-state v2 " + field_name + ".gpu_enabled must be a boolean");
+    }
+  }
+  if (resources.contains("share_mode")) {
+    if (!resources.at("share_mode").is_string()) {
+      throw std::runtime_error("desired-state v2 " + field_name + ".share_mode must be a string");
+    }
+    const std::string share_mode = resources.at("share_mode").get<std::string>();
+    if (share_mode != "exclusive" && share_mode != "shared" && share_mode != "best-effort") {
+      throw std::runtime_error(
+          "desired-state v2 " + field_name +
+          ".share_mode must be exclusive, shared, or best-effort");
+    }
+  }
+  if (resources.contains("gpu_fraction")) {
+    if (!resources.at("gpu_fraction").is_number()) {
+      throw std::runtime_error(
+          "desired-state v2 " + field_name + ".gpu_fraction must be a number");
+    }
+    const double gpu_fraction = resources.at("gpu_fraction").get<double>();
+    if (gpu_fraction <= 0.0 || gpu_fraction > 1.0) {
+      throw std::runtime_error(
+          "desired-state v2 " + field_name + ".gpu_fraction must be in (0, 1]");
+    }
+  }
+  const std::string share_mode = resources.value("share_mode", std::string{});
+  if (share_mode == "exclusive" && resources.contains("gpu_fraction")) {
+    const double gpu_fraction = resources.at("gpu_fraction").get<double>();
+    if (std::abs(gpu_fraction - 1.0) > 1e-9) {
+      throw std::runtime_error(
+          "desired-state v2 " + field_name +
+          ".gpu_fraction must be 1.0 when share_mode=exclusive");
+    }
+  }
+  if (resources.contains("memory_cap_mb") &&
+      (!resources.at("memory_cap_mb").is_number_integer() ||
+       resources.at("memory_cap_mb").get<int>() <= 0)) {
+    throw std::runtime_error(
+        "desired-state v2 " + field_name + ".memory_cap_mb must be a positive integer");
+  }
+  if (resources.contains("priority") &&
+      (!resources.at("priority").is_number_integer() || resources.at("priority").get<int>() < 0)) {
+    throw std::runtime_error(
+        "desired-state v2 " + field_name + ".priority must be a non-negative integer");
+  }
+  if (resources.contains("preemptible") && !resources.at("preemptible").is_boolean()) {
+    throw std::runtime_error(
+        "desired-state v2 " + field_name + ".preemptible must be a boolean");
+  }
+}
+
 void ValidateVoiceListenerModel(const nlohmann::json& model) {
   if (!model.is_object()) {
     throw std::runtime_error("desired-state v2 features.voice_listener.model must be an object");
@@ -127,6 +192,7 @@ void DesiredStateV2Validator::Validate() {
   ValidateLegacyPlacementCompatibility();
   ValidateInfer();
   ValidateWorker();
+  ValidateVoiceModuleResources();
   ValidateApp();
   ValidateSkills();
   ValidateBrowsing();
@@ -671,21 +737,32 @@ void DesiredStateV2Validator::ValidateWorker() const {
 }
 
 void DesiredStateV2Validator::ValidateWorkerResources() const {
-  if (!value_.contains("resources") || !value_.at("resources").is_object()) {
+  if (!value_.contains("resources")) {
     return;
+  }
+  if (!value_.at("resources").is_object()) {
+    throw std::runtime_error("desired-state v2 resources must be an object");
   }
   const auto& resources = value_.at("resources");
-  if (!resources.contains("worker") || !resources.at("worker").is_object()) {
+  if (!resources.contains("worker")) {
     return;
   }
-  const auto& worker_resources = resources.at("worker");
-  const std::string share_mode = worker_resources.value("share_mode", std::string{});
-  if (share_mode == "exclusive" && worker_resources.contains("gpu_fraction")) {
-    const double gpu_fraction = worker_resources.at("gpu_fraction").get<double>();
-    if (std::abs(gpu_fraction - 1.0) > 1e-9) {
-      throw std::runtime_error(
-          "desired-state v2 resources.worker.gpu_fraction must be 1.0 when share_mode=exclusive");
-    }
+  ValidateGpuResourceBlock(resources.at("worker"), "resources.worker", false);
+}
+
+void DesiredStateV2Validator::ValidateVoiceModuleResources() const {
+  if (!value_.contains("resources")) {
+    return;
+  }
+  if (!value_.at("resources").is_object()) {
+    throw std::runtime_error("desired-state v2 resources must be an object");
+  }
+  const auto& resources = value_.at("resources");
+  if (resources.contains("voice_module")) {
+    ValidateGpuResourceBlock(resources.at("voice_module"), "resources.voice_module", true);
+  }
+  if (resources.contains("voice_listener")) {
+    ValidateGpuResourceBlock(resources.at("voice_listener"), "resources.voice_listener", true);
   }
 }
 

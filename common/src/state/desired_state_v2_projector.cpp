@@ -1,6 +1,7 @@
 #include "naim/state/desired_state_v2_projector.h"
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -17,6 +18,8 @@ namespace {
 using ProjectorSupport = DesiredStateV2ProjectorSupport;
 
 constexpr int kDefaultSharedDiskSizeGb = ProjectorSupport::kDefaultSharedDiskSizeGb;
+constexpr double kDefaultVoiceModuleGpuFraction = 0.2;
+constexpr int kDefaultVoiceModuleGpuPriority = 50;
 constexpr std::string_view kDefaultInferImage = ProjectorSupport::kDefaultInferImage;
 constexpr std::string_view kDefaultSkillsImage = ProjectorSupport::kDefaultSkillsImage;
 constexpr std::string_view kDefaultWebGatewayImage =
@@ -727,6 +730,29 @@ void DesiredStateV2Projector::ProjectResources() {
     };
     if (worker->memory_cap_mb.has_value()) {
       resources["worker"]["memory_cap_mb"] = *worker->memory_cap_mb;
+    }
+  }
+  if (voice_module_instance_ != nullptr && voice_module_instance_->gpu_device.has_value()) {
+    resources["voice_module"] = {
+        {"gpu_enabled", true},
+        {"share_mode", ToString(voice_module_instance_->share_mode)},
+        {"gpu_fraction", voice_module_instance_->gpu_fraction},
+    };
+    if (voice_module_instance_->priority != kDefaultVoiceModuleGpuPriority) {
+      resources["voice_module"]["priority"] = voice_module_instance_->priority;
+    }
+    if (voice_module_instance_->preemptible) {
+      resources["voice_module"]["preemptible"] = true;
+    }
+    if (voice_module_instance_->memory_cap_mb.has_value()) {
+      resources["voice_module"]["memory_cap_mb"] = *voice_module_instance_->memory_cap_mb;
+    }
+    if (std::abs(voice_module_instance_->gpu_fraction - kDefaultVoiceModuleGpuFraction) < 1e-9 &&
+        voice_module_instance_->share_mode == GpuShareMode::Shared &&
+        voice_module_instance_->priority == kDefaultVoiceModuleGpuPriority &&
+        !voice_module_instance_->preemptible &&
+        !voice_module_instance_->memory_cap_mb.has_value()) {
+      resources["voice_module"] = {{"gpu_enabled", true}};
     }
   }
   if (shared_disk_ != nullptr) {

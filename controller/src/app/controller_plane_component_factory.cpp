@@ -167,20 +167,12 @@ ControllerPlaneComponentFactory::PlaneMutationServiceInstance() const {
   return plane_mutation_service;
 }
 
-const PlaneSkillRuntimeSyncService&
-ControllerPlaneComponentFactory::PlaneSkillRuntimeSyncServiceInstance() const {
-  static const PlaneSkillRuntimeSyncService runtime_sync_service;
-  return runtime_sync_service;
-}
-
 const PlaneSkillCatalogService&
 ControllerPlaneComponentFactory::PlaneSkillCatalogServiceInstance() const {
   const auto* plane_mutation_service = &PlaneMutationServiceInstance();
-  const auto* runtime_sync_service = &PlaneSkillRuntimeSyncServiceInstance();
   const auto* defaults = &Defaults();
   static const PlaneSkillCatalogService plane_skill_catalog_service(
       *plane_mutation_service,
-      *runtime_sync_service,
       [defaults](const std::string& db_path,
           const std::string& plane_name,
           const std::string& fallback_artifacts_root) {
@@ -315,11 +307,9 @@ ControllerPlaneComponentFactory::PlaneRegistryServiceInstance() const {
 
 const SkillsFactoryService& ControllerPlaneComponentFactory::SkillsFactoryServiceInstance() const {
   const auto* plane_mutation_service = &PlaneMutationServiceInstance();
-  const auto* runtime_sync_service = &PlaneSkillRuntimeSyncServiceInstance();
   const auto* defaults = &Defaults();
   static const SkillsFactoryService skills_factory_service(
       *plane_mutation_service,
-      *runtime_sync_service,
       [defaults](const std::string& db_path,
           const std::string& plane_name,
           const std::string& fallback_artifacts_root) {

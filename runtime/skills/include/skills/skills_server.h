@@ -50,6 +50,7 @@ class SkillsServer final {
   std::vector<std::string> SplitPath(const std::string& path) const;
   static nlohmann::json ParseJsonBody(const HttpRequest& request);
   HttpResponse BuildJsonResponse(int status_code, const nlohmann::json& payload) const;
+  void StartControllerSyncLoop();
   void SyncFromController();
   void WriteRuntimeStatus(const std::string& phase, bool ready) const;
   void SetReadyFile(bool ready) const;
@@ -57,6 +58,7 @@ class SkillsServer final {
   SkillsRuntimeConfig config_;
   SkillsStore store_;
   std::atomic<bool> stop_requested_{false};
+  std::thread controller_sync_thread_;
   naim::platform::SocketHandle listen_fd_ = naim::platform::kInvalidSocket;
 };
 

@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 
 ENV HOST=0.0.0.0 \
     PORT=18140 \

@@ -449,7 +449,6 @@ add_executable(
   controller/src/interaction/interaction_service.cpp
   controller/src/plane/plane_dashboard_skills_summary_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
-  controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
   controller/src/skills/plane_skills_service_tests.cpp
@@ -472,7 +471,6 @@ add_executable(
   controller/src/plane/plane_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_catalog_service.cpp
-  controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
   controller/src/skills/skills_factory_service.cpp
@@ -837,7 +835,6 @@ add_executable(
   controller/src/interaction/interaction_upstream_event_parser.cpp
   controller/src/observation/plane_observation_matcher.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
-  controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
 )
@@ -1381,7 +1378,6 @@ add_executable(
   controller/src/plane/plane_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_catalog_service.cpp
-  controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
   controller/src/skills/skills_factory_http_service.cpp

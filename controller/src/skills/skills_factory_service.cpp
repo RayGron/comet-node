@@ -139,10 +139,8 @@ std::vector<std::string> UniqueNonEmptyStringArray(
 
 SkillsFactoryService::SkillsFactoryService(
     PlaneMutationService plane_mutation_service,
-    PlaneSkillRuntimeSyncService runtime_sync_service,
     ResolveArtifactsRootFn resolve_artifacts_root)
     : plane_mutation_service_(std::move(plane_mutation_service)),
-      runtime_sync_service_(std::move(runtime_sync_service)),
       resolve_artifacts_root_(std::move(resolve_artifacts_root)) {}
 
 std::string SkillsFactoryService::GenerateSkillId() {
@@ -457,21 +455,7 @@ nlohmann::json SkillsFactoryService::UpdateSkill(
         "",
     });
   }
-  SyncAffectedPlanes(db_path, LoadPlanesUsingSkill(store, skill_id));
   return BuildSkillPayload(db_path, skill_id);
-}
-
-void SkillsFactoryService::SyncAffectedPlanes(
-    const std::string& db_path,
-    const std::vector<std::string>& plane_names) const {
-  naim::ControllerStore store(db_path);
-  store.Initialize();
-  for (const auto& plane_name : plane_names) {
-    const auto desired_state = store.LoadDesiredState(plane_name);
-    if (desired_state.has_value()) {
-      (void)runtime_sync_service_.SyncPlane(db_path, *desired_state);
-    }
-  }
 }
 
 nlohmann::json SkillsFactoryService::DeleteSkill(
@@ -484,7 +468,6 @@ nlohmann::json SkillsFactoryService::DeleteSkill(
     throw std::runtime_error("skill '" + skill_id + "' not found");
   }
 
-  std::vector<std::string> affected_planes;
   for (const auto& desired_state : store.LoadDesiredStates()) {
     if (!desired_state.skills.has_value() ||
         !ContainsSkillId(desired_state.skills->factory_skill_ids, skill_id)) {
@@ -504,12 +487,10 @@ nlohmann::json SkillsFactoryService::DeleteSkill(
       throw std::runtime_error(
           result.output.empty() ? "failed to persist plane desired state" : result.output);
     }
-    affected_planes.push_back(desired_state.plane_name);
   }
 
   store.DeletePlaneSkillBindingsForSkill(skill_id);
   store.DeleteSkillsFactorySkill(skill_id);
-  SyncAffectedPlanes(db_path, affected_planes);
   return json{{"status", "deleted"}, {"skill_id", skill_id}};
 }
 

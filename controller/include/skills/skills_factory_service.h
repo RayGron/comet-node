@@ -9,7 +9,6 @@
 
 #include "naim/state/sqlite_store.h"
 #include "plane/plane_mutation_service.h"
-#include "skills/plane_skill_runtime_sync_service.h"
 
 namespace naim::controller {
 
@@ -22,7 +21,6 @@ class SkillsFactoryService final {
 
   SkillsFactoryService(
       PlaneMutationService plane_mutation_service,
-      PlaneSkillRuntimeSyncService runtime_sync_service,
       ResolveArtifactsRootFn resolve_artifacts_root);
 
   nlohmann::json BuildListPayload(const std::string& db_path) const;
@@ -81,12 +79,8 @@ class SkillsFactoryService final {
   std::vector<std::string> LoadPlanesUsingSkill(
       naim::ControllerStore& store,
       const std::string& skill_id) const;
-  void SyncAffectedPlanes(
-      const std::string& db_path,
-      const std::vector<std::string>& plane_names) const;
 
   PlaneMutationService plane_mutation_service_;
-  PlaneSkillRuntimeSyncService runtime_sync_service_;
   ResolveArtifactsRootFn resolve_artifacts_root_;
 };
 

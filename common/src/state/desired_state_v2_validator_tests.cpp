@@ -2001,6 +2001,102 @@ int main() {
       std::cout << "ok: voice-listener-plane" << '\n';
     }
 
+    {
+      const json gpu_voice_listener_plane{
+          {"version", 2},
+          {"plane_name", "gpu-voice-listener-plane"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-gpu-voice-listener"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 2}}},
+          {"topology",
+           {{"nodes",
+             json::array(
+                 {{{"name", "local-hostd"},
+                   {"execution_mode", "mixed"},
+                   {"gpu_memory_mb", {{"0", 24576}, {"1", 24576}}}}})}}},
+          {"infer", {{"replicas", 1}}},
+          {"worker",
+           {{"assignments",
+             json::array(
+                 {{{"node", "local-hostd"}, {"gpu_device", "0"}},
+                  {{"node", "local-hostd"}, {"gpu_device", "1"}}})}}},
+          {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
+          {"features",
+           {{"voice_listener",
+             {{"enabled", true},
+              {"wake_phrase", "Hey Jex"},
+              {"model",
+               {{"name", "whisper"},
+                {"source",
+                 {{"type", "library"},
+                  {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"}}},
+                {"mount_path", "/models/whisper/ggml-base.bin"},
+                {"env", "WHISPER_MODEL_PATH"},
+                {"required", true}}}}}}},
+          {"resources",
+           {{"worker",
+             {{"share_mode", "shared"}, {"gpu_fraction", 0.7}, {"memory_cap_mb", 16384}}},
+            {"voice_module",
+             {{"gpu_enabled", true},
+              {"share_mode", "shared"},
+              {"gpu_fraction", 0.2},
+              {"memory_cap_mb", 4096}}}}},
+      };
+      const auto state = RenderValid(gpu_voice_listener_plane, "gpu-voice-listener-plane");
+      const auto voice = FindInstance(state, "voice-module-gpu-voice-listener-plane");
+      Expect(voice.node_name == "local-hostd",
+             "gpu-voice-listener-plane: voice module should colocate with a GPU worker");
+      Expect(voice.gpu_device == std::optional<std::string>("0"),
+             "gpu-voice-listener-plane: voice module should choose a worker GPU deterministically");
+      Expect(voice.share_mode == naim::GpuShareMode::Shared,
+             "gpu-voice-listener-plane: voice module should use shared GPU mode");
+      Expect(voice.gpu_fraction == 0.2,
+             "gpu-voice-listener-plane: voice module gpu_fraction mismatch");
+      Expect(voice.memory_cap_mb == std::optional<int>(4096),
+             "gpu-voice-listener-plane: voice module memory cap mismatch");
+      const auto compose_plans = naim::BuildNodeComposePlans(state);
+      const auto& service = *std::find_if(
+          compose_plans.front().services.begin(),
+          compose_plans.front().services.end(),
+          [](const naim::ComposeService& candidate) {
+            return candidate.name == "voice-module-gpu-voice-listener-plane";
+          });
+      Expect(service.use_nvidia_runtime,
+             "gpu-voice-listener-plane: compose should enable nvidia runtime for voice");
+      Expect(service.gpu_device == std::optional<std::string>("0"),
+             "gpu-voice-listener-plane: compose voice gpu_device mismatch");
+      Expect(service.environment.at("NVIDIA_VISIBLE_DEVICES") == "0",
+             "gpu-voice-listener-plane: compose should expose selected voice GPU");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.at("resources").at("voice_module").at("gpu_enabled") == true,
+             "gpu-voice-listener-plane: projector should preserve voice GPU enablement");
+      Expect(projected.at("resources").at("voice_module").at("gpu_fraction") == 0.2,
+             "gpu-voice-listener-plane: projector should preserve voice GPU fraction");
+      std::cout << "ok: gpu-voice-listener-plane" << '\n';
+    }
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-voice-gpu-fraction"},
+            {"plane_mode", "llm"},
+            {"model",
+             {{"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+              {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+              {"served_model_name", "qwen"}}},
+            {"runtime", {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"resources",
+             {{"voice_module", {{"gpu_enabled", true}, {"share_mode", "exclusive"}, {"gpu_fraction", 0.25}}}}},
+        },
+        "bad-voice-gpu-fraction");
+
     ExpectInvalid(
         json{
             {"version", 2},

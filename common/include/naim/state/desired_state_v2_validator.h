@@ -24,6 +24,7 @@ class DesiredStateV2Validator final {
   void ValidateInfer() const;
   void ValidateWorker() const;
   void ValidateWorkerResources() const;
+  void ValidateVoiceModuleResources() const;
   void ValidateApp() const;
   void ValidateSingleAppSpec(
       const nlohmann::json& app,

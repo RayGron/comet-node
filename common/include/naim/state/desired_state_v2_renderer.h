@@ -46,6 +46,8 @@ class DesiredStateV2Renderer final {
   std::string ResolveAppNodeName(const nlohmann::json& app_json) const;
   std::string ResolveWorkerNodeName(int worker_index) const;
   std::optional<std::string> ResolveWorkerGpuDevice(int worker_index) const;
+  const nlohmann::json& VoiceModuleResources() const;
+  bool VoiceModuleGpuEnabled() const;
   std::optional<std::string> ResolveLegacyServiceNodeName(
       const nlohmann::json& service_json,
       const char* service_name) const;
@@ -110,6 +112,7 @@ class DesiredStateV2Renderer final {
   nlohmann::json worker_json_;
   nlohmann::json resources_json_;
   nlohmann::json worker_resources_json_;
+  nlohmann::json voice_module_resources_json_;
   nlohmann::json app_json_;
   std::vector<nlohmann::json> apps_json_;
   nlohmann::json skills_json_;

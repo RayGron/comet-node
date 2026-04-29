@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include "naim/runtime/infer_runtime_config.h"
@@ -37,6 +40,8 @@ constexpr int kInteractionPublishedPortSpan = 10000;
 constexpr int kVoiceModuleContainerPort = 18140;
 constexpr int kVoiceModulePublishedPortBase = 54000;
 constexpr int kVoiceModulePublishedPortSpan = 10000;
+constexpr double kDefaultVoiceModuleGpuFraction = 0.2;
+constexpr int kDefaultVoiceModuleGpuPriority = 50;
 constexpr std::string_view kTurboQuantDefaultCacheTypeK = "turbo4";
 constexpr std::string_view kTurboQuantDefaultCacheTypeV = "turbo4";
 
@@ -58,6 +63,47 @@ std::string PlacementExecutionNodeName(const nlohmann::json& placement) {
     return execution_node;
   }
   return placement.value("primary_node", std::string{});
+}
+
+struct VoiceGpuHost {
+  std::string node_name;
+  std::string gpu_device;
+  double allocated_fraction = 0.0;
+  int allocated_memory_cap_mb = 0;
+  std::string first_worker_name;
+};
+
+std::optional<VoiceGpuHost> SelectVoiceGpuHost(const DesiredState& state) {
+  std::map<std::pair<std::string, std::string>, VoiceGpuHost> hosts;
+  for (const auto& instance : state.instances) {
+    if (instance.role != InstanceRole::Worker || !instance.gpu_device.has_value() ||
+        instance.gpu_device->empty()) {
+      continue;
+    }
+    auto& host = hosts[{instance.node_name, *instance.gpu_device}];
+    if (host.node_name.empty()) {
+      host.node_name = instance.node_name;
+      host.gpu_device = *instance.gpu_device;
+      host.first_worker_name = instance.name;
+    }
+    host.allocated_fraction += instance.gpu_fraction;
+    host.allocated_memory_cap_mb += instance.memory_cap_mb.value_or(0);
+  }
+
+  std::optional<VoiceGpuHost> best;
+  for (const auto& [_, host] : hosts) {
+    if (!best.has_value() ||
+        host.allocated_fraction < best->allocated_fraction ||
+        (host.allocated_fraction == best->allocated_fraction &&
+         host.allocated_memory_cap_mb < best->allocated_memory_cap_mb) ||
+        (host.allocated_fraction == best->allocated_fraction &&
+         host.allocated_memory_cap_mb == best->allocated_memory_cap_mb &&
+         std::tie(host.node_name, host.gpu_device, host.first_worker_name) <
+             std::tie(best->node_name, best->gpu_device, best->first_worker_name))) {
+      best = host;
+    }
+  }
+  return best;
 }
 
 }  // namespace
@@ -83,6 +129,14 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
           resources_json_.contains("worker") && resources_json_.at("worker").is_object()
               ? resources_json_.at("worker")
               : nlohmann::json::object()),
+      voice_module_resources_json_(
+          resources_json_.contains("voice_module") &&
+                  resources_json_.at("voice_module").is_object()
+              ? resources_json_.at("voice_module")
+              : (resources_json_.contains("voice_listener") &&
+                         resources_json_.at("voice_listener").is_object()
+                     ? resources_json_.at("voice_listener")
+                     : nlohmann::json::object())),
       app_json_(nlohmann::json::object()),
       skills_json_(
           value.contains("skills") && value.at("skills").is_object() ? value.at("skills")
@@ -1095,11 +1149,17 @@ void DesiredStateV2Renderer::RenderVoiceModuleInstance() {
   }
 
   const auto& config = *state_.voice_listener;
+  const bool gpu_enabled = VoiceModuleGpuEnabled();
+  const auto voice_gpu_host = gpu_enabled ? SelectVoiceGpuHost(state_) : std::nullopt;
+  if (gpu_enabled && !voice_gpu_host.has_value()) {
+    throw std::runtime_error(
+        "desired-state v2 resources.voice_module requires at least one worker with gpu_device");
+  }
   InstanceSpec voice;
   voice.name = BuildVoiceModuleInstanceName();
   voice.role = InstanceRole::VoiceModule;
   voice.plane_name = state_.plane_name;
-  voice.node_name = ResolveAppNodeName();
+  voice.node_name = voice_gpu_host.has_value() ? voice_gpu_host->node_name : ResolveAppNodeName();
   voice.image = config.image.has_value() && !config.image->empty()
                     ? *config.image
                     : std::string("naim/voice-module:dev");
@@ -1116,6 +1176,21 @@ void DesiredStateV2Renderer::RenderVoiceModuleInstance() {
       InstanceNeedsSharedDiskMount(voice.role) ? state_.plane_shared_disk_name : "";
   voice.private_disk_size_gb =
       ExtractPrivateDiskSizeGb(voice_json, kDefaultVoiceModulePrivateDiskSizeGb, "storage");
+  if (voice_gpu_host.has_value()) {
+    const auto& resources = VoiceModuleResources();
+    voice.gpu_device = voice_gpu_host->gpu_device;
+    voice.placement_mode = PlacementMode::Manual;
+    voice.share_mode =
+        ParseGpuShareMode(resources.value("share_mode", std::string("shared")));
+    voice.gpu_fraction =
+        resources.value("gpu_fraction", kDefaultVoiceModuleGpuFraction);
+    voice.priority = resources.value("priority", kDefaultVoiceModuleGpuPriority);
+    voice.preemptible =
+        resources.value("preemptible", voice.share_mode == GpuShareMode::BestEffort);
+    voice.memory_cap_mb = resources.contains("memory_cap_mb")
+                              ? std::optional<int>(resources.at("memory_cap_mb").get<int>())
+                              : std::nullopt;
+  }
   voice.environment = {
       {"NAIM_PLANE_NAME", state_.plane_name},
       {"NAIM_INSTANCE_NAME", voice.name},
@@ -1271,6 +1346,26 @@ int DesiredStateV2Renderer::WorkerCount() const {
 
 int DesiredStateV2Renderer::ExpectedWorkers() const {
   return std::max(1, WorkerCount());
+}
+
+const nlohmann::json& DesiredStateV2Renderer::VoiceModuleResources() const {
+  return voice_module_resources_json_;
+}
+
+bool DesiredStateV2Renderer::VoiceModuleGpuEnabled() const {
+  const auto& resources = VoiceModuleResources();
+  if (resources.empty()) {
+    return false;
+  }
+  if (resources.contains("gpu_enabled")) {
+    return resources.value("gpu_enabled", false);
+  }
+  if (resources.contains("enabled")) {
+    return resources.value("enabled", false);
+  }
+  return resources.contains("share_mode") || resources.contains("gpu_fraction") ||
+      resources.contains("memory_cap_mb") || resources.contains("priority") ||
+      resources.contains("preemptible");
 }
 
 bool DesiredStateV2Renderer::HasExternalAppHost() const {

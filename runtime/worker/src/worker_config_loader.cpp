@@ -24,9 +24,7 @@ std::string ResolveVisibleGpuDevice() {
     if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
       auto * buft = ggml_backend_dev_buffer_type(dev);
       if (buft) {
-        std::string dev_name;
-        dev_name.assign(ggml_backend_buft_name(buft));
-        return dev_name;
+        return ggml_backend_buft_name(buft);
       }
     }
   }

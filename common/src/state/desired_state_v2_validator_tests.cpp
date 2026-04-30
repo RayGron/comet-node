@@ -1261,11 +1261,11 @@ int main() {
       Expect(service_it->healthcheck == "CMD-SHELL test -f /tmp/naim-ready",
              "llm-with-skills: compose healthcheck should use readiness file");
       Expect(
-          std::none_of(
+          std::any_of(
               service_it->volumes.begin(),
               service_it->volumes.end(),
               [](const naim::ComposeVolume& volume) { return volume.target == "/naim/shared"; }),
-          "llm-with-skills: skills service should not mount shared disk by default");
+          "llm-with-skills: skills service should mount shared disk by default");
       std::cout << "ok: llm-with-skills" << '\n';
     }
 
@@ -1378,11 +1378,11 @@ int main() {
               "seccomp=unconfined") != service_it->security_opts.end(),
           "llm-with-browsing: compose service should relax seccomp for CEF");
       Expect(
-          std::none_of(
+          std::any_of(
               service_it->volumes.begin(),
               service_it->volumes.end(),
               [](const naim::ComposeVolume& volume) { return volume.target == "/naim/shared"; }),
-          "llm-with-browsing: browsing service should not mount shared disk by default");
+          "llm-with-browsing: browsing service should mount shared disk by default");
       std::cout << "ok: llm-with-browsing" << '\n';
     }
 
@@ -1881,6 +1881,238 @@ int main() {
       std::cout << "ok: multi-app-plane" << '\n';
     }
 
+    {
+      const json app_model_plane{
+          {"version", 2},
+          {"plane_name", "app-model-plane"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-app-model"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"apps",
+           json::array(
+               {{{"name", "chat"},
+                 {"primary", true},
+                 {"enabled", true},
+                 {"image", "example/app:dev"}},
+                {{"name", "voice-asr"},
+                 {"enabled", true},
+                 {"image", "example/voice-asr:dev"},
+                 {"models",
+                  json::array(
+                      {{{"name", "whisper"},
+                        {"source",
+                         {{"type", "library"},
+                          {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"}}},
+                        {"mount_path", "/models/whisper/ggml-base.bin"},
+                        {"env", "WHISPER_MODEL_PATH"},
+                        {"required", true}}})}}})},
+      };
+      const auto state = RenderValid(app_model_plane, "app-model-plane");
+      const auto voice = FindInstance(state, "app-app-model-plane-voice-asr");
+      Expect(voice.app_model_mounts.size() == 1,
+             "app-model-plane: voice app should have one model mount");
+      Expect(voice.environment.at("WHISPER_MODEL_PATH") == "/models/whisper/ggml-base.bin",
+             "app-model-plane: model env should point to container mount path");
+      Expect(voice.app_model_mounts.front().source_path ==
+                 "/mnt/shared-storage/models/whisper/ggml-base.bin",
+             "app-model-plane: source path should be retained");
+      const auto compose_plans = naim::BuildNodeComposePlans(state);
+      const auto& service = *std::find_if(
+          compose_plans.front().services.begin(),
+          compose_plans.front().services.end(),
+          [](const naim::ComposeService& candidate) {
+            return candidate.name == "app-app-model-plane-voice-asr";
+          });
+      const auto mount_it = std::find_if(
+          service.volumes.begin(),
+          service.volumes.end(),
+          [](const naim::ComposeVolume& volume) {
+            return volume.target == "/models/whisper/ggml-base.bin";
+          });
+      Expect(mount_it != service.volumes.end(),
+             "app-model-plane: compose should include model mount");
+      Expect(mount_it->read_only, "app-model-plane: model mount should be read-only");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.at("apps").at(1).contains("models"),
+             "app-model-plane: projector should preserve app models");
+      Expect(!projected.at("apps").at(1).value("env", json::object()).contains("WHISPER_MODEL_PATH"),
+             "app-model-plane: projector should not duplicate generated model env");
+      std::cout << "ok: app-model-plane" << '\n';
+    }
+
+    {
+      const json voice_listener_plane{
+          {"version", 2},
+          {"plane_name", "voice-listener-plane"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-voice-listener"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app",
+           {{"enabled", true},
+            {"image", "example/app:dev"},
+            {"env", {{"APP_MODE", "voice-test"}}}}},
+          {"features",
+           {{"voice_listener",
+             {{"enabled", true},
+              {"wake_phrase", "Hey Jex"},
+              {"language", "auto"},
+              {"model",
+               {{"name", "whisper"},
+                {"source",
+                 {{"type", "library"},
+                  {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"},
+                  {"node", "storage1"},
+                  {"paths", json::array({"/mnt/shared-storage/models/whisper/ggml-base.bin"})}}},
+                {"mount_path", "/models/whisper/ggml-base.bin"},
+                {"env", "WHISPER_MODEL_PATH"},
+                {"required", true}}}}}}}
+      };
+      const auto state = RenderValid(voice_listener_plane, "voice-listener-plane");
+      const auto voice = FindInstance(state, "voice-module-voice-listener-plane");
+      Expect(voice.role == naim::InstanceRole::VoiceModule,
+             "voice-listener-plane: voice module role mismatch");
+      Expect(voice.shared_disk_name == state.plane_shared_disk_name,
+             "voice-listener-plane: voice module should mount plane shared disk");
+      Expect(voice.environment.at("NAIM_VOICE_LISTENER_WAKE_PHRASE") == "Hey Jex",
+             "voice-listener-plane: wake phrase env mismatch");
+      Expect(voice.app_model_mounts.size() == 1,
+             "voice-listener-plane: voice module should mount whisper model");
+      const auto app = FindInstance(state, "app-voice-listener-plane");
+      Expect(app.environment.at("NAIM_VOICE_LISTENER_BASE") ==
+                 "http://voice-module-voice-listener-plane:18140/v1",
+             "voice-listener-plane: primary app should receive voice feature base");
+      Expect(app.environment.at("APP_MODE") == "voice-test",
+             "voice-listener-plane: primary app should preserve explicit app env");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.at("features").at("voice_listener").at("wake_phrase") == "Hey Jex",
+             "voice-listener-plane: projector should preserve wake phrase");
+      std::cout << "ok: voice-listener-plane" << '\n';
+    }
+
+    {
+      const json gpu_voice_listener_plane{
+          {"version", 2},
+          {"plane_name", "gpu-voice-listener-plane"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-gpu-voice-listener"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 2}}},
+          {"topology",
+           {{"nodes",
+             json::array(
+                 {{{"name", "local-hostd"},
+                   {"execution_mode", "mixed"},
+                   {"gpu_memory_mb", {{"0", 24576}, {"1", 24576}}}}})}}},
+          {"infer", {{"replicas", 1}}},
+          {"worker",
+           {{"assignments",
+             json::array(
+                 {{{"node", "local-hostd"}, {"gpu_device", "0"}},
+                  {{"node", "local-hostd"}, {"gpu_device", "1"}}})}}},
+          {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
+          {"features",
+           {{"voice_listener",
+             {{"enabled", true},
+              {"wake_phrase", "Hey Jex"},
+              {"model",
+               {{"name", "whisper"},
+                {"source",
+                 {{"type", "library"},
+                  {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"}}},
+                {"mount_path", "/models/whisper/ggml-base.bin"},
+                {"env", "WHISPER_MODEL_PATH"},
+                {"required", true}}}}}}},
+          {"resources",
+           {{"worker",
+             {{"share_mode", "shared"}, {"gpu_fraction", 0.7}, {"memory_cap_mb", 16384}}},
+            {"voice_module",
+             {{"gpu_enabled", true},
+              {"share_mode", "shared"},
+              {"gpu_fraction", 0.2},
+              {"memory_cap_mb", 4096}}}}},
+      };
+      const auto state = RenderValid(gpu_voice_listener_plane, "gpu-voice-listener-plane");
+      const auto voice = FindInstance(state, "voice-module-gpu-voice-listener-plane");
+      Expect(voice.node_name == "local-hostd",
+             "gpu-voice-listener-plane: voice module should colocate with a GPU worker");
+      Expect(voice.gpu_device == std::optional<std::string>("0"),
+             "gpu-voice-listener-plane: voice module should choose a worker GPU deterministically");
+      Expect(voice.share_mode == naim::GpuShareMode::Shared,
+             "gpu-voice-listener-plane: voice module should use shared GPU mode");
+      Expect(voice.gpu_fraction == 0.2,
+             "gpu-voice-listener-plane: voice module gpu_fraction mismatch");
+      Expect(voice.memory_cap_mb == std::optional<int>(4096),
+             "gpu-voice-listener-plane: voice module memory cap mismatch");
+      const auto compose_plans = naim::BuildNodeComposePlans(state);
+      const auto& service = *std::find_if(
+          compose_plans.front().services.begin(),
+          compose_plans.front().services.end(),
+          [](const naim::ComposeService& candidate) {
+            return candidate.name == "voice-module-gpu-voice-listener-plane";
+          });
+      Expect(service.use_nvidia_runtime,
+             "gpu-voice-listener-plane: compose should enable nvidia runtime for voice");
+      Expect(service.gpu_device == std::optional<std::string>("0"),
+             "gpu-voice-listener-plane: compose voice gpu_device mismatch");
+      Expect(service.environment.at("NVIDIA_VISIBLE_DEVICES") == "0",
+             "gpu-voice-listener-plane: compose should expose selected voice GPU");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.at("resources").at("voice_module").at("gpu_enabled") == true,
+             "gpu-voice-listener-plane: projector should preserve voice GPU enablement");
+      Expect(projected.at("resources").at("voice_module").at("gpu_fraction") == 0.2,
+             "gpu-voice-listener-plane: projector should preserve voice GPU fraction");
+      std::cout << "ok: gpu-voice-listener-plane" << '\n';
+    }
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-voice-gpu-fraction"},
+            {"plane_mode", "llm"},
+            {"model",
+             {{"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+              {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+              {"served_model_name", "qwen"}}},
+            {"runtime", {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"resources",
+             {{"voice_module", {{"gpu_enabled", true}, {"share_mode", "exclusive"}, {"gpu_fraction", 0.25}}}}},
+        },
+        "bad-voice-gpu-fraction");
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-voice-listener"},
+            {"plane_mode", "llm"},
+            {"model",
+             {{"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+              {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+              {"served_model_name", "qwen"}}},
+            {"runtime", {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"features", {{"voice_listener", {{"enabled", true}, {"wake_phrase", ""}}}}},
+        },
+        "bad-voice-listener");
+
     ExpectInvalid(
         json{
             {"version", 2},
@@ -1893,6 +2125,23 @@ int main() {
                   {{"name", "collector"}, {"enabled", true}, {"image", "example/app:dev"}}})},
         },
         "duplicate-app-names");
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-app-model-source"},
+            {"plane_mode", "compute"},
+            {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+            {"app",
+             {{"enabled", true},
+              {"image", "example/app:dev"},
+              {"models",
+               json::array(
+                   {{{"name", "whisper"},
+                     {"source", {{"type", "url"}, {"path", "/models/ggml-base.bin"}}},
+                     {"mount_path", "/models/whisper/ggml-base.bin"}}})}}},
+        },
+        "bad-app-model-source");
 
     return 0;
   } catch (const std::exception& ex) {

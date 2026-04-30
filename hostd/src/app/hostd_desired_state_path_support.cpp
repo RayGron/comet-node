@@ -75,6 +75,15 @@ naim::DesiredState HostdDesiredStatePathSupport::RebaseStateForRuntimeRoot(
         naim::IsNodeLocalDiskKind(disk.kind) ? std::optional<std::string>(disk.node_name)
                                               : std::nullopt);
   }
+  for (auto& instance : state.instances) {
+    for (auto& model_mount : instance.app_model_mounts) {
+      model_mount.host_path = RebaseManagedPath(
+          model_mount.host_path,
+          storage_root,
+          runtime_root,
+          instance.node_name);
+    }
+  }
   return state;
 }
 

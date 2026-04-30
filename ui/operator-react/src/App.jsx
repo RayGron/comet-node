@@ -13,7 +13,9 @@ import {
 } from "recharts";
 import {
   buildDesiredStateV2FromForm,
+  buildHostNodeOptions,
   buildNewPlaneFormState,
+  buildNewPlaneFormStateWithNodes,
   buildPlaneFormStateFromDesiredStateV2,
   isDesiredStateV2,
   PlaneV2FormBuilder,
@@ -22,6 +24,8 @@ import {
 import { formatPlaneDashboardSkillsSummary } from "./planeSkills.js";
 import {
   detectModelSourceFormat,
+  defaultModelDownloadTarget,
+  eligibleModelStorageNodes,
   MODEL_LIBRARY_FORMAT_OPTIONS,
   MODEL_LIBRARY_GGUF_QUANTIZATIONS,
   MODEL_LIBRARY_QUANTIZATION_FILTERS,
@@ -1199,7 +1203,8 @@ export function PlaneEditorDialog({
 
   const readOnly = dialog.mode === "view";
   const showFormBuilder = !readOnly && Boolean(dialog.form);
-  const formValidation = showFormBuilder
+  const showValidation = Boolean(dialog.showValidation);
+  const formValidation = showFormBuilder && showValidation
     ? validatePlaneV2Form(dialog.form || buildNewPlaneFormState())
     : { errors: [], warnings: [] };
   const desiredStateLabel = showFormBuilder
@@ -1276,6 +1281,7 @@ export function PlaneEditorDialog({
               peerLinks={peerLinks || null}
               skillsFactoryItems={skillsFactoryItems || []}
               skillsFactoryGroups={skillsFactoryGroups || []}
+              showValidation={showValidation}
               onResetLtCypherDeployment={onResetLtCypherDeployment}
             />
           ) : null}
@@ -2028,6 +2034,7 @@ function App() {
     sourceUrls: "",
     format: "unknown",
     formatLocked: false,
+    targetSelectionTouched: false,
   });
   const [quantizationSearch, setQuantizationSearch] = useState("");
   const [quantizationFilter, setQuantizationFilter] = useState("all");
@@ -2050,6 +2057,7 @@ function App() {
     text: "",
     form: null,
     originalSkillsEnabled: false,
+    showValidation: false,
     busy: false,
     error: "",
   });
@@ -3124,7 +3132,22 @@ function App() {
     setApiError("");
     try {
       if (mode === "new") {
-        const form = buildNewPlaneFormState();
+        let latestHostdHosts = hostdHosts || [];
+        if (!Array.isArray(latestHostdHosts) || latestHostdHosts.length === 0) {
+          try {
+            const hostdHostsPayload = await fetchJson(hostdHostsPath());
+            latestHostdHosts = Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : [];
+            setHostdHosts(latestHostdHosts);
+          } catch {
+            latestHostdHosts = [];
+          }
+        }
+        const form = buildNewPlaneFormStateWithNodes(
+          buildHostNodeOptions([
+            ...(Array.isArray(latestHostdHosts) ? latestHostdHosts : []),
+            ...(Array.isArray(modelLibrary.nodes) ? modelLibrary.nodes : []),
+          ]),
+        );
         setPlaneDialog({
           open: true,
           mode,
@@ -3133,6 +3156,7 @@ function App() {
           text: JSON.stringify(buildDesiredStateV2FromForm(form), null, 2),
           form,
           originalSkillsEnabled: false,
+          showValidation: false,
           busy: false,
           error: "",
         });
@@ -3152,6 +3176,7 @@ function App() {
           ? buildPlaneFormStateFromDesiredStateV2(payload.desired_state_v2)
           : null,
         originalSkillsEnabled: Boolean(payload?.desired_state_v2?.skills?.enabled),
+        showValidation: false,
         busy: false,
         error: "",
       });
@@ -3161,7 +3186,7 @@ function App() {
   }
 
   async function savePlaneDialog() {
-    setPlaneDialog((current) => ({ ...current, busy: true, error: "" }));
+    setPlaneDialog((current) => ({ ...current, busy: true, error: "", showValidation: true }));
     try {
       if (planeDialog.form) {
         const validation = validatePlaneV2Form(planeDialog.form);
@@ -3232,6 +3257,7 @@ function App() {
         text: "",
         form: null,
         originalSkillsEnabled: false,
+        showValidation: false,
         busy: false,
         error: "",
       });
@@ -3865,13 +3891,11 @@ function App() {
   const visibleModelItems = (modelLibrary.items || []).slice(0, visibleModelCount);
   const hasMoreModelItems = activeModelCount > visibleModelCount;
   const modelLibraryNodes = Array.isArray(modelLibrary.nodes) ? modelLibrary.nodes : [];
-  const storageModelNodes = modelLibraryNodes.filter(
-    (node) =>
-      node?.role_eligible === true &&
-      node?.registration_state === "registered" &&
-      node?.session_state === "connected" &&
-      node?.storage_root,
-  );
+  const planeNodeOptions = buildHostNodeOptions([
+    ...(Array.isArray(hostdHosts) ? hostdHosts : []),
+    ...modelLibraryNodes,
+  ]);
+  const storageModelNodes = eligibleModelStorageNodes(modelLibraryNodes);
   const modelLibraryJobs = Array.isArray(modelLibrary.jobs) ? modelLibrary.jobs : [];
   const downloadModelJobs = modelLibraryJobs.filter(
     (job) => normalizeModelLibraryJobKind(job?.job_kind) === "download",
@@ -6222,7 +6246,11 @@ function App() {
           type="text"
           value={modelDownloadForm.targetRoot}
           onChange={(event) =>
-            setModelDownloadForm((current) => ({ ...current, targetRoot: event.target.value }))
+            setModelDownloadForm((current) => ({
+              ...current,
+              targetRoot: event.target.value,
+              targetSelectionTouched: true,
+            }))
           }
           placeholder="/abs/path/to/model/library"
           disabled={Boolean(modelDownloadForm.targetNodeName)}
@@ -6240,6 +6268,7 @@ function App() {
               ...current,
               targetNodeName: event.target.value,
               targetRoot: event.target.value ? "" : current.targetRoot,
+              targetSelectionTouched: true,
             }))
           }
         >
@@ -7355,14 +7384,28 @@ function App() {
   }, [desiredState, interactionStatus]);
 
   useEffect(() => {
-    if (modelDownloadForm.targetRoot || !Array.isArray(modelLibrary.roots) || modelLibrary.roots.length === 0) {
+    if (
+      modelDownloadForm.targetRoot ||
+      modelDownloadForm.targetNodeName ||
+      modelDownloadForm.targetSelectionTouched
+    ) {
+      return;
+    }
+    const nextDefault = defaultModelDownloadTarget(modelLibrary);
+    if (!nextDefault) {
       return;
     }
     setModelDownloadForm((current) => ({
       ...current,
-      targetRoot: modelLibrary.roots[0],
+      targetRoot: nextDefault.targetRoot,
+      targetNodeName: nextDefault.targetNodeName,
     }));
-  }, [modelDownloadForm.targetRoot, modelLibrary.roots]);
+  }, [
+    modelDownloadForm.targetNodeName,
+    modelDownloadForm.targetRoot,
+    modelDownloadForm.targetSelectionTouched,
+    modelLibrary,
+  ]);
 
   useEffect(() => {
     const detectedSourceFormat = detectModelSourceFormat(modelDownloadForm.sourceUrls);
@@ -7892,13 +7935,14 @@ function App() {
             text: "",
             form: null,
             originalSkillsEnabled: false,
+            showValidation: false,
             busy: false,
             error: "",
           })
         }
         onSave={savePlaneDialog}
         modelLibraryItems={modelLibrary.items || []}
-        hostdHosts={hostdHosts || []}
+        hostdHosts={planeNodeOptions}
         peerLinks={dashboard?.peer_links || null}
         skillsFactoryItems={skillsFactory.items || []}
         skillsFactoryGroups={skillsFactory.groups || []}

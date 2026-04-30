@@ -15,6 +15,17 @@ namespace naim {
 
 namespace {
 
+std::string JoinStrings(const std::vector<std::string>& values, const std::string& separator) {
+  std::ostringstream out;
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    if (index > 0) {
+      out << separator;
+    }
+    out << values[index];
+  }
+  return out.str();
+}
+
 std::string DiskKey(const DiskSpec& disk) {
   return disk.name + "@" + disk.node_name;
 }
@@ -63,6 +74,30 @@ std::string PublishedPortsSignature(const std::vector<PublishedPort>& ports) {
   return out.str();
 }
 
+std::string AppModelMountsSignature(const std::vector<AppModelMountSpec>& mounts) {
+  std::vector<std::string> entries;
+  entries.reserve(mounts.size());
+  for (const auto& mount : mounts) {
+    std::vector<std::string> source_paths = mount.source_paths;
+    std::sort(source_paths.begin(), source_paths.end());
+    entries.push_back(
+        mount.name + "|" + mount.source_path + "|" + mount.source_node_name + "|" +
+        JoinStrings(source_paths, ",") + "|" + mount.host_path + "|" + mount.mount_path + "|" +
+        mount.env_var + "|" + std::to_string(mount.required ? 1 : 0));
+  }
+  std::sort(entries.begin(), entries.end());
+  std::ostringstream out;
+  bool first = true;
+  for (const auto& entry : entries) {
+    if (!first) {
+      out << ";";
+    }
+    first = false;
+    out << entry;
+  }
+  return out.str();
+}
+
 std::string InstanceSignature(const InstanceSpec& instance) {
   return instance.node_name + "|" + instance.image + "|" + instance.command + "|" +
          instance.private_disk_name + "|" + instance.shared_disk_name + "|" +
@@ -71,6 +106,7 @@ std::string InstanceSignature(const InstanceSpec& instance) {
          std::to_string(instance.preemptible ? 1 : 0) + "|" +
          std::to_string(instance.memory_cap_mb.value_or(0)) + "|" +
          PublishedPortsSignature(instance.published_ports) + "|" +
+         AppModelMountsSignature(instance.app_model_mounts) + "|" +
          MapSignature(instance.environment) + "|" + MapSignature(instance.labels);
 }
 

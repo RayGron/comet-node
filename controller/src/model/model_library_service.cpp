@@ -343,7 +343,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
     const HttpRequest& request) const {
   const json body = support_.parse_json_request_body(request);
   std::string target_root = body.value("target_root", std::string{});
-  const std::string target_node_name = body.value("target_node_name", std::string{});
+  std::string target_node_name = body.value("target_node_name", std::string{});
   const std::string target_subdir = body.value("target_subdir", std::string{});
   const std::string model_id = body.value("model_id", std::string{});
   const std::string source_url = body.value("source_url", std::string{});
@@ -371,10 +371,13 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   const std::string desired_output_format = NormalizeModelOutputFormat(requested_output_format);
   const std::vector<std::string> quantizations;
   const bool keep_base_gguf = true;
+  const bool requires_controller_local_conversion =
+      detected_source_format == "safetensors" && desired_output_format == "gguf";
   naim::ControllerStore store(db_path);
   store.Initialize();
-  if (!target_node_name.empty()) {
-    const auto host = store.LoadRegisteredHost(target_node_name);
+  auto apply_target_node =
+      [&](const std::string& node_name) -> std::optional<HttpResponse> {
+    const auto host = store.LoadRegisteredHost(node_name);
     if (!host.has_value()) {
       return support_.build_json_response(
           404,
@@ -407,6 +410,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
                {"message", "target_node_name does not advertise a usable storage_root"}},
           {});
     }
+    target_node_name = summary.node_name;
     target_root = summary.storage_root;
     std::uintmax_t required_bytes = 0;
     bool have_required_bytes = !source_urls.empty();
@@ -427,6 +431,66 @@ HttpResponse ModelLibraryService::EnqueueDownload(
                {"required_bytes", required_bytes},
                {"available_bytes", summary.storage_free_bytes}},
           {});
+    }
+    return std::nullopt;
+  };
+  if (!target_node_name.empty()) {
+    if (auto error_response = apply_target_node(target_node_name)) {
+      return *error_response;
+    }
+  } else if (!requires_controller_local_conversion) {
+    std::vector<ModelLibraryNodeSummary> eligible_nodes;
+    for (const auto& host : store.LoadRegisteredHosts()) {
+      const auto summary = ModelLibraryNodePlacement::BuildSummary(host);
+      if (summary.registration_state != "registered" ||
+          summary.session_state != "connected") {
+        continue;
+      }
+      if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
+              summary.derived_role,
+              summary.storage_role_enabled,
+              false)) {
+        continue;
+      }
+      if (summary.storage_root.empty() ||
+          !IsUsableAbsoluteHostPath(summary.storage_root)) {
+        continue;
+      }
+      eligible_nodes.push_back(summary);
+    }
+    if (target_root.empty()) {
+      if (eligible_nodes.size() == 1) {
+        if (auto error_response = apply_target_node(eligible_nodes.front().node_name)) {
+          return *error_response;
+        }
+      } else if (eligible_nodes.size() > 1) {
+        return support_.build_json_response(
+            409,
+            json{{"status", "conflict"},
+                 {"message", "target_node_name is required when multiple storage-capable nodes are available"}},
+            {});
+      }
+    } else if (IsUsableAbsoluteHostPath(target_root)) {
+      std::vector<ModelLibraryNodeSummary> matching_nodes;
+      const auto normalized_target_root =
+          NormalizePathString(std::filesystem::path(target_root));
+      for (const auto& summary : eligible_nodes) {
+        if (NormalizePathString(std::filesystem::path(summary.storage_root)) ==
+            normalized_target_root) {
+          matching_nodes.push_back(summary);
+        }
+      }
+      if (matching_nodes.size() == 1) {
+        if (auto error_response = apply_target_node(matching_nodes.front().node_name)) {
+          return *error_response;
+        }
+      } else if (matching_nodes.size() > 1) {
+        return support_.build_json_response(
+            409,
+            json{{"status", "conflict"},
+                 {"message", "target_node_name is required because target_root matches multiple nodes"}},
+            {});
+      }
     }
   }
   if (target_root.empty() || !IsUsableAbsoluteHostPath(target_root)) {
@@ -450,11 +514,12 @@ HttpResponse ModelLibraryService::EnqueueDownload(
              {"message", "failed to detect source format from source_urls"}},
         {});
   }
-  if (desired_output_format != "gguf" && desired_output_format != "safetensors") {
+  if (desired_output_format != "gguf" && desired_output_format != "safetensors" &&
+      desired_output_format != "whisper.cpp") {
     return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
-             {"message", "format must be gguf, safetensors, or source"}},
+             {"message", "format must be gguf, safetensors, whisper.cpp, or source"}},
         {});
   }
   if (detected_source_format == "gguf" && desired_output_format != "gguf") {
@@ -462,6 +527,13 @@ HttpResponse ModelLibraryService::EnqueueDownload(
         400,
         json{{"status", "bad_request"},
              {"message", "gguf sources can only retain GGUF output format"}},
+        {});
+  }
+  if (detected_source_format == "whisper.cpp" && desired_output_format != "whisper.cpp") {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"},
+             {"message", "whisper.cpp sources can only retain whisper.cpp output format"}},
         {});
   }
 
@@ -1598,16 +1670,28 @@ ModelLibraryService::BuildReferenceMap(const std::string& db_path) const {
   const auto desired_states = store.LoadDesiredStates();
   std::map<std::string, std::vector<std::string>> references;
   for (const auto& desired_state : desired_states) {
-    if (!desired_state.bootstrap_model.has_value() ||
-        !desired_state.bootstrap_model->local_path.has_value()) {
-      continue;
+    if (desired_state.bootstrap_model.has_value() &&
+        desired_state.bootstrap_model->local_path.has_value()) {
+      const std::string& local_path = *desired_state.bootstrap_model->local_path;
+      if (IsUsableAbsoluteHostPath(local_path)) {
+        references[NormalizePathString(local_path)].push_back(
+            desired_state.plane_name);
+      }
     }
-    const std::string& local_path = *desired_state.bootstrap_model->local_path;
-    if (!IsUsableAbsoluteHostPath(local_path)) {
-      continue;
+    for (const auto& instance : desired_state.instances) {
+      for (const auto& mount : instance.app_model_mounts) {
+        if (IsUsableAbsoluteHostPath(mount.source_path)) {
+          references[NormalizePathString(mount.source_path)].push_back(
+              desired_state.plane_name + ":" + instance.name);
+        }
+        for (const auto& source_path : mount.source_paths) {
+          if (IsUsableAbsoluteHostPath(source_path)) {
+            references[NormalizePathString(source_path)].push_back(
+                desired_state.plane_name + ":" + instance.name);
+          }
+        }
+      }
     }
-    references[NormalizePathString(local_path)].push_back(
-        desired_state.plane_name);
   }
   return references;
 }
@@ -1849,11 +1933,33 @@ ModelLibraryService::ScanEntries(const std::string& db_path) const {
         continue;
       }
       error.clear();
-      if (!EndsWithIgnoreCase(current_name, ".gguf")) {
+      const bool current_is_whisper_cpp =
+          EndsWithIgnoreCase(current_name, ".bin") &&
+          (Lowercase(current_name).rfind("ggml-", 0) == 0 ||
+           Lowercase(current_name).find("whisper") != std::string::npos);
+      if (!EndsWithIgnoreCase(current_name, ".gguf") && !current_is_whisper_cpp) {
         continue;
       }
       const auto normalized_file_path = NormalizePathString(current_path);
       if (pending_downloads.target_paths.count(normalized_file_path) != 0) {
+        continue;
+      }
+      if (current_is_whisper_cpp) {
+        ModelLibraryEntry entry;
+        entry.path = normalized_file_path;
+        entry.name = current_name;
+        entry.kind = "file";
+        entry.format = "whisper.cpp";
+        entry.quantization = "base";
+        entry.root = root_text;
+        entry.paths = {entry.path};
+        entry.size_bytes = iterator->file_size(error);
+        const auto reference_it = reference_map.find(entry.path);
+        if (reference_it != reference_map.end()) {
+          entry.referenced_by = reference_it->second;
+          entry.deletable = false;
+        }
+        entries_by_path[entry.path] = std::move(entry);
         continue;
       }
       std::string multipart_prefix;

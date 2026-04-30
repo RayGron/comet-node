@@ -77,6 +77,7 @@ manifest_hostd = None
 manifest_controller = None
 manifest_web_ui = None
 manifest_knowledge = None
+manifest_voice_module = None
 try:
     with open(manifest_path, "r", encoding="utf-8") as handle:
         manifest = json.load(handle)
@@ -88,6 +89,7 @@ try:
     manifest_hostd = (manifest.get("images") or {}).get("hostd")
     manifest_web_ui = (manifest.get("images") or {}).get("web-ui")
     manifest_knowledge = (manifest.get("images") or {}).get("knowledge-runtime")
+    manifest_voice_module = (manifest.get("images") or {}).get("voice-module")
 except FileNotFoundError:
     pass
 
@@ -151,6 +153,8 @@ if manifest_web_ui:
     lines.append(f"- web ui image: `{manifest_web_ui}`")
 if manifest_knowledge:
     lines.append(f"- knowledge runtime image: `{manifest_knowledge}`")
+if manifest_voice_module:
+    lines.append(f"- voice module image: `{manifest_voice_module}`")
 lines.append("")
 lines.append("### Main")
 if docker_lines:

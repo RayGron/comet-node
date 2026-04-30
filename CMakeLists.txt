@@ -11,6 +11,9 @@ option(NAIM_ENABLE_LLAMA_RUNTIME
        ON)
 option(NAIM_ENABLE_CUDA "Build llama.cpp runtime with CUDA backend" ON)
 option(NAIM_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
+option(NAIM_ENABLE_VOICE_MODULE
+       "Configure whisper.cpp-backed Voice Listener runtime target"
+       ON)
 set(NAIM_CEF_ROOT "" CACHE PATH "Path to an unpacked CEF binary distribution")
 set(NAIM_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribution archive")
 
@@ -449,7 +452,6 @@ add_executable(
   controller/src/interaction/interaction_service.cpp
   controller/src/plane/plane_dashboard_skills_summary_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
-  controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
   controller/src/skills/plane_skills_service_tests.cpp
@@ -472,7 +474,6 @@ add_executable(
   controller/src/plane/plane_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_catalog_service.cpp
-  controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
   controller/src/skills/skills_factory_service.cpp
@@ -837,7 +838,6 @@ add_executable(
   controller/src/interaction/interaction_upstream_event_parser.cpp
   controller/src/observation/plane_observation_matcher.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
-  controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
 )
@@ -928,6 +928,34 @@ target_include_directories(
 target_link_libraries(
   naim-interaction-utf8-payload-sanitizer-tests PRIVATE naim-common)
 naim_enable_strict_warnings(naim-interaction-utf8-payload-sanitizer-tests)
+
+add_executable(
+  naim-interaction-runtime-server-tests
+  controller/src/app/controller_language_support.cpp
+  controller/src/http/controller_http_server_support.cpp
+  controller/src/http/controller_http_transport.cpp
+  controller/src/infra/controller_network_manager.cpp
+  controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_context_compression_service.cpp
+  controller/src/interaction/interaction_conversation_payload_builder.cpp
+  controller/src/interaction/interaction_model_identity_builder.cpp
+  controller/src/interaction/interaction_payload_builder.cpp
+  controller/src/interaction/interaction_request_contract_support.cpp
+  controller/src/interaction/interaction_request_heuristics.cpp
+  controller/src/interaction/interaction_runtime_request_codec.cpp
+  controller/src/interaction/interaction_text_post_processor.cpp
+  controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
+  runtime/interaction/src/interaction_runtime_server.cpp
+  runtime/interaction/src/interaction_runtime_server_tests.cpp
+)
+target_include_directories(
+  naim-interaction-runtime-server-tests PRIVATE common/include controller/include runtime/interaction/include)
+target_link_libraries(
+  naim-interaction-runtime-server-tests PRIVATE naim-common Threads::Threads)
+if(WIN32)
+  target_link_libraries(naim-interaction-runtime-server-tests PRIVATE ws2_32)
+endif()
+naim_enable_strict_warnings(naim-interaction-runtime-server-tests)
 
 add_executable(
   naim-knowledge-vault-service-tests
@@ -1381,7 +1409,6 @@ add_executable(
   controller/src/plane/plane_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_catalog_service.cpp
-  controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
   controller/src/skills/skills_factory_http_service.cpp
@@ -1680,4 +1707,60 @@ if(NOT WIN32)
       # llama
   )
   naim_enable_strict_warnings(naim-workerd)
+
+  if(NAIM_ENABLE_VOICE_MODULE)
+    set(NAIM_WHISPER_CPP_GIT_TAG "v1.8.1" CACHE STRING
+        "Pinned whisper.cpp release used for the NAIM voice-module runtime")
+    set(NAIM_CPP_HTTPLIB_GIT_TAG "v0.26.0" CACHE STRING
+        "Pinned cpp-httplib release used for the NAIM voice-module runtime")
+    include(ExternalProject)
+
+    set(_naim_voice_module_build_dir "${CMAKE_BINARY_DIR}/runtime/voice-module-build")
+    set(_naim_voice_module_output "${CMAKE_BINARY_DIR}/naim-voice-moduled")
+    set(_naim_voice_module_cmake_args
+        "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+        "-DNAIM_WHISPER_CPP_GIT_TAG=${NAIM_WHISPER_CPP_GIT_TAG}"
+        "-DNAIM_CPP_HTTPLIB_GIT_TAG=${NAIM_CPP_HTTPLIB_GIT_TAG}"
+        "-DNAIM_ENABLE_CUDA=${NAIM_ENABLE_CUDA}"
+        "-DNAIM_CUDA_NATIVE=${NAIM_CUDA_NATIVE}"
+        "-DNAIM_CUDA_ARCHITECTURES=${NAIM_CUDA_ARCHITECTURES}"
+        "-DNAIM_CUDA_NVCC_JOBS=${NAIM_CUDA_NVCC_JOBS}"
+    )
+    if(CMAKE_C_COMPILER)
+      list(APPEND _naim_voice_module_cmake_args "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}")
+    endif()
+    if(CMAKE_CXX_COMPILER)
+      list(APPEND _naim_voice_module_cmake_args "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
+    endif()
+    if(CUDAToolkit_ROOT)
+      list(APPEND _naim_voice_module_cmake_args "-DCUDAToolkit_ROOT=${CUDAToolkit_ROOT}")
+    endif()
+    if(CMAKE_CUDA_COMPILER)
+      list(APPEND _naim_voice_module_cmake_args "-DCMAKE_CUDA_COMPILER=${CMAKE_CUDA_COMPILER}")
+    endif()
+    if(CMAKE_CUDA_COMPILER_LAUNCHER)
+      list(APPEND _naim_voice_module_cmake_args
+           "-DCMAKE_CUDA_COMPILER_LAUNCHER=${CMAKE_CUDA_COMPILER_LAUNCHER}")
+    endif()
+
+    ExternalProject_Add(
+      naim-voice-module-runtime
+      SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/runtime/voice"
+      BINARY_DIR "${_naim_voice_module_build_dir}"
+      CMAKE_ARGS ${_naim_voice_module_cmake_args}
+      BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --target naim-voice-moduled
+      INSTALL_COMMAND
+        "${CMAKE_COMMAND}" -E copy_if_different
+        "<BINARY_DIR>/naim-voice-moduled"
+        "${_naim_voice_module_output}"
+      BUILD_BYPRODUCTS "${_naim_voice_module_output}"
+    )
+
+    add_custom_target(
+      naim-voice-module-runtime-all
+      ALL
+      DEPENDS naim-voice-module-runtime
+    )
+    unset(_naim_voice_module_cmake_args)
+  endif()
 endif()

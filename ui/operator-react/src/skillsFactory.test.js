@@ -4,8 +4,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   buildDesiredStateV2FromForm,
+  buildHostNodeOptions,
   buildNewPlaneFormState,
+  buildNewPlaneFormStateWithNodes,
   buildPlaneFormStateFromDesiredStateV2,
+  chooseDefaultPlaneNode,
+  updatePlaneDialogForm,
   validatePlaneV2Form,
 } from "./planeV2Form.jsx";
 import { PlaneEditorDialog } from "./App.jsx";
@@ -141,6 +145,25 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(reparsed.factorySkillIds).toEqual(["skill-alpha", "skill-beta"]);
   });
 
+  it("clears stale plane dialog errors when the form changes", () => {
+    let dialog = {
+      form: buildNewPlaneFormState(),
+      text: "",
+      error: "Model Library selection is required when model source type is library.",
+    };
+    const setDialog = (updater) => {
+      dialog = typeof updater === "function" ? updater(dialog) : updater;
+    };
+
+    updatePlaneDialogForm(setDialog, (current) => ({
+      ...current,
+      planeName: "updated-plane",
+    }));
+
+    expect(dialog.error).toBe("");
+    expect(dialog.text).toContain('"plane_name": "updated-plane"');
+  });
+
   it("warns when factory selections exist while Skills is disabled", () => {
     const form = buildNewPlaneFormState();
     form.modelPath = "/models/qwen";
@@ -240,6 +263,44 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(reparsed.contextCompressionMode).toBe("auto");
     expect(reparsed.contextCompressionTarget).toBe("dialog_and_knowledge");
     expect(reparsed.contextCompressionMemoryPriority).toBe("balanced");
+  });
+
+  it("round-trips voice listener capability through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "voice-plane";
+    form.modelPath = "/models/qwen";
+    form.voiceListenerEnabled = true;
+    form.voiceListenerWakePhrase = "Hey Jex";
+    form.voiceListenerLanguage = "auto";
+    form.voiceListenerModelPath = "/models/whisper/ggml-large-v3-turbo-q5_0.bin";
+    form.voiceListenerModelRef = "ggml-large-v3-turbo-q5_0.bin";
+    form.voiceListenerModelNodeName = "storage1";
+    form.voiceListenerModelPaths = ["/models/whisper/ggml-large-v3-turbo-q5_0.bin"];
+    form.voiceListenerModelMountPath = "/models/whisper/ggml-large-v3-turbo-q5_0.bin";
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.features.voice_listener).toEqual({
+      enabled: true,
+      wake_phrase: "Hey Jex",
+      language: "auto",
+      model: {
+        name: "ggml-large-v3-turbo-q5_0.bin",
+        source: {
+          type: "library",
+          path: "/models/whisper/ggml-large-v3-turbo-q5_0.bin",
+          node: "storage1",
+          paths: ["/models/whisper/ggml-large-v3-turbo-q5_0.bin"],
+        },
+        mount_path: "/models/whisper/ggml-large-v3-turbo-q5_0.bin",
+        env: "WHISPER_MODEL_PATH",
+        required: true,
+      },
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.voiceListenerEnabled).toBe(true);
+    expect(reparsed.voiceListenerWakePhrase).toBe("Hey Jex");
+    expect(reparsed.voiceListenerModelPath).toBe("/models/whisper/ggml-large-v3-turbo-q5_0.bin");
   });
 
   it("preserves interaction runtime image through desired state v2 round-trip", () => {
@@ -403,6 +464,78 @@ describe("planeV2Form SkillsFactory mapping", () => {
     });
 
     expect(form.executionNode).toBe("worker-node-a");
+  });
+
+  it("prefers the connected local node for single-machine plane defaults", () => {
+    const hosts = [
+      {
+        node_name: "storage1",
+        state: "connected",
+        roles: ["storage"],
+      },
+      {
+        node_name: "hostd-node",
+        state: "connected",
+        roles: ["storage", "worker"],
+        gpu_count: 1,
+      },
+    ];
+
+    expect(buildHostNodeOptions(hosts).map((host) => host.node_name)).toEqual([
+      "hostd-node",
+      "storage1",
+    ]);
+    expect(chooseDefaultPlaneNode(hosts, "execution")).toBe("hostd-node");
+    expect(chooseDefaultPlaneNode(hosts, "storage")).toBe("hostd-node");
+  });
+
+  it("keeps single-machine defaults on the connected local node even with stale remote storage", () => {
+    const hosts = [
+      {
+        node_name: "storage1",
+        state: "connected",
+        roles: ["storage"],
+      },
+      {
+        node_name: "local-hostd",
+        state: "connected",
+        roles: ["worker"],
+        gpu_count: 1,
+      },
+    ];
+
+    expect(chooseDefaultPlaneNode(hosts, "execution")).toBe("local-hostd");
+    expect(chooseDefaultPlaneNode(hosts, "storage")).toBe("local-hostd");
+  });
+
+  it("uses role-specific defaults for distributed production nodes", () => {
+    const hosts = [
+      {
+        node_name: "hpc1",
+        session_state: "connected",
+        derived_role: "worker",
+        capacity_summary: {
+          gpu_count: 4,
+          storage_root: "/mnt/shared-storage/naim/storage",
+        },
+      },
+      {
+        node_name: "storage1",
+        session_state: "connected",
+        derived_role: "storage",
+        capacity_summary: {
+          gpu_count: 0,
+          storage_root: "/mnt/array/naim/storage",
+        },
+      },
+    ];
+
+    expect(chooseDefaultPlaneNode(hosts, "execution")).toBe("hpc1");
+    expect(chooseDefaultPlaneNode(hosts, "storage")).toBe("storage1");
+
+    const form = buildNewPlaneFormStateWithNodes(hosts);
+    expect(form.executionNode).toBe("hpc1");
+    expect(form.materializationSourceNodeName).toBe("storage1");
   });
 
   it("does not emit legacy node-placement fields when topology is disabled", () => {

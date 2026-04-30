@@ -41,6 +41,7 @@ openmp_library=""
 : "${NAIM_CUDA_NATIVE:=OFF}"
 : "${NAIM_CUDA_ARCHITECTURES:=}"
 : "${NAIM_CUDA_NVCC_JOBS:=1}"
+: "${NAIM_COMPILER_CACHE:=auto}"
 
 detect_cuda_root() {
   local candidate=""
@@ -141,6 +142,42 @@ if detect_macos_openmp; then
   :
 elif [[ "${TARGET_OS}" == "macos" ]]; then
   echo "[cmake] OpenMP runtime was not found for macOS; building without OpenMP (install with 'brew install libomp' to enable it)" >&2
+fi
+
+compiler_cache_launcher=""
+case "${NAIM_COMPILER_CACHE}" in
+  ""|auto|AUTO)
+    if command -v ccache >/dev/null 2>&1; then
+      compiler_cache_launcher="$(command -v ccache)"
+    elif command -v sccache >/dev/null 2>&1; then
+      compiler_cache_launcher="$(command -v sccache)"
+    fi
+    ;;
+  OFF|off|0|false|FALSE|no|NO|none|NONE)
+    compiler_cache_launcher=""
+    ;;
+  ccache|sccache)
+    if command -v "${NAIM_COMPILER_CACHE}" >/dev/null 2>&1; then
+      compiler_cache_launcher="$(command -v "${NAIM_COMPILER_CACHE}")"
+    else
+      echo "[cmake] requested compiler cache '${NAIM_COMPILER_CACHE}' was not found on PATH" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    if [[ -x "${NAIM_COMPILER_CACHE}" ]]; then
+      compiler_cache_launcher="${NAIM_COMPILER_CACHE}"
+    else
+      echo "[cmake] NAIM_COMPILER_CACHE must be auto, off, ccache, sccache, or an executable path" >&2
+      exit 1
+    fi
+    ;;
+esac
+
+if [[ -n "${compiler_cache_launcher}" ]]; then
+  echo "[cmake] compiler cache launcher: ${compiler_cache_launcher}" >&2
+else
+  echo "[cmake] compiler cache launcher: disabled" >&2
 fi
 
 vcpkg_root="$("${script_dir}/find-vcpkg.sh" --root)"
@@ -264,9 +301,11 @@ cmake_args=(
 )
 
 cmake_args+=("-DNAIM_ENABLE_CUDA=${NAIM_ENABLE_CUDA}")
+cmake_args+=("-DCMAKE_CXX_COMPILER_LAUNCHER=${compiler_cache_launcher}")
 if [[ "${NAIM_ENABLE_CUDA}" == "ON" ]]; then
   cmake_args+=("-DCUDAToolkit_ROOT=${cuda_root}")
   cmake_args+=("-DCMAKE_CUDA_COMPILER=${cuda_nvcc}")
+  cmake_args+=("-DCMAKE_CUDA_COMPILER_LAUNCHER=${compiler_cache_launcher}")
   cmake_args+=("-DNAIM_CUDA_NATIVE=${NAIM_CUDA_NATIVE}")
   cmake_args+=("-DNAIM_CUDA_ARCHITECTURES=${NAIM_CUDA_ARCHITECTURES}")
   cmake_args+=("-DNAIM_CUDA_NVCC_JOBS=${NAIM_CUDA_NVCC_JOBS}")

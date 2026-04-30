@@ -98,6 +98,8 @@ struct StreamedInteractionSegmentResult {
   int dialog_estimate_before = 0;
   int dialog_estimate_after = 0;
   double context_compression_ratio = 1.0;
+  nlohmann::json webgateway_summary = nlohmann::json::object();
+  nlohmann::json webgateway_policy = nlohmann::json::object();
 };
 
 struct InteractionSessionResult {
@@ -119,6 +121,8 @@ struct InteractionSessionResult {
   int dialog_estimate_before = 0;
   int dialog_estimate_after = 0;
   double context_compression_ratio = 1.0;
+  nlohmann::json webgateway_summary = nlohmann::json::object();
+  nlohmann::json webgateway_policy = nlohmann::json::object();
 };
 
 struct InteractionRequestContext {

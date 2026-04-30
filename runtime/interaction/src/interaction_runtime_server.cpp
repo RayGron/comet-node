@@ -7,6 +7,7 @@
 #include <csignal>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 
@@ -31,6 +32,12 @@ constexpr const char* kAppliedSkillsPayloadKey = "_naim_applied_skills";
 constexpr const char* kAutoAppliedSkillsPayloadKey = "_naim_auto_applied_skills";
 constexpr const char* kSkillsSessionIdPayloadKey = "_naim_skills_session_id";
 constexpr const char* kSkillResolutionModePayloadKey = "_naim_skill_resolution_mode";
+constexpr const char* kBrowsingSystemInstructionPayloadKey =
+    "_naim_browsing_system_instruction";
+constexpr const char* kBrowsingSummaryPayloadKey = "_naim_browsing_summary";
+constexpr const char* kWebGatewayContextPayloadKey = "_naim_webgateway_context";
+constexpr const char* kWebGatewayPolicyPayloadKey = "_naim_webgateway_policy";
+constexpr const char* kWebGatewayReviewPayloadKey = "_naim_webgateway_review";
 
 void SignalHandler(int) {
   if (g_stop_requested != nullptr) {
@@ -109,6 +116,173 @@ std::string BuildSkillsSystemInstruction(const nlohmann::json& skills) {
     instruction += "\n\nInstructions:\n" + content;
   }
   return instruction;
+}
+
+std::string ReadJsonStringOrDefault(
+    const nlohmann::json& payload,
+    const std::string& key,
+    std::string default_value = {}) {
+  const auto it = payload.find(key);
+  if (it == payload.end() || it->is_null() || !it->is_string()) {
+    return default_value;
+  }
+  return it->get<std::string>();
+}
+
+std::string LastUserMessageContent(
+    const naim::controller::InteractionRequestContext& context) {
+  if (!context.payload.contains("messages") ||
+      !context.payload.at("messages").is_array()) {
+    return "";
+  }
+  const auto& messages = context.payload.at("messages");
+  for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+    if (it->is_object() && it->value("role", std::string{}) == "user" &&
+        it->contains("content") && it->at("content").is_string()) {
+      return it->at("content").get<std::string>();
+    }
+  }
+  return "";
+}
+
+nlohmann::json ConversationSlice(
+    const naim::controller::InteractionRequestContext& context) {
+  if (context.payload.contains("messages") &&
+      context.payload.at("messages").is_array()) {
+    return context.payload.at("messages");
+  }
+  return nlohmann::json::array();
+}
+
+std::string ReadPersistedBrowsingMode(
+    const naim::controller::InteractionRequestContext& context) {
+  const nlohmann::json& state =
+      context.payload.contains(naim::controller::kInteractionSessionContextStatePayloadKey) &&
+              context.payload.at(naim::controller::kInteractionSessionContextStatePayloadKey)
+                  .is_object()
+          ? context.payload.at(naim::controller::kInteractionSessionContextStatePayloadKey)
+          : context.session_context_state;
+  if (!state.is_object()) {
+    return "auto";
+  }
+  const std::string mode = state.value("browsing_mode", std::string{});
+  if (mode == "enabled" || mode == "disabled") {
+    return mode;
+  }
+  return "auto";
+}
+
+nlohmann::json BuildDisabledWebGatewayContext() {
+  return nlohmann::json{
+      {"mode", "disabled"},
+      {"mode_source", "default_off"},
+      {"plane_enabled", false},
+      {"ready", false},
+      {"session_backend", "broker_fallback"},
+      {"rendered_browser_enabled", true},
+      {"rendered_browser_ready", false},
+      {"login_enabled", false},
+      {"toggle_only", false},
+      {"decision", "disabled"},
+      {"reason", "web_mode_disabled"},
+      {"lookup_state", "disabled"},
+      {"lookup_attempted", false},
+      {"lookup_required", false},
+      {"evidence_attached", false},
+      {"searches", nlohmann::json::array()},
+      {"sources", nlohmann::json::array()},
+      {"errors", nlohmann::json::array()},
+      {"refusal", nullptr},
+      {"response_policy", nlohmann::json::object()},
+  };
+}
+
+nlohmann::json BuildUnavailableWebGatewayContext(
+    const std::string& reason,
+    const std::string& error_message) {
+  nlohmann::json context = BuildDisabledWebGatewayContext();
+  context["mode"] = "enabled";
+  context["mode_source"] = "webgateway_unreachable";
+  context["plane_enabled"] = true;
+  context["decision"] = "unavailable";
+  context["reason"] = reason.empty() ? "webgateway_unavailable" : reason;
+  context["lookup_state"] = "required_but_unavailable";
+  context["lookup_attempted"] = false;
+  context["lookup_required"] = true;
+  context["response_policy"] = nlohmann::json{
+      {"must_disclose_web_unavailable", true},
+      {"must_not_suggest_local_access", false},
+      {"must_refuse_upload", false},
+      {"must_use_only_evidence", false},
+      {"must_not_claim_unverified_web_lookup", true},
+      {"blocked_reason", nullptr},
+      {"unavailable_disclaimer",
+       "Web browsing was unavailable for this request, so I could not verify fresh public sources online."},
+  };
+  if (!error_message.empty()) {
+    context["errors"] = nlohmann::json::array(
+        {nlohmann::json{{"code", reason.empty() ? "webgateway_unavailable" : reason},
+                        {"message", error_message}}});
+  }
+  return context;
+}
+
+void ApplyWebGatewayPayload(
+    naim::controller::InteractionRequestContext* context,
+    const nlohmann::json& webgateway_context,
+    const nlohmann::json& response_policy,
+    const std::string& model_instruction,
+    const std::optional<std::string>& refusal,
+    const std::string& decision) {
+  if (context == nullptr) {
+    return;
+  }
+  if (!model_instruction.empty()) {
+    context->payload[kBrowsingSystemInstructionPayloadKey] = model_instruction;
+  }
+  context->payload[kBrowsingSummaryPayloadKey] = webgateway_context;
+  context->payload[kWebGatewayContextPayloadKey] = webgateway_context;
+  context->payload[kWebGatewayPolicyPayloadKey] = response_policy;
+  context->payload[kWebGatewayReviewPayloadKey] =
+      nlohmann::json{
+          {"decision", decision},
+          {"response_policy", response_policy},
+          {"refusal", refusal.has_value() ? nlohmann::json(*refusal) : nlohmann::json(nullptr)},
+      };
+}
+
+std::optional<std::string> ExtractAssistantContent(const nlohmann::json& payload) {
+  if (!payload.is_object() || !payload.contains("choices") ||
+      !payload.at("choices").is_array() || payload.at("choices").empty() ||
+      !payload.at("choices").at(0).is_object()) {
+    return std::nullopt;
+  }
+  const auto& choice = payload.at("choices").at(0);
+  if (choice.contains("message") && choice.at("message").is_object() &&
+      choice.at("message").contains("content") &&
+      choice.at("message").at("content").is_string()) {
+    return choice.at("message").at("content").get<std::string>();
+  }
+  if (choice.contains("text") && choice.at("text").is_string()) {
+    return choice.at("text").get<std::string>();
+  }
+  return std::nullopt;
+}
+
+void SetAssistantContent(nlohmann::json* payload, const std::string& content) {
+  if (payload == nullptr || !payload->is_object() || !payload->contains("choices") ||
+      !payload->at("choices").is_array() || payload->at("choices").empty() ||
+      !payload->at("choices").at(0).is_object()) {
+    return;
+  }
+  auto& choice = payload->at("choices").at(0);
+  if (choice.contains("message") && choice.at("message").is_object()) {
+    choice.at("message")["content"] = content;
+    return;
+  }
+  if (choice.contains("text")) {
+    choice["text"] = content;
+  }
 }
 
 void SetNoResolvedSkills(naim::controller::InteractionRequestContext* context) {
@@ -359,6 +533,10 @@ HttpResponse InteractionRuntimeServer::ExecuteNonStream(const HttpRequest& reque
   }
   const auto local_started_at = std::chrono::steady_clock::now();
   auto execution = BuildRuntimeExecution(request);
+  const auto browsing_started_at = std::chrono::steady_clock::now();
+  const int browsing_resolve_ms =
+      ResolvePlaneOwnedBrowsing(execution.resolution, &execution.request_context);
+  const auto browsing_finished_at = std::chrono::steady_clock::now();
   const auto compression_started_at = std::chrono::steady_clock::now();
   naim::controller::InteractionContextCompressionService().Apply(
       execution.resolution,
@@ -378,9 +556,20 @@ HttpResponse InteractionRuntimeServer::ExecuteNonStream(const HttpRequest& reque
       "/chat/completions",
       upstream_body,
       {{"Accept", "application/json"}});
+  ReviewPlaneOwnedBrowsingResponse(
+      execution.resolution,
+      execution.request_context,
+      &response);
   for (const auto& [name, value] : BuildCompressionHeaders(execution.request_context)) {
     response.headers[name] = value;
   }
+  response.headers["x-naim-webgateway-resolve-ms"] =
+      std::to_string(browsing_resolve_ms);
+  response.headers["x-naim-webgateway-total-ms"] =
+      std::to_string(static_cast<int>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              browsing_finished_at - browsing_started_at)
+              .count()));
   AddRuntimeTelemetryHeaders(
       &response,
       execution.local_raw_execution,
@@ -410,6 +599,10 @@ void InteractionRuntimeServer::ExecuteStream(
   const auto local_started_at = std::chrono::steady_clock::now();
   auto execution = BuildRuntimeExecution(request);
   execution.force_stream = true;
+  const auto browsing_started_at = std::chrono::steady_clock::now();
+  const int browsing_resolve_ms =
+      ResolvePlaneOwnedBrowsing(execution.resolution, &execution.request_context);
+  const auto browsing_finished_at = std::chrono::steady_clock::now();
   const auto compression_started_at = std::chrono::steady_clock::now();
   naim::controller::InteractionContextCompressionService().Apply(
       execution.resolution,
@@ -432,6 +625,13 @@ void InteractionRuntimeServer::ExecuteStream(
       execution.local_raw_execution ? "true" : "false";
   response_headers["x-naim-skills-resolve-ms"] =
       std::to_string(execution.skills_resolve_ms);
+  response_headers["x-naim-webgateway-resolve-ms"] =
+      std::to_string(browsing_resolve_ms);
+  response_headers["x-naim-webgateway-total-ms"] =
+      std::to_string(static_cast<int>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              browsing_finished_at - browsing_started_at)
+              .count()));
   response_headers["x-naim-context-compression-ms"] =
       std::to_string(static_cast<int>(
           std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -745,6 +945,223 @@ InteractionRuntimeServer::ResolvePlaneNetworkSkillsTarget(
   target.host = it->name;
   target.port = port;
   target.raw = "http://" + target.host + ":" + std::to_string(target.port);
+  target.node_name = it->node_name;
+  target.route_mode = "plane-network";
+  target.route_via_hostd_proxy = false;
+  return target;
+}
+
+int InteractionRuntimeServer::ResolvePlaneOwnedBrowsing(
+    const naim::controller::PlaneInteractionResolution& resolution,
+    naim::controller::InteractionRequestContext* request_context) const {
+  const auto started_at = std::chrono::steady_clock::now();
+  if (request_context == nullptr) {
+    throw std::invalid_argument("interaction request context is required");
+  }
+  if (!resolution.desired_state.browsing.has_value() ||
+      !resolution.desired_state.browsing->enabled) {
+    ApplyWebGatewayPayload(
+        request_context,
+        BuildDisabledWebGatewayContext(),
+        nlohmann::json::object(),
+        "",
+        std::nullopt,
+        "disabled");
+    return 0;
+  }
+
+  const auto target = ResolvePlaneNetworkWebGatewayTarget(resolution.desired_state);
+  if (!target.has_value()) {
+    const nlohmann::json context =
+        BuildUnavailableWebGatewayContext("webgateway_target_missing", "");
+    ApplyWebGatewayPayload(
+        request_context,
+        context,
+        context.value("response_policy", nlohmann::json::object()),
+        "WebGateway could not provide usable evidence for this request. If online verification matters, state that web browsing was unavailable.",
+        std::nullopt,
+        "unavailable");
+    return static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - started_at)
+                                .count());
+  }
+
+  nlohmann::json resolve_payload = {
+      {"plane_name", resolution.desired_state.plane_name},
+      {"conversation_slice", ConversationSlice(*request_context)},
+      {"latest_user_message", LastUserMessageContent(*request_context)},
+      {"web_mode", ReadPersistedBrowsingMode(*request_context)},
+      {"plane_policy",
+       nlohmann::json{
+           {"enabled", true},
+           {"browser_session_enabled",
+            resolution.desired_state.browsing->policy.has_value()
+                ? nlohmann::json(
+                      resolution.desired_state.browsing->policy->browser_session_enabled)
+                : nlohmann::json(false)},
+           {"rendered_browser_enabled",
+            resolution.desired_state.browsing->policy.has_value()
+                ? nlohmann::json(
+                      resolution.desired_state.browsing->policy->rendered_browser_enabled)
+                : nlohmann::json(true)},
+       }},
+  };
+
+  try {
+    const HttpResponse response = SendControllerHttpRequest(
+        *target,
+        "POST",
+        "/resolve",
+        resolve_payload.dump(),
+        JsonHeaders());
+    if (response.status_code != 200) {
+      const nlohmann::json context = BuildUnavailableWebGatewayContext(
+          "webgateway_upstream_failed",
+          "WebGateway returned status " + std::to_string(response.status_code));
+      ApplyWebGatewayPayload(
+          request_context,
+          context,
+          context.value("response_policy", nlohmann::json::object()),
+          "WebGateway could not provide usable evidence for this request. If online verification matters, state that web browsing was unavailable.",
+          std::nullopt,
+          "unavailable");
+    } else {
+      const nlohmann::json payload =
+          response.body.empty() ? nlohmann::json::object()
+                                : nlohmann::json::parse(response.body, nullptr, false);
+      if (!payload.is_object()) {
+        throw std::runtime_error("WebGateway returned malformed resolve payload");
+      }
+      const nlohmann::json webgateway_context =
+          payload.contains("context") && payload.at("context").is_object()
+              ? payload.at("context")
+              : BuildDisabledWebGatewayContext();
+      const nlohmann::json response_policy =
+          payload.contains("response_policy") && payload.at("response_policy").is_object()
+              ? payload.at("response_policy")
+              : webgateway_context.value("response_policy", nlohmann::json::object());
+      const auto refusal_it = payload.find("refusal");
+      std::optional<std::string> refusal = std::nullopt;
+      if (refusal_it != payload.end() && refusal_it->is_string()) {
+        refusal = refusal_it->get<std::string>();
+      }
+      ApplyWebGatewayPayload(
+          request_context,
+          webgateway_context,
+          response_policy,
+          ReadJsonStringOrDefault(payload, "model_instruction"),
+          refusal,
+          ReadJsonStringOrDefault(payload, "decision", "disabled"));
+    }
+  } catch (const std::exception& error) {
+    const nlohmann::json context =
+        BuildUnavailableWebGatewayContext("webgateway_unavailable", error.what());
+    ApplyWebGatewayPayload(
+        request_context,
+        context,
+        context.value("response_policy", nlohmann::json::object()),
+        "WebGateway could not provide usable evidence for this request. If online verification matters, state that web browsing was unavailable.",
+        std::nullopt,
+        "unavailable");
+  }
+  return static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - started_at)
+                              .count());
+}
+
+void InteractionRuntimeServer::ReviewPlaneOwnedBrowsingResponse(
+    const naim::controller::PlaneInteractionResolution& resolution,
+    const naim::controller::InteractionRequestContext& request_context,
+    HttpResponse* response) const {
+  if (response == nullptr || response->status_code != 200 || response->body.empty() ||
+      !request_context.payload.contains(kWebGatewayReviewPayloadKey) ||
+      !request_context.payload.at(kWebGatewayReviewPayloadKey).is_object() ||
+      !resolution.desired_state.browsing.has_value() ||
+      !resolution.desired_state.browsing->enabled) {
+    return;
+  }
+  nlohmann::json body = nlohmann::json::parse(response->body, nullptr, false);
+  if (!body.is_object()) {
+    return;
+  }
+  const auto draft = ExtractAssistantContent(body);
+  if (!draft.has_value()) {
+    return;
+  }
+  const auto target = ResolvePlaneNetworkWebGatewayTarget(resolution.desired_state);
+  if (!target.has_value()) {
+    body[kWebGatewayContextPayloadKey] =
+        request_context.payload.value(kWebGatewayContextPayloadKey, nlohmann::json::object());
+    body["webgateway"] = body[kWebGatewayContextPayloadKey];
+    response->body = body.dump();
+    return;
+  }
+
+  nlohmann::json review_payload =
+      request_context.payload.at(kWebGatewayReviewPayloadKey);
+  review_payload["draft_model_answer"] = *draft;
+  try {
+    const HttpResponse review_response = SendControllerHttpRequest(
+        *target,
+        "POST",
+        "/review-response",
+        review_payload.dump(),
+        JsonHeaders());
+    if (review_response.status_code == 200 && !review_response.body.empty()) {
+      const nlohmann::json review =
+          nlohmann::json::parse(review_response.body, nullptr, false);
+      if (review.is_object() && review.contains("corrected_answer") &&
+          review.at("corrected_answer").is_string()) {
+        SetAssistantContent(&body, review.at("corrected_answer").get<std::string>());
+      }
+      body["_naim_webgateway_review_result"] = review;
+    }
+  } catch (const std::exception&) {
+  }
+  body[kWebGatewayContextPayloadKey] =
+      request_context.payload.value(kWebGatewayContextPayloadKey, nlohmann::json::object());
+  body[kWebGatewayPolicyPayloadKey] =
+      request_context.payload.value(kWebGatewayPolicyPayloadKey, nlohmann::json::object());
+  body["webgateway"] = body[kWebGatewayContextPayloadKey];
+  response->body = body.dump();
+}
+
+std::optional<naim::controller::ControllerEndpointTarget>
+InteractionRuntimeServer::ResolvePlaneNetworkWebGatewayTarget(
+    const naim::DesiredState& desired_state) const {
+  if (!config_.webgateway_base_url.empty()) {
+    auto target = ParseControllerEndpointTarget(config_.webgateway_base_url);
+    target.route_mode = "plane-network";
+    target.route_via_hostd_proxy = false;
+    return target;
+  }
+  const auto it = std::find_if(
+      desired_state.instances.begin(),
+      desired_state.instances.end(),
+      [](const naim::InstanceSpec& instance) {
+        return instance.role == naim::InstanceRole::Browsing;
+      });
+  if (it == desired_state.instances.end() || it->name.empty()) {
+    return std::nullopt;
+  }
+
+  int port = 18130;
+  if (const auto env_it = it->environment.find("NAIM_WEBGATEWAY_PORT");
+      env_it != it->environment.end()) {
+    port = ParsePositiveIntOr(env_it->second, port);
+  }
+  for (const auto& published : it->published_ports) {
+    if (published.container_port > 0) {
+      port = published.container_port;
+      break;
+    }
+  }
+  naim::controller::ControllerEndpointTarget target;
+  target.host = it->name;
+  target.port = port;
+  target.base_path = "/v1/webgateway";
+  target.raw = "http://" + target.host + ":" + std::to_string(target.port) +
+               target.base_path;
   target.node_name = it->node_name;
   target.route_mode = "plane-network";
   target.route_via_hostd_proxy = false;

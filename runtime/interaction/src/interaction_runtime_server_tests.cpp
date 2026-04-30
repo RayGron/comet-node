@@ -59,6 +59,13 @@ naim::DesiredState BuildDesiredState() {
   state.interaction->system_prompt = "You are a test assistant.";
   state.skills = naim::SkillsSettings{};
   state.skills->enabled = true;
+  naim::BrowsingSettings browsing;
+  browsing.enabled = true;
+  naim::BrowsingPolicySettings browsing_policy;
+  browsing_policy.browser_session_enabled = true;
+  browsing_policy.rendered_browser_enabled = true;
+  browsing.policy = browsing_policy;
+  state.browsing = browsing;
 
   naim::InstanceSpec skills;
   skills.name = "skills-test-plane";
@@ -68,6 +75,15 @@ naim::DesiredState BuildDesiredState() {
   skills.environment["NAIM_SKILLS_PORT"] = "18120";
   skills.published_ports.push_back(naim::PublishedPort{"127.0.0.1", 26182, 18120});
   state.instances.push_back(skills);
+
+  naim::InstanceSpec webgateway;
+  webgateway.name = "webgateway-test-plane";
+  webgateway.role = naim::InstanceRole::Browsing;
+  webgateway.plane_name = state.plane_name;
+  webgateway.node_name = "hpc1";
+  webgateway.environment["NAIM_WEBGATEWAY_PORT"] = "18130";
+  webgateway.published_ports.push_back(naim::PublishedPort{"127.0.0.1", 26183, 18130});
+  state.instances.push_back(webgateway);
   return state;
 }
 
@@ -155,6 +171,41 @@ void TestPlaneNetworkSkillsTargetUsesContainerPort() {
   Expect(!target->route_via_hostd_proxy, "plane-network skills target should not use hostd proxy");
 }
 
+void TestPlaneNetworkWebGatewayTargetUsesPlaneDns() {
+  TempDir temp;
+  auto server = BuildServer(temp.path());
+  const auto target = server.ResolvePlaneNetworkWebGatewayTarget(BuildDesiredState());
+  Expect(target.has_value(), "webgateway plane-network target should resolve");
+  Expect(target->host == "webgateway-test-plane",
+         "webgateway target should use instance DNS name");
+  Expect(target->port == 18130, "webgateway target should use container port");
+  Expect(target->base_path == "/v1/webgateway",
+         "webgateway target should use runtime API base path");
+  Expect(!target->route_via_hostd_proxy,
+         "plane-network webgateway target should not use hostd proxy");
+}
+
+void TestPlaneOwnedBrowsingDisabledDoesNotUseController() {
+  TempDir temp;
+  auto state = BuildDesiredState();
+  state.browsing->enabled = false;
+  auto server = BuildServer(temp.path());
+  naim::controller::PlaneInteractionResolution resolution;
+  resolution.desired_state = state;
+  naim::controller::InteractionRequestContext context;
+  context.payload = nlohmann::json{
+      {"messages",
+       nlohmann::json::array(
+           {nlohmann::json{{"role", "user"}, {"content", "hello"}}})}};
+  const int elapsed = server.ResolvePlaneOwnedBrowsing(resolution, &context);
+  Expect(elapsed == 0, "disabled webgateway should not perform a runtime lookup");
+  Expect(context.payload.contains("_naim_webgateway_context"),
+         "disabled webgateway should still expose context");
+  Expect(context.payload.at("_naim_webgateway_context").value("mode", std::string{}) ==
+             "disabled",
+         "disabled webgateway context should mark disabled mode");
+}
+
 }  // namespace
 
 int main() {
@@ -163,6 +214,8 @@ int main() {
     TestRawRequestFallsBackWithoutSnapshot();
     TestWrappedRequestNeverUsesRawProxy();
     TestPlaneNetworkSkillsTargetUsesContainerPort();
+    TestPlaneNetworkWebGatewayTargetUsesPlaneDns();
+    TestPlaneOwnedBrowsingDisabledDoesNotUseController();
     std::cout << "ok: interaction-runtime-server-fast-path-tests\n";
     return 0;
   } catch (const std::exception& error) {

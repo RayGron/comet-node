@@ -169,9 +169,6 @@ InteractionHttpService::ResolveRequestContext(
   if (const auto error = ResolveRequestSkills(resolution, request_context)) {
     return error;
   }
-  if (const auto error = ResolveRequestBrowsing(resolution, request_context)) {
-    return error;
-  }
   return ResolveRequestKnowledge(resolution, request_context);
 }
 
@@ -180,17 +177,12 @@ HttpResponse InteractionHttpService::BuildSessionResponse(
     const naim::controller::InteractionRequestContext& request_context,
     const naim::controller::InteractionSessionResult& result) const {
   const naim::controller::InteractionSessionPresenter presenter;
-  naim::controller::InteractionSessionResult reviewed_result = result;
-  naim::controller::InteractionBrowsingService().ReviewInteractionResponse(
-      resolution,
-      request_context,
-      &reviewed_result);
   const auto response_spec =
-      presenter.BuildResponseSpec(resolution, request_context, reviewed_result);
+      presenter.BuildResponseSpec(resolution, request_context, result);
   auto headers =
       naim::controller::InteractionRequestContractSupport{}
           .BuildInteractionResponseHeaders(request_context.request_id);
-  for (const auto& [name, value] : BuildCompressionHeaders(reviewed_result)) {
+  for (const auto& [name, value] : BuildCompressionHeaders(result)) {
     headers[name] = value;
   }
   return support_.BuildJsonResponse(

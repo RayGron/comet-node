@@ -2072,6 +2072,9 @@ function App() {
   });
 
   const refreshTimerRef = useRef(null);
+  const refreshSequenceRef = useRef(0);
+  const liveRefreshSequenceRef = useRef(0);
+  const selectedPlaneRef = useRef(selectedPlane);
   const eventSourceRef = useRef(null);
   const chatAbortRef = useRef(null);
   const interactionSplitRef = useRef(null);
@@ -2079,6 +2082,10 @@ function App() {
   const chatTranscriptEndRef = useRef(null);
   const modelLibraryListRef = useRef(null);
   const modelLibraryLoadMoreRef = useRef(null);
+
+  useEffect(() => {
+    selectedPlaneRef.current = selectedPlane;
+  }, [selectedPlane]);
 
   function resetProtectedData() {
     setPlanes([]);
@@ -2207,6 +2214,7 @@ function App() {
       preferredPlane && items.some((item) => item.name === preferredPlane);
     const nextPlane = planeExists ? preferredPlane : "";
     if (nextPlane !== selectedPlane) {
+      selectedPlaneRef.current = nextPlane;
       startTransition(() => {
         setSelectedPlane(nextPlane);
       });
@@ -2462,10 +2470,19 @@ function App() {
   }
 
   async function refreshAll(planeOverride) {
-    setLoading(true);
+    const refreshId = ++refreshSequenceRef.current;
+    const requestedPlane = planeOverride ?? selectedPlaneRef.current;
+    const shouldCommitFleet = () =>
+      refreshId === refreshSequenceRef.current && selectedPlaneRef.current === "";
+    const shouldCommitPlane = (planeName) =>
+      refreshId === refreshSequenceRef.current && selectedPlaneRef.current === planeName;
+    const shouldCommitError = () => refreshId === refreshSequenceRef.current;
+    if (!dashboard && !planeDetail && planes.length === 0) {
+      setLoading(true);
+    }
     setApiError("");
     try {
-      const planeName = await loadPlanes(planeOverride ?? selectedPlane);
+      const planeName = await loadPlanes(requestedPlane);
       const globalHostObservationsRequest = fetchJson(
         queryPath("/api/v1/host-observations", {
           stale_after: 30,
@@ -2491,6 +2508,9 @@ function App() {
           knowledgeVaultStatusRequest,
           protocolRegistryRequest,
         ]);
+        if (!shouldCommitFleet()) {
+          return;
+        }
         const globalObservationItems = hostObservationItemsFromPayload(
           globalHostObservationsPayload,
         );
@@ -2564,6 +2584,9 @@ function App() {
         knowledgeVaultStatusRequest,
         protocolRegistryRequest,
       ]);
+      if (!shouldCommitPlane(planeName)) {
+        return;
+      }
 
       setPlaneDetail(planePayload);
       setDashboard(dashboardPayload);
@@ -2629,10 +2652,112 @@ function App() {
         handleUnauthorized();
         return;
       }
+      if (!shouldCommitError()) {
+        return;
+      }
       setApiHealthy(false);
       setApiError(error.message || String(error));
     } finally {
-      setLoading(false);
+      if (shouldCommitError()) {
+        setLoading(false);
+      }
+    }
+  }
+
+  async function refreshSelectedPlaneLive(planeName = selectedPlaneRef.current) {
+    if (!planeName) {
+      return;
+    }
+    const refreshId = ++liveRefreshSequenceRef.current;
+    const shouldCommit = () =>
+      refreshId === liveRefreshSequenceRef.current && selectedPlaneRef.current === planeName;
+    setApiError("");
+    try {
+      const [
+        dashboardPayload,
+        hostObservationsPayload,
+        globalHostObservationsPayload,
+        interactionPayload,
+      ] = await Promise.all([
+        fetchJson(planePath(planeName, "dashboard")),
+        fetchJson(
+          queryPath("/api/v1/host-observations", {
+            plane: planeName,
+            stale_after: 30,
+          }),
+        ),
+        fetchJson(
+          queryPath("/api/v1/host-observations", {
+            stale_after: 30,
+          }),
+        ),
+        fetchJson(interactionPath(planeName, "status")),
+      ]);
+      if (!shouldCommit()) {
+        return;
+      }
+      setDashboard(dashboardPayload);
+      setHostObservations(hostObservationsPayload);
+      setGlobalHostObservations(globalHostObservationsPayload);
+      setInteractionStatus(interactionPayload);
+
+      const globalObservationItems = hostObservationItemsFromPayload(
+        globalHostObservationsPayload,
+      );
+      const serverSummary = summarizeGlobalObservations(globalObservationItems);
+      const dashboardRuntime = dashboardPayload?.runtime || {};
+      const observationItems = hostObservationItemsFromPayload(hostObservationsPayload);
+      const observedInstancesCount = observationItems.reduce((count, observation) => {
+        const instances = observedInstancesForObservation(observation);
+        return count + instances.length;
+      }, 0);
+      const readyNodeCount =
+        Number(dashboardRuntime.ready_nodes ?? 0) > 0 || observationItems.length === 0
+          ? Number(dashboardRuntime.ready_nodes ?? 0)
+          : observationItems.filter((item) => {
+              const status = String(item?.status || "").toLowerCase();
+              return status !== "stale" && status !== "failed" && status !== "error";
+            }).length;
+      const missingRuntimeCount = observationItems.filter(
+        (observation) =>
+          observation?.runtime_status?.available !== true &&
+          observation?.instance_runtimes?.available !== true,
+      ).length;
+      setMetricHistory((current) =>
+        appendMetricHistory(
+          current,
+          {
+            ...buildServerMetricSamples(
+              serverSummary,
+              globalObservationItems.length,
+            ),
+            ...buildPlaneMetricSamples({
+              planeName,
+              readyNodes: readyNodeCount,
+              observedInstanceCount:
+                observedInstancesCount > 0
+                  ? observedInstancesCount
+                  : Number(dashboardPayload?.plane?.instance_count ?? 0),
+              rolloutActions: Number(dashboardPayload?.rollout?.total_actions ?? 0),
+              alertCount: Number((dashboardPayload?.alerts || {}).total ?? 0),
+              missingRuntimeNodes: missingRuntimeCount,
+            }),
+          },
+          Date.now(),
+        ),
+      );
+      setApiHealthy(true);
+      setLastRefreshAt(new Date().toISOString());
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      if (!shouldCommit()) {
+        return;
+      }
+      setApiHealthy(false);
+      setApiError(error.message || String(error));
     }
   }
 
@@ -3574,6 +3699,10 @@ function App() {
     }
     const refreshDelay = selectedPage === "dashboard" ? FLEET_REFRESH_MS : AUTO_REFRESH_MS;
     const timer = setInterval(() => {
+      if (selectedPlane && selectedPage === "dashboard") {
+        refreshSelectedPlaneLive(selectedPlane);
+        return;
+      }
       refreshAll(selectedPlane);
     }, refreshDelay);
     return () => clearInterval(timer);
@@ -4459,6 +4588,7 @@ function App() {
   }, [activeModelCount, hasMoreModelItems, visibleModelItems.length]);
 
   function openPlaneDashboard(planeName) {
+    selectedPlaneRef.current = planeName;
     setSelectedPlane(planeName);
     setSelectedPage("dashboard");
     setSelectedTab("status");
@@ -4466,6 +4596,7 @@ function App() {
   }
 
   function closePlaneDashboard() {
+    selectedPlaneRef.current = "";
     setSelectedPlane("");
     setSelectedTab("status");
   }

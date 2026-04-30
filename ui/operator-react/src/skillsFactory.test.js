@@ -265,6 +265,44 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(reparsed.contextCompressionMemoryPriority).toBe("balanced");
   });
 
+  it("round-trips voice listener capability through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "voice-plane";
+    form.modelPath = "/models/qwen";
+    form.voiceListenerEnabled = true;
+    form.voiceListenerWakePhrase = "Hey Jex";
+    form.voiceListenerLanguage = "auto";
+    form.voiceListenerModelPath = "/models/whisper/ggml-large-v3-turbo-q5_0.bin";
+    form.voiceListenerModelRef = "ggml-large-v3-turbo-q5_0.bin";
+    form.voiceListenerModelNodeName = "storage1";
+    form.voiceListenerModelPaths = ["/models/whisper/ggml-large-v3-turbo-q5_0.bin"];
+    form.voiceListenerModelMountPath = "/models/whisper/ggml-large-v3-turbo-q5_0.bin";
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.features.voice_listener).toEqual({
+      enabled: true,
+      wake_phrase: "Hey Jex",
+      language: "auto",
+      model: {
+        name: "ggml-large-v3-turbo-q5_0.bin",
+        source: {
+          type: "library",
+          path: "/models/whisper/ggml-large-v3-turbo-q5_0.bin",
+          node: "storage1",
+          paths: ["/models/whisper/ggml-large-v3-turbo-q5_0.bin"],
+        },
+        mount_path: "/models/whisper/ggml-large-v3-turbo-q5_0.bin",
+        env: "WHISPER_MODEL_PATH",
+        required: true,
+      },
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.voiceListenerEnabled).toBe(true);
+    expect(reparsed.voiceListenerWakePhrase).toBe("Hey Jex");
+    expect(reparsed.voiceListenerModelPath).toBe("/models/whisper/ggml-large-v3-turbo-q5_0.bin");
+  });
+
   it("preserves interaction runtime image through desired state v2 round-trip", () => {
     const desiredState = {
       ...buildDesiredStateV2FromForm(buildNewPlaneFormState()),

@@ -42,6 +42,8 @@ class InteractionRuntimeServer final {
     naim::controller::ResolvedInteractionPolicy resolved_policy;
     bool force_stream = false;
     bool structured_output_json = false;
+    bool local_raw_execution = false;
+    int skills_resolve_ms = 0;
   };
 
   void AcceptLoop();
@@ -52,6 +54,7 @@ class InteractionRuntimeServer final {
   HttpResponse ExecuteNonStream(const HttpRequest& request);
   void ExecuteStream(naim::platform::SocketHandle client_fd, const HttpRequest& request);
   bool ShouldProxyRawRequestThroughController(const HttpRequest& request) const;
+  bool HasLocalPlaneStateSnapshot() const;
   HttpResponse ProxyRawRequestThroughController(
       const HttpRequest& request,
       const std::string& controller_path) const;
@@ -63,6 +66,11 @@ class InteractionRuntimeServer final {
   std::optional<RuntimeExecution> TryBuildWrappedRuntimeExecution(
       const std::string& body) const;
   RuntimeExecution BuildDirectRuntimeExecution(const HttpRequest& request) const;
+  int ResolveExplicitSkillsForDirectExecution(
+      const naim::controller::PlaneInteractionResolution& resolution,
+      naim::controller::InteractionRequestContext* request_context) const;
+  std::optional<naim::controller::ControllerEndpointTarget> ResolvePlaneNetworkSkillsTarget(
+      const naim::DesiredState& desired_state) const;
   nlohmann::json LoadPlaneStatePayload() const;
   nlohmann::json LoadPlaneStatePayloadFromSnapshot() const;
   HttpResponse BuildJsonResponse(int status_code, const nlohmann::json& payload) const;

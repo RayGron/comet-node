@@ -1,5 +1,6 @@
 #include "naim/state/desired_state_v2_validator.h"
 
+#include <cmath>
 #include <map>
 #include <optional>
 #include <set>
@@ -67,6 +68,112 @@ bool IsValidEnvName(const std::string& value) {
   return true;
 }
 
+void ValidateGpuResourceBlock(
+    const nlohmann::json& resources,
+    const std::string& field_name,
+    bool allow_enabled_flags) {
+  if (!resources.is_object()) {
+    throw std::runtime_error("desired-state v2 " + field_name + " must be an object");
+  }
+  if (allow_enabled_flags) {
+    if (resources.contains("enabled") && !resources.at("enabled").is_boolean()) {
+      throw std::runtime_error("desired-state v2 " + field_name + ".enabled must be a boolean");
+    }
+    if (resources.contains("gpu_enabled") && !resources.at("gpu_enabled").is_boolean()) {
+      throw std::runtime_error(
+          "desired-state v2 " + field_name + ".gpu_enabled must be a boolean");
+    }
+  }
+  if (resources.contains("share_mode")) {
+    if (!resources.at("share_mode").is_string()) {
+      throw std::runtime_error("desired-state v2 " + field_name + ".share_mode must be a string");
+    }
+    const std::string share_mode = resources.at("share_mode").get<std::string>();
+    if (share_mode != "exclusive" && share_mode != "shared" && share_mode != "best-effort") {
+      throw std::runtime_error(
+          "desired-state v2 " + field_name +
+          ".share_mode must be exclusive, shared, or best-effort");
+    }
+  }
+  if (resources.contains("gpu_fraction")) {
+    if (!resources.at("gpu_fraction").is_number()) {
+      throw std::runtime_error(
+          "desired-state v2 " + field_name + ".gpu_fraction must be a number");
+    }
+    const double gpu_fraction = resources.at("gpu_fraction").get<double>();
+    if (gpu_fraction <= 0.0 || gpu_fraction > 1.0) {
+      throw std::runtime_error(
+          "desired-state v2 " + field_name + ".gpu_fraction must be in (0, 1]");
+    }
+  }
+  const std::string share_mode = resources.value("share_mode", std::string{});
+  if (share_mode == "exclusive" && resources.contains("gpu_fraction")) {
+    const double gpu_fraction = resources.at("gpu_fraction").get<double>();
+    if (std::abs(gpu_fraction - 1.0) > 1e-9) {
+      throw std::runtime_error(
+          "desired-state v2 " + field_name +
+          ".gpu_fraction must be 1.0 when share_mode=exclusive");
+    }
+  }
+  if (resources.contains("memory_cap_mb") &&
+      (!resources.at("memory_cap_mb").is_number_integer() ||
+       resources.at("memory_cap_mb").get<int>() <= 0)) {
+    throw std::runtime_error(
+        "desired-state v2 " + field_name + ".memory_cap_mb must be a positive integer");
+  }
+  if (resources.contains("priority") &&
+      (!resources.at("priority").is_number_integer() || resources.at("priority").get<int>() < 0)) {
+    throw std::runtime_error(
+        "desired-state v2 " + field_name + ".priority must be a non-negative integer");
+  }
+  if (resources.contains("preemptible") && !resources.at("preemptible").is_boolean()) {
+    throw std::runtime_error(
+        "desired-state v2 " + field_name + ".preemptible must be a boolean");
+  }
+}
+
+void ValidateVoiceListenerModel(const nlohmann::json& model) {
+  if (!model.is_object()) {
+    throw std::runtime_error("desired-state v2 features.voice_listener.model must be an object");
+  }
+  if (!model.contains("source") || !model.at("source").is_object()) {
+    throw std::runtime_error("desired-state v2 features.voice_listener.model.source must be an object");
+  }
+  const auto& source = model.at("source");
+  if (source.value("type", std::string{}) != "library") {
+    throw std::runtime_error("desired-state v2 features.voice_listener.model.source.type must be library");
+  }
+  if (!IsAbsolutePath(source.value("path", std::string{}))) {
+    throw std::runtime_error("desired-state v2 features.voice_listener.model.source.path must be an absolute path");
+  }
+  if (source.contains("paths")) {
+    if (!source.at("paths").is_array()) {
+      throw std::runtime_error("desired-state v2 features.voice_listener.model.source.paths must be an array");
+    }
+    for (const auto& path : source.at("paths")) {
+      if (!path.is_string() || !IsAbsolutePath(path.get<std::string>())) {
+        throw std::runtime_error("desired-state v2 features.voice_listener.model.source.paths items must be absolute paths");
+      }
+    }
+  }
+  if (source.contains("node") && !source.at("node").is_string()) {
+    throw std::runtime_error("desired-state v2 features.voice_listener.model.source.node must be a string");
+  }
+  if (!IsAbsolutePath(model.value("mount_path", std::string{}))) {
+    throw std::runtime_error("desired-state v2 features.voice_listener.model.mount_path must be an absolute path");
+  }
+  if (model.contains("env") && !model.at("env").is_string()) {
+    throw std::runtime_error("desired-state v2 features.voice_listener.model.env must be a string");
+  }
+  const std::string env_name = model.value("env", std::string("WHISPER_MODEL_PATH"));
+  if (!env_name.empty() && !IsValidEnvName(env_name)) {
+    throw std::runtime_error("desired-state v2 features.voice_listener.model.env must be a valid environment variable name");
+  }
+  if (model.contains("required") && !model.at("required").is_boolean()) {
+    throw std::runtime_error("desired-state v2 features.voice_listener.model.required must be a boolean");
+  }
+}
+
 }  // namespace
 
 void DesiredStateV2Validator::ValidateOrThrow(const nlohmann::json& value) {
@@ -85,6 +192,7 @@ void DesiredStateV2Validator::Validate() {
   ValidateLegacyPlacementCompatibility();
   ValidateInfer();
   ValidateWorker();
+  ValidateVoiceModuleResources();
   ValidateApp();
   ValidateSkills();
   ValidateBrowsing();
@@ -247,6 +355,39 @@ void DesiredStateV2Validator::ValidateFeatures() const {
   RequireObject("features");
   const auto& features = value_.at("features");
   const std::string plane_mode = value_.value("plane_mode", std::string("llm"));
+  if (features.contains("voice_listener")) {
+    if (!features.at("voice_listener").is_object()) {
+      throw std::runtime_error("desired-state v2 features.voice_listener must be an object");
+    }
+    const auto& voice_listener = features.at("voice_listener");
+    if (voice_listener.contains("enabled") && !voice_listener.at("enabled").is_boolean()) {
+      throw std::runtime_error("desired-state v2 features.voice_listener.enabled must be a boolean");
+    }
+    const bool enabled = voice_listener.value("enabled", false);
+    if (voice_listener.contains("wake_phrase") && !voice_listener.at("wake_phrase").is_string()) {
+      throw std::runtime_error("desired-state v2 features.voice_listener.wake_phrase must be a string");
+    }
+    if (voice_listener.contains("language") && !voice_listener.at("language").is_string()) {
+      throw std::runtime_error("desired-state v2 features.voice_listener.language must be a string");
+    }
+    if (voice_listener.contains("image") && !voice_listener.at("image").is_string()) {
+      throw std::runtime_error("desired-state v2 features.voice_listener.image must be a string");
+    }
+    if (enabled) {
+      if (plane_mode != "llm") {
+        throw std::runtime_error("desired-state v2 features.voice_listener requires plane_mode=llm");
+      }
+      if (voice_listener.value("wake_phrase", std::string("Hey Jex")).empty()) {
+        throw std::runtime_error("desired-state v2 features.voice_listener.wake_phrase must be non-empty");
+      }
+      if (!voice_listener.contains("model")) {
+        throw std::runtime_error("desired-state v2 features.voice_listener requires model when enabled");
+      }
+      ValidateVoiceListenerModel(voice_listener.at("model"));
+    } else if (voice_listener.contains("model")) {
+      ValidateVoiceListenerModel(voice_listener.at("model"));
+    }
+  }
   if (features.contains("turboquant")) {
     if (!features.at("turboquant").is_object()) {
       throw std::runtime_error("desired-state v2 features.turboquant must be an object");
@@ -596,21 +737,32 @@ void DesiredStateV2Validator::ValidateWorker() const {
 }
 
 void DesiredStateV2Validator::ValidateWorkerResources() const {
-  if (!value_.contains("resources") || !value_.at("resources").is_object()) {
+  if (!value_.contains("resources")) {
     return;
+  }
+  if (!value_.at("resources").is_object()) {
+    throw std::runtime_error("desired-state v2 resources must be an object");
   }
   const auto& resources = value_.at("resources");
-  if (!resources.contains("worker") || !resources.at("worker").is_object()) {
+  if (!resources.contains("worker")) {
     return;
   }
-  const auto& worker_resources = resources.at("worker");
-  const std::string share_mode = worker_resources.value("share_mode", std::string{});
-  if (share_mode == "exclusive" && worker_resources.contains("gpu_fraction")) {
-    const double gpu_fraction = worker_resources.at("gpu_fraction").get<double>();
-    if (std::abs(gpu_fraction - 1.0) > 1e-9) {
-      throw std::runtime_error(
-          "desired-state v2 resources.worker.gpu_fraction must be 1.0 when share_mode=exclusive");
-    }
+  ValidateGpuResourceBlock(resources.at("worker"), "resources.worker", false);
+}
+
+void DesiredStateV2Validator::ValidateVoiceModuleResources() const {
+  if (!value_.contains("resources")) {
+    return;
+  }
+  if (!value_.at("resources").is_object()) {
+    throw std::runtime_error("desired-state v2 resources must be an object");
+  }
+  const auto& resources = value_.at("resources");
+  if (resources.contains("voice_module")) {
+    ValidateGpuResourceBlock(resources.at("voice_module"), "resources.voice_module", true);
+  }
+  if (resources.contains("voice_listener")) {
+    ValidateGpuResourceBlock(resources.at("voice_listener"), "resources.voice_listener", true);
   }
 }
 

@@ -274,9 +274,11 @@ ComposeService BuildComposeService(
                               "http://127.0.0.1:$${NAIM_INFERENCE_PORT:-8000}/health"
                             : (instance.role == InstanceRole::App
                                    ? "CMD-SHELL curl -fsS http://127.0.0.1:$${PORT:-8080}/health >/dev/null"
-                                   : (instance.role == InstanceRole::Skills
-                                          ? "CMD-SHELL test -f /tmp/naim-ready"
-                                          : "CMD-SHELL test -f /tmp/naim-ready"));
+                                   : (instance.role == InstanceRole::VoiceModule
+                                          ? "CMD-SHELL curl -fsS http://127.0.0.1:$${NAIM_VOICE_MODULE_PORT:-18140}/health >/dev/null"
+                                          : (instance.role == InstanceRole::Skills
+                                                 ? "CMD-SHELL test -f /tmp/naim-ready"
+                                                 : "CMD-SHELL test -f /tmp/naim-ready")));
   if (instance.role == InstanceRole::Infer) {
     const int infer_api_port = InferApiPort(state, instance);
     const int infer_gateway_port = InferGatewayPort(state, instance);
@@ -376,6 +378,8 @@ std::string ToString(InstanceRole role) {
       return "webgateway";
     case InstanceRole::Interaction:
       return "interaction";
+    case InstanceRole::VoiceModule:
+      return "voice-module";
   }
   return "unknown";
 }
@@ -396,6 +400,8 @@ std::string ToString(DiskKind kind) {
       return "webgateway-private";
     case DiskKind::InteractionPrivate:
       return "interaction-private";
+    case DiskKind::VoiceModulePrivate:
+      return "voice-module-private";
   }
   return "unknown";
 }

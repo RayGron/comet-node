@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include "naim/runtime/infer_runtime_config.h"
@@ -24,6 +27,7 @@ constexpr int kDefaultAppPrivateDiskSizeGb = 8;
 constexpr int kDefaultSkillsPrivateDiskSizeGb = 1;
 constexpr int kDefaultWebGatewayPrivateDiskSizeGb = 1;
 constexpr int kDefaultInteractionPrivateDiskSizeGb = 1;
+constexpr int kDefaultVoiceModulePrivateDiskSizeGb = 1;
 constexpr int kSkillsContainerPort = 18120;
 constexpr int kSkillsPublishedPortBase = 24000;
 constexpr int kSkillsPublishedPortSpan = 10000;
@@ -33,6 +37,11 @@ constexpr int kWebGatewayPublishedPortSpan = 10000;
 constexpr int kInteractionContainerPort = 18110;
 constexpr int kInteractionPublishedPortBase = 44000;
 constexpr int kInteractionPublishedPortSpan = 10000;
+constexpr int kVoiceModuleContainerPort = 18140;
+constexpr int kVoiceModulePublishedPortBase = 54000;
+constexpr int kVoiceModulePublishedPortSpan = 10000;
+constexpr double kDefaultVoiceModuleGpuFraction = 0.2;
+constexpr int kDefaultVoiceModuleGpuPriority = 50;
 constexpr std::string_view kTurboQuantDefaultCacheTypeK = "turbo4";
 constexpr std::string_view kTurboQuantDefaultCacheTypeV = "turbo4";
 
@@ -54,6 +63,47 @@ std::string PlacementExecutionNodeName(const nlohmann::json& placement) {
     return execution_node;
   }
   return placement.value("primary_node", std::string{});
+}
+
+struct VoiceGpuHost {
+  std::string node_name;
+  std::string gpu_device;
+  double allocated_fraction = 0.0;
+  int allocated_memory_cap_mb = 0;
+  std::string first_worker_name;
+};
+
+std::optional<VoiceGpuHost> SelectVoiceGpuHost(const DesiredState& state) {
+  std::map<std::pair<std::string, std::string>, VoiceGpuHost> hosts;
+  for (const auto& instance : state.instances) {
+    if (instance.role != InstanceRole::Worker || !instance.gpu_device.has_value() ||
+        instance.gpu_device->empty()) {
+      continue;
+    }
+    auto& host = hosts[{instance.node_name, *instance.gpu_device}];
+    if (host.node_name.empty()) {
+      host.node_name = instance.node_name;
+      host.gpu_device = *instance.gpu_device;
+      host.first_worker_name = instance.name;
+    }
+    host.allocated_fraction += instance.gpu_fraction;
+    host.allocated_memory_cap_mb += instance.memory_cap_mb.value_or(0);
+  }
+
+  std::optional<VoiceGpuHost> best;
+  for (const auto& [_, host] : hosts) {
+    if (!best.has_value() ||
+        host.allocated_fraction < best->allocated_fraction ||
+        (host.allocated_fraction == best->allocated_fraction &&
+         host.allocated_memory_cap_mb < best->allocated_memory_cap_mb) ||
+        (host.allocated_fraction == best->allocated_fraction &&
+         host.allocated_memory_cap_mb == best->allocated_memory_cap_mb &&
+         std::tie(host.node_name, host.gpu_device, host.first_worker_name) <
+             std::tie(best->node_name, best->gpu_device, best->first_worker_name))) {
+      best = host;
+    }
+  }
+  return best;
 }
 
 }  // namespace
@@ -79,6 +129,14 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
           resources_json_.contains("worker") && resources_json_.at("worker").is_object()
               ? resources_json_.at("worker")
               : nlohmann::json::object()),
+      voice_module_resources_json_(
+          resources_json_.contains("voice_module") &&
+                  resources_json_.at("voice_module").is_object()
+              ? resources_json_.at("voice_module")
+              : (resources_json_.contains("voice_listener") &&
+                         resources_json_.at("voice_listener").is_object()
+                     ? resources_json_.at("voice_listener")
+                     : nlohmann::json::object())),
       app_json_(nlohmann::json::object()),
       skills_json_(
           value.contains("skills") && value.at("skills").is_object() ? value.at("skills")
@@ -135,6 +193,7 @@ DesiredState DesiredStateV2Renderer::RenderState() {
   RenderSkillsInstance();
   RenderWebGatewayInstance();
   RenderInteractionInstance();
+  RenderVoiceModuleInstance();
   return state_;
 }
 
@@ -291,6 +350,43 @@ void DesiredStateV2Renderer::RenderFeatures() {
           "memory_priority",
           context_compression.memory_priority);
       state_.context_compression = std::move(context_compression);
+    }
+  }
+  if (features_json_.contains("voice_listener") &&
+      features_json_.at("voice_listener").is_object()) {
+    const auto& voice_json = features_json_.at("voice_listener");
+    if (voice_json.value("enabled", false)) {
+      VoiceListenerFeatureSpec voice_listener;
+      voice_listener.enabled = true;
+      voice_listener.wake_phrase = voice_json.value("wake_phrase", voice_listener.wake_phrase);
+      voice_listener.language = voice_json.value("language", voice_listener.language);
+      if (voice_json.contains("image") && voice_json.at("image").is_string()) {
+        voice_listener.image = voice_json.at("image").get<std::string>();
+      }
+      if (voice_json.contains("model") && voice_json.at("model").is_object()) {
+        const auto& model_json = voice_json.at("model");
+        const nlohmann::json source_json =
+            model_json.contains("source") && model_json.at("source").is_object()
+                ? model_json.at("source")
+                : nlohmann::json::object();
+        voice_listener.model.name = model_json.value("name", std::string("whisper"));
+        voice_listener.model.source_path = source_json.value("path", std::string{});
+        voice_listener.model.source_node_name = source_json.value("node", std::string{});
+        if (source_json.contains("paths") && source_json.at("paths").is_array()) {
+          voice_listener.model.source_paths =
+              source_json.at("paths").get<std::vector<std::string>>();
+        }
+        if (voice_listener.model.source_paths.empty() &&
+            !voice_listener.model.source_path.empty()) {
+          voice_listener.model.source_paths.push_back(voice_listener.model.source_path);
+        }
+        voice_listener.model.mount_path =
+            model_json.value("mount_path", std::string("/models/whisper/model.bin"));
+        voice_listener.model.env_var =
+            model_json.value("env", std::string("WHISPER_MODEL_PATH"));
+        voice_listener.model.required = model_json.value("required", true);
+      }
+      state_.voice_listener = std::move(voice_listener);
     }
   }
 }
@@ -801,8 +897,16 @@ void DesiredStateV2Renderer::RenderAppInstance() {
     if (!infer_names_.empty()) {
       app.depends_on.push_back(infer_names_.front());
     }
+    if (state_.voice_listener.has_value() && state_.voice_listener->enabled) {
+      app.depends_on.push_back(BuildVoiceModuleInstanceName());
+      app.environment["NAIM_VOICE_LISTENER_BASE"] =
+          "http://" + BuildVoiceModuleInstanceName() + ":" +
+          std::to_string(kVoiceModuleContainerPort) + "/v1";
+      app.environment["NAIM_VOICE_LISTENER_WAKE_PHRASE"] = state_.voice_listener->wake_phrase;
+    }
     if (app_entry.contains("env") && app_entry.at("env").is_object()) {
-      app.environment = app_entry.at("env").get<std::map<std::string, std::string>>();
+      const auto app_env = app_entry.at("env").get<std::map<std::string, std::string>>();
+      app.environment.insert(app_env.begin(), app_env.end());
     }
     app.environment["NAIM_APP_NAME"] = app_name;
     app.environment["NAIM_APP_PRIMARY"] = primary ? "true" : "false";
@@ -1039,6 +1143,131 @@ void DesiredStateV2Renderer::RenderWebGatewayInstance() {
   state_.disks.push_back(std::move(browsing_private_disk));
 }
 
+void DesiredStateV2Renderer::RenderVoiceModuleInstance() {
+  if (!state_.voice_listener.has_value() || !state_.voice_listener->enabled) {
+    return;
+  }
+
+  const auto& config = *state_.voice_listener;
+  const bool gpu_enabled = VoiceModuleGpuEnabled();
+  const auto voice_gpu_host = gpu_enabled ? SelectVoiceGpuHost(state_) : std::nullopt;
+  if (gpu_enabled && !voice_gpu_host.has_value()) {
+    throw std::runtime_error(
+        "desired-state v2 resources.voice_module requires at least one worker with gpu_device");
+  }
+  InstanceSpec voice;
+  voice.name = BuildVoiceModuleInstanceName();
+  voice.role = InstanceRole::VoiceModule;
+  voice.plane_name = state_.plane_name;
+  voice.node_name = voice_gpu_host.has_value() ? voice_gpu_host->node_name : ResolveAppNodeName();
+  voice.image = config.image.has_value() && !config.image->empty()
+                    ? *config.image
+                    : std::string("naim/voice-module:dev");
+  const nlohmann::json voice_json =
+      features_json_.contains("voice_listener") &&
+              features_json_.at("voice_listener").is_object()
+          ? features_json_.at("voice_listener")
+          : nlohmann::json::object();
+  voice.command = BuildCommandFromStartSpec(
+      voice_json.value("start", nlohmann::json::object()),
+      "/runtime/bin/naim-voice-moduled");
+  voice.private_disk_name = voice.name + "-private";
+  voice.shared_disk_name =
+      InstanceNeedsSharedDiskMount(voice.role) ? state_.plane_shared_disk_name : "";
+  voice.private_disk_size_gb =
+      ExtractPrivateDiskSizeGb(voice_json, kDefaultVoiceModulePrivateDiskSizeGb, "storage");
+  if (voice_gpu_host.has_value()) {
+    const auto& resources = VoiceModuleResources();
+    voice.gpu_device = voice_gpu_host->gpu_device;
+    voice.placement_mode = PlacementMode::Manual;
+    voice.share_mode =
+        ParseGpuShareMode(resources.value("share_mode", std::string("shared")));
+    voice.gpu_fraction =
+        resources.value("gpu_fraction", kDefaultVoiceModuleGpuFraction);
+    voice.priority = resources.value("priority", kDefaultVoiceModuleGpuPriority);
+    voice.preemptible =
+        resources.value("preemptible", voice.share_mode == GpuShareMode::BestEffort);
+    voice.memory_cap_mb = resources.contains("memory_cap_mb")
+                              ? std::optional<int>(resources.at("memory_cap_mb").get<int>())
+                              : std::nullopt;
+  }
+  voice.environment = {
+      {"NAIM_PLANE_NAME", state_.plane_name},
+      {"NAIM_INSTANCE_NAME", voice.name},
+      {"NAIM_INSTANCE_ROLE", "voice-module"},
+      {"NAIM_NODE_NAME", voice.node_name},
+      {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
+      {"NAIM_VOICE_MODULE_PORT", std::to_string(kVoiceModuleContainerPort)},
+      {"NAIM_VOICE_LISTENER_WAKE_PHRASE", config.wake_phrase},
+      {"VOICE_LISTENER_WAKE_PHRASE", config.wake_phrase},
+      {"VOICE_ASR_LANGUAGE", config.language},
+      {"HOST", "0.0.0.0"},
+      {"PORT", std::to_string(kVoiceModuleContainerPort)},
+      {"NAIM_CONTROLLER_URL", "http://controller.internal:18080"},
+      {"NAIM_CONTROL_ROOT", state_.control_root},
+  };
+  if (voice_json.contains("env") && voice_json.at("env").is_object()) {
+    const auto custom_env = voice_json.at("env").get<std::map<std::string, std::string>>();
+    for (const auto& [key, value] : custom_env) {
+      voice.environment[key] = value;
+    }
+  }
+  AppModelMountSpec model_mount = config.model;
+  if (model_mount.name.empty()) {
+    model_mount.name = "whisper";
+  }
+  if (model_mount.mount_path.empty()) {
+    model_mount.mount_path = "/models/whisper/model.bin";
+  }
+  if (model_mount.env_var.empty()) {
+    model_mount.env_var = "WHISPER_MODEL_PATH";
+  }
+  if (model_mount.source_paths.empty() && !model_mount.source_path.empty()) {
+    model_mount.source_paths.push_back(model_mount.source_path);
+  }
+  model_mount.host_path = BuildAppModelHostPath(
+      voice.name,
+      model_mount.name,
+      model_mount.mount_path,
+      model_mount.source_path);
+  voice.environment[model_mount.env_var] = model_mount.mount_path;
+  voice.app_model_mounts.push_back(std::move(model_mount));
+  voice.labels = {
+      {"naim.plane", state_.plane_name},
+      {"naim.role", "voice-module"},
+      {"naim.node", voice.node_name},
+  };
+  if (voice_json.contains("publish") && voice_json.at("publish").is_array()) {
+    for (const auto& port_json : voice_json.at("publish")) {
+      voice.published_ports.push_back(PublishedPort{
+          port_json.value("host_ip", std::string("127.0.0.1")),
+          port_json.value("host_port", 0),
+          port_json.value("container_port", 0),
+      });
+    }
+  }
+  if (voice.published_ports.empty()) {
+    voice.published_ports.push_back(PublishedPort{
+        "127.0.0.1",
+        BuildVoiceModuleHostPort(),
+        kVoiceModuleContainerPort,
+    });
+  }
+  state_.instances.push_back(voice);
+
+  DiskSpec voice_private_disk;
+  voice_private_disk.name = voice.private_disk_name;
+  voice_private_disk.kind = DiskKind::VoiceModulePrivate;
+  voice_private_disk.plane_name = state_.plane_name;
+  voice_private_disk.owner_name = voice.name;
+  voice_private_disk.node_name = voice.node_name;
+  voice_private_disk.host_path = BuildInstancePrivateHostPath(voice.name);
+  voice_private_disk.container_path =
+      ExtractPrivateMountPath(voice_json, "/naim/private", "storage");
+  voice_private_disk.size_gb = voice.private_disk_size_gb;
+  state_.disks.push_back(std::move(voice_private_disk));
+}
+
 void DesiredStateV2Renderer::RenderInteractionInstance() {
   if (state_.plane_mode != PlaneMode::Llm) {
     return;
@@ -1117,6 +1346,26 @@ int DesiredStateV2Renderer::WorkerCount() const {
 
 int DesiredStateV2Renderer::ExpectedWorkers() const {
   return std::max(1, WorkerCount());
+}
+
+const nlohmann::json& DesiredStateV2Renderer::VoiceModuleResources() const {
+  return voice_module_resources_json_;
+}
+
+bool DesiredStateV2Renderer::VoiceModuleGpuEnabled() const {
+  const auto& resources = VoiceModuleResources();
+  if (resources.empty()) {
+    return false;
+  }
+  if (resources.contains("gpu_enabled")) {
+    return resources.value("gpu_enabled", false);
+  }
+  if (resources.contains("enabled")) {
+    return resources.value("enabled", false);
+  }
+  return resources.contains("share_mode") || resources.contains("gpu_fraction") ||
+      resources.contains("memory_cap_mb") || resources.contains("priority") ||
+      resources.contains("preemptible");
 }
 
 bool DesiredStateV2Renderer::HasExternalAppHost() const {
@@ -1359,6 +1608,10 @@ std::string DesiredStateV2Renderer::BuildInteractionInstanceName() const {
   return "interaction-" + state_.plane_name;
 }
 
+std::string DesiredStateV2Renderer::BuildVoiceModuleInstanceName() const {
+  return "voice-module-" + state_.plane_name;
+}
+
 std::string DesiredStateV2Renderer::BuildPlaneSharedHostPath() const {
   return "/var/lib/naim/disks/planes/" + state_.plane_name + "/shared";
 }
@@ -1472,6 +1725,13 @@ int DesiredStateV2Renderer::BuildInteractionHostPort() const {
       StablePortHash(state_.plane_name + ":" + BuildInteractionInstanceName()) %
       kInteractionPublishedPortSpan;
   return kInteractionPublishedPortBase + static_cast<int>(offset);
+}
+
+int DesiredStateV2Renderer::BuildVoiceModuleHostPort() const {
+  const uint32_t offset =
+      StablePortHash(state_.plane_name + ":" + BuildVoiceModuleInstanceName()) %
+      kVoiceModulePublishedPortSpan;
+  return kVoiceModulePublishedPortBase + static_cast<int>(offset);
 }
 
 std::string DesiredStateV2Renderer::DefaultInferRuntimeBackend() const {

@@ -19,6 +19,9 @@ const TURBOQUANT_CACHE_TYPES = ["f16", "turbo3", "turbo4"];
 const CONTEXT_COMPRESSION_DEFAULT_MODE = "auto";
 const CONTEXT_COMPRESSION_DEFAULT_TARGET = "dialog_and_knowledge";
 const CONTEXT_COMPRESSION_DEFAULT_MEMORY_PRIORITY = "balanced";
+const VOICE_LISTENER_DEFAULT_WAKE_PHRASE = "Hey Jex";
+const VOICE_LISTENER_DEFAULT_LANGUAGE = "auto";
+const VOICE_LISTENER_DEFAULT_MOUNT_PATH = "/models/whisper/model.bin";
 const LT_CYPHER_PLANE_NAME = "lt-cypher-ai";
 const LT_CYPHER_HARBOR_IMAGE_PREFIX = "chainzano.com/localtrade/lt-cypher-ai:";
 const LT_CYPHER_DEFAULT_IMAGE = `${LT_CYPHER_HARBOR_IMAGE_PREFIX}<git-sha>`;
@@ -83,6 +86,10 @@ const FIELD_INFO = {
   contextCompressionMode: "Context Compression mode. V1 supports auto only.",
   contextCompressionTarget: "Prompt segments compressed by Context Compression. V1 supports dialog and knowledge together only.",
   contextCompressionMemoryPriority: "Budget policy used by Context Compression. V1 supports balanced only.",
+  voiceListenerEnabled: "Enable a plane-owned Voice Listener service backed by whisper.cpp ASR.",
+  voiceListenerModel: "Whisper model artifact used by the Voice Listener. Only whisper.cpp models are selectable here.",
+  voiceListenerWakePhrase: "Phrase that activates the listener before a transcript is submitted to chat.",
+  voiceListenerLanguage: "Language hint for whisper.cpp. Use auto unless a plane must listen in one fixed language.",
   browserSessionEnabled: "Allow approval-gated browser session APIs for this plane. Search and sanitized fetch stay enabled when Isolated Browsing is on.",
   turboquantEnabled: "Enable KV-cache quantization for llama.cpp + llama_rpc planes. This requires a compatible turboquant-capable llama.cpp build.",
   turboquantCacheTypeK: "KV cache type used for K cache pages. Defaults to turbo4 when TurboQuant is enabled.",
@@ -323,6 +330,20 @@ function inferModelQuantization(item) {
     }
   }
   return explicit;
+}
+
+function isWhisperModelLibraryItem(item) {
+  const format = inferModelFormat(item);
+  if (format === "whisper.cpp" || format === "whisper") {
+    return true;
+  }
+  const text = normalizeSearchText([item?.name, item?.model_id, item?.path, ...modelLibraryPaths(item)].join(" "));
+  return text.includes("whisper") || /(^|\/)ggml-[^/]+\.bin$/.test(text);
+}
+
+function whisperModelMountPath(item) {
+  const name = String(item?.name || item?.path?.split("/").pop() || "model.bin").trim() || "model.bin";
+  return `/models/whisper/${name}`;
 }
 
 function findLtCypherModelItem(items) {
@@ -726,6 +747,14 @@ export function buildNewPlaneFormState() {
     contextCompressionMode: CONTEXT_COMPRESSION_DEFAULT_MODE,
     contextCompressionTarget: CONTEXT_COMPRESSION_DEFAULT_TARGET,
     contextCompressionMemoryPriority: CONTEXT_COMPRESSION_DEFAULT_MEMORY_PRIORITY,
+    voiceListenerEnabled: false,
+    voiceListenerWakePhrase: VOICE_LISTENER_DEFAULT_WAKE_PHRASE,
+    voiceListenerLanguage: VOICE_LISTENER_DEFAULT_LANGUAGE,
+    voiceListenerModelPath: "",
+    voiceListenerModelRef: "",
+    voiceListenerModelNodeName: "",
+    voiceListenerModelPaths: [],
+    voiceListenerModelMountPath: VOICE_LISTENER_DEFAULT_MOUNT_PATH,
     planeMode: "llm",
     protectedPlane: false,
     factorySkillIds: [],
@@ -862,6 +891,9 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
   const appHost = value?.placement?.app_host || {};
   const turboquant = value?.features?.turboquant || {};
   const contextCompression = value?.features?.context_compression || {};
+  const voiceListener = value?.features?.voice_listener || {};
+  const voiceListenerModel = voiceListener?.model || {};
+  const voiceListenerModelSource = voiceListenerModel?.source || {};
   const planeName = value?.plane_name || defaults.planeName;
   const servedModelName = value?.model?.served_model_name || deriveServedModelName(planeName);
   const serverName = network.server_name || deriveServerName(planeName);
@@ -896,6 +928,19 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     contextCompressionMemoryPriority:
       contextCompression?.memory_priority ||
       CONTEXT_COMPRESSION_DEFAULT_MEMORY_PRIORITY,
+    voiceListenerEnabled: Boolean(voiceListener?.enabled),
+    voiceListenerWakePhrase:
+      voiceListener?.wake_phrase || VOICE_LISTENER_DEFAULT_WAKE_PHRASE,
+    voiceListenerLanguage:
+      voiceListener?.language || VOICE_LISTENER_DEFAULT_LANGUAGE,
+    voiceListenerModelPath: voiceListenerModelSource?.path || "",
+    voiceListenerModelRef: voiceListenerModelSource?.ref || voiceListenerModel?.name || "",
+    voiceListenerModelNodeName: voiceListenerModelSource?.node || "",
+    voiceListenerModelPaths: Array.isArray(voiceListenerModelSource?.paths)
+      ? voiceListenerModelSource.paths
+      : [],
+    voiceListenerModelMountPath:
+      voiceListenerModel?.mount_path || VOICE_LISTENER_DEFAULT_MOUNT_PATH,
     planeMode: value?.plane_mode || defaults.planeMode,
     protectedPlane: Boolean(value?.protected),
     factorySkillIds: Array.isArray(value?.skills?.factory_skill_ids)
@@ -1245,6 +1290,41 @@ export function buildDesiredStateV2FromForm(form) {
         memory_priority: CONTEXT_COMPRESSION_DEFAULT_MEMORY_PRIORITY,
       };
     }
+    if (form.voiceListenerEnabled) {
+      const source = {
+        type: "library",
+        path: String(form.voiceListenerModelPath || "").trim(),
+      };
+      if (String(form.voiceListenerModelNodeName || "").trim()) {
+        source.node = String(form.voiceListenerModelNodeName || "").trim();
+      }
+      const sourcePaths = (Array.isArray(form.voiceListenerModelPaths)
+        ? form.voiceListenerModelPaths
+        : [])
+        .map((path) => String(path || "").trim())
+        .filter(Boolean);
+      if (sourcePaths.length > 0) {
+        source.paths = sourcePaths;
+      }
+      features.voice_listener = {
+        enabled: true,
+        wake_phrase:
+          String(form.voiceListenerWakePhrase || "").trim() ||
+          VOICE_LISTENER_DEFAULT_WAKE_PHRASE,
+        language:
+          String(form.voiceListenerLanguage || "").trim() ||
+          VOICE_LISTENER_DEFAULT_LANGUAGE,
+        model: {
+          name: String(form.voiceListenerModelRef || "").trim() || "whisper",
+          source,
+          mount_path:
+            String(form.voiceListenerModelMountPath || "").trim() ||
+            VOICE_LISTENER_DEFAULT_MOUNT_PATH,
+          env: "WHISPER_MODEL_PATH",
+          required: true,
+        },
+      };
+    }
     if (Object.keys(features).length > 0) {
       desiredState.features = features;
     }
@@ -1460,6 +1540,14 @@ export function validatePlaneV2Form(form) {
     }
   }
   if (form?.planeMode === "llm") {
+    if (form?.voiceListenerEnabled) {
+      if (!String(form?.voiceListenerWakePhrase || "").trim()) {
+        errors.push("Voice Listener Wake Phrase is required.");
+      }
+      if (!String(form?.voiceListenerModelPath || "").trim()) {
+        errors.push("Voice Listener requires a Whisper model.");
+      }
+    }
     if (Number(form?.inferReplicas || 0) <= 0) {
       errors.push("Infer replicas must be a positive integer for llm planes.");
     }
@@ -2165,6 +2253,7 @@ export function PlaneV2FormBuilder({
           skillsEnabled: nextPlaneMode === "llm" ? current.skillsEnabled : false,
           browsingEnabled: nextPlaneMode === "llm" ? current.browsingEnabled : false,
           knowledgeEnabled: nextPlaneMode === "llm" ? current.knowledgeEnabled : false,
+          voiceListenerEnabled: nextPlaneMode === "llm" ? current.voiceListenerEnabled : false,
           browserSessionEnabled:
             nextPlaneMode === "llm" ? current.browserSessionEnabled : false,
         });
@@ -2287,6 +2376,17 @@ export function PlaneV2FormBuilder({
           : fallbackName.replace(/\s+/g, "-").toLowerCase(),
       };
     });
+  }
+
+  function selectVoiceListenerModel(item) {
+    updatePlaneDialogForm(setDialog, (current) => ({
+      ...current,
+      voiceListenerModelPath: item?.path || "",
+      voiceListenerModelRef: item?.model_id || item?.name || item?.path || "whisper",
+      voiceListenerModelNodeName: item?.node_name || "",
+      voiceListenerModelPaths: Array.isArray(item?.paths) ? item.paths : [],
+      voiceListenerModelMountPath: whisperModelMountPath(item),
+    }));
   }
 
   function updateTopologyNodes(update) {
@@ -2424,6 +2524,8 @@ export function PlaneV2FormBuilder({
   );
   const factoryGroupTree = buildSkillsFactoryGroupTree(skillsFactoryItems, skillsFactoryGroups);
   const factoryTreePaths = collectSkillsFactoryTreePaths(factoryGroupTree);
+  const whisperModelLibraryItems = (Array.isArray(modelLibraryItems) ? modelLibraryItems : [])
+    .filter(isWhisperModelLibraryItem);
   const expandedFactoryGroupPathSet = new Set(expandedFactoryGroupPaths);
 
   function renderFactoryGroupNode(node) {
@@ -2637,6 +2739,14 @@ export function PlaneV2FormBuilder({
           disabled={form.planeMode !== "llm"}
           disabledLabel="LLM only"
           onToggle={toggleFeature("turboquantEnabled")}
+        />
+        <FeatureToggle
+          title="Voice Listener"
+          info={FIELD_INFO.voiceListenerEnabled}
+          active={form.planeMode === "llm" && form.voiceListenerEnabled}
+          disabled={form.planeMode !== "llm"}
+          disabledLabel="LLM only"
+          onToggle={toggleFeature("voiceListenerEnabled")}
         />
         <FeatureToggle
           title="App"

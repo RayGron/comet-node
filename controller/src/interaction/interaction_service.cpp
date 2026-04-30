@@ -2059,8 +2059,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const bool browsing_enabled = browsing_service.IsEnabled(*desired_state);
   const auto browsing_target = browsing_service.ResolveTarget(*desired_state);
   const bool browsing_ready =
-      browsing_enabled && running_plane && browsing_target.has_value() &&
-      probe_controller_target_ok_(browsing_target, "/health");
+      browsing_enabled && running_plane && browsing_target.has_value();
   const auto browsing_instance = std::find_if(
       desired_state->instances.begin(),
       desired_state->instances.end(),

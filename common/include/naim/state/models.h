@@ -47,7 +47,10 @@ inline bool InstanceNeedsSharedDiskMount(InstanceRole role) {
   return role == InstanceRole::Infer ||
          role == InstanceRole::Worker ||
          role == InstanceRole::App ||
-         role == InstanceRole::Interaction;
+         role == InstanceRole::Skills ||
+         role == InstanceRole::Browsing ||
+         role == InstanceRole::Interaction ||
+         role == InstanceRole::VoiceModule;
 }
 
 inline bool InstanceNeedsPrivateDisk(InstanceRole role) {

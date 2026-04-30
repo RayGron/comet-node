@@ -209,6 +209,7 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
   std::string error_code;
   std::string error_message;
   const auto response = service.ProxyPlaneBrowsingRequest(
+      resolution.db_path,
       resolution.desired_state,
       "POST",
       "/resolve",
@@ -277,6 +278,7 @@ void InteractionBrowsingService::ReviewInteractionResponse(
   std::string error_code;
   std::string error_message;
   const auto review_response = PlaneBrowsingService().ProxyPlaneBrowsingRequest(
+      resolution.db_path,
       resolution.desired_state,
       "POST",
       "/review-response",

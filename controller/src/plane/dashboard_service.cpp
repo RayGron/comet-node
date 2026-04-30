@@ -821,6 +821,7 @@ nlohmann::json DashboardService::BuildPayload(
       *view.desired_state,
       store.LoadPlaneSkillBindings(view.desired_state->plane_name, std::nullopt));
   payload["webgateway"] = PlaneBrowsingService().BuildStatusPayload(
+      db_path,
       *view.desired_state,
       selected_plane_state);
 

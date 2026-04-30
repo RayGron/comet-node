@@ -179,6 +179,30 @@ wait_for_http() {
   return 1
 }
 
+wait_for_container_http_contains() {
+  local container="$1"
+  local port="$2"
+  local expected="$3"
+  local attempts="${4:-45}"
+  for _ in $(seq 1 "${attempts}"); do
+    if docker exec \
+        -e NAIM_HEALTH_PORT="${port}" \
+        -e NAIM_HEALTH_EXPECTED="${expected}" \
+        "${container}" \
+        bash -lc '
+          exec 3<>"/dev/tcp/127.0.0.1/${NAIM_HEALTH_PORT}"
+          printf "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3
+          response="$(cat <&3)"
+          grep -F "${NAIM_HEALTH_EXPECTED}" <<<"${response}" >/dev/null
+        ' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "timed out waiting for ${container} health on port ${port}" >&2
+  return 1
+}
+
 docker compose -f "${compose_path}" pull naim-controller >/dev/null
 docker compose -f "${compose_path}" up -d --remove-orphans naim-controller >/dev/null
 wait_for_http "http://127.0.0.1:${controller_port}/health" 90
@@ -186,11 +210,11 @@ wait_for_http "http://127.0.0.1:${controller_port}/health" 90
 docker compose -f "${compose_path}" pull naim-skills-factory naim-web-ui >/dev/null
 docker compose -f "${compose_path}" up -d --remove-orphans naim-skills-factory naim-web-ui >/dev/null
 wait_for_http "http://127.0.0.1:${web_ui_port}/health" 90
-docker exec naim-skills-factory bash -lc \
-  'exec 3<>/dev/tcp/127.0.0.1/18082
-   printf "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3
-   response="$(cat <&3)"
-   grep -F "\"service\":\"naim-skills-factory\"" <<<"${response}" >/dev/null'
+wait_for_container_http_contains \
+  naim-skills-factory \
+  18082 \
+  '"service":"naim-skills-factory"' \
+  90
 
 rollout_json="$(
   docker run --rm \
@@ -353,6 +377,7 @@ managed_images = {
     ("browsing", "image"): images.get("webgateway-runtime", ""),
 }
 interaction_image = images.get("interaction-runtime", "")
+voice_module_image = images.get("voice-module", "")
 
 def is_managed_image(value: object) -> bool:
     if not isinstance(value, str):
@@ -400,6 +425,15 @@ for row in rows:
             if current != interaction_image:
                 interaction["image"] = interaction_image
                 changed = True
+    features = payload.get("features")
+    if isinstance(features, dict) and voice_module_image:
+        voice_listener = features.get("voice_listener")
+        if isinstance(voice_listener, dict) and voice_listener.get("enabled") is True:
+            current = voice_listener.get("image")
+            if current is None or is_managed_image(current):
+                if current != voice_module_image:
+                    voice_listener["image"] = voice_module_image
+                    changed = True
     if not changed:
         continue
     state_path = output_dir / f"{row['name']}.desired-state.v2.json"

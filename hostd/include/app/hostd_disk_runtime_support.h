@@ -50,9 +50,12 @@ class HostdDiskRuntimeSupport final {
       const std::optional<naim::DesiredState>& previous_state,
       const naim::NodeExecutionPlan& execution_plan) const;
 
- void RemoveRealDiskMount(
+  void RemoveRealDiskMount(
       const naim::DiskRuntimeState& runtime_state,
       const std::optional<std::string>& runtime_root) const;
+
+  static std::optional<unsigned int> ParseLoopDeviceMinor(
+      const std::string& device_path);
 
  private:
   bool IsUnderRoot(
@@ -71,6 +74,8 @@ class HostdDiskRuntimeSupport final {
   std::string NormalizeManagedPath(const std::string& path) const;
   std::string NormalizeLoopImagePath(const std::string& image_path) const;
   std::string NormalizeMountPointPath(const std::string& mount_point) const;
+  void EnsureLoopDeviceNodeExists(const std::string& device_path) const;
+  void EnsureNextLoopDeviceNodeExists() const;
   std::optional<std::string> DetectExistingLoopDevice(const std::string& image_path) const;
   std::string RequireLoopDeviceForImage(const std::string& image_path) const;
   std::string DetectFilesystemTypeForDevice(const std::string& device_path) const;

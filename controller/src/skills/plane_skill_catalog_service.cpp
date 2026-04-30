@@ -71,10 +71,8 @@ std::vector<std::string> RemoveSkillId(
 
 PlaneSkillCatalogService::PlaneSkillCatalogService(
     PlaneMutationService plane_mutation_service,
-    PlaneSkillRuntimeSyncService runtime_sync_service,
     ResolveArtifactsRootFn resolve_artifacts_root)
     : plane_mutation_service_(std::move(plane_mutation_service)),
-      runtime_sync_service_(std::move(runtime_sync_service)),
       resolve_artifacts_root_(std::move(resolve_artifacts_root)) {}
 
 std::string PlaneSkillCatalogService::GenerateSkillId() {
@@ -262,7 +260,6 @@ nlohmann::json PlaneSkillCatalogService::CreateSkill(
         result.output.empty() ? "failed to persist plane desired state" : result.output);
   }
 
-  (void)runtime_sync_service_.SyncPlane(db_path, next_state);
   return BuildSkillPayload(db_path, plane_name, input.id);
 }
 
@@ -346,7 +343,6 @@ nlohmann::json PlaneSkillCatalogService::UpdateSkill(
         result.output.empty() ? "failed to persist plane desired state" : result.output);
   }
 
-  (void)runtime_sync_service_.SyncPlane(db_path, next_state);
   return BuildSkillPayload(db_path, plane_name, skill_id);
 }
 
@@ -387,7 +383,6 @@ nlohmann::json PlaneSkillCatalogService::DeleteSkill(
         result.output.empty() ? "failed to persist plane desired state" : result.output);
   }
 
-  (void)runtime_sync_service_.SyncPlane(db_path, next_state);
   return json{
       {"status", "deleted"},
       {"plane_name", plane_name},

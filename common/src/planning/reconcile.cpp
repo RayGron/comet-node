@@ -78,6 +78,21 @@ std::string PublishedPortsSignature(const std::vector<PublishedPort>& ports) {
   return JoinStrings(entries, ";");
 }
 
+std::string AppModelMountsSignature(const std::vector<AppModelMountSpec>& mounts) {
+  std::vector<std::string> entries;
+  entries.reserve(mounts.size());
+  for (const auto& mount : mounts) {
+    std::vector<std::string> source_paths = mount.source_paths;
+    std::sort(source_paths.begin(), source_paths.end());
+    entries.push_back(
+        mount.name + "|" + mount.source_path + "|" + mount.source_node_name + "|" +
+        JoinStrings(source_paths, ",") + "|" + mount.host_path + "|" + mount.mount_path + "|" +
+        mount.env_var + "|" + std::to_string(mount.required ? 1 : 0));
+  }
+  std::sort(entries.begin(), entries.end());
+  return JoinStrings(entries, ";");
+}
+
 std::string InstanceSignature(const InstanceSpec& instance) {
   std::vector<std::string> dependencies = instance.depends_on;
   std::sort(dependencies.begin(), dependencies.end());
@@ -92,6 +107,7 @@ std::string InstanceSignature(const InstanceSpec& instance) {
          std::to_string(instance.gpu_fraction) + "|" +
          std::to_string(instance.private_disk_size_gb) + "|" +
          PublishedPortsSignature(instance.published_ports) + "|" +
+         AppModelMountsSignature(instance.app_model_mounts) + "|" +
          JoinStrings(dependencies, ",") + "|" + MapSignature(instance.environment) + "|" +
          MapSignature(instance.labels);
 }

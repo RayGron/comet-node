@@ -2,7 +2,6 @@ build/
 build-turboquant/
 dist/
 var/
-vcpkg_installed/
 .tools/
 .DS_Store
 

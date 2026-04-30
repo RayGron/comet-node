@@ -2,8 +2,6 @@
 # Copyright (C) 2021-2026 QuasarApp (MIT).
 # Copyright (C) 2026-2026 RayGron (lGPLv3).
 #
-
-
 # This module adds support of the ccache.
 # If you include this cmake file in the main cmakList file then your project will be use the ccace on to the compilator
 if(DEFINED CCACHE_SUPPORT)
@@ -49,4 +47,3 @@ if(CCACHE_PROGRAM)
 
     endif()
 endif()
-

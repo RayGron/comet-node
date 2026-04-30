@@ -1261,11 +1261,11 @@ int main() {
       Expect(service_it->healthcheck == "CMD-SHELL test -f /tmp/naim-ready",
              "llm-with-skills: compose healthcheck should use readiness file");
       Expect(
-          std::none_of(
+          std::any_of(
               service_it->volumes.begin(),
               service_it->volumes.end(),
               [](const naim::ComposeVolume& volume) { return volume.target == "/naim/shared"; }),
-          "llm-with-skills: skills service should not mount shared disk by default");
+          "llm-with-skills: skills service should mount shared disk by default");
       std::cout << "ok: llm-with-skills" << '\n';
     }
 
@@ -1378,11 +1378,11 @@ int main() {
               "seccomp=unconfined") != service_it->security_opts.end(),
           "llm-with-browsing: compose service should relax seccomp for CEF");
       Expect(
-          std::none_of(
+          std::any_of(
               service_it->volumes.begin(),
               service_it->volumes.end(),
               [](const naim::ComposeVolume& volume) { return volume.target == "/naim/shared"; }),
-          "llm-with-browsing: browsing service should not mount shared disk by default");
+          "llm-with-browsing: browsing service should mount shared disk by default");
       std::cout << "ok: llm-with-browsing" << '\n';
     }
 
@@ -1985,6 +1985,8 @@ int main() {
       const auto voice = FindInstance(state, "voice-module-voice-listener-plane");
       Expect(voice.role == naim::InstanceRole::VoiceModule,
              "voice-listener-plane: voice module role mismatch");
+      Expect(voice.shared_disk_name == state.plane_shared_disk_name,
+             "voice-listener-plane: voice module should mount plane shared disk");
       Expect(voice.environment.at("NAIM_VOICE_LISTENER_WAKE_PHRASE") == "Hey Jex",
              "voice-listener-plane: wake phrase env mismatch");
       Expect(voice.app_model_mounts.size() == 1,

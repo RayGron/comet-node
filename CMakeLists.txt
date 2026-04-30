@@ -9,7 +9,10 @@ option(NAIM_CONTROLLER_BUILD_LLAMA_QUANTIZE
 option(NAIM_ENABLE_LLAMA_RUNTIME
        "Configure llama.cpp and inference runtime targets"
        ON)
-option(NAIM_ENABLE_CUDA "Build llama.cpp runtime with CUDA backend" ON)
+
+option(NAIM_ENABLE_CUDA "Build llama.cpp runtime with CUDA backend" OFF)
+option(NAIM_ENABLE_VULKAN "Build llama.cpp runtime with Vulkan backend" OFF)
+
 option(NAIM_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
 set(NAIM_CEF_ROOT "" CACHE PATH "Path to an unpacked CEF binary distribution")
 set(NAIM_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribution archive")
@@ -109,6 +112,9 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
   set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
   set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
   set(GGML_RPC ON CACHE BOOL "" FORCE)
+  set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+  set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+  set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 
   if(NAIM_ENABLE_CUDA)
     # llama.cpp needs Blackwell FP4/MXFP4 kernels to be compiled for the
@@ -193,13 +199,16 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
         "or configure with -DNAIM_ENABLE_CUDA=OFF.")
     endif()
     set(GGML_CUDA ON CACHE BOOL "" FORCE)
-    message(STATUS "Naim CUDA runtime: enabled")
+
+    message(STATUS "Naim runtime: CUDA")
     message(STATUS "Naim CUDA native architectures: ${NAIM_CUDA_NATIVE}")
     message(STATUS "Naim CUDA explicit architectures: ${NAIM_CUDA_ARCHITECTURES}")
+  elseif(NAIM_ENABLE_VULKAN)
+    set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+    message(STATUS "Naim runtime: VULKAN")
   else()
-    set(GGML_CUDA OFF CACHE BOOL "" FORCE)
-    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
-    message(STATUS "Naim CUDA runtime: disabled")
+    message(STATUS "Naim runtime: NONE")
+
   endif()
 
   if(NAIM_LLAMA_CPP_SOURCE_DIR AND EXISTS "${NAIM_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
@@ -1673,7 +1682,7 @@ if(NOT WIN32)
     naim-workerd
     PRIVATE
       nlohmann_json::nlohmann_json
-      # llama
+      common # llama common library
   )
   naim_enable_strict_warnings(naim-workerd)
 endif()

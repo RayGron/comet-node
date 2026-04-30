@@ -930,6 +930,34 @@ target_link_libraries(
 naim_enable_strict_warnings(naim-interaction-utf8-payload-sanitizer-tests)
 
 add_executable(
+  naim-interaction-runtime-server-tests
+  controller/src/app/controller_language_support.cpp
+  controller/src/http/controller_http_server_support.cpp
+  controller/src/http/controller_http_transport.cpp
+  controller/src/infra/controller_network_manager.cpp
+  controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_context_compression_service.cpp
+  controller/src/interaction/interaction_conversation_payload_builder.cpp
+  controller/src/interaction/interaction_model_identity_builder.cpp
+  controller/src/interaction/interaction_payload_builder.cpp
+  controller/src/interaction/interaction_request_contract_support.cpp
+  controller/src/interaction/interaction_request_heuristics.cpp
+  controller/src/interaction/interaction_runtime_request_codec.cpp
+  controller/src/interaction/interaction_text_post_processor.cpp
+  controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
+  runtime/interaction/src/interaction_runtime_server.cpp
+  runtime/interaction/src/interaction_runtime_server_tests.cpp
+)
+target_include_directories(
+  naim-interaction-runtime-server-tests PRIVATE common/include controller/include runtime/interaction/include)
+target_link_libraries(
+  naim-interaction-runtime-server-tests PRIVATE naim-common Threads::Threads)
+if(WIN32)
+  target_link_libraries(naim-interaction-runtime-server-tests PRIVATE ws2_32)
+endif()
+naim_enable_strict_warnings(naim-interaction-runtime-server-tests)
+
+add_executable(
   naim-knowledge-vault-service-tests
   controller/src/http/controller_http_server_support.cpp
   controller/src/http/controller_http_transport.cpp

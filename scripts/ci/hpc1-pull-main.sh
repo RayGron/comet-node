@@ -4,6 +4,27 @@ set -euo pipefail
 : "${NAIM_RELEASE_SHA:?NAIM_RELEASE_SHA is required}"
 : "${NAIM_RELEASE_BRANCH:=main}"
 
+naim_ci_ensure_shared_git_permissions() {
+  local git_dir
+  local group_name
+
+  git_dir="$(git rev-parse --git-dir)"
+  group_name="$(id -gn)"
+
+  git config core.sharedRepository group >/dev/null 2>&1 || true
+  git config core.filemode false >/dev/null 2>&1 || true
+
+  if sudo -n true >/dev/null 2>&1; then
+    sudo chgrp -R "${group_name}" "${git_dir}" || true
+    sudo chmod -R g+rwX "${git_dir}" || true
+    sudo find "${git_dir}" -type d -exec chmod g+s {} + || true
+  else
+    chgrp -R "${group_name}" "${git_dir}" 2>/dev/null || true
+    chmod -R g+rwX "${git_dir}" 2>/dev/null || true
+    find "${git_dir}" -type d -exec chmod g+s {} + 2>/dev/null || true
+  fi
+}
+
 naim_ci_retry_git_fetch() {
   local remote="$1"
   local branch="$2"
@@ -27,6 +48,7 @@ naim_ci_retry_git_fetch() {
 }
 
 git config http.version HTTP/1.1 >/dev/null 2>&1 || true
+naim_ci_ensure_shared_git_permissions
 naim_ci_retry_git_fetch origin "${NAIM_RELEASE_BRANCH}"
 
 # This checkout is dedicated to CI builds, so local tracked changes are disposable.

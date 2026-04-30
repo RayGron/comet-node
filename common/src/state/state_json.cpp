@@ -150,6 +150,40 @@ json ToJson(const ContextCompressionFeatureSpec& context_compression) {
   };
 }
 
+json ToJson(const VoiceListenerFeatureSpec& voice_listener) {
+  json source = {
+      {"type", "library"},
+      {"path", voice_listener.model.source_path},
+  };
+  if (!voice_listener.model.source_node_name.empty()) {
+    source["node"] = voice_listener.model.source_node_name;
+  }
+  if (!voice_listener.model.source_paths.empty() &&
+      !(voice_listener.model.source_paths.size() == 1 &&
+        voice_listener.model.source_paths.front() == voice_listener.model.source_path)) {
+    source["paths"] = voice_listener.model.source_paths;
+  }
+  json model = {
+      {"name", voice_listener.model.name.empty() ? std::string("whisper")
+                                                  : voice_listener.model.name},
+      {"source", std::move(source)},
+      {"mount_path", voice_listener.model.mount_path},
+      {"env", voice_listener.model.env_var.empty() ? std::string("WHISPER_MODEL_PATH")
+                                                    : voice_listener.model.env_var},
+      {"required", voice_listener.model.required},
+  };
+  json result = {
+      {"enabled", voice_listener.enabled},
+      {"wake_phrase", voice_listener.wake_phrase},
+      {"language", voice_listener.language},
+      {"model", std::move(model)},
+  };
+  if (voice_listener.image.has_value() && !voice_listener.image->empty()) {
+    result["image"] = *voice_listener.image;
+  }
+  return result;
+}
+
 json DesiredStateToJson(const DesiredState& state) {
   json result = {
       {"plane_name", state.plane_name},
@@ -222,13 +256,17 @@ json DesiredStateToJson(const DesiredState& state) {
   if (state.knowledge.has_value()) {
     result["knowledge"] = SettingsCodecs::ToJson(*state.knowledge);
   }
-  if (state.turboquant.has_value() || state.context_compression.has_value()) {
+  if (state.turboquant.has_value() || state.context_compression.has_value() ||
+      state.voice_listener.has_value()) {
     json features = json::object();
     if (state.turboquant.has_value()) {
       features["turboquant"] = ToJson(*state.turboquant);
     }
     if (state.context_compression.has_value()) {
       features["context_compression"] = ToJson(*state.context_compression);
+    }
+    if (state.voice_listener.has_value()) {
+      features["voice_listener"] = ToJson(*state.voice_listener);
     }
     result["features"] = std::move(features);
   }
@@ -326,6 +364,44 @@ DesiredState DesiredStateFromJson(const json& value) {
           "memory_priority",
           context_compression.memory_priority);
       state.context_compression = std::move(context_compression);
+    }
+    if (features.contains("voice_listener") &&
+        features.at("voice_listener").is_object()) {
+      VoiceListenerFeatureSpec voice_listener;
+      const auto& voice_listener_json = features.at("voice_listener");
+      voice_listener.enabled = voice_listener_json.value("enabled", voice_listener.enabled);
+      voice_listener.wake_phrase = voice_listener_json.value(
+          "wake_phrase",
+          voice_listener.wake_phrase);
+      voice_listener.language = voice_listener_json.value("language", voice_listener.language);
+      if (voice_listener_json.contains("image") &&
+          voice_listener_json.at("image").is_string()) {
+        voice_listener.image = voice_listener_json.at("image").get<std::string>();
+      }
+      if (voice_listener_json.contains("model") &&
+          voice_listener_json.at("model").is_object()) {
+        const auto& model_json = voice_listener_json.at("model");
+        const json source_json = model_json.contains("source") && model_json.at("source").is_object()
+                                     ? model_json.at("source")
+                                     : json::object();
+        voice_listener.model.name = model_json.value("name", std::string("whisper"));
+        voice_listener.model.source_path = source_json.value("path", std::string{});
+        voice_listener.model.source_node_name = source_json.value("node", std::string{});
+        if (source_json.contains("paths") && source_json.at("paths").is_array()) {
+          voice_listener.model.source_paths =
+              source_json.at("paths").get<std::vector<std::string>>();
+        }
+        if (voice_listener.model.source_paths.empty() &&
+            !voice_listener.model.source_path.empty()) {
+          voice_listener.model.source_paths.push_back(voice_listener.model.source_path);
+        }
+        voice_listener.model.mount_path =
+            model_json.value("mount_path", std::string("/models/whisper/model.bin"));
+        voice_listener.model.env_var =
+            model_json.value("env", std::string("WHISPER_MODEL_PATH"));
+        voice_listener.model.required = model_json.value("required", true);
+      }
+      state.voice_listener = std::move(voice_listener);
     }
   }
   if (value.contains("app_host") && value.at("app_host").is_object()) {

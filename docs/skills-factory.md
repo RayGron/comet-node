@@ -88,15 +88,19 @@ Deleting from `SkillsFactory` is global detach:
 - remove the canonical record
 - remove plane bindings for that `skill_id`
 - remove the id from every plane’s `factory_skill_ids[]`
-- best-effort delete the live runtime copy from ready planes
-- offline or unready planes converge on the next reconciliation
+- plane-owned runtime replicas converge on their next hourly sync
 
 ### Runtime synchronization
 
-`PlaneSkillRuntimeSyncService` materializes selected factory skills into plane-local runtime state:
+Each `skills-<plane>` runtime owns a local SQLite replica of the skills attached to its
+plane. That runtime pulls its selected factory skills from the controller on a timer:
 
-- create/update/start reconciliation syncs selected skills into `skills-<plane>`
-- deselection removes runtime copies no longer selected
+- sync runs from the plane-owned skills runtime, not from controller request paths
+- the sync interval is one hour
+- startup participates in the same timer loop, then the runtime waits one hour between pulls
+- create/update/delete/attach/detach APIs update controller state only; they do not push runtime syncs
+- scheduler ticks and interaction requests do not trigger skills synchronization
+- deselection removes runtime copies on the next hourly sync
 - interaction-time resolution still reads only the plane-local runtime copy
 
 ### Contextual interaction-time activation

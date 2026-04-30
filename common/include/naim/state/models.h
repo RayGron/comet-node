@@ -15,6 +15,7 @@ enum class InstanceRole {
   Skills,
   Browsing,
   Interaction,
+  VoiceModule,
 };
 
 enum class DiskKind {
@@ -25,6 +26,7 @@ enum class DiskKind {
   SkillsPrivate,
   BrowsingPrivate,
   InteractionPrivate,
+  VoiceModulePrivate,
 };
 
 inline bool IsPrivateDiskKind(DiskKind kind) {
@@ -33,7 +35,8 @@ inline bool IsPrivateDiskKind(DiskKind kind) {
          kind == DiskKind::AppPrivate ||
          kind == DiskKind::SkillsPrivate ||
          kind == DiskKind::BrowsingPrivate ||
-         kind == DiskKind::InteractionPrivate;
+         kind == DiskKind::InteractionPrivate ||
+         kind == DiskKind::VoiceModulePrivate;
 }
 
 inline bool IsNodeLocalDiskKind(DiskKind kind) {
@@ -44,7 +47,10 @@ inline bool InstanceNeedsSharedDiskMount(InstanceRole role) {
   return role == InstanceRole::Infer ||
          role == InstanceRole::Worker ||
          role == InstanceRole::App ||
-         role == InstanceRole::Interaction;
+         role == InstanceRole::Skills ||
+         role == InstanceRole::Browsing ||
+         role == InstanceRole::Interaction ||
+         role == InstanceRole::VoiceModule;
 }
 
 inline bool InstanceNeedsPrivateDisk(InstanceRole role) {
@@ -52,7 +58,8 @@ inline bool InstanceNeedsPrivateDisk(InstanceRole role) {
          role == InstanceRole::App ||
          role == InstanceRole::Skills ||
          role == InstanceRole::Browsing ||
-         role == InstanceRole::Interaction;
+         role == InstanceRole::Interaction ||
+         role == InstanceRole::VoiceModule;
 }
 
 struct PublishedPort {
@@ -95,6 +102,17 @@ struct DiskSpec {
   int size_gb = 0;
 };
 
+struct AppModelMountSpec {
+  std::string name;
+  std::string source_path;
+  std::string source_node_name;
+  std::vector<std::string> source_paths;
+  std::string host_path;
+  std::string mount_path;
+  std::string env_var;
+  bool required = true;
+};
+
 struct InstanceSpec {
   std::string name;
   InstanceRole role;
@@ -116,6 +134,7 @@ struct InstanceSpec {
   bool preemptible = false;
   std::optional<int> memory_cap_mb;
   int private_disk_size_gb = 0;
+  std::vector<AppModelMountSpec> app_model_mounts;
 };
 
 struct NodeInventory {
@@ -333,6 +352,14 @@ struct ContextCompressionFeatureSpec {
   std::string memory_priority = "balanced";
 };
 
+struct VoiceListenerFeatureSpec {
+  bool enabled = false;
+  std::string wake_phrase = "Hey Jex";
+  std::string language = "auto";
+  AppModelMountSpec model;
+  std::optional<std::string> image;
+};
+
 using WebGatewayPolicySettings = BrowsingPolicySettings;
 using WebGatewaySettings = BrowsingSettings;
 
@@ -358,6 +385,7 @@ struct DesiredState {
   std::optional<KnowledgeSettings> knowledge;
   std::optional<TurboQuantFeatureSpec> turboquant;
   std::optional<ContextCompressionFeatureSpec> context_compression;
+  std::optional<VoiceListenerFeatureSpec> voice_listener;
   std::optional<ExternalAppHostConfig> app_host;
   InferenceRuntimeSettings inference;
   WorkerGroupSpec worker_group;

@@ -1,6 +1,8 @@
 #include "interaction/interaction_runtime_server.h"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <csignal>
 #include <fstream>
@@ -23,6 +25,12 @@ namespace naim::interaction_runtime {
 namespace {
 
 std::atomic<bool>* g_stop_requested = nullptr;
+constexpr const char* kSkillsSystemInstructionPayloadKey =
+    "_naim_skills_system_instruction";
+constexpr const char* kAppliedSkillsPayloadKey = "_naim_applied_skills";
+constexpr const char* kAutoAppliedSkillsPayloadKey = "_naim_auto_applied_skills";
+constexpr const char* kSkillsSessionIdPayloadKey = "_naim_skills_session_id";
+constexpr const char* kSkillResolutionModePayloadKey = "_naim_skill_resolution_mode";
 
 void SignalHandler(int) {
   if (g_stop_requested != nullptr) {
@@ -68,6 +76,54 @@ std::optional<std::string> FindRequestHeader(
   return it->second;
 }
 
+bool HasExplicitSkillIds(const nlohmann::json& payload) {
+  return payload.contains("skill_ids") && payload.at("skill_ids").is_array() &&
+         !payload.at("skill_ids").empty();
+}
+
+int ParsePositiveIntOr(const std::string& value, int fallback) {
+  try {
+    const int parsed = std::stoi(value);
+    return parsed > 0 ? parsed : fallback;
+  } catch (const std::exception&) {
+    return fallback;
+  }
+}
+
+std::string BuildSkillsSystemInstruction(const nlohmann::json& skills) {
+  std::string instruction = "Skills currently applied for this request:";
+  for (const auto& skill : skills) {
+    if (!skill.is_object()) {
+      continue;
+    }
+    const std::string name = skill.value("name", std::string{});
+    const std::string description = skill.value("description", std::string{});
+    const std::string content = skill.value("content", std::string{});
+    if (content.empty()) {
+      continue;
+    }
+    instruction += "\n\nSkill: " + name;
+    if (!description.empty()) {
+      instruction += "\nDescription: " + description;
+    }
+    instruction += "\n\nInstructions:\n" + content;
+  }
+  return instruction;
+}
+
+void SetNoResolvedSkills(naim::controller::InteractionRequestContext* context) {
+  if (context == nullptr) {
+    return;
+  }
+  context->payload[kAppliedSkillsPayloadKey] = nlohmann::json::array();
+  context->payload[kAutoAppliedSkillsPayloadKey] = nlohmann::json::array();
+  context->payload[kSkillResolutionModePayloadKey] = "none";
+}
+
+std::vector<std::pair<std::string, std::string>> JsonHeaders() {
+  return {{"Accept", "application/json"}, {"Content-Type", "application/json"}};
+}
+
 std::map<std::string, std::string> BuildCompressionHeaders(
     const naim::controller::InteractionRequestContext& request_context) {
   std::map<std::string, std::string> headers;
@@ -94,6 +150,27 @@ std::map<std::string, std::string> BuildCompressionHeaders(
   headers["x-naim-context-compression-ratio"] =
       std::to_string(compression.value("compression_ratio", 1.0));
   return headers;
+}
+
+void AddRuntimeTelemetryHeaders(
+    HttpResponse* response,
+    bool local_raw_execution,
+    int skills_resolve_ms,
+    int context_compression_ms,
+    int prompt_build_ms,
+    int local_runtime_ms) {
+  if (response == nullptr) {
+    return;
+  }
+  response->headers["x-naim-local-raw-execution"] =
+      local_raw_execution ? "true" : "false";
+  response->headers["x-naim-skills-resolve-ms"] =
+      std::to_string(skills_resolve_ms);
+  response->headers["x-naim-context-compression-ms"] =
+      std::to_string(context_compression_ms);
+  response->headers["x-naim-prompt-build-ms"] = std::to_string(prompt_build_ms);
+  response->headers["x-naim-runtime-local-execution-ms"] =
+      std::to_string(local_runtime_ms);
 }
 
 HttpResponse SanitizeJsonChatResponse(HttpResponse response) {
@@ -280,16 +357,21 @@ HttpResponse InteractionRuntimeServer::ExecuteNonStream(const HttpRequest& reque
         request,
         "/api/v1/planes/" + config_.plane_name + "/interaction/chat/completions");
   }
+  const auto local_started_at = std::chrono::steady_clock::now();
   auto execution = BuildRuntimeExecution(request);
+  const auto compression_started_at = std::chrono::steady_clock::now();
   naim::controller::InteractionContextCompressionService().Apply(
       execution.resolution,
       &execution.request_context);
+  const auto compression_finished_at = std::chrono::steady_clock::now();
+  const auto prompt_started_at = std::chrono::steady_clock::now();
   const std::string upstream_body = naim::controller::BuildInteractionUpstreamBodyPayload(
       execution.resolution,
       execution.request_context.payload,
       execution.force_stream,
       execution.resolved_policy,
       execution.structured_output_json);
+  const auto prompt_finished_at = std::chrono::steady_clock::now();
   HttpResponse response = SendControllerHttpRequest(
       UpstreamTarget(),
       "POST",
@@ -299,6 +381,19 @@ HttpResponse InteractionRuntimeServer::ExecuteNonStream(const HttpRequest& reque
   for (const auto& [name, value] : BuildCompressionHeaders(execution.request_context)) {
     response.headers[name] = value;
   }
+  AddRuntimeTelemetryHeaders(
+      &response,
+      execution.local_raw_execution,
+      execution.skills_resolve_ms,
+      static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                           compression_finished_at - compression_started_at)
+                           .count()),
+      static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                           prompt_finished_at - prompt_started_at)
+                           .count()),
+      static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                           prompt_finished_at - local_started_at)
+                           .count()));
   return SanitizeJsonChatResponse(std::move(response));
 }
 
@@ -312,24 +407,49 @@ void InteractionRuntimeServer::ExecuteStream(
         "/api/v1/planes/" + config_.plane_name + "/interaction/chat/completions/stream");
     return;
   }
+  const auto local_started_at = std::chrono::steady_clock::now();
   auto execution = BuildRuntimeExecution(request);
   execution.force_stream = true;
+  const auto compression_started_at = std::chrono::steady_clock::now();
   naim::controller::InteractionContextCompressionService().Apply(
       execution.resolution,
       &execution.request_context);
+  const auto compression_finished_at = std::chrono::steady_clock::now();
+  const auto prompt_started_at = std::chrono::steady_clock::now();
   const std::string upstream_body = naim::controller::BuildInteractionUpstreamBodyPayload(
       execution.resolution,
       execution.request_context.payload,
       true,
       execution.resolved_policy,
       execution.structured_output_json);
+  const auto prompt_finished_at = std::chrono::steady_clock::now();
   auto upstream = OpenInteractionStreamRequest(
       UpstreamTarget(),
       "interaction-runtime",
       upstream_body);
+  auto response_headers = BuildCompressionHeaders(execution.request_context);
+  response_headers["x-naim-local-raw-execution"] =
+      execution.local_raw_execution ? "true" : "false";
+  response_headers["x-naim-skills-resolve-ms"] =
+      std::to_string(execution.skills_resolve_ms);
+  response_headers["x-naim-context-compression-ms"] =
+      std::to_string(static_cast<int>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              compression_finished_at - compression_started_at)
+              .count()));
+  response_headers["x-naim-prompt-build-ms"] =
+      std::to_string(static_cast<int>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              prompt_finished_at - prompt_started_at)
+              .count()));
+  response_headers["x-naim-runtime-local-execution-ms"] =
+      std::to_string(static_cast<int>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              prompt_finished_at - local_started_at)
+              .count()));
   if (!naim::controller::ControllerNetworkManager::SendSseHeaders(
           client_fd,
-          BuildCompressionHeaders(execution.request_context))) {
+          response_headers)) {
     upstream.close();
     naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
     return;
@@ -358,12 +478,26 @@ bool InteractionRuntimeServer::ShouldProxyRawRequestThroughController(
   if (TryBuildWrappedRuntimeExecution(request.body).has_value()) {
     return false;
   }
+  if (HasLocalPlaneStateSnapshot()) {
+    return false;
+  }
   return !config_.controller_url.empty();
+}
+
+bool InteractionRuntimeServer::HasLocalPlaneStateSnapshot() const {
+  try {
+    const auto snapshot = LoadPlaneStatePayloadFromSnapshot();
+    return snapshot.is_object() && snapshot.contains("desired_state") &&
+           snapshot.at("desired_state").is_object();
+  } catch (const std::exception&) {
+    return false;
+  }
 }
 
 HttpResponse InteractionRuntimeServer::ProxyRawRequestThroughController(
     const HttpRequest& request,
     const std::string& controller_path) const {
+  const auto started_at = std::chrono::steady_clock::now();
   std::vector<std::pair<std::string, std::string>> headers{
       {"Accept", "application/json"},
       {"Content-Type", "application/json"},
@@ -376,12 +510,19 @@ HttpResponse InteractionRuntimeServer::ProxyRawRequestThroughController(
       request_id.has_value()) {
     headers.emplace_back("X-Naim-Request-Id", *request_id);
   }
-  return SendControllerHttpRequest(
+  HttpResponse response = SendControllerHttpRequest(
       ParseControllerEndpointTarget(config_.controller_url),
       "POST",
       controller_path,
       request.body,
       headers);
+  response.headers["x-naim-local-raw-execution"] = "false";
+  response.headers["x-naim-controller-proxy-fallback-ms"] =
+      std::to_string(static_cast<int>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - started_at)
+              .count()));
+  return response;
 }
 
 void InteractionRuntimeServer::ProxyRawStreamThroughController(
@@ -492,7 +633,122 @@ InteractionRuntimeServer::BuildDirectRuntimeExecution(const HttpRequest& request
       request.path == "/v1/chat/completions/stream" || payload.value("stream", false);
   execution.structured_output_json =
       execution.request_context.structured_output_json;
+  execution.local_raw_execution = true;
+  execution.skills_resolve_ms = ResolveExplicitSkillsForDirectExecution(
+      execution.resolution,
+      &execution.request_context);
   return execution;
+}
+
+int InteractionRuntimeServer::ResolveExplicitSkillsForDirectExecution(
+    const naim::controller::PlaneInteractionResolution& resolution,
+    naim::controller::InteractionRequestContext* request_context) const {
+  const auto started_at = std::chrono::steady_clock::now();
+  if (request_context == nullptr) {
+    throw std::invalid_argument("interaction request context is required");
+  }
+  if (!HasExplicitSkillIds(request_context->payload)) {
+    SetNoResolvedSkills(request_context);
+    return 0;
+  }
+  if (!resolution.desired_state.skills.has_value() ||
+      !resolution.desired_state.skills->enabled) {
+    throw std::runtime_error("skills are not enabled for this plane");
+  }
+  const auto target = ResolvePlaneNetworkSkillsTarget(resolution.desired_state);
+  if (!target.has_value()) {
+    throw std::runtime_error("skills service is not ready for this plane");
+  }
+
+  nlohmann::json resolve_payload = nlohmann::json::object();
+  resolve_payload["skill_ids"] = request_context->payload.at("skill_ids");
+  if (request_context->payload.contains("session_id") &&
+      request_context->payload.at("session_id").is_string()) {
+    resolve_payload["session_id"] = request_context->payload.at("session_id");
+  }
+
+  const HttpResponse response = SendControllerHttpRequest(
+      *target,
+      "POST",
+      "/v1/skills/resolve",
+      resolve_payload.dump(),
+      JsonHeaders());
+  if (response.status_code != 200) {
+    throw std::runtime_error(
+        "skills service returned status " + std::to_string(response.status_code));
+  }
+  const nlohmann::json response_payload =
+      response.body.empty() ? nlohmann::json::object() : nlohmann::json::parse(response.body);
+  const nlohmann::json resolved_skills =
+      response_payload.value("skills", nlohmann::json::array());
+  if (!resolved_skills.is_array()) {
+    throw std::runtime_error("skills service returned malformed resolve payload");
+  }
+
+  nlohmann::json applied_skills = nlohmann::json::array();
+  for (const auto& skill : resolved_skills) {
+    if (!skill.is_object()) {
+      continue;
+    }
+    applied_skills.push_back(
+        nlohmann::json{{"id", skill.value("id", std::string{})},
+                       {"name", skill.value("name", std::string{})},
+                       {"source", skill.value("source", std::string{})}});
+  }
+  if (!resolved_skills.empty()) {
+    request_context->payload[kSkillsSystemInstructionPayloadKey] =
+        BuildSkillsSystemInstruction(resolved_skills);
+  }
+  request_context->payload[kAppliedSkillsPayloadKey] = applied_skills;
+  request_context->payload[kAutoAppliedSkillsPayloadKey] = nlohmann::json::array();
+  request_context->payload[kSkillResolutionModePayloadKey] = "explicit";
+  if (response_payload.contains("skills_session_id") &&
+      !response_payload.at("skills_session_id").is_null()) {
+    request_context->payload[kSkillsSessionIdPayloadKey] =
+        response_payload.at("skills_session_id");
+  } else if (request_context->payload.contains("session_id") &&
+             request_context->payload.at("session_id").is_string()) {
+    request_context->payload[kSkillsSessionIdPayloadKey] =
+        request_context->payload.at("session_id");
+  }
+
+  return static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - started_at)
+                              .count());
+}
+
+std::optional<naim::controller::ControllerEndpointTarget>
+InteractionRuntimeServer::ResolvePlaneNetworkSkillsTarget(
+    const naim::DesiredState& desired_state) const {
+  const auto it = std::find_if(
+      desired_state.instances.begin(),
+      desired_state.instances.end(),
+      [](const naim::InstanceSpec& instance) {
+        return instance.role == naim::InstanceRole::Skills;
+      });
+  if (it == desired_state.instances.end() || it->name.empty()) {
+    return std::nullopt;
+  }
+
+  int port = 18120;
+  if (const auto env_it = it->environment.find("NAIM_SKILLS_PORT");
+      env_it != it->environment.end()) {
+    port = ParsePositiveIntOr(env_it->second, port);
+  }
+  for (const auto& published : it->published_ports) {
+    if (published.container_port > 0) {
+      port = published.container_port;
+      break;
+    }
+  }
+  naim::controller::ControllerEndpointTarget target;
+  target.host = it->name;
+  target.port = port;
+  target.raw = "http://" + target.host + ":" + std::to_string(target.port);
+  target.node_name = it->node_name;
+  target.route_mode = "plane-network";
+  target.route_via_hostd_proxy = false;
+  return target;
 }
 
 nlohmann::json InteractionRuntimeServer::LoadPlaneStatePayload() const {

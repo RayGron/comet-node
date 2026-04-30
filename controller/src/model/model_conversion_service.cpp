@@ -23,6 +23,7 @@ namespace {
 
 constexpr std::string_view kFormatGguf = "gguf";
 constexpr std::string_view kFormatSafetensors = "safetensors";
+constexpr std::string_view kFormatWhisperCpp = "whisper.cpp";
 constexpr std::string_view kFormatUnknown = "unknown";
 constexpr std::array<std::string_view, 5> kKnownQuantizations = {
     "FP16",
@@ -99,10 +100,16 @@ std::string ModelConversionService::DetectSourceFormat(
   }
   bool saw_safetensors = false;
   bool saw_gguf = false;
+  bool saw_whisper_cpp = false;
   for (const auto& source_url : source_urls) {
     const auto lowered = Lowercase(FilenameFromUrl(source_url));
     if (lowered.ends_with(".gguf")) {
       saw_gguf = true;
+      continue;
+    }
+    if (lowered.ends_with(".bin") &&
+        (lowered.starts_with("ggml-") || lowered.find("whisper") != std::string::npos)) {
+      saw_whisper_cpp = true;
       continue;
     }
     if (lowered.ends_with(".safetensors")) {
@@ -120,6 +127,9 @@ std::string ModelConversionService::DetectSourceFormat(
   if (saw_gguf && !saw_safetensors) {
     return std::string(kFormatGguf);
   }
+  if (saw_whisper_cpp && !saw_gguf && !saw_safetensors) {
+    return std::string(kFormatWhisperCpp);
+  }
   return std::string(kFormatUnknown);
 }
 
@@ -130,6 +140,10 @@ std::string ModelConversionService::NormalizeOutputFormat(const std::string& val
   }
   if (normalized == kFormatSafetensors) {
     return std::string(kFormatSafetensors);
+  }
+  if (normalized == kFormatWhisperCpp || normalized == "whisper" ||
+      normalized == "whisper.cpp-bin") {
+    return std::string(kFormatWhisperCpp);
   }
   return normalized.empty() ? std::string(kFormatUnknown) : normalized;
 }

@@ -222,6 +222,7 @@ class SkillRuntimeTestServer {
   }
 
   int port() const { return port_; }
+  int request_count() const { return request_count_.load(); }
 
  private:
   void Serve() {
@@ -240,6 +241,7 @@ class SkillRuntimeTestServer {
 
       char buffer[4096];
       (void)recv(client_fd, buffer, sizeof(buffer), 0);
+      request_count_.fetch_add(1);
 
       const std::string body = json{{"skills", skills_payload_}}.dump();
       std::ostringstream response;
@@ -265,6 +267,7 @@ class SkillRuntimeTestServer {
 
   json skills_payload_;
   std::atomic<bool> stop_requested_{false};
+  std::atomic<int> request_count_{0};
   naim::platform::SocketHandle listen_fd_ = naim::platform::kInvalidSocket;
   int port_ = 0;
   std::thread thread_;
@@ -2464,11 +2467,10 @@ int main() {
                               {"content",
                                "Please debug this regression and find the root cause."}}})}});
       Expect(
-          selection.mode == "contextual" && selection.candidate_count == 1 &&
-              selection.selected_skill_ids.size() == 1 &&
-              selection.selected_skill_ids.front() == "code-agent-root-cause-debug",
-          "resolver should fall back to attached controller skill records when the runtime replica is unavailable");
-      std::cout << "ok: contextual-resolver-falls-back-to-attached-controller-skill-records" << '\n';
+          selection.mode == "none" && selection.candidate_count == 0 &&
+              selection.selected_skill_ids.empty(),
+          "resolver should use only the plane-owned skills runtime replica");
+      std::cout << "ok: contextual-resolver-does-not-fallback-to-controller-store" << '\n';
     }
 
     {
@@ -2666,20 +2668,18 @@ int main() {
           skills_service.ResolveInteractionSkills(resolution, &request_context);
       Expect(
           !error.has_value(),
-          "automatic contextual skills should not fail when the plane-local replica is unreachable");
+          "automatic contextual skills should degrade to no skills when the plane-local replica is unreachable");
       const auto applied = request_context.payload.at(
           naim::controller::PlaneSkillsService::kAppliedSkillsPayloadKey);
       Expect(
-          applied.is_array() && applied.size() == 1 &&
-              applied.front().at("id").get<std::string>() ==
-                  "lt-jex-market-asset-report",
-          "automatic contextual skills should fall back to attached controller skill records");
+          applied.is_array() && applied.empty(),
+          "automatic contextual skills should not read attached controller skill records");
       Expect(
           request_context.payload.at(
               naim::controller::PlaneSkillsService::kSkillResolutionModePayloadKey)
-              .get<std::string>() == "contextual",
-          "automatic contextual skills should report contextual mode after catalog-backed match_terms selection");
-      std::cout << "ok: interaction-auto-skills-fallback-to-attached-controller-skill-records" << '\n';
+              .get<std::string>() == "none",
+          "automatic contextual skills should report none when runtime replica has no candidates");
+      std::cout << "ok: interaction-auto-skills-use-plane-owned-runtime-only" << '\n';
     }
 
     {
@@ -2715,23 +2715,56 @@ int main() {
       const auto error =
           skills_service.ResolveInteractionSkills(resolution, &request_context);
       Expect(
+          error.has_value() && error->code == "skills_not_ready",
+          "explicit skills should fail when the plane-owned runtime replica is unreachable");
+      std::cout << "ok: interaction-explicit-skills-require-plane-owned-runtime" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array());
+      const std::string db_path = MakeTempDbPath();
+      fs::remove(db_path);
+      naim::ControllerStore store(db_path);
+      store.Initialize();
+      auto desired_state = BuildDesiredState(
+          "interaction-plane", {"lt-jex-market-asset-report"});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+      naim::SkillsFactorySkillRecord record;
+      record.id = "lt-jex-market-asset-report";
+      record.name = "asset-market-report";
+      record.description = "Use for current state reports of one tracked asset.";
+      record.content = "Use factual market data and separate venue-specific data.";
+      record.match_terms = {"current asset report"};
+      store.UpsertSkillsFactorySkill(record);
+
+      naim::controller::PlaneSkillsService skills_service;
+      naim::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"skill_ids", json::array({"lt-jex-market-asset-report"})},
+          {"messages",
+           json::array(
+               {json{{"role", "user"},
+                     {"content", "Show the current BNB market report."}}})},
+      };
+      naim::controller::PlaneInteractionResolution resolution;
+      resolution.db_path = db_path;
+      resolution.desired_state = desired_state;
+
+      const auto error =
+          skills_service.ResolveInteractionSkills(resolution, &request_context);
+      Expect(
           !error.has_value(),
-          "explicit skills should still resolve from controller catalog when runtime endpoint is unreachable");
+          "empty runtime replica response should not fall back to attached controller records");
       const auto applied = request_context.payload.at(
           naim::controller::PlaneSkillsService::kAppliedSkillsPayloadKey);
       Expect(
-          applied.is_array() && applied.size() == 1 &&
-              applied.front().at("id").get<std::string>() ==
-                  "lt-jex-market-asset-report",
-          "explicit controller catalog fallback should apply requested skill metadata");
+          applied.is_array() && applied.empty(),
+          "explicit skills should not resolve from attached controller records when the runtime replica is empty");
       Expect(
-          ContainsLiteral(
-              request_context.payload.at(
-                  naim::controller::PlaneSkillsService::kSystemInstructionPayloadKey)
-                  .get<std::string>(),
-              "Use factual market data"),
-          "explicit controller catalog fallback should inject skill instructions");
-      std::cout << "ok: interaction-explicit-skills-fallback-to-controller-catalog" << '\n';
+          runtime.request_count() == 1,
+          "explicit skill resolution should use the plane-owned skills runtime replica");
+      std::cout << "ok: interaction-explicit-skills-use-plane-owned-runtime-only" << '\n';
     }
 
     {

@@ -10,25 +10,48 @@
 namespace naim::hostd {
 
 class HostdSystemTelemetryCollector final {
- public:
+public:
   naim::GpuTelemetrySnapshot CollectGpuTelemetry(
-      const naim::DesiredState& state,
-      const std::string& node_name,
-      const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const;
+    const naim::DesiredState& state,
+    const std::string& node_name,
+    const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const;
 
   naim::DiskTelemetrySnapshot CollectDiskTelemetry(
-      const naim::DesiredState& state,
-      const std::string& node_name) const;
+    const naim::DesiredState& state,
+    const std::string& node_name) const;
 
   naim::DiskTelemetryRecord BuildStorageRootTelemetry(
-      const std::string& node_name,
-      const std::string& storage_root) const;
+    const std::string& node_name,
+    const std::string& storage_root) const;
 
   naim::CpuTelemetrySnapshot CollectCpuTelemetry() const;
   naim::NetworkTelemetrySnapshot CollectNetworkTelemetry(
-      const std::string& state_root) const;
+    const std::string& state_root) const;
 
- private:
+private:
+
+  std::vector<std::string> splitCsvRow(
+    const std::string& line) const;
+
+#ifdef NAIM_RUNTIME_CUDA
+  void populateGpuProcessesFromNvidiaSMI(
+    naim::GpuTelemetrySnapshot* snapshot,
+    const std::vector<RuntimeProcessStatus> &instance_statuses) const;
+
+  std::optional<naim::GpuTelemetrySnapshot> collectGpuTelemetryWithNVML(
+    const naim::DesiredState& state,
+    const std::string& node_name) const;
+
+  std::optional<naim::GpuTelemetrySnapshot> collectGpuTelemetryWithNvidiaSMI(
+    const naim::DesiredState& state,
+    const std::string& node_name,
+    const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const;
+#endif
+
+#ifdef NAIM_RUNTIME_VULKAN
+  std::optional<naim::GpuTelemetrySnapshot> collectGpuTelemetryWithVulkanAPI() const;
+#endif
+
   HostdCommandSupport command_support_;
 };
 

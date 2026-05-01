@@ -206,11 +206,20 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
     message(STATUS "Naim runtime: CUDA")
     message(STATUS "Naim CUDA native architectures: ${NAIM_CUDA_NATIVE}")
     message(STATUS "Naim CUDA explicit architectures: ${NAIM_CUDA_ARCHITECTURES}")
+    add_definitions(-DNAIM_RUNTIME_CUDA)
+
   elseif(NAIM_ENABLE_VULKAN)
+    find_package(Vulkan REQUIRED)
+    message(STATUS "Vulkan Found: ${Vulkan_FOUND}")
+    message(STATUS "Vulkan Include: ${Vulkan_INCLUDE_DIRS}")
+    message(STATUS "Vulkan Libraries: ${Vulkan_LIBRARIES}")
+
     set(GGML_VULKAN ON CACHE BOOL "" FORCE)
     message(STATUS "Naim runtime: VULKAN")
+    add_definitions(-DNAIM_RUNTIME_VULKAN)
   else()
     message(STATUS "Naim runtime: NONE")
+    add_definitions(-DNAIM_RUNTIME_NONE)
 
   endif()
 
@@ -310,6 +319,11 @@ target_link_libraries(
     unofficial-sodium::sodium
     unofficial::sqlite3::sqlite3
 )
+
+if(NAIM_ENABLE_VULKAN)
+  target_link_libraries(naim-common PUBLIC Vulkan::Vulkan)
+endif()
+
 naim_enable_strict_warnings(naim-common)
 
 add_executable(

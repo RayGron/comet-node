@@ -560,7 +560,19 @@ naim_enable_strict_warnings(naim-plane-observation-matcher-tests)
 
 add_executable(
   naim-telemetry-live-store-tests
+  controller/src/telemetry/telemetry_clock.cpp
+  controller/src/telemetry/telemetry_environment_reader.cpp
+  controller/src/telemetry/telemetry_frame_matcher.cpp
+  controller/src/telemetry/telemetry_frame_normalizer.cpp
+  controller/src/telemetry/telemetry_frame_ring_buffer.cpp
+  controller/src/telemetry/telemetry_health_builder.cpp
   controller/src/telemetry/telemetry_live_store.cpp
+  controller/src/telemetry/telemetry_open_metrics_exporter.cpp
+  controller/src/telemetry/telemetry_operational_config.cpp
+  controller/src/telemetry/telemetry_persistence_repository.cpp
+  controller/src/telemetry/telemetry_snapshot_builder.cpp
+  controller/src/telemetry/telemetry_sqlite_connection.cpp
+  controller/src/telemetry/telemetry_stream_metrics_service.cpp
   controller/src/telemetry/telemetry_live_store_tests.cpp
 )
 target_include_directories(
@@ -626,7 +638,19 @@ add_executable(
   controller/src/infra/controller_network_manager.cpp
   controller/src/knowledge/knowledge_vault_service_repository.cpp
   controller/src/observation/plane_observation_matcher.cpp
+  controller/src/telemetry/telemetry_clock.cpp
+  controller/src/telemetry/telemetry_environment_reader.cpp
+  controller/src/telemetry/telemetry_frame_matcher.cpp
+  controller/src/telemetry/telemetry_frame_normalizer.cpp
+  controller/src/telemetry/telemetry_frame_ring_buffer.cpp
+  controller/src/telemetry/telemetry_health_builder.cpp
   controller/src/telemetry/telemetry_live_store.cpp
+  controller/src/telemetry/telemetry_open_metrics_exporter.cpp
+  controller/src/telemetry/telemetry_operational_config.cpp
+  controller/src/telemetry/telemetry_persistence_repository.cpp
+  controller/src/telemetry/telemetry_snapshot_builder.cpp
+  controller/src/telemetry/telemetry_sqlite_connection.cpp
+  controller/src/telemetry/telemetry_stream_metrics_service.cpp
 )
 target_include_directories(
   naim-hostd-http-tests PRIVATE common/include controller/include)
@@ -1436,7 +1460,19 @@ add_executable(
   controller/src/skills/skills_factory_service.cpp
   controller/src/scheduler/scheduler_service.cpp
   controller/src/read_model/state_aggregate_loader.cpp
+  controller/src/telemetry/telemetry_clock.cpp
+  controller/src/telemetry/telemetry_environment_reader.cpp
+  controller/src/telemetry/telemetry_frame_matcher.cpp
+  controller/src/telemetry/telemetry_frame_normalizer.cpp
+  controller/src/telemetry/telemetry_frame_ring_buffer.cpp
+  controller/src/telemetry/telemetry_health_builder.cpp
   controller/src/telemetry/telemetry_live_store.cpp
+  controller/src/telemetry/telemetry_open_metrics_exporter.cpp
+  controller/src/telemetry/telemetry_operational_config.cpp
+  controller/src/telemetry/telemetry_persistence_repository.cpp
+  controller/src/telemetry/telemetry_snapshot_builder.cpp
+  controller/src/telemetry/telemetry_sqlite_connection.cpp
+  controller/src/telemetry/telemetry_stream_metrics_service.cpp
   controller/src/web/web_ui_service.cpp
   controller/src/app/controller_app.cpp
   controller/src/app/controller_composition_root.cpp

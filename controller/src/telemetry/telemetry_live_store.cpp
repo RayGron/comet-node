@@ -4,8 +4,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <map>
+#include <sstream>
 #include <stdexcept>
 
 #include <sqlite3.h>
@@ -106,6 +108,34 @@ std::int64_t SafeSequenceForSqlite(std::uint64_t sequence) {
       static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())));
 }
 
+std::optional<std::uint64_t> EnvUint64(const char* key) {
+  const char* value = std::getenv(key);
+  if (value == nullptr || value[0] == '\0') {
+    return std::nullopt;
+  }
+  return static_cast<std::uint64_t>(std::stoull(value));
+}
+
+std::optional<std::size_t> EnvSize(const char* key) {
+  const auto value = EnvUint64(key);
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  return static_cast<std::size_t>(*value);
+}
+
+std::string SanitizeMetricLabel(std::string value) {
+  for (char& ch : value) {
+    const bool ok =
+        (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+        (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.';
+    if (!ok) {
+      ch = '_';
+    }
+  }
+  return value;
+}
+
 }  // namespace
 
 TelemetryLiveStore& TelemetryLiveStore::Instance() {
@@ -120,12 +150,78 @@ void TelemetryLiveStore::ConfigurePersistence(
   ConfigurePersistenceLocked(db_path, retention_capacity);
 }
 
+void TelemetryLiveStore::ConfigureFromEnvironment(const std::string& db_path) {
+  RetentionConfig retention = retention_;
+  retention.hot_history_capacity =
+      EnvSize("NAIM_TELEMETRY_HOT_HISTORY_CAPACITY")
+          .value_or(retention.hot_history_capacity);
+  retention.stream_batch_limit =
+      EnvSize("NAIM_TELEMETRY_STREAM_BATCH_LIMIT")
+          .value_or(retention.stream_batch_limit);
+  retention.durable_history_capacity =
+      EnvSize("NAIM_TELEMETRY_DURABLE_HISTORY_CAPACITY")
+          .value_or(retention.durable_history_capacity);
+  retention.warm_bucket_ms =
+      EnvUint64("NAIM_TELEMETRY_WARM_BUCKET_MS")
+          .value_or(retention.warm_bucket_ms);
+  retention.cold_bucket_ms =
+      EnvUint64("NAIM_TELEMETRY_COLD_BUCKET_MS")
+          .value_or(retention.cold_bucket_ms);
+
+  AlertThresholds thresholds = thresholds_;
+  thresholds.stale_warning_ms =
+      EnvUint64("NAIM_TELEMETRY_STALE_WARNING_MS")
+          .value_or(thresholds.stale_warning_ms);
+  thresholds.stale_critical_ms =
+      EnvUint64("NAIM_TELEMETRY_STALE_CRITICAL_MS")
+          .value_or(thresholds.stale_critical_ms);
+  thresholds.ingest_warning_ms =
+      EnvUint64("NAIM_TELEMETRY_INGEST_WARNING_MS")
+          .value_or(thresholds.ingest_warning_ms);
+  thresholds.queue_warning_ms =
+      EnvUint64("NAIM_TELEMETRY_QUEUE_WARNING_MS")
+          .value_or(thresholds.queue_warning_ms);
+  thresholds.browser_apply_warning_ms =
+      EnvUint64("NAIM_TELEMETRY_BROWSER_APPLY_WARNING_MS")
+          .value_or(thresholds.browser_apply_warning_ms);
+
+  ConfigureOperationalPolicy(retention, thresholds);
+  ConfigurePersistence(db_path, retention.durable_history_capacity);
+}
+
+void TelemetryLiveStore::ConfigureOperationalPolicy(
+    RetentionConfig retention,
+    AlertThresholds thresholds) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  retention.hot_history_capacity = std::max<std::size_t>(1, retention.hot_history_capacity);
+  retention.stream_batch_limit = std::max<std::size_t>(1, retention.stream_batch_limit);
+  retention.durable_history_capacity =
+      std::max<std::size_t>(1, retention.durable_history_capacity);
+  retention.warm_bucket_ms = std::max<std::uint64_t>(1, retention.warm_bucket_ms);
+  retention.cold_bucket_ms = std::max<std::uint64_t>(
+      retention.warm_bucket_ms,
+      retention.cold_bucket_ms);
+  retention_ = retention;
+  thresholds_ = thresholds;
+  for (auto& node : nodes_) {
+    while (node.history.size() > retention_.hot_history_capacity) {
+      node.last_pruned_sequence = node.history.front().sequence;
+      node.history.pop_front();
+      ++node.dropped_frames_total;
+      ++dropped_frames_total_;
+    }
+  }
+}
+
 void TelemetryLiveStore::ResetForTests() {
   std::lock_guard<std::mutex> lock(mutex_);
   nodes_.clear();
   latest_sequence_ = 0;
   dropped_frames_total_ = 0;
+  retention_ = RetentionConfig{};
+  thresholds_ = AlertThresholds{};
   persistence_ = PersistenceState{};
+  streams_ = StreamMetrics{};
 }
 
 bool TelemetryLiveStore::Upsert(naim::HostTelemetryFrame frame) {
@@ -177,7 +273,7 @@ bool TelemetryLiveStore::UpsertInMemoryLocked(naim::HostTelemetryFrame frame) {
   } else {
     it->latest = frame;
     it->history.push_back(std::move(frame));
-    while (it->history.size() > HistoryCapacity()) {
+    while (it->history.size() > retention_.hot_history_capacity) {
       it->last_pruned_sequence = it->history.front().sequence;
       it->history.pop_front();
       ++it->dropped_frames_total;
@@ -316,8 +412,13 @@ nlohmann::json TelemetryLiveStore::BuildSnapshot(
     }
   }
   const bool overloaded = dropped_frames_total_ > 0;
-  const auto alerts =
-      BuildAlerts(matched_buffers, persistence_, dropped_frames_total_, now_ms);
+  const auto alerts = BuildAlerts(
+      matched_buffers,
+      persistence_,
+      streams_,
+      thresholds_,
+      dropped_frames_total_,
+      now_ms);
   const std::string status =
       !alerts.empty() ? "degraded" : overloaded ? "overloaded" : "ok";
   return nlohmann::json{
@@ -329,16 +430,18 @@ nlohmann::json TelemetryLiveStore::BuildSnapshot(
       {"latest_sequence", latest_sequence_},
       {"telemetry_overloaded", overloaded},
       {"dropped_frames_total", dropped_frames_total_},
-      {"history_capacity", HistoryCapacity()},
-      {"stream_batch_limit", StreamBatchLimit()},
+      {"history_capacity", retention_.hot_history_capacity},
+      {"stream_batch_limit", retention_.stream_batch_limit},
       {"persistence", BuildPersistenceStatusLocked()},
+      {"streams", BuildStreamStatusLocked()},
       {"alerts", alerts},
       {"retention",
        nlohmann::json{
-           {"hot_history_capacity", HistoryCapacity()},
+           {"hot_history_capacity", retention_.hot_history_capacity},
            {"durable_history_capacity", persistence_.retention_capacity},
-           {"warm_bucket_ms", WarmBucketMs()},
-           {"cold_bucket_ms", ColdBucketMs()},
+           {"stream_batch_limit", retention_.stream_batch_limit},
+           {"warm_bucket_ms", retention_.warm_bucket_ms},
+           {"cold_bucket_ms", retention_.cold_bucket_ms},
        }},
       {"telemetry_health",
        nlohmann::json{
@@ -346,13 +449,18 @@ nlohmann::json TelemetryLiveStore::BuildSnapshot(
            {"last_frame_age_ms",
             latest_sequence_ > 0 && now_ms >= latest_sequence_ ? now_ms - latest_sequence_ : 0},
            {"dropped_frames_total", dropped_frames_total_},
-           {"stream_batch_limit", StreamBatchLimit()},
+           {"stream_batch_limit", retention_.stream_batch_limit},
        }},
       {"planes", BuildPlaneAggregates(matched_buffers, now_ms)},
       {"nodes", std::move(nodes)},
       {"history", std::move(history)},
       {"downsampled_history",
-       BuildDownsampledHistory(matched_buffers, history_seconds, now_ms)},
+       BuildDownsampledHistory(
+           matched_buffers,
+           history_seconds,
+           now_ms,
+           retention_.warm_bucket_ms,
+           retention_.cold_bucket_ms)},
   };
 }
 
@@ -366,8 +474,13 @@ nlohmann::json TelemetryLiveStore::BuildHealth(
       matched_buffers.push_back(&buffer);
     }
   }
-  const auto alerts =
-      BuildAlerts(matched_buffers, persistence_, dropped_frames_total_, now_ms);
+  const auto alerts = BuildAlerts(
+      matched_buffers,
+      persistence_,
+      streams_,
+      thresholds_,
+      dropped_frames_total_,
+      now_ms);
   std::string status = "ok";
   if (!alerts.empty()) {
     status = "degraded";
@@ -388,18 +501,88 @@ nlohmann::json TelemetryLiveStore::BuildHealth(
       {"last_frame_age_ms",
        latest_sequence_ > 0 && now_ms >= latest_sequence_ ? now_ms - latest_sequence_ : 0},
       {"dropped_frames_total", dropped_frames_total_},
-      {"stream_batch_limit", StreamBatchLimit()},
+      {"stream_batch_limit", retention_.stream_batch_limit},
       {"retention",
        nlohmann::json{
-           {"hot_history_capacity", HistoryCapacity()},
+           {"hot_history_capacity", retention_.hot_history_capacity},
            {"durable_history_capacity", persistence_.retention_capacity},
-           {"warm_bucket_ms", WarmBucketMs()},
-           {"cold_bucket_ms", ColdBucketMs()},
+           {"stream_batch_limit", retention_.stream_batch_limit},
+           {"warm_bucket_ms", retention_.warm_bucket_ms},
+           {"cold_bucket_ms", retention_.cold_bucket_ms},
        }},
       {"persistence", BuildPersistenceStatusLocked()},
+      {"streams", BuildStreamStatusLocked()},
+      {"thresholds",
+       nlohmann::json{
+           {"stale_warning_ms", thresholds_.stale_warning_ms},
+           {"stale_critical_ms", thresholds_.stale_critical_ms},
+           {"ingest_warning_ms", thresholds_.ingest_warning_ms},
+           {"queue_warning_ms", thresholds_.queue_warning_ms},
+           {"browser_apply_warning_ms", thresholds_.browser_apply_warning_ms},
+       }},
       {"planes", BuildPlaneAggregates(matched_buffers, now_ms)},
       {"alerts", alerts},
   };
+}
+
+std::string TelemetryLiveStore::BuildOpenMetrics(
+    const std::optional<std::string>& plane_name) const {
+  const auto health = BuildHealth(plane_name);
+  std::ostringstream out;
+  const auto status = health.value("status", std::string{"ok"});
+  const int status_value = status == "critical" ? 2 : status == "degraded" ? 1 : 0;
+  out << "# TYPE naim_telemetry_health_status gauge\n";
+  out << "naim_telemetry_health_status " << status_value << "\n";
+  out << "# TYPE naim_telemetry_latest_sequence gauge\n";
+  out << "naim_telemetry_latest_sequence "
+      << health.value("latest_sequence", std::uint64_t{0}) << "\n";
+  out << "# TYPE naim_telemetry_last_frame_age_ms gauge\n";
+  out << "naim_telemetry_last_frame_age_ms "
+      << health.value("last_frame_age_ms", std::uint64_t{0}) << "\n";
+  out << "# TYPE naim_telemetry_dropped_frames_total counter\n";
+  out << "naim_telemetry_dropped_frames_total "
+      << health.value("dropped_frames_total", std::uint64_t{0}) << "\n";
+  const auto persistence = health.value("persistence", nlohmann::json::object());
+  out << "# TYPE naim_telemetry_persistence_enabled gauge\n";
+  out << "naim_telemetry_persistence_enabled "
+      << (persistence.value("enabled", false) ? 1 : 0) << "\n";
+  out << "# TYPE naim_telemetry_persistence_errors_total counter\n";
+  out << "naim_telemetry_persistence_errors_total "
+      << persistence.value("error_count", std::uint64_t{0}) << "\n";
+  out << "# TYPE naim_telemetry_persistence_persisted_frames_total counter\n";
+  out << "naim_telemetry_persistence_persisted_frames_total "
+      << persistence.value("persisted_frames_total", std::uint64_t{0}) << "\n";
+  out << "# TYPE naim_telemetry_stream_active_clients gauge\n";
+  out << "# TYPE naim_telemetry_stream_replay_required_total counter\n";
+  out << "# TYPE naim_telemetry_stream_send_failures_total counter\n";
+  const auto streams = health.value("streams", nlohmann::json::object());
+  for (const auto& name : {std::string{"telemetry"}, std::string{"live"}}) {
+    const auto stream = streams.value(name, nlohmann::json::object());
+    out << "naim_telemetry_stream_active_clients{stream=\""
+        << SanitizeMetricLabel(name) << "\"} "
+        << stream.value("active_clients", std::uint64_t{0}) << "\n";
+    out << "naim_telemetry_stream_replay_required_total{stream=\""
+        << SanitizeMetricLabel(name) << "\"} "
+        << stream.value("replay_required_total", std::uint64_t{0}) << "\n";
+    out << "naim_telemetry_stream_send_failures_total{stream=\""
+        << SanitizeMetricLabel(name) << "\"} "
+        << stream.value("send_failure_total", std::uint64_t{0}) << "\n";
+  }
+  out << "# TYPE naim_telemetry_plane_nodes gauge\n";
+  out << "# TYPE naim_telemetry_plane_stale_nodes gauge\n";
+  out << "# TYPE naim_telemetry_plane_max_ingest_ms gauge\n";
+  for (const auto& plane : health.value("planes", nlohmann::json::array())) {
+    const std::string plane_name_label =
+        SanitizeMetricLabel(plane.value("plane_name", std::string{"unassigned"}));
+    out << "naim_telemetry_plane_nodes{plane=\"" << plane_name_label << "\"} "
+        << plane.value("node_count", std::uint64_t{0}) << "\n";
+    out << "naim_telemetry_plane_stale_nodes{plane=\"" << plane_name_label << "\"} "
+        << plane.value("stale_nodes", std::uint64_t{0}) << "\n";
+    const auto latency = plane.value("latency", nlohmann::json::object());
+    out << "naim_telemetry_plane_max_ingest_ms{plane=\"" << plane_name_label << "\"} "
+        << latency.value("max_controller_ingest_ms", std::uint64_t{0}) << "\n";
+  }
+  return out.str();
 }
 
 std::vector<naim::HostTelemetryFrame> TelemetryLiveStore::LoadFramesAfter(
@@ -420,8 +603,9 @@ std::vector<naim::HostTelemetryFrame> TelemetryLiveStore::LoadFramesAfter(
       [](const auto& left, const auto& right) {
         return left.sequence < right.sequence;
       });
-  if (frames.size() > StreamBatchLimit()) {
-    const auto erase_count = static_cast<std::ptrdiff_t>(frames.size() - StreamBatchLimit());
+  if (frames.size() > retention_.stream_batch_limit) {
+    const auto erase_count =
+        static_cast<std::ptrdiff_t>(frames.size() - retention_.stream_batch_limit);
     frames.erase(frames.begin(), frames.begin() + erase_count);
   }
   return frames;
@@ -462,12 +646,13 @@ TelemetryLiveStore::StreamDelta TelemetryLiveStore::LoadStreamDeltaAfter(
       [](const auto& left, const auto& right) {
         return left.sequence < right.sequence;
       });
-  if (frames.size() > StreamBatchLimit()) {
+  if (frames.size() > retention_.stream_batch_limit) {
     delta.replay_required = true;
     if (delta.replay_reason.empty()) {
       delta.replay_reason = "stream-batch-truncated";
     }
-    const auto erase_count = static_cast<std::ptrdiff_t>(frames.size() - StreamBatchLimit());
+    const auto erase_count =
+        static_cast<std::ptrdiff_t>(frames.size() - retention_.stream_batch_limit);
     frames.erase(frames.begin(), frames.begin() + erase_count);
   }
   delta.frames = std::move(frames);
@@ -477,6 +662,47 @@ TelemetryLiveStore::StreamDelta TelemetryLiveStore::LoadStreamDeltaAfter(
 std::uint64_t TelemetryLiveStore::LatestSequence() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return latest_sequence_;
+}
+
+void TelemetryLiveStore::RecordStreamOpened(const std::string& stream_name) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  RecordStreamOpenedLocked(stream_name);
+}
+
+void TelemetryLiveStore::RecordStreamClosed(const std::string& stream_name) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto& state = MutableStreamStateLocked(stream_name);
+  if (state.active_clients > 0) {
+    --state.active_clients;
+  }
+  ++state.closed_total;
+}
+
+void TelemetryLiveStore::RecordStreamReplayRequired(const std::string& stream_name) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ++MutableStreamStateLocked(stream_name).replay_required_total;
+}
+
+void TelemetryLiveStore::RecordStreamSendFailure(const std::string& stream_name) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ++MutableStreamStateLocked(stream_name).send_failure_total;
+}
+
+void TelemetryLiveStore::RecordStreamOpenedLocked(const std::string& stream_name) {
+  auto& state = MutableStreamStateLocked(stream_name);
+  if (state.opened_total > 0) {
+    ++state.reconnect_total;
+  }
+  ++state.opened_total;
+  ++state.active_clients;
+}
+
+TelemetryLiveStore::StreamState& TelemetryLiveStore::MutableStreamStateLocked(
+    const std::string& stream_name) {
+  if (stream_name == "live") {
+    return streams_.live;
+  }
+  return streams_.telemetry;
 }
 
 bool TelemetryLiveStore::MatchesPlane(
@@ -510,16 +736,31 @@ nlohmann::json TelemetryLiveStore::BuildPersistenceStatusLocked() const {
   };
 }
 
+nlohmann::json TelemetryLiveStore::BuildStreamStatusLocked() const {
+  const auto encode = [](const StreamState& state) {
+    return nlohmann::json{
+        {"active_clients", state.active_clients},
+        {"opened_total", state.opened_total},
+        {"closed_total", state.closed_total},
+        {"reconnect_total", state.reconnect_total},
+        {"replay_required_total", state.replay_required_total},
+        {"send_failure_total", state.send_failure_total},
+    };
+  };
+  return nlohmann::json{
+      {"telemetry", encode(streams_.telemetry)},
+      {"live", encode(streams_.live)},
+  };
+}
+
 nlohmann::json TelemetryLiveStore::BuildAlerts(
     const std::vector<const NodeBuffer*>& buffers,
     const PersistenceState& persistence,
+    const StreamMetrics& streams,
+    const AlertThresholds& thresholds,
     const std::uint64_t dropped_frames_total,
     const std::uint64_t now_ms) {
   nlohmann::json alerts = nlohmann::json::array();
-  constexpr std::uint64_t stale_warn_ms = 15000;
-  constexpr std::uint64_t stale_critical_ms = 60000;
-  constexpr std::uint64_t ingest_warn_ms = 3000;
-  constexpr std::uint64_t queue_warn_ms = 1000;
   if (!persistence.enabled) {
     alerts.push_back(nlohmann::json{
         {"code", "telemetry.persistence.disabled"},
@@ -544,13 +785,31 @@ nlohmann::json TelemetryLiveStore::BuildAlerts(
         {"count", dropped_frames_total},
     });
   }
+  if (streams.telemetry.send_failure_total > 0 || streams.live.send_failure_total > 0) {
+    alerts.push_back(nlohmann::json{
+        {"code", "telemetry.stream.send_failures"},
+        {"severity", "warning"},
+        {"message", "telemetry stream clients observed send failures"},
+        {"telemetry_failures", streams.telemetry.send_failure_total},
+        {"live_failures", streams.live.send_failure_total},
+    });
+  }
+  if (streams.telemetry.replay_required_total > 0 || streams.live.replay_required_total > 0) {
+    alerts.push_back(nlohmann::json{
+        {"code", "telemetry.stream.replay_required"},
+        {"severity", "warning"},
+        {"message", "telemetry stream replay was required"},
+        {"telemetry_replay_required_total", streams.telemetry.replay_required_total},
+        {"live_replay_required_total", streams.live.replay_required_total},
+    });
+  }
   for (const auto* buffer : buffers) {
     if (buffer == nullptr) {
       continue;
     }
     const auto& frame = buffer->latest;
     const auto ingest_ms = ControllerIngestDelayMs(frame, now_ms);
-    if (ingest_ms >= stale_critical_ms) {
+    if (ingest_ms >= thresholds.stale_critical_ms) {
       alerts.push_back(nlohmann::json{
           {"code", "telemetry.node.stale"},
           {"severity", "critical"},
@@ -558,7 +817,7 @@ nlohmann::json TelemetryLiveStore::BuildAlerts(
           {"plane_name", PlaneKeyForFrame(frame)},
           {"age_ms", ingest_ms},
       });
-    } else if (ingest_ms >= stale_warn_ms) {
+    } else if (ingest_ms >= thresholds.stale_warning_ms) {
       alerts.push_back(nlohmann::json{
           {"code", "telemetry.node.slow"},
           {"severity", "warning"},
@@ -567,7 +826,7 @@ nlohmann::json TelemetryLiveStore::BuildAlerts(
           {"age_ms", ingest_ms},
       });
     }
-    if (ingest_ms >= ingest_warn_ms) {
+    if (ingest_ms >= thresholds.ingest_warning_ms) {
       alerts.push_back(nlohmann::json{
           {"code", "telemetry.controller.ingest_delay"},
           {"severity", "warning"},
@@ -576,7 +835,7 @@ nlohmann::json TelemetryLiveStore::BuildAlerts(
           {"delay_ms", ingest_ms},
       });
     }
-    if (frame.publisher_queue_delay_ms >= queue_warn_ms) {
+    if (frame.publisher_queue_delay_ms >= thresholds.queue_warning_ms) {
       alerts.push_back(nlohmann::json{
           {"code", "telemetry.publisher.queue_delay"},
           {"severity", "warning"},
@@ -692,7 +951,9 @@ struct BucketAccumulator {
 nlohmann::json TelemetryLiveStore::BuildDownsampledHistory(
     const std::vector<const NodeBuffer*>& buffers,
     const int history_seconds,
-    const std::uint64_t now_ms) {
+    const std::uint64_t now_ms,
+    const std::uint64_t warm_bucket_ms,
+    const std::uint64_t cold_bucket_ms) {
   if (history_seconds <= 0) {
     return nlohmann::json::array();
   }
@@ -708,7 +969,8 @@ nlohmann::json TelemetryLiveStore::BuildDownsampledHistory(
         continue;
       }
       const std::uint64_t age_ms = now_ms >= frame.sequence ? now_ms - frame.sequence : 0;
-      const std::uint64_t bucket_ms = age_ms <= WarmBucketMs() ? WarmBucketMs() : ColdBucketMs();
+      const std::uint64_t bucket_ms =
+          age_ms <= warm_bucket_ms ? warm_bucket_ms : cold_bucket_ms;
       const std::uint64_t bucket_start_ms = (frame.sequence / bucket_ms) * bucket_ms;
       const auto key =
           frame.node_name + "|" + PlaneKeyForFrame(frame) + "|" +
@@ -843,26 +1105,6 @@ nlohmann::json TelemetryLiveStore::BuildPlaneAggregates(
     });
   }
   return result;
-}
-
-constexpr std::size_t TelemetryLiveStore::HistoryCapacity() {
-  return 300;
-}
-
-constexpr std::size_t TelemetryLiveStore::StreamBatchLimit() {
-  return 128;
-}
-
-constexpr std::uint64_t TelemetryLiveStore::WarmBucketMs() {
-  return 10000;
-}
-
-constexpr std::uint64_t TelemetryLiveStore::ColdBucketMs() {
-  return 60000;
-}
-
-constexpr std::size_t TelemetryLiveStore::DurableHistoryCapacity() {
-  return 9600;
 }
 
 }  // namespace naim::controller

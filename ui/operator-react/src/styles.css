@@ -429,6 +429,25 @@ body {
   gap: 16px;
 }
 
+.telemetry-latency-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.telemetry-latency-strip span {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+.telemetry-latency-strip strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
 .page-panel {
   min-width: 0;
 }

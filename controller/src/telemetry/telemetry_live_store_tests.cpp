@@ -274,6 +274,62 @@ void TestSqlitePersistenceReplayAndHealth() {
   std::cout << "ok: telemetry-live-store-sqlite-persistence-health\n";
 }
 
+void TestConfigurableRetentionAndMetrics() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  store.ResetForTests();
+  naim::controller::TelemetryLiveStore::RetentionConfig retention;
+  retention.hot_history_capacity = 3;
+  retention.stream_batch_limit = 2;
+  retention.durable_history_capacity = 5;
+  retention.warm_bucket_ms = 1000;
+  retention.cold_bucket_ms = 2000;
+  naim::controller::TelemetryLiveStore::AlertThresholds thresholds;
+  thresholds.queue_warning_ms = 1;
+  store.ConfigureOperationalPolicy(retention, thresholds);
+  for (std::uint64_t index = 0; index < 6; ++index) {
+    Expect(
+        store.Upsert(MakeFrame("node-config", "plane-config", 5000 + index)),
+        "config frame should update");
+  }
+  const auto snapshot = store.BuildSnapshot(std::string("plane-config"), 30);
+  Expect(snapshot.at("history_capacity").get<std::size_t>() == 3, "hot capacity should be configurable");
+  Expect(snapshot.at("stream_batch_limit").get<std::size_t>() == 2, "stream cap should be configurable");
+  Expect(
+      snapshot.at("dropped_frames_total").get<std::uint64_t>() >= 3,
+      "custom hot capacity should prune frames");
+  const auto delta = store.LoadStreamDeltaAfter(0, std::string("plane-config"));
+  Expect(delta.frames.size() == 2, "custom stream batch limit should cap deltas");
+  Expect(delta.replay_required, "custom stream batch limit should require replay");
+  Expect(!snapshot.at("alerts").empty(), "custom thresholds should produce alert candidates");
+  std::cout << "ok: telemetry-live-store-configurable-retention\n";
+}
+
+void TestStreamMetricsAndOpenMetrics() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  store.ResetForTests();
+  Expect(store.Upsert(MakeFrame("node-metrics", "plane-metrics", CurrentMillis())), "metrics frame");
+  store.RecordStreamOpened("live");
+  store.RecordStreamOpened("live");
+  store.RecordStreamClosed("live");
+  store.RecordStreamReplayRequired("live");
+  store.RecordStreamSendFailure("live");
+  const auto health = store.BuildHealth(std::string("plane-metrics"));
+  const auto live = health.at("streams").at("live");
+  Expect(live.at("active_clients").get<std::uint64_t>() == 1, "live active clients");
+  Expect(live.at("reconnect_total").get<std::uint64_t>() == 1, "live reconnect count");
+  Expect(live.at("replay_required_total").get<std::uint64_t>() == 1, "live replay count");
+  Expect(live.at("send_failure_total").get<std::uint64_t>() == 1, "live send failure count");
+  const auto metrics = store.BuildOpenMetrics(std::string("plane-metrics"));
+  Expect(
+      metrics.find("naim_telemetry_health_status") != std::string::npos,
+      "openmetrics should expose health status");
+  Expect(
+      metrics.find("naim_telemetry_stream_active_clients") != std::string::npos,
+      "openmetrics should expose stream clients");
+  store.ResetForTests();
+  std::cout << "ok: telemetry-live-store-stream-openmetrics\n";
+}
+
 }  // namespace
 
 int main() {
@@ -284,6 +340,8 @@ int main() {
     TestBackpressureProjection();
     TestPlaneAggregatesAndDownsampling();
     TestSqlitePersistenceReplayAndHealth();
+    TestConfigurableRetentionAndMetrics();
+    TestStreamMetricsAndOpenMetrics();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "telemetry_live_store_tests failed: " << error.what() << "\n";

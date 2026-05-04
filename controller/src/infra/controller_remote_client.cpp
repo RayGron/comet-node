@@ -62,6 +62,30 @@ std::optional<std::string> LoadControllerTargetConfig() {
   return value;
 }
 
+std::vector<std::pair<std::string, std::string>> ControllerAuthHeadersFromEnv() {
+  std::vector<std::pair<std::string, std::string>> headers;
+  if (const char* token = std::getenv("NAIM_CONTROLLER_SESSION_TOKEN");
+      token != nullptr && token[0] != '\0') {
+    headers.emplace_back("X-NAIM-Session-Token", token);
+    return headers;
+  }
+  if (const char* token = std::getenv("NAIM_CONTROLLER_TOKEN");
+      token != nullptr && token[0] != '\0') {
+    headers.emplace_back("X-NAIM-Session-Token", token);
+    return headers;
+  }
+  if (const char* token = std::getenv("NAIM_CONTROLLER_BEARER_TOKEN");
+      token != nullptr && token[0] != '\0') {
+    headers.emplace_back("Authorization", std::string("Bearer ") + token);
+    return headers;
+  }
+  if (const char* cookie = std::getenv("NAIM_CONTROLLER_COOKIE");
+      cookie != nullptr && cookie[0] != '\0') {
+    headers.emplace_back("Cookie", cookie);
+  }
+  return headers;
+}
+
 }  // namespace
 
 std::optional<std::string> ResolveControllerTarget(
@@ -86,7 +110,11 @@ nlohmann::json SendControllerJsonRequest(
     const std::string& path,
     const std::vector<std::pair<std::string, std::string>>& params) {
   const HttpResponse response = SendControllerHttpRequest(
-      target, method, path + BuildQueryString(params));
+      target,
+      method,
+      path + BuildQueryString(params),
+      "",
+      ControllerAuthHeadersFromEnv());
   nlohmann::json payload =
       response.body.empty() ? nlohmann::json::object()
                             : nlohmann::json::parse(response.body);

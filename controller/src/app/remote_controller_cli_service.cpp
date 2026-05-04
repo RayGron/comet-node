@@ -199,6 +199,13 @@ int RemoteControllerCliService::ExecuteCommand(
         {{"node", node_name.value_or("")},
          {"stale_after", stale_after.has_value() ? std::to_string(*stale_after) : ""}}));
   }
+  if (command == "show-telemetry-health") {
+    return EmitRemoteJsonPayload(SendControllerJsonRequest(
+        target,
+        "GET",
+        "/api/v1/telemetry/health",
+        {{"plane", plane_name.value_or("")}}));
+  }
   if (command == "show-disk-state") {
     return EmitRemoteJsonPayload(SendControllerJsonRequest(
         target,

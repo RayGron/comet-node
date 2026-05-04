@@ -4,7 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "telemetry/telemetry_live_store_types.h"
+#include "telemetry/telemetry_state_types.h"
 
 namespace naim::controller {
 

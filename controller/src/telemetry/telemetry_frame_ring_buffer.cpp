@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstddef>
 
+#include "telemetry/telemetry_frame_sequence_less.h"
+
 namespace naim::controller {
 
 bool TelemetryFrameRingBuffer::Upsert(
@@ -61,12 +63,7 @@ std::vector<naim::HostTelemetryFrame> TelemetryFrameRingBuffer::LoadFramesAfter(
       }
     }
   }
-  std::sort(
-      frames.begin(),
-      frames.end(),
-      [](const auto& left, const auto& right) {
-        return left.sequence < right.sequence;
-      });
+  std::sort(frames.begin(), frames.end(), TelemetryFrameSequenceLess{});
   if (frames.size() > retention.stream_batch_limit) {
     const auto erase_count =
         static_cast<std::ptrdiff_t>(frames.size() - retention.stream_batch_limit);
@@ -107,12 +104,7 @@ TelemetryStreamDelta TelemetryFrameRingBuffer::LoadStreamDeltaAfter(
     }
   }
   delta.first_available_sequence = first_available;
-  std::sort(
-      frames.begin(),
-      frames.end(),
-      [](const auto& left, const auto& right) {
-        return left.sequence < right.sequence;
-      });
+  std::sort(frames.begin(), frames.end(), TelemetryFrameSequenceLess{});
   if (frames.size() > retention.stream_batch_limit) {
     delta.replay_required = true;
     if (delta.replay_reason.empty()) {

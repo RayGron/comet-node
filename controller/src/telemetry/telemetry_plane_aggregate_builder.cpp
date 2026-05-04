@@ -43,11 +43,10 @@ nlohmann::json TelemetryPlaneAggregateBuilder::Build(
   }
   nlohmann::json result = nlohmann::json::array();
   for (const auto& [_, plane] : planes) {
-    const bool overloaded = plane.dropped_frames_total > 0;
     std::string status = "ok";
     if (plane.stale_nodes > 0) {
       status = "stale";
-    } else if (plane.degraded_nodes > 0 || overloaded) {
+    } else if (plane.degraded_nodes > 0) {
       status = "degraded";
     }
     const double node_count = static_cast<double>(std::max<std::uint64_t>(1, plane.node_count));

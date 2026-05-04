@@ -17,8 +17,9 @@ nlohmann::json TelemetryNodeHealthBuilder::Build(
   if (stale) {
     status = "stale";
   } else if (
-      buffer.dropped_frames_total > 0 || frame.telemetry_dropped_frames > 0 ||
-      frame.publish_error_count > 0 || !frame.degraded_reason.empty()) {
+      frame.telemetry_dropped_frames > 0 ||
+      !frame.last_publish_error.empty() ||
+      !frame.degraded_reason.empty()) {
     status = "degraded";
   }
   return nlohmann::json{

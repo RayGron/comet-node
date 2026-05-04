@@ -52,7 +52,6 @@ nlohmann::json TelemetrySnapshotBuilder::BuildSnapshot(
       persistence,
       streams,
       thresholds,
-      dropped_frames_total,
       now_ms);
   const std::string status =
       !alerts.empty() ? "degraded" : overloaded ? "overloaded" : "ok";

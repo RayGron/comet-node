@@ -19,7 +19,6 @@ class TelemetryAlertBuilder final {
       const TelemetryPersistenceState& persistence,
       const TelemetryStreamMetrics& streams,
       const TelemetryAlertThresholds& thresholds,
-      std::uint64_t dropped_frames_total,
       std::uint64_t now_ms) const;
 
  private:

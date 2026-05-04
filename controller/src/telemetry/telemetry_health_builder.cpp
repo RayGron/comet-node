@@ -25,7 +25,6 @@ nlohmann::json TelemetryHealthBuilder::BuildHealth(
       persistence,
       streams,
       thresholds,
-      dropped_frames_total,
       now_ms);
   std::string status = "ok";
   if (!alerts.empty()) {

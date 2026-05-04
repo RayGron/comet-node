@@ -1,7 +1,5 @@
 #pragma once
 
-#include <cstdint>
-
 #include <nlohmann/json.hpp>
 
 #include "telemetry/telemetry_state_types.h"
@@ -12,8 +10,7 @@ class TelemetryPipelineAlertBuilder final {
  public:
   nlohmann::json Build(
       const TelemetryPersistenceState& persistence,
-      const TelemetryStreamMetrics& streams,
-      std::uint64_t dropped_frames_total) const;
+      const TelemetryStreamMetrics& streams) const;
 };
 
 }  // namespace naim::controller

@@ -563,6 +563,7 @@ set(
   controller/src/telemetry/telemetry_alert_builder.cpp
   controller/src/telemetry/telemetry_clock.cpp
   controller/src/telemetry/telemetry_environment_reader.cpp
+  controller/src/telemetry/telemetry_frame_health_policy.cpp
   controller/src/telemetry/telemetry_frame_json_builder.cpp
   controller/src/telemetry/telemetry_frame_matcher.cpp
   controller/src/telemetry/telemetry_frame_normalizer.cpp

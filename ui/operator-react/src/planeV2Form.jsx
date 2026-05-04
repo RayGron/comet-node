@@ -97,6 +97,7 @@ const FIELD_INFO = {
   browsingLoginEnabled: "Allow login-capable browser sessions for this plane WebGateway. Keep disabled unless the plane needs authenticated browsing.",
   browsingMaxSearchResults: "Maximum number of web search results returned by one WebGateway search request.",
   browsingMaxFetchBytes: "Maximum sanitized fetch response size returned by WebGateway.",
+  webgatewayImage: "Optional WebGateway runtime image override. Leave blank to use the controller default.",
   turboquantEnabled: "Enable KV-cache quantization for llama.cpp + llama_rpc planes. This requires a compatible turboquant-capable llama.cpp build.",
   turboquantCacheTypeK: "KV cache type used for K cache pages. Defaults to turbo4 when TurboQuant is enabled.",
   turboquantCacheTypeV: "KV cache type used for V cache pages. Defaults to turbo4 when TurboQuant is enabled.",
@@ -750,6 +751,7 @@ export function buildNewPlaneFormState() {
     browsingLoginEnabled: false,
     browsingMaxSearchResults: WEBGATEWAY_DEFAULT_MAX_SEARCH_RESULTS,
     browsingMaxFetchBytes: WEBGATEWAY_DEFAULT_MAX_FETCH_BYTES,
+    webgatewayImage: "",
     turboquantEnabled: false,
     turboquantCacheTypeK: TURBOQUANT_DEFAULT_CACHE_TYPE_K,
     turboquantCacheTypeV: TURBOQUANT_DEFAULT_CACHE_TYPE_V,
@@ -935,6 +937,7 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
       browsingPolicy?.max_search_results || defaults.browsingMaxSearchResults,
     browsingMaxFetchBytes:
       browsingPolicy?.max_fetch_bytes || defaults.browsingMaxFetchBytes,
+    webgatewayImage: browsing?.image || defaults.webgatewayImage,
     turboquantEnabled: Boolean(turboquant?.enabled),
     turboquantCacheTypeK: normalizeTurboQuantCacheType(
       turboquant?.cache_type_k,
@@ -1283,6 +1286,9 @@ export function buildDesiredStateV2FromForm(form) {
           ),
         },
       };
+      if (String(form.webgatewayImage || "").trim()) {
+        desiredState.webgateway.image = String(form.webgatewayImage || "").trim();
+      }
     }
     if (form.knowledgeEnabled) {
       desiredState.knowledge = {
@@ -1362,9 +1368,32 @@ export function buildDesiredStateV2FromForm(form) {
       if (String(form.voiceListenerImage || "").trim()) {
         features.voice_listener.image = String(form.voiceListenerImage || "").trim();
       }
+      features.voice_listener.env = {
+        HOST: "0.0.0.0",
+        PORT: "18140",
+        VOICE_ASR_LANGUAGE:
+          String(form.voiceListenerLanguage || "").trim() ||
+          VOICE_LISTENER_DEFAULT_LANGUAGE,
+        VOICE_ASR_THREADS: "8",
+        VOICE_LISTENER_WAKE_PHRASE:
+          String(form.voiceListenerWakePhrase || "").trim() ||
+          VOICE_LISTENER_DEFAULT_WAKE_PHRASE,
+      };
+      features.voice_listener.storage = {
+        mount_path: "/naim/private",
+        size_gb: 1,
+      };
     }
     if (Object.keys(features).length > 0) {
       desiredState.features = features;
+    }
+    if (form.voiceListenerEnabled) {
+      desiredState.resources.voice_module = {
+        gpu_enabled: true,
+        gpu_fraction: 0.2,
+        memory_cap_mb: 4096,
+        share_mode: "shared",
+      };
     }
   }
 
@@ -2895,6 +2924,14 @@ export function PlaneV2FormBuilder({
                 onChange={bindNumber("browsingMaxFetchBytes")}
               />
             </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.webgatewayImage}>WebGateway image</InfoLabel>
+              <input
+                className="text-input"
+                value={form.webgatewayImage}
+                onChange={bindText("webgatewayImage")}
+              />
+            </label>
           </div>
         </div>
       ) : null}
@@ -3145,6 +3182,22 @@ export function PlaneV2FormBuilder({
             </label>
           </div>
 
+          <div className="plane-form-grid">
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.modelRef}>Model ref</InfoLabel>
+              <input
+                className={inputClassName(
+                  Boolean(fieldError("Model ref is required for catalog or huggingface sources")),
+                )}
+                value={form.modelRef}
+                onChange={bindText("modelRef")}
+              />
+              <FieldHint
+                message={fieldError("Model ref is required for catalog or huggingface sources")}
+              />
+            </label>
+          </div>
+
           {form.modelSourceType === "library" || form.modelSourceType === "local" ? (
             <div className="field-label">
               <InfoLabel
@@ -3164,24 +3217,6 @@ export function PlaneV2FormBuilder({
                   fieldError("Model Library selection is required when model source type is library")
                 }
               />
-            </div>
-          ) : null}
-
-          {form.modelSourceType !== "local" && form.modelSourceType !== "library" ? (
-            <div className="plane-form-grid">
-              <label className="field-label">
-                <InfoLabel info={FIELD_INFO.modelRef}>Model ref</InfoLabel>
-                <input
-                  className={inputClassName(
-                    Boolean(fieldError("Model ref is required for catalog or huggingface sources")),
-                  )}
-                  value={form.modelRef}
-                  onChange={bindText("modelRef")}
-                />
-                <FieldHint
-                  message={fieldError("Model ref is required for catalog or huggingface sources")}
-                />
-              </label>
             </div>
           ) : null}
 

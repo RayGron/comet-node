@@ -327,6 +327,23 @@ describe("planeV2Form SkillsFactory mapping", () => {
         env: "WHISPER_MODEL_PATH",
         required: true,
       },
+      env: {
+        HOST: "0.0.0.0",
+        PORT: "18140",
+        VOICE_ASR_LANGUAGE: "auto",
+        VOICE_ASR_THREADS: "8",
+        VOICE_LISTENER_WAKE_PHRASE: "Hey Jex",
+      },
+      storage: {
+        mount_path: "/naim/private",
+        size_gb: 1,
+      },
+    });
+    expect(desiredState.resources.voice_module).toEqual({
+      gpu_enabled: true,
+      gpu_fraction: 0.2,
+      memory_cap_mb: 4096,
+      share_mode: "shared",
     });
 
     const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);

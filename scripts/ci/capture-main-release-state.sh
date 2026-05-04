@@ -85,17 +85,44 @@ if [[ -f "${compose_path}" ]]; then
 fi
 
 db_backup_path=""
+db_backup_status="not-present"
+db_backup_error=""
+db_backup_timeout_seconds="${NAIM_MAIN_DB_BACKUP_TIMEOUT_SECONDS:-120}"
 if [[ -f "${db_path}" ]]; then
   db_backup_path="${backup_root}/controller.sqlite.before"
+  db_backup_status="failed"
   if command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "${db_path}" ".backup '${db_backup_path}'"
-  else
-    cp "${db_path}" "${db_backup_path}"
-    for suffix in -wal -shm; do
-      if [[ -f "${db_path}${suffix}" ]]; then
-        cp "${db_path}${suffix}" "${db_backup_path}${suffix}"
+    if command -v timeout >/dev/null 2>&1; then
+      if timeout "${db_backup_timeout_seconds}s" sqlite3 "${db_path}" ".backup '${db_backup_path}'"; then
+        db_backup_status="ok"
+      else
+        backup_status=$?
+        db_backup_error="sqlite backup exited with ${backup_status} after timeout ${db_backup_timeout_seconds}s"
+        rm -f "${db_backup_path}" "${db_backup_path}-wal" "${db_backup_path}-shm"
+        db_backup_path=""
       fi
-    done
+    elif sqlite3 "${db_path}" ".backup '${db_backup_path}'"; then
+      db_backup_status="ok"
+    else
+      backup_status=$?
+      db_backup_error="sqlite backup exited with ${backup_status}; timeout command is unavailable"
+      rm -f "${db_backup_path}" "${db_backup_path}-wal" "${db_backup_path}-shm"
+      db_backup_path=""
+    fi
+  else
+    if cp "${db_path}" "${db_backup_path}"; then
+      for suffix in -wal -shm; do
+        if [[ -f "${db_path}${suffix}" ]]; then
+          cp "${db_path}${suffix}" "${db_backup_path}${suffix}"
+        fi
+      done
+      db_backup_status="ok"
+    else
+      backup_status=$?
+      db_backup_error="filesystem database copy exited with ${backup_status}"
+      rm -f "${db_backup_path}" "${db_backup_path}-wal" "${db_backup_path}-shm"
+      db_backup_path=""
+    fi
   fi
 fi
 
@@ -112,6 +139,9 @@ python3 - \
   "${previous_manifest_path}" \
   "${compose_backup_path}" \
   "${db_backup_path}" \
+  "${db_backup_status}" \
+  "${db_backup_error}" \
+  "${db_backup_timeout_seconds}" \
   "${docker_state_path}" \
   "${controller_port}" \
   "${web_ui_port}" <<'PY'
@@ -127,10 +157,13 @@ from datetime import datetime, timezone
     previous_manifest_path,
     compose_backup_path,
     db_backup_path,
+    db_backup_status,
+    db_backup_error,
+    db_backup_timeout_seconds,
     docker_state_path,
     controller_port,
     web_ui_port,
-) = sys.argv[1:11]
+) = sys.argv[1:14]
 
 print(json.dumps({
     "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -141,6 +174,9 @@ print(json.dumps({
     "previous_manifest_path": previous_manifest_path,
     "compose_backup_path": compose_backup_path,
     "db_backup_path": db_backup_path,
+    "db_backup_status": db_backup_status,
+    "db_backup_error": db_backup_error,
+    "db_backup_timeout_seconds": int(db_backup_timeout_seconds),
     "docker_state_path": docker_state_path,
     "controller_port": controller_port,
     "web_ui_port": web_ui_port,

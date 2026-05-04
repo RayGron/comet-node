@@ -379,6 +379,15 @@ json ToJson(const HostTelemetryFrame& frame) {
       {"ttl_ms", frame.ttl_ms},
       {"lane", frame.lane},
       {"degraded_reason", frame.degraded_reason},
+      {"collector_duration_ms", frame.collector_duration_ms},
+      {"publish_duration_ms", frame.publish_duration_ms},
+      {"publisher_queue_delay_ms", frame.publisher_queue_delay_ms},
+      {"telemetry_bus_depth", frame.telemetry_bus_depth},
+      {"telemetry_dropped_frames", frame.telemetry_dropped_frames},
+      {"publish_error_count", frame.publish_error_count},
+      {"adaptive_interval_ms", frame.adaptive_interval_ms},
+      {"adaptive_reason", frame.adaptive_reason},
+      {"last_publish_error", frame.last_publish_error},
       {"instance_runtime", std::move(instance_runtime)},
       {"gpu", ToJson(frame.gpu)},
       {"network", ToJson(frame.network)},
@@ -417,6 +426,21 @@ HostTelemetryFrame HostTelemetryFrameFromJson(const json& value) {
   frame.ttl_ms = value.value("ttl_ms", 10000);
   frame.lane = value.value("lane", std::string{"fast"});
   frame.degraded_reason = value.value("degraded_reason", std::string{});
+  frame.collector_duration_ms =
+      value.value("collector_duration_ms", static_cast<std::uint64_t>(0));
+  frame.publish_duration_ms =
+      value.value("publish_duration_ms", static_cast<std::uint64_t>(0));
+  frame.publisher_queue_delay_ms =
+      value.value("publisher_queue_delay_ms", static_cast<std::uint64_t>(0));
+  frame.telemetry_bus_depth =
+      value.value("telemetry_bus_depth", static_cast<std::uint64_t>(0));
+  frame.telemetry_dropped_frames =
+      value.value("telemetry_dropped_frames", static_cast<std::uint64_t>(0));
+  frame.publish_error_count =
+      value.value("publish_error_count", static_cast<std::uint64_t>(0));
+  frame.adaptive_interval_ms = value.value("adaptive_interval_ms", frame.interval_ms);
+  frame.adaptive_reason = value.value("adaptive_reason", std::string{});
+  frame.last_publish_error = value.value("last_publish_error", std::string{});
   for (const auto& status : value.value("instance_runtime", json::array())) {
     if (status.is_object()) {
       frame.instance_runtime.push_back(RuntimeProcessStatusFromJson(status));

@@ -1,10 +1,13 @@
 #include "run/launcher_run_service.h"
 
+#include <algorithm>
 #include <chrono>
 #include <atomic>
 #include <cerrno>
 #include <csignal>
 #include <cctype>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -13,7 +16,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
+#include <mutex>
 
 #include <nlohmann/json.hpp>
 
@@ -149,6 +154,113 @@ class LauncherTelemetryBackendSupport final : public naim::hostd::IHttpHostdBack
     return naim::hostd::controller_transport_support::Trim(value);
   }
 };
+
+struct LauncherTelemetryBusItem {
+  naim::HostTelemetryFrame frame;
+  std::chrono::steady_clock::time_point enqueued_at;
+};
+
+class LauncherTelemetryBus final {
+ public:
+  void Publish(naim::HostTelemetryFrame frame) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (queue_.size() >= kCapacity) {
+      queue_.pop_front();
+      ++dropped_frames_;
+    }
+    queue_.push_back(LauncherTelemetryBusItem{std::move(frame), std::chrono::steady_clock::now()});
+    cv_.notify_one();
+  }
+
+  std::optional<LauncherTelemetryBusItem> WaitPop(const std::atomic_bool& stop_requested) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait_for(lock, std::chrono::milliseconds(250), [&]() {
+      return stop_requested.load() || !queue_.empty();
+    });
+    if (queue_.empty()) {
+      return std::nullopt;
+    }
+    auto item = std::move(queue_.front());
+    queue_.pop_front();
+    return item;
+  }
+
+  void Stop() {
+    cv_.notify_all();
+  }
+
+  std::uint64_t DroppedFrames() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dropped_frames_;
+  }
+
+  std::size_t Depth() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return queue_.size();
+  }
+
+ private:
+  static constexpr std::size_t kCapacity = 16;
+
+  mutable std::mutex mutex_;
+  std::condition_variable cv_;
+  std::deque<LauncherTelemetryBusItem> queue_;
+  std::uint64_t dropped_frames_ = 0;
+};
+
+struct LauncherTelemetryRuntimeMetrics {
+  std::atomic<std::uint64_t> last_publish_duration_ms{0};
+  std::atomic<std::uint64_t> publish_error_count{0};
+  std::string last_publish_error;
+  mutable std::mutex error_mutex;
+};
+
+std::uint64_t DurationMillis(
+    const std::chrono::steady_clock::time_point started_at,
+    const std::chrono::steady_clock::time_point finished_at) {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(finished_at - started_at).count());
+}
+
+struct LauncherTelemetryCadence {
+  std::chrono::milliseconds interval;
+  std::string reason;
+};
+
+LauncherTelemetryCadence ResolveTelemetryCadence(const naim::HostTelemetryFrame& frame) {
+  if (frame.plane_name.empty() && frame.instance_runtime.empty()) {
+    return {std::chrono::seconds(10), "idle-no-plane"};
+  }
+  const bool has_not_ready = std::any_of(
+      frame.instance_runtime.begin(),
+      frame.instance_runtime.end(),
+      [](const naim::RuntimeProcessStatus& status) {
+        return !status.ready || status.runtime_phase == "starting" ||
+               status.runtime_phase == "deploying" || status.runtime_phase == "loading";
+      });
+  if (has_not_ready) {
+    return {std::chrono::seconds(1), "plane-changing"};
+  }
+  if (!frame.instance_runtime.empty()) {
+    return {std::chrono::seconds(5), "stable-runtime"};
+  }
+  return {std::chrono::seconds(3), "plane-without-runtime"};
+}
+
+std::string LoadLastPublishError(const LauncherTelemetryRuntimeMetrics& metrics) {
+  std::lock_guard<std::mutex> lock(metrics.error_mutex);
+  return metrics.last_publish_error;
+}
+
+void StoreLastPublishError(
+    LauncherTelemetryRuntimeMetrics* metrics,
+    const std::string& error) {
+  if (metrics == nullptr) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(metrics->error_mutex);
+  metrics->last_publish_error = error;
+}
 
 std::filesystem::path HostdSelfUpdateMarkerPath(
     const std::filesystem::path& state_root,
@@ -610,25 +722,85 @@ int LauncherRunService::RunHostdLoop(
   };
 #else
   std::atomic_bool telemetry_runtime_stop{false};
-  std::thread telemetry_runtime_thread;
+  LauncherTelemetryBus telemetry_bus;
+  LauncherTelemetryRuntimeMetrics telemetry_metrics;
+  std::thread telemetry_collector_thread;
+  std::thread telemetry_publisher_thread;
   const auto stop_telemetry_runtime = [&]() {
     telemetry_runtime_stop.store(true);
-    if (telemetry_runtime_thread.joinable()) {
-      telemetry_runtime_thread.join();
+    telemetry_bus.Stop();
+    if (telemetry_collector_thread.joinable()) {
+      telemetry_collector_thread.join();
+    }
+    if (telemetry_publisher_thread.joinable()) {
+      telemetry_publisher_thread.join();
     }
   };
   const auto start_telemetry_runtime = [&]() {
     telemetry_runtime_stop.store(false);
-    telemetry_runtime_thread = std::thread([&, telemetry_interval_ms = kTelemetryIntervalMs,
-                                             telemetry_ttl_ms = kTelemetryTtlMs]() {
-      const auto interval = std::chrono::milliseconds(telemetry_interval_ms);
-      const auto slow_interval = std::max(
-          interval * 5,
-          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(10)));
+    telemetry_collector_thread = std::thread([&, telemetry_interval_ms = kTelemetryIntervalMs,
+                                               telemetry_ttl_ms = kTelemetryTtlMs]() {
+      auto interval = std::chrono::milliseconds(telemetry_interval_ms);
+      auto slow_interval = std::max(
+          interval * 6,
+          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(30)));
       std::cout << "hostd_telemetry_runtime=in-process\n";
-      std::cout << "hostd_telemetry_interval_ms=" << interval.count() << "\n";
-      std::cout << "hostd_telemetry_slow_interval_ms=" << slow_interval.count() << "\n";
+      std::cout << "hostd_telemetry_bus=bounded-local\n";
+      std::cout << "hostd_telemetry_initial_interval_ms=" << interval.count() << "\n";
+      std::cout << "hostd_telemetry_initial_slow_interval_ms=" << slow_interval.count() << "\n";
       std::cout.flush();
+      while (!telemetry_runtime_stop.load()) {
+        try {
+          naim::hostd::HostdReportingSupport reporting_support;
+          auto next_tick = std::chrono::steady_clock::now();
+          auto next_slow_tick = next_tick;
+          while (!telemetry_runtime_stop.load()) {
+            next_tick += interval;
+            const auto now = std::chrono::steady_clock::now();
+            const bool include_slow_lane = now >= next_slow_tick;
+            if (include_slow_lane) {
+              next_slow_tick = now + slow_interval;
+            }
+            const auto collect_started_at = std::chrono::steady_clock::now();
+            auto frame = reporting_support.BuildTelemetryFrame(
+                options.node_name,
+                options.storage_root,
+                options.state_root.string(),
+                static_cast<int>(interval.count()),
+                telemetry_ttl_ms,
+                include_slow_lane);
+            const auto collect_finished_at = std::chrono::steady_clock::now();
+            const auto cadence = ResolveTelemetryCadence(frame);
+            frame.collector_duration_ms = DurationMillis(collect_started_at, collect_finished_at);
+            frame.publish_duration_ms = telemetry_metrics.last_publish_duration_ms.load();
+            frame.telemetry_bus_depth = telemetry_bus.Depth();
+            frame.telemetry_dropped_frames = telemetry_bus.DroppedFrames();
+            frame.publish_error_count = telemetry_metrics.publish_error_count.load();
+            frame.adaptive_interval_ms = static_cast<int>(cadence.interval.count());
+            frame.adaptive_reason = cadence.reason;
+            frame.last_publish_error = LoadLastPublishError(telemetry_metrics);
+            telemetry_bus.Publish(std::move(frame));
+            interval = cadence.interval;
+            slow_interval = std::max(
+                interval * 6,
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(30)));
+            while (!telemetry_runtime_stop.load() &&
+                   std::chrono::steady_clock::now() < next_tick) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (std::chrono::steady_clock::now() > next_tick + interval) {
+              next_tick = std::chrono::steady_clock::now();
+            }
+          }
+        } catch (const std::exception& error) {
+          if (!telemetry_runtime_stop.load()) {
+            std::cerr << "naim-node: telemetry collector warning: " << error.what() << "\n";
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+          }
+        }
+      }
+    });
+    telemetry_publisher_thread = std::thread([&]() {
       while (!telemetry_runtime_stop.load()) {
         try {
           LauncherTelemetryBackendSupport backend_support;
@@ -649,35 +821,30 @@ int LauncherRunService::RunHostdLoop(
                   : std::optional<std::string>(options.onboarding_key),
               options.node_name,
               options.storage_root);
-          naim::hostd::HostdReportingSupport reporting_support;
-          auto next_tick = std::chrono::steady_clock::now();
-          auto next_slow_tick = next_tick;
           while (!telemetry_runtime_stop.load()) {
-            next_tick += interval;
-            const auto now = std::chrono::steady_clock::now();
-            const bool include_slow_lane = now >= next_slow_tick;
-            if (include_slow_lane) {
-              next_slow_tick = now + slow_interval;
+            auto item = telemetry_bus.WaitPop(telemetry_runtime_stop);
+            if (!item.has_value()) {
+              continue;
             }
-            const auto frame = reporting_support.BuildTelemetryFrame(
-                options.node_name,
-                options.storage_root,
-                options.state_root.string(),
-                static_cast<int>(interval.count()),
-                telemetry_ttl_ms,
-                include_slow_lane);
-            backend->UpsertHostTelemetry(frame);
-            while (!telemetry_runtime_stop.load() &&
-                   std::chrono::steady_clock::now() < next_tick) {
-              std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-            if (std::chrono::steady_clock::now() > next_tick + interval) {
-              next_tick = std::chrono::steady_clock::now();
-            }
+            item->frame.publisher_queue_delay_ms =
+                DurationMillis(item->enqueued_at, std::chrono::steady_clock::now());
+            item->frame.telemetry_bus_depth = telemetry_bus.Depth();
+            item->frame.telemetry_dropped_frames = telemetry_bus.DroppedFrames();
+            item->frame.publish_error_count = telemetry_metrics.publish_error_count.load();
+            item->frame.publish_duration_ms =
+                telemetry_metrics.last_publish_duration_ms.load();
+            item->frame.last_publish_error = LoadLastPublishError(telemetry_metrics);
+            const auto publish_started_at = std::chrono::steady_clock::now();
+            backend->UpsertHostTelemetry(item->frame);
+            telemetry_metrics.last_publish_duration_ms.store(
+                DurationMillis(publish_started_at, std::chrono::steady_clock::now()));
+            StoreLastPublishError(&telemetry_metrics, "");
           }
         } catch (const std::exception& error) {
           if (!telemetry_runtime_stop.load()) {
-            std::cerr << "naim-node: telemetry runtime warning: " << error.what() << "\n";
+            telemetry_metrics.publish_error_count.fetch_add(1);
+            StoreLastPublishError(&telemetry_metrics, error.what());
+            std::cerr << "naim-node: telemetry publisher warning: " << error.what() << "\n";
             std::this_thread::sleep_for(std::chrono::seconds(1));
           }
         }

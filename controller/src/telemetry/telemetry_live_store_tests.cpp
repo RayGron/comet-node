@@ -31,6 +31,13 @@ naim::HostTelemetryFrame MakeFrame(
   frame.expires_at = "2026-05-04 12:00:10";
   frame.monotonic_ms = sequence;
   frame.lane = "fast";
+  frame.collector_duration_ms = 2;
+  frame.publish_duration_ms = 3;
+  frame.publisher_queue_delay_ms = 4;
+  frame.telemetry_bus_depth = 1;
+  frame.telemetry_dropped_frames = 0;
+  frame.adaptive_interval_ms = 2000;
+  frame.adaptive_reason = "test";
   frame.cpu.source = "procfs";
   frame.cpu.total_memory_bytes = 100;
   frame.cpu.used_memory_bytes = 50;
@@ -120,6 +127,21 @@ void TestCoherenceFieldsAndStaleProjection() {
   Expect(node.at("lane").get<std::string>() == "full", "lane should roundtrip");
   Expect(node.at("monotonic_ms").get<std::uint64_t>() == 1234, "monotonic_ms should roundtrip");
   Expect(
+      node.at("collector_duration_ms").get<std::uint64_t>() == 2,
+      "collector duration should roundtrip");
+  Expect(
+      node.at("publish_duration_ms").get<std::uint64_t>() == 3,
+      "publish duration should roundtrip");
+  Expect(
+      node.at("publisher_queue_delay_ms").get<std::uint64_t>() == 4,
+      "queue delay should roundtrip");
+  Expect(
+      node.at("adaptive_reason").get<std::string>() == "test",
+      "adaptive reason should roundtrip");
+  Expect(
+      node.contains("controller_ingest_delay_ms"),
+      "controller ingest delay should be projected");
+  Expect(
       node.at("degraded_reason").get<std::string>() == "cpu:procfs-warmup",
       "degraded reason should roundtrip");
   Expect(!node.at("stale").get<bool>(), "fresh frame should not be stale");
@@ -133,6 +155,33 @@ void TestCoherenceFieldsAndStaleProjection() {
   std::cout << "ok: telemetry-live-store-coherence-stale\n";
 }
 
+void TestBackpressureProjection() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  for (std::uint64_t index = 0; index < 320; ++index) {
+    Expect(
+        store.Upsert(MakeFrame("node-backpressure", "plane-backpressure", 1000 + index)),
+        "backpressure frame should update");
+  }
+  const auto snapshot = store.BuildSnapshot(std::string("plane-backpressure"), 600);
+  Expect(snapshot.at("telemetry_overloaded").get<bool>(), "snapshot should expose overload");
+  Expect(
+      snapshot.at("dropped_frames_total").get<std::uint64_t>() >= 20,
+      "snapshot should count dropped frames");
+  Expect(
+      snapshot.at("history_capacity").get<std::size_t>() == 300,
+      "snapshot should expose history capacity");
+  Expect(
+      snapshot.at("stream_batch_limit").get<std::size_t>() == 128,
+      "snapshot should expose stream batch limit");
+  Expect(
+      snapshot.at("nodes").at(0).at("controller_dropped_frames_total").get<std::uint64_t>() >= 20,
+      "node should expose dropped frames");
+  const auto frames = store.LoadFramesAfter(1000, std::string("plane-backpressure"));
+  Expect(frames.size() == 128, "stream load should be capped");
+  Expect(frames.front().sequence > 1000, "stream cap should retain newer frames");
+  std::cout << "ok: telemetry-live-store-backpressure\n";
+}
+
 }  // namespace
 
 int main() {
@@ -140,6 +189,7 @@ int main() {
     TestUpsertAndSnapshot();
     TestPlaneFilter();
     TestCoherenceFieldsAndStaleProjection();
+    TestBackpressureProjection();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "telemetry_live_store_tests failed: " << error.what() << "\n";

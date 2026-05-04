@@ -425,8 +425,12 @@ int LauncherRunService::RunHostdLoop(
   }
   std::cout
       << "next_step=leave hostd running so it can receive assignments and upload telemetry\n";
+  constexpr int kTelemetryIntervalMs = 2000;
+  constexpr int kTelemetryTtlMs = 10000;
   auto next_inventory_report_at = std::chrono::steady_clock::now();
+#if defined(_WIN32)
   auto next_telemetry_report_at = std::chrono::steady_clock::now();
+#endif
   const auto self_update_marker =
       HostdSelfUpdateMarkerPath(options.state_root, options.node_name);
   std::error_code marker_error;
@@ -493,7 +497,7 @@ int LauncherRunService::RunHostdLoop(
     return args;
   };
 
-  const auto build_telemetry_args = [&]() {
+  const auto build_telemetry_args = [&](const bool watch) {
     std::vector<std::string> args = {
         hostd_binary.string(),
         "report-telemetry",
@@ -501,7 +505,14 @@ int LauncherRunService::RunHostdLoop(
         options.node_name,
         "--state-root",
         options.state_root.string(),
+        "--interval-ms",
+        std::to_string(kTelemetryIntervalMs),
+        "--ttl-ms",
+        std::to_string(kTelemetryTtlMs),
     };
+    if (watch) {
+      args.push_back("--watch");
+    }
     if (!options.controller_url.empty()) {
       args.insert(args.end(), {"--controller", options.controller_url});
       if (!options.controller_fingerprint.empty()) {
@@ -532,18 +543,19 @@ int LauncherRunService::RunHostdLoop(
         now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
   };
 
+#if defined(_WIN32)
   const auto run_telemetry_if_due = [&]() {
-    constexpr int kTelemetryIntervalMs = 2000;
     const auto now = std::chrono::steady_clock::now();
     if (now < next_telemetry_report_at) {
       return;
     }
-    const int telemetry_code = process_runner_.RunCommand(build_telemetry_args());
+    const int telemetry_code = process_runner_.RunCommand(build_telemetry_args(false));
     if (telemetry_code != 0) {
       std::cerr << "naim-node: hostd report-telemetry exit=" << telemetry_code << "\n";
     }
     next_telemetry_report_at = now + std::chrono::milliseconds(kTelemetryIntervalMs);
   };
+#endif
 
   const auto wait_for_self_update_recreate = [&]() -> int {
     peer_service.Stop();
@@ -555,6 +567,7 @@ int LauncherRunService::RunHostdLoop(
 
 #if !defined(_WIN32)
   pid_t apply_pid = -1;
+  pid_t telemetry_pid = -1;
   const auto reap_apply_if_finished = [&]() -> bool {
     if (apply_pid <= 0) {
       return false;
@@ -574,6 +587,29 @@ int LauncherRunService::RunHostdLoop(
     }
     return false;
   };
+
+  const auto reap_telemetry_if_finished = [&]() {
+    if (telemetry_pid <= 0) {
+      return;
+    }
+    const std::optional<int> telemetry_code = PollChildExitCode(telemetry_pid);
+    if (!telemetry_code.has_value()) {
+      return;
+    }
+    if (*telemetry_code != 0) {
+      std::cerr << "naim-node: hostd report-telemetry watch exit=" << *telemetry_code
+                << "\n";
+    }
+    telemetry_pid = -1;
+  };
+
+  const auto start_telemetry_if_needed = [&]() {
+    reap_telemetry_if_finished();
+    if (telemetry_pid <= 0) {
+      telemetry_pid =
+          static_cast<pid_t>(process_runner_.SpawnCommand(build_telemetry_args(true)));
+    }
+  };
 #endif
 
   while (!signal_manager.stop_requested()) {
@@ -588,7 +624,12 @@ int LauncherRunService::RunHostdLoop(
       return wait_for_self_update_recreate();
     }
 #else
+    start_telemetry_if_needed();
     if (reap_apply_if_finished()) {
+      if (telemetry_pid > 0) {
+        StopChildProcess(telemetry_pid);
+        telemetry_pid = -1;
+      }
       return wait_for_self_update_recreate();
     }
     if (apply_pid <= 0) {
@@ -597,24 +638,36 @@ int LauncherRunService::RunHostdLoop(
 #endif
 
     run_report_if_due();
+#if defined(_WIN32)
     run_telemetry_if_due();
+#endif
 
     for (int second = 0;
          second < options.poll_interval_sec && !signal_manager.stop_requested();
          ++second) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
 #if !defined(_WIN32)
+      start_telemetry_if_needed();
       if (reap_apply_if_finished()) {
+        if (telemetry_pid > 0) {
+          StopChildProcess(telemetry_pid);
+          telemetry_pid = -1;
+        }
         return wait_for_self_update_recreate();
       }
 #endif
       run_report_if_due();
+#if defined(_WIN32)
       run_telemetry_if_due();
+#endif
     }
   }
 #if !defined(_WIN32)
   if (apply_pid > 0) {
     StopChildProcess(apply_pid);
+  }
+  if (telemetry_pid > 0) {
+    StopChildProcess(telemetry_pid);
   }
 #endif
   peer_service.Stop();

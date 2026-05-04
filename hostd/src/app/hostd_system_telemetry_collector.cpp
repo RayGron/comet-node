@@ -338,19 +338,14 @@ std::vector<double> CollectCpuTemperatureSamples() {
   return samples;
 }
 
-struct CpuSample {
-  std::uint64_t idle = 0;
-  std::uint64_t total = 0;
-};
-
-std::optional<CpuSample> ReadCpuSample() {
+std::optional<HostdCpuCounterSample> ReadCpuSample() {
   std::ifstream input("/proc/stat");
   if (!input.is_open()) {
     return std::nullopt;
   }
 
   std::string cpu_label;
-  CpuSample sample;
+  HostdCpuCounterSample sample;
   std::uint64_t user = 0;
   std::uint64_t nice = 0;
   std::uint64_t system = 0;
@@ -964,13 +959,17 @@ naim::CpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectCpuTelemetry() 
   snapshot.core_count = static_cast<int>(std::thread::hardware_concurrency());
 
   const auto first = ReadCpuSample();
-  std::this_thread::sleep_for(std::chrono::milliseconds(150));
-  const auto second = ReadCpuSample();
-  if (first.has_value() && second.has_value() && second->total > first->total) {
-    const auto total_delta = static_cast<double>(second->total - first->total);
-    const auto idle_delta = static_cast<double>(second->idle - first->idle);
+  if (first.has_value() && last_cpu_sample_.has_value() &&
+      first->total > last_cpu_sample_->total) {
+    const auto total_delta = static_cast<double>(first->total - last_cpu_sample_->total);
+    const auto idle_delta = static_cast<double>(first->idle - last_cpu_sample_->idle);
     snapshot.utilization_pct =
         total_delta > 0.0 ? std::max(0.0, 100.0 * (1.0 - (idle_delta / total_delta))) : 0.0;
+    last_cpu_sample_ = first;
+  } else if (first.has_value()) {
+    last_cpu_sample_ = first;
+    snapshot.degraded = true;
+    snapshot.source = "procfs-warmup";
   } else {
     snapshot.degraded = true;
     snapshot.source = "procfs-unavailable";

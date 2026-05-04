@@ -112,6 +112,22 @@ bool HostdCliCommandDispatcher::DispatchReportTelemetry(
   }
   const auto request =
       resolution_support_.ResolveAssignmentRequest(command_line, node_config, node_name);
+  const int interval_ms = command_line.telemetry_interval_ms().value_or(2000);
+  const int ttl_ms = command_line.telemetry_ttl_ms().value_or(10000);
+  if (command_line.watch()) {
+    observation_service_.WatchLocalTelemetry(
+        request.db_path,
+        request.controller_url,
+        request.host_private_key_path,
+        request.controller_fingerprint,
+        request.onboarding_key,
+        request.common.node_name,
+        request.common.storage_root,
+        request.common.state_root,
+        interval_ms,
+        ttl_ms);
+    return true;
+  }
   observation_service_.ReportLocalTelemetry(
       request.db_path,
       request.controller_url,
@@ -121,8 +137,8 @@ bool HostdCliCommandDispatcher::DispatchReportTelemetry(
       request.common.node_name,
       request.common.storage_root,
       request.common.state_root,
-      2000,
-      10000);
+      interval_ms,
+      ttl_ms);
   return true;
 }
 

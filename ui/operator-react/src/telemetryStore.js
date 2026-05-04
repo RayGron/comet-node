@@ -4,6 +4,9 @@ export function createTelemetryStore() {
     latestSequence: 0,
     droppedFramesTotal: 0,
     overloaded: false,
+    schemaVersion: "telemetry.store.v2",
+    lastReplayRequired: false,
+    lastReplayReason: "",
   };
 }
 
@@ -56,6 +59,9 @@ export function reduceTelemetryStore(store, frames, planeName = "") {
     Boolean(current.overloaded) ||
     acceptedFrames.some((frame) => frame?.telemetry_overloaded === true) ||
     droppedFramesTotal > 0;
+  const replayRequired =
+    Boolean(current.lastReplayRequired) ||
+    acceptedFrames.some((frame) => frame?.replay?.required === true);
 
   return {
     store: {
@@ -63,9 +69,31 @@ export function reduceTelemetryStore(store, frames, planeName = "") {
       latestSequence,
       droppedFramesTotal,
       overloaded,
+      schemaVersion: "telemetry.store.v2",
+      lastReplayRequired: replayRequired,
+      lastReplayReason: current.lastReplayReason || "",
     },
     acceptedFrames,
     changed: true,
+  };
+}
+
+export function applyTelemetrySnapshotMetadata(store, payload) {
+  const current = store || createTelemetryStore();
+  const replay = payload?.replay || {};
+  return {
+    ...current,
+    latestSequence: Math.max(
+      Number(current.latestSequence || 0),
+      Number(payload?.latest_sequence || replay?.latest_sequence || 0),
+    ),
+    droppedFramesTotal: Math.max(
+      Number(current.droppedFramesTotal || 0),
+      Number(payload?.dropped_frames_total || replay?.dropped_frames_total || 0),
+    ),
+    overloaded: Boolean(current.overloaded) || payload?.telemetry_overloaded === true,
+    lastReplayRequired: replay?.required === true,
+    lastReplayReason: replay?.reason || current.lastReplayReason || "",
   };
 }
 

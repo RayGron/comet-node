@@ -144,6 +144,8 @@ naim::HostTelemetryFrame HostdObservedStateSnapshotBuilder::BuildTelemetryFrame(
     const bool include_slow_lane) const {
   naim::HostTelemetryFrame frame;
   frame.node_name = node_name;
+  frame.node_id = node_name;
+  frame.source = "hostd";
   const auto sampled_at = std::chrono::system_clock::now();
   frame.sampled_at = TimestampString(sampled_at);
   frame.collected_at = frame.sampled_at;
@@ -151,6 +153,7 @@ naim::HostTelemetryFrame HostdObservedStateSnapshotBuilder::BuildTelemetryFrame(
       TimestampString(sampled_at + std::chrono::milliseconds(std::max(1, ttl_ms)));
   frame.sequence = CurrentSequenceMillis();
   frame.monotonic_ms = CurrentMonotonicMillis();
+  frame.monotonic_timestamp_ms = frame.monotonic_ms;
   frame.interval_ms = interval_ms;
   frame.ttl_ms = ttl_ms;
   frame.lane = include_slow_lane ? "full" : "fast";
@@ -158,12 +161,27 @@ naim::HostTelemetryFrame HostdObservedStateSnapshotBuilder::BuildTelemetryFrame(
   const auto local_state = local_state_repository_.LoadLocalAppliedState(state_root, node_name);
   if (local_state.has_value()) {
     frame.plane_name = local_state->plane_name;
+    frame.plane_id = local_state->plane_name;
   }
   const naim::DesiredState telemetry_state =
       local_state.has_value() ? *local_state : naim::DesiredState{};
   frame.instance_runtime =
       runtime_telemetry_support_.LoadLocalInstanceRuntimeStatuses(state_root, node_name);
   runtime_telemetry_support_.ResolveInstanceHostPids(&frame.instance_runtime);
+  frame.plane_instance_count = frame.instance_runtime.size();
+  for (const auto& runtime : frame.instance_runtime) {
+    if (runtime.ready) {
+      ++frame.plane_ready_instance_count;
+    }
+  }
+  frame.plane_not_ready_instance_count =
+      frame.plane_instance_count - frame.plane_ready_instance_count;
+  if (frame.plane_instance_count == 0) {
+    frame.plane_runtime_health = frame.plane_name.empty() ? "idle" : "no-runtime";
+  } else {
+    frame.plane_runtime_health =
+        frame.plane_not_ready_instance_count > 0 ? "changing" : "ready";
+  }
   frame.gpu = system_telemetry_collector_.CollectGpuTelemetry(
       telemetry_state,
       node_name,

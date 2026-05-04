@@ -135,14 +135,19 @@ struct CpuTelemetrySnapshot {
 
 struct HostTelemetryFrame {
   int contract_version = 1;
+  std::string schema_version = "host.telemetry.v2";
   std::string channel = "host.telemetry.v1";
+  std::string source = "hostd";
   std::string node_name;
+  std::string node_id;
   std::string plane_name;
+  std::string plane_id;
   std::string sampled_at;
   std::string collected_at;
   std::string expires_at;
   std::uint64_t sequence = 0;
   std::uint64_t monotonic_ms = 0;
+  std::uint64_t monotonic_timestamp_ms = 0;
   int interval_ms = 2000;
   int ttl_ms = 10000;
   std::string lane = "fast";
@@ -156,6 +161,10 @@ struct HostTelemetryFrame {
   int adaptive_interval_ms = 2000;
   std::string adaptive_reason;
   std::string last_publish_error;
+  std::uint64_t plane_instance_count = 0;
+  std::uint64_t plane_ready_instance_count = 0;
+  std::uint64_t plane_not_ready_instance_count = 0;
+  std::string plane_runtime_health = "unknown";
   std::vector<RuntimeProcessStatus> instance_runtime;
   GpuTelemetrySnapshot gpu;
   NetworkTelemetrySnapshot network;

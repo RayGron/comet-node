@@ -4080,7 +4080,10 @@ function App() {
   const skillsEnabled =
     Boolean(desiredStateV2?.skills?.enabled) || Boolean(desiredState?.skills?.enabled);
   const browsingEnabled =
-    Boolean(desiredStateV2?.browsing?.enabled) || Boolean(desiredState?.browsing?.enabled);
+    Boolean(desiredStateV2?.webgateway?.enabled) ||
+    Boolean(desiredStateV2?.browsing?.enabled) ||
+    Boolean(desiredState?.webgateway?.enabled) ||
+    Boolean(desiredState?.browsing?.enabled);
   const knowledgeEnabled =
     Boolean(desiredStateV2?.knowledge?.enabled) || Boolean(desiredState?.knowledge?.enabled);
   const selectedKnowledgeIds = selectedKnowledgeIdsFromDesiredState(desiredStateV2 || desiredState);

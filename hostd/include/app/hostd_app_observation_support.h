@@ -26,6 +26,13 @@ class HostdAppObservationSupport final : public IHostdObservationSupport {
       naim::HostObservationStatus status,
       const std::string& status_message,
       const std::optional<int>& assignment_id = std::nullopt) const override;
+  naim::HostTelemetryFrame BuildTelemetryFrame(
+      const std::string& node_name,
+      const std::string& storage_root,
+      const std::string& state_root,
+      int interval_ms,
+      int ttl_ms,
+      bool include_slow_lane) const override;
   void AppendHostdEvent(
       HostdBackend& backend,
       const std::string& category,

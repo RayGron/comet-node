@@ -4,12 +4,14 @@
 #include <array>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
 
 #include "http/controller_http_server_support.h"
 #include "infra/controller_network_manager.h"
+#include "telemetry/telemetry_live_store.h"
 
 using nlohmann::json;
 
@@ -31,6 +33,11 @@ struct SseStreamRequest {
   std::optional<std::string> category;
   int limit = 100;
   std::optional<int> last_event_id;
+};
+
+struct TelemetryStreamRequest {
+  std::optional<std::string> plane_name;
+  std::uint64_t last_sequence = 0;
 };
 
 std::optional<std::string> FindQueryString(
@@ -67,6 +74,15 @@ SseStreamRequest ParseSseStreamRequest(const HttpRequest& request) {
     if (header_value.has_value()) {
       stream_request.last_event_id = std::stoi(*header_value);
     }
+  }
+  return stream_request;
+}
+
+TelemetryStreamRequest ParseTelemetryStreamRequest(const HttpRequest& request) {
+  TelemetryStreamRequest stream_request;
+  stream_request.plane_name = FindQueryString(request, "plane");
+  if (const auto since = FindQueryString(request, "since_sequence"); since.has_value()) {
+    stream_request.last_sequence = static_cast<std::uint64_t>(std::stoull(*since));
   }
   return stream_request;
 }
@@ -178,6 +194,91 @@ void ControllerHttpServer::StreamEventsSse(
   ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
 }
 
+void ControllerHttpServer::StreamTelemetrySse(
+    const SocketHandle client_fd,
+    const HttpRequest& request,
+    std::shared_ptr<SharedState> state) {
+  const TelemetryStreamRequest stream_request = ParseTelemetryStreamRequest(request);
+  std::uint64_t last_sequence = stream_request.last_sequence;
+  if (!ControllerNetworkManager::SendSseHeaders(client_fd)) {
+    ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+    return;
+  }
+  if (!ControllerNetworkManager::SendSseCommentFrame(client_fd, " telemetry connected")) {
+    ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+    return;
+  }
+
+  const auto snapshot = TelemetryLiveStore::Instance().BuildSnapshot(
+      stream_request.plane_name,
+      0);
+  if (!ControllerNetworkManager::SendSseEventFrame(
+          client_fd,
+          static_cast<int>(TelemetryLiveStore::Instance().LatestSequence() % 2147483647ULL),
+          "telemetry.snapshot",
+          snapshot.dump())) {
+    ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+    return;
+  }
+  last_sequence = std::max(last_sequence, TelemetryLiveStore::Instance().LatestSequence());
+
+  auto last_keepalive = std::chrono::steady_clock::now();
+  while (!state->stop_requested.load()) {
+    const auto frames =
+        TelemetryLiveStore::Instance().LoadFramesAfter(last_sequence, stream_request.plane_name);
+    for (const auto& frame : frames) {
+      const std::string payload = naim::SerializeHostTelemetryFrameJson(frame);
+      if (!ControllerNetworkManager::SendSseEventFrame(
+              client_fd,
+              static_cast<int>(frame.sequence % 2147483647ULL),
+              "telemetry.node",
+              payload)) {
+        ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+        return;
+      }
+      last_sequence = std::max(last_sequence, frame.sequence);
+      last_keepalive = std::chrono::steady_clock::now();
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_keepalive >= std::chrono::seconds(5)) {
+      if (!ControllerNetworkManager::SendSseCommentFrame(
+              client_fd,
+              " telemetry keepalive")) {
+        ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+        return;
+      }
+      last_keepalive = now;
+    }
+
+    naim::platform::PollFd fd_state{};
+    fd_state.fd = client_fd;
+    fd_state.events = POLLIN | POLLERR | POLLHUP;
+    const int poll_result = naim::platform::Poll(&fd_state, 1, 250);
+    if (poll_result < 0) {
+      if (naim::platform::LastSocketErrorWasInterrupted()) {
+        continue;
+      }
+      break;
+    }
+    if (poll_result == 0) {
+      continue;
+    }
+    if ((fd_state.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      break;
+    }
+    if ((fd_state.revents & POLLIN) != 0) {
+      char scratch[1];
+      const ssize_t read_count = recv(client_fd, scratch, sizeof(scratch), MSG_PEEK);
+      if (read_count <= 0) {
+        break;
+      }
+    }
+  }
+
+  ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+}
+
 int ControllerHttpServer::Serve(const Config& config) {
   auto state = std::make_shared<SharedState>();
   state->stop_requested.store(false);
@@ -258,6 +359,14 @@ int ControllerHttpServer::Serve(const Config& config) {
 
     const HttpRequest request =
         ControllerHttpServerSupport::ParseHttpRequest(request_data);
+    if (request.method == "GET" && request.path == "/api/v1/telemetry/stream") {
+      std::thread(
+          [client_fd, request, state]() {
+            StreamTelemetrySse(client_fd, request, std::move(state));
+          })
+          .detach();
+      continue;
+    }
     if (request.method == "GET" && request.path == "/api/v1/events/stream") {
       std::thread(
           [client_fd,

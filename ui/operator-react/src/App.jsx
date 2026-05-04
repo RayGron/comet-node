@@ -997,6 +997,143 @@ function hostObservationItemsFromPayload(payload) {
   return [];
 }
 
+function summarizeGpuTelemetryFrame(gpu) {
+  const devices = Array.isArray(gpu?.devices) ? gpu.devices : [];
+  return {
+    available: devices.length > 0,
+    degraded: gpu?.degraded === true,
+    source: gpu?.source || "",
+    collected_at: gpu?.collected_at || "",
+    summary: {
+      device_count: devices.length,
+      total_vram_mb: devices.reduce((sum, item) => sum + Number(item?.total_vram_mb || 0), 0),
+      used_vram_mb: devices.reduce((sum, item) => sum + Number(item?.used_vram_mb || 0), 0),
+      free_vram_mb: devices.reduce((sum, item) => sum + Number(item?.free_vram_mb || 0), 0),
+      temperature_device_count: devices.filter((item) => item?.temperature_available).length,
+      hottest_temperature_c: devices.reduce(
+        (max, item) => Math.max(max, Number(item?.temperature_c || 0)),
+        0,
+      ),
+    },
+    devices,
+  };
+}
+
+function summarizeNetworkTelemetryFrame(network) {
+  const interfaces = Array.isArray(network?.interfaces) ? network.interfaces : [];
+  return {
+    available: interfaces.length > 0,
+    degraded: network?.degraded === true,
+    source: network?.source || "",
+    collected_at: network?.collected_at || "",
+    summary: {
+      interface_count: interfaces.length,
+      rx_bytes: interfaces.reduce((sum, item) => sum + Number(item?.rx_bytes || 0), 0),
+      tx_bytes: interfaces.reduce((sum, item) => sum + Number(item?.tx_bytes || 0), 0),
+    },
+    interfaces,
+    peer_discovery: Array.isArray(network?.peer_discovery) ? network.peer_discovery : [],
+  };
+}
+
+function summarizeDiskTelemetryFrame(disk) {
+  const items = Array.isArray(disk?.items) ? disk.items : [];
+  return {
+    available: items.length > 0,
+    degraded: disk?.degraded === true,
+    source: disk?.source || "",
+    collected_at: disk?.collected_at || "",
+    summary: {
+      disk_count: items.length,
+      total_bytes: items.reduce((sum, item) => sum + Number(item?.total_bytes || 0), 0),
+      used_bytes: items.reduce((sum, item) => sum + Number(item?.used_bytes || 0), 0),
+      free_bytes: items.reduce((sum, item) => sum + Number(item?.free_bytes || 0), 0),
+      read_bytes: items.reduce((sum, item) => sum + Number(item?.read_bytes || 0), 0),
+      write_bytes: items.reduce((sum, item) => sum + Number(item?.write_bytes || 0), 0),
+    },
+    items,
+  };
+}
+
+function hostObservationFromTelemetryFrame(frame) {
+  if (!frame?.node_name) {
+    return null;
+  }
+  const cpuSnapshot = frame?.cpu || {};
+  const instanceRuntime = Array.isArray(frame?.instance_runtime) ? frame.instance_runtime : [];
+  const stale = frame?.stale === true;
+  return {
+    node_name: frame.node_name,
+    plane_name: frame.plane_name || "",
+    status: stale ? "stale" : "healthy",
+    observed_at: frame.sampled_at || null,
+    heartbeat_at: frame.sampled_at || null,
+    telemetry_sequence: frame.sequence || 0,
+    telemetry_channel: frame.channel || "host.telemetry.v1",
+    telemetry_lane: frame.lane || "fast",
+    telemetry_monotonic_ms: frame.monotonic_ms || 0,
+    telemetry_expires_at: frame.expires_at || "",
+    telemetry_expires_in_ms: frame.expires_in_ms ?? null,
+    telemetry_stale: stale,
+    telemetry_degraded: Boolean(frame?.degraded_reason),
+    telemetry_degraded_reason: frame?.degraded_reason || "",
+    runtime_status: { available: instanceRuntime.length > 0 },
+    instance_runtimes: {
+      available: instanceRuntime.length > 0,
+      items: instanceRuntime,
+    },
+    cpu_telemetry: {
+      available: Boolean(cpuSnapshot?.source),
+      degraded: cpuSnapshot?.degraded === true,
+      source: cpuSnapshot?.source || "",
+      collected_at: cpuSnapshot?.collected_at || "",
+      summary: cpuSnapshot,
+    },
+    gpu_telemetry: summarizeGpuTelemetryFrame(frame?.gpu),
+    network_telemetry: summarizeNetworkTelemetryFrame(frame?.network),
+    disk_telemetry: summarizeDiskTelemetryFrame(frame?.disk),
+  };
+}
+
+function mergeTelemetryIntoObservationPayload(currentPayload, frames, planeName = "") {
+  const currentItems = hostObservationItemsFromPayload(currentPayload);
+  const byNode = new Map(currentItems.filter((item) => item?.node_name).map((item) => [item.node_name, item]));
+  let changed = false;
+  for (const frame of frames || []) {
+    if (planeName && frame?.plane_name && frame.plane_name !== planeName) {
+      continue;
+    }
+    const telemetryItem = hostObservationFromTelemetryFrame(frame);
+    if (!telemetryItem?.node_name) {
+      continue;
+    }
+    const previous = byNode.get(telemetryItem.node_name) || {};
+    const previousSequence = Number(previous.telemetry_sequence || 0);
+    const nextSequence = Number(telemetryItem.telemetry_sequence || 0);
+    if (previousSequence > 0 && nextSequence > 0 && nextSequence <= previousSequence) {
+      continue;
+    }
+    const nextItem = {
+      ...previous,
+      ...telemetryItem,
+      observed_state: previous.observed_state,
+      applied_generation: previous.applied_generation,
+      disk_telemetry: telemetryItem.disk_telemetry?.available
+        ? telemetryItem.disk_telemetry
+        : previous.disk_telemetry,
+    };
+    byNode.set(telemetryItem.node_name, nextItem);
+    changed = true;
+  }
+  if (!changed && currentPayload) {
+    return currentPayload;
+  }
+  return {
+    ...(currentPayload || {}),
+    observations: [...byNode.values()],
+  };
+}
+
 function instanceRole(instance) {
   const subrole =
     instance?.labels?.["naim.subrole"] ||
@@ -1964,6 +2101,7 @@ function App() {
   const [dashboard, setDashboard] = useState(null);
   const [hostObservations, setHostObservations] = useState(null);
   const [globalHostObservations, setGlobalHostObservations] = useState(null);
+  const [telemetryHealthy, setTelemetryHealthy] = useState(false);
   const [hostdHosts, setHostdHosts] = useState([]);
   const [protocolRegistry, setProtocolRegistry] = useState({ items: [], summary: {} });
   const [selectedHostNodeName, setSelectedHostNodeName] = useState("");
@@ -2076,6 +2214,8 @@ function App() {
   const liveRefreshSequenceRef = useRef(0);
   const selectedPlaneRef = useRef(selectedPlane);
   const eventSourceRef = useRef(null);
+  const telemetrySourceRef = useRef(null);
+  const globalHostObservationsRef = useRef(null);
   const chatAbortRef = useRef(null);
   const interactionSplitRef = useRef(null);
   const chatTranscriptRef = useRef(null);
@@ -2675,38 +2815,21 @@ function App() {
     try {
       const [
         dashboardPayload,
-        hostObservationsPayload,
-        globalHostObservationsPayload,
         interactionPayload,
       ] = await Promise.all([
         fetchJson(planePath(planeName, "dashboard")),
-        fetchJson(
-          queryPath("/api/v1/host-observations", {
-            plane: planeName,
-            stale_after: 30,
-          }),
-        ),
-        fetchJson(
-          queryPath("/api/v1/host-observations", {
-            stale_after: 30,
-          }),
-        ),
         fetchJson(interactionPath(planeName, "status")),
       ]);
       if (!shouldCommit()) {
         return;
       }
       setDashboard(dashboardPayload);
-      setHostObservations(hostObservationsPayload);
-      setGlobalHostObservations(globalHostObservationsPayload);
       setInteractionStatus(interactionPayload);
 
-      const globalObservationItems = hostObservationItemsFromPayload(
-        globalHostObservationsPayload,
-      );
+      const globalObservationItems = hostObservationItemsFromPayload(globalHostObservations);
       const serverSummary = summarizeGlobalObservations(globalObservationItems);
       const dashboardRuntime = dashboardPayload?.runtime || {};
-      const observationItems = hostObservationItemsFromPayload(hostObservationsPayload);
+      const observationItems = hostObservationItemsFromPayload(hostObservations);
       const observedInstancesCount = observationItems.reduce((count, observation) => {
         const instances = observedInstancesForObservation(observation);
         return count + instances.length;
@@ -3709,6 +3832,10 @@ function App() {
   }, [authState.authenticated, selectedPlane, selectedPage]);
 
   useEffect(() => {
+    globalHostObservationsRef.current = globalHostObservations;
+  }, [globalHostObservations]);
+
+  useEffect(() => {
     if (!authState.authenticated || selectedPage !== "knowledge-vault") {
       return undefined;
     }
@@ -3793,6 +3920,129 @@ function App() {
       }
     };
   }, [authState.authenticated, selectedPlane]);
+
+  useEffect(() => {
+    if (!authState.authenticated) {
+      if (telemetrySourceRef.current) {
+        telemetrySourceRef.current.close();
+        telemetrySourceRef.current = null;
+      }
+      setTelemetryHealthy(false);
+      return undefined;
+    }
+
+    let stopped = false;
+    const applyFrames = (frames) => {
+      const validFrames = (frames || []).filter((frame) => frame?.node_name);
+      if (validFrames.length === 0) {
+        return;
+      }
+      const mergedGlobal = mergeTelemetryIntoObservationPayload(
+        globalHostObservationsRef.current,
+        validFrames,
+      );
+      const globalChanged = mergedGlobal !== globalHostObservationsRef.current;
+      if (globalChanged) {
+        globalHostObservationsRef.current = mergedGlobal;
+        setGlobalHostObservations(mergedGlobal);
+      }
+      if (selectedPlaneRef.current) {
+        setHostObservations((current) =>
+          mergeTelemetryIntoObservationPayload(current, validFrames, selectedPlaneRef.current),
+        );
+      }
+      if (!globalChanged) {
+        return;
+      }
+      const globalItems = hostObservationItemsFromPayload(mergedGlobal);
+      const serverSummary = summarizeGlobalObservations(globalItems);
+      setMetricHistory((current) =>
+        appendMetricHistory(
+          current,
+          buildServerMetricSamples(serverSummary, globalItems.length),
+          Date.now(),
+        ),
+      );
+    };
+
+    fetchJson(queryPath("/api/v1/telemetry/snapshot", { history_seconds: 120 }))
+      .then((payload) => {
+        if (stopped) {
+          return;
+        }
+        applyFrames([...(payload?.history || []), ...(payload?.nodes || [])]);
+      })
+      .catch((error) => {
+        if (error?.status === 401) {
+          handleUnauthorized();
+        }
+      });
+
+    const source = new EventSource(
+      queryPath("/api/v1/telemetry/stream", {
+        plane: selectedPlane || undefined,
+      }),
+    );
+    telemetrySourceRef.current = source;
+    setTelemetryHealthy(false);
+
+    source.onopen = () => {
+      setTelemetryHealthy(true);
+    };
+    source.onerror = () => {
+      setTelemetryHealthy(false);
+    };
+    source.addEventListener("telemetry.snapshot", (event) => {
+      try {
+        const payload = JSON.parse(event.data || "{}");
+        applyFrames(payload.nodes || []);
+      } catch (_) {
+        setTelemetryHealthy(false);
+      }
+    });
+    source.addEventListener("telemetry.node", (event) => {
+      try {
+        applyFrames([JSON.parse(event.data || "{}")]);
+      } catch (_) {
+        setTelemetryHealthy(false);
+      }
+    });
+
+    return () => {
+      stopped = true;
+      source.close();
+      if (telemetrySourceRef.current === source) {
+        telemetrySourceRef.current = null;
+      }
+    };
+  }, [authState.authenticated, selectedPlane]);
+
+  useEffect(() => {
+    if (!authState.authenticated || telemetryHealthy) {
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      fetchJson(queryPath("/api/v1/telemetry/snapshot", { history_seconds: 0 }))
+        .then((payload) => {
+          const frames = Array.isArray(payload?.nodes) ? payload.nodes : [];
+          const mergedGlobal = mergeTelemetryIntoObservationPayload(
+            globalHostObservationsRef.current,
+            frames,
+          );
+          if (mergedGlobal !== globalHostObservationsRef.current) {
+            globalHostObservationsRef.current = mergedGlobal;
+            setGlobalHostObservations(mergedGlobal);
+          }
+          if (selectedPlaneRef.current) {
+            setHostObservations((current) =>
+              mergeTelemetryIntoObservationPayload(current, frames, selectedPlaneRef.current),
+            );
+          }
+        })
+        .catch(() => {});
+    }, AUTO_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [authState.authenticated, telemetryHealthy]);
 
   useEffect(() => {
     setSelectedTab("status");
@@ -7634,10 +7884,10 @@ function App() {
     return renderAuthShell();
   }
 
-  const streamLabel = streamHealthy ? "Events live" : "Events reconnecting";
+  const streamLabel = streamHealthy && telemetryHealthy ? "Streams live" : "Streams reconnecting";
   const streamTitle = selectedPlane
-    ? `Global controller event stream; refreshing fleet and selected plane ${selectedPlane}.`
-    : "Global controller event stream; refreshing fleet data.";
+    ? `Controller event and telemetry streams; refreshing selected plane ${selectedPlane}.`
+    : "Controller event and telemetry streams; refreshing fleet data.";
   const lastRefreshTitle = `Last refresh: ${formatTimestamp(lastRefreshAt)}`;
   const lastEventTitle = `Last event: ${lastEventName || "none"}`;
 
@@ -7664,7 +7914,7 @@ function App() {
               <span>{apiHealthy ? "API" : apiError ? "API error" : "API..."}</span>
             </span>
             <span className="status-chip" title={streamTitle}>
-              {statusDot(streamHealthy ? "is-healthy" : selectedPlane ? "is-warning" : "is-booting")}
+              {statusDot(streamHealthy && telemetryHealthy ? "is-healthy" : selectedPlane ? "is-warning" : "is-booting")}
               <span>{streamLabel}</span>
             </span>
             <span className="hero-status-time" title={lastRefreshTitle}>

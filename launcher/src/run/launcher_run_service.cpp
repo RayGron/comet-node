@@ -1,12 +1,15 @@
 #include "run/launcher_run_service.h"
 
 #include <chrono>
+#include <atomic>
 #include <cerrno>
 #include <csignal>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -24,6 +27,9 @@
 #include "naim/core/platform_compat.h"
 #include "naim/security/crypto_utils.h"
 #include "naim/state/sqlite_store.h"
+#include "app/hostd_controller_transport_support.h"
+#include "app/hostd_reporting_support.h"
+#include "backend/hostd_backend_factory.h"
 #include "run/hostd_peer_service.h"
 
 namespace naim::launcher {
@@ -98,6 +104,51 @@ void StopChildProcess(pid_t pid) {
   }
 }
 #endif
+
+class LauncherTelemetryBackendSupport final : public naim::hostd::IHttpHostdBackendSupport {
+ public:
+  nlohmann::json SendControllerJsonRequest(
+      const std::string& controller_url,
+      const std::string& method,
+      const std::string& path,
+      const nlohmann::json& payload,
+      const std::map<std::string, std::string>& headers = {}) const override {
+    return naim::hostd::controller_transport_support::SendControllerJsonRequest(
+        controller_url,
+        method,
+        path,
+        payload,
+        headers);
+  }
+
+  naim::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) const override {
+    return naim::hostd::controller_transport_support::ParseAssignmentPayload(payload);
+  }
+
+  nlohmann::json BuildHostObservationPayload(
+      const naim::HostObservation& observation) const override {
+    return naim::hostd::controller_transport_support::BuildHostObservationPayload(observation);
+  }
+
+  nlohmann::json BuildHostTelemetryPayload(
+      const naim::HostTelemetryFrame& frame) const override {
+    return naim::hostd::controller_transport_support::BuildHostTelemetryPayload(frame);
+  }
+
+  nlohmann::json BuildDiskRuntimeStatePayload(
+      const naim::DiskRuntimeState& state) const override {
+    return naim::hostd::controller_transport_support::BuildDiskRuntimeStatePayload(state);
+  }
+
+  naim::DiskRuntimeState ParseDiskRuntimeStatePayload(
+      const nlohmann::json& payload) const override {
+    return naim::hostd::controller_transport_support::ParseDiskRuntimeStatePayload(payload);
+  }
+
+  std::string Trim(const std::string& value) const override {
+    return naim::hostd::controller_transport_support::Trim(value);
+  }
+};
 
 std::filesystem::path HostdSelfUpdateMarkerPath(
     const std::filesystem::path& state_root,
@@ -425,7 +476,12 @@ int LauncherRunService::RunHostdLoop(
   }
   std::cout
       << "next_step=leave hostd running so it can receive assignments and upload telemetry\n";
+  constexpr int kTelemetryIntervalMs = 2000;
+  constexpr int kTelemetryTtlMs = 10000;
   auto next_inventory_report_at = std::chrono::steady_clock::now();
+#if defined(_WIN32)
+  auto next_telemetry_report_at = std::chrono::steady_clock::now();
+#endif
   const auto self_update_marker =
       HostdSelfUpdateMarkerPath(options.state_root, options.node_name);
   std::error_code marker_error;
@@ -492,6 +548,41 @@ int LauncherRunService::RunHostdLoop(
     return args;
   };
 
+#if defined(_WIN32)
+  const auto build_telemetry_args = [&](const bool watch) {
+    std::vector<std::string> args = {
+        hostd_binary.string(),
+        "report-telemetry",
+        "--node",
+        options.node_name,
+        "--state-root",
+        options.state_root.string(),
+        "--interval-ms",
+        std::to_string(kTelemetryIntervalMs),
+        "--ttl-ms",
+        std::to_string(kTelemetryTtlMs),
+    };
+    if (watch) {
+      args.push_back("--watch");
+    }
+    if (!options.controller_url.empty()) {
+      args.insert(args.end(), {"--controller", options.controller_url});
+      if (!options.controller_fingerprint.empty()) {
+        args.insert(args.end(), {"--controller-fingerprint", options.controller_fingerprint});
+      }
+      if (!options.onboarding_key.empty()) {
+        args.insert(args.end(), {"--onboarding-key", options.onboarding_key});
+      }
+      if (!options.host_private_key_path.empty()) {
+        args.insert(args.end(), {"--host-private-key", options.host_private_key_path.string()});
+      }
+    } else {
+      args.insert(args.end(), {"--db", options.db_path.string()});
+    }
+    return args;
+  };
+#endif
+
   const auto run_report_if_due = [&]() {
     const auto now = std::chrono::steady_clock::now();
     if (now < next_inventory_report_at) {
@@ -505,7 +596,100 @@ int LauncherRunService::RunHostdLoop(
         now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
   };
 
+#if defined(_WIN32)
+  const auto run_telemetry_if_due = [&]() {
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_telemetry_report_at) {
+      return;
+    }
+    const int telemetry_code = process_runner_.RunCommand(build_telemetry_args(false));
+    if (telemetry_code != 0) {
+      std::cerr << "naim-node: hostd report-telemetry exit=" << telemetry_code << "\n";
+    }
+    next_telemetry_report_at = now + std::chrono::milliseconds(kTelemetryIntervalMs);
+  };
+#else
+  std::atomic_bool telemetry_runtime_stop{false};
+  std::thread telemetry_runtime_thread;
+  const auto stop_telemetry_runtime = [&]() {
+    telemetry_runtime_stop.store(true);
+    if (telemetry_runtime_thread.joinable()) {
+      telemetry_runtime_thread.join();
+    }
+  };
+  const auto start_telemetry_runtime = [&]() {
+    telemetry_runtime_stop.store(false);
+    telemetry_runtime_thread = std::thread([&, telemetry_interval_ms = kTelemetryIntervalMs,
+                                             telemetry_ttl_ms = kTelemetryTtlMs]() {
+      const auto interval = std::chrono::milliseconds(telemetry_interval_ms);
+      const auto slow_interval = std::max(
+          interval * 5,
+          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(10)));
+      std::cout << "hostd_telemetry_runtime=in-process\n";
+      std::cout << "hostd_telemetry_interval_ms=" << interval.count() << "\n";
+      std::cout << "hostd_telemetry_slow_interval_ms=" << slow_interval.count() << "\n";
+      std::cout.flush();
+      while (!telemetry_runtime_stop.load()) {
+        try {
+          LauncherTelemetryBackendSupport backend_support;
+          naim::hostd::HostdBackendFactory backend_factory(backend_support);
+          auto backend = backend_factory.CreateBackend(
+              options.db_path.empty() ? std::nullopt
+                                      : std::optional<std::string>(options.db_path.string()),
+              options.controller_url.empty() ? std::nullopt
+                                             : std::optional<std::string>(options.controller_url),
+              options.host_private_key_path.empty()
+                  ? std::nullopt
+                  : std::optional<std::string>(options.host_private_key_path.string()),
+              options.controller_fingerprint.empty()
+                  ? std::nullopt
+                  : std::optional<std::string>(options.controller_fingerprint),
+              options.onboarding_key.empty()
+                  ? std::nullopt
+                  : std::optional<std::string>(options.onboarding_key),
+              options.node_name,
+              options.storage_root);
+          naim::hostd::HostdReportingSupport reporting_support;
+          auto next_tick = std::chrono::steady_clock::now();
+          auto next_slow_tick = next_tick;
+          while (!telemetry_runtime_stop.load()) {
+            next_tick += interval;
+            const auto now = std::chrono::steady_clock::now();
+            const bool include_slow_lane = now >= next_slow_tick;
+            if (include_slow_lane) {
+              next_slow_tick = now + slow_interval;
+            }
+            const auto frame = reporting_support.BuildTelemetryFrame(
+                options.node_name,
+                options.storage_root,
+                options.state_root.string(),
+                static_cast<int>(interval.count()),
+                telemetry_ttl_ms,
+                include_slow_lane);
+            backend->UpsertHostTelemetry(frame);
+            while (!telemetry_runtime_stop.load() &&
+                   std::chrono::steady_clock::now() < next_tick) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (std::chrono::steady_clock::now() > next_tick + interval) {
+              next_tick = std::chrono::steady_clock::now();
+            }
+          }
+        } catch (const std::exception& error) {
+          if (!telemetry_runtime_stop.load()) {
+            std::cerr << "naim-node: telemetry runtime warning: " << error.what() << "\n";
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+          }
+        }
+      }
+    });
+  };
+#endif
+
   const auto wait_for_self_update_recreate = [&]() -> int {
+#if !defined(_WIN32)
+    stop_telemetry_runtime();
+#endif
     peer_service.Stop();
     for (int second = 0; second < 300 && !signal_manager.stop_requested(); ++second) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -534,6 +718,7 @@ int LauncherRunService::RunHostdLoop(
     }
     return false;
   };
+  start_telemetry_runtime();
 #endif
 
   while (!signal_manager.stop_requested()) {
@@ -557,6 +742,9 @@ int LauncherRunService::RunHostdLoop(
 #endif
 
     run_report_if_due();
+#if defined(_WIN32)
+    run_telemetry_if_due();
+#endif
 
     for (int second = 0;
          second < options.poll_interval_sec && !signal_manager.stop_requested();
@@ -568,12 +756,16 @@ int LauncherRunService::RunHostdLoop(
       }
 #endif
       run_report_if_due();
+#if defined(_WIN32)
+      run_telemetry_if_due();
+#endif
     }
   }
 #if !defined(_WIN32)
   if (apply_pid > 0) {
     StopChildProcess(apply_pid);
   }
+  stop_telemetry_runtime();
 #endif
   peer_service.Stop();
   return 0;

@@ -174,6 +174,11 @@ class LauncherHostdBackendSupport final : public naim::hostd::IHttpHostdBackendS
     return naim::hostd::controller_transport_support::BuildHostObservationPayload(observation);
   }
 
+  nlohmann::json BuildHostTelemetryPayload(
+      const naim::HostTelemetryFrame& frame) const override {
+    return naim::hostd::controller_transport_support::BuildHostTelemetryPayload(frame);
+  }
+
   nlohmann::json BuildDiskRuntimeStatePayload(
       const naim::DiskRuntimeState& state) const override {
     return naim::hostd::controller_transport_support::BuildDiskRuntimeStatePayload(state);

@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "naim/runtime/runtime_status.h"
 #include "naim/state/sqlite_store.h"
 
 namespace naim::hostd {
@@ -58,6 +59,7 @@ class HostdBackend {
       const std::string& target_node_name,
       const std::string& ticket_id) = 0;
   virtual void UpsertHostObservation(const naim::HostObservation& observation) = 0;
+  virtual void UpsertHostTelemetry(const naim::HostTelemetryFrame& frame) = 0;
   virtual void AppendEvent(const naim::EventRecord& event) = 0;
   virtual void UpsertDiskRuntimeState(const naim::DiskRuntimeState& state) = 0;
   virtual std::optional<naim::DiskRuntimeState> LoadDiskRuntimeState(

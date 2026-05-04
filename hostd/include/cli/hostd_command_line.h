@@ -30,6 +30,9 @@ class HostdCommandLine {
   std::optional<std::string> controller_fingerprint() const;
   std::optional<std::string> onboarding_key() const;
   std::optional<std::string> config_path() const;
+  std::optional<int> telemetry_interval_ms() const;
+  std::optional<int> telemetry_ttl_ms() const;
+  bool watch() const;
 
   std::string ResolveDbPath(const std::optional<std::string>& db_arg) const;
   std::string ResolveArtifactsRoot(
@@ -41,6 +44,7 @@ class HostdCommandLine {
 
  private:
   std::optional<std::string> FindOptionValue(const std::string& option_name) const;
+  bool HasFlag(const std::string& flag_name) const;
   static std::string DefaultDbPath();
   static std::string DefaultArtifactsRoot();
   static std::string DefaultStateRoot();

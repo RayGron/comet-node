@@ -98,6 +98,7 @@ class RecordingHostdBackend final : public naim::hostd::HostdBackend {
   }
 
   void UpsertHostObservation(const naim::HostObservation&) override {}
+  void UpsertHostTelemetry(const naim::HostTelemetryFrame&) override {}
   void AppendEvent(const naim::EventRecord&) override {}
   void UpsertDiskRuntimeState(const naim::DiskRuntimeState&) override {}
   std::optional<naim::DiskRuntimeState> LoadDiskRuntimeState(

@@ -41,6 +41,10 @@ class HostdCliCommandDispatcher final {
       const HostdCommandLine& command_line,
       const NaimNodeConfig& node_config,
       const std::string& node_name) const;
+  bool DispatchReportTelemetry(
+      const HostdCommandLine& command_line,
+      const NaimNodeConfig& node_config,
+      const std::string& node_name) const;
   bool DispatchApplyStateOps(
       const HostdCommandLine& command_line,
       const NaimNodeConfig& node_config,

@@ -559,6 +559,16 @@ target_link_libraries(naim-plane-observation-matcher-tests PRIVATE naim-common)
 naim_enable_strict_warnings(naim-plane-observation-matcher-tests)
 
 add_executable(
+  naim-telemetry-live-store-tests
+  controller/src/telemetry/telemetry_live_store.cpp
+  controller/src/telemetry/telemetry_live_store_tests.cpp
+)
+target_include_directories(
+  naim-telemetry-live-store-tests PRIVATE common/include controller/include)
+target_link_libraries(naim-telemetry-live-store-tests PRIVATE naim-common)
+naim_enable_strict_warnings(naim-telemetry-live-store-tests)
+
+add_executable(
   naim-read-model-tests
   controller/src/observation/plane_observation_matcher.cpp
   controller/src/infra/controller_runtime_support_service.cpp
@@ -616,6 +626,7 @@ add_executable(
   controller/src/infra/controller_network_manager.cpp
   controller/src/knowledge/knowledge_vault_service_repository.cpp
   controller/src/observation/plane_observation_matcher.cpp
+  controller/src/telemetry/telemetry_live_store.cpp
 )
 target_include_directories(
   naim-hostd-http-tests PRIVATE common/include controller/include)
@@ -1425,6 +1436,7 @@ add_executable(
   controller/src/skills/skills_factory_service.cpp
   controller/src/scheduler/scheduler_service.cpp
   controller/src/read_model/state_aggregate_loader.cpp
+  controller/src/telemetry/telemetry_live_store.cpp
   controller/src/web/web_ui_service.cpp
   controller/src/app/controller_app.cpp
   controller/src/app/controller_composition_root.cpp
@@ -1525,8 +1537,19 @@ add_executable(
   launcher/src/platform/signal_manager.cpp
   launcher/src/run/hostd_peer_service.cpp
   launcher/src/run/launcher_run_service.cpp
+  hostd/src/app/hostd_command_support.cpp
   hostd/src/app/hostd_controller_transport_support.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_local_runtime_state_support.cpp
+  hostd/src/app/hostd_local_state_path_support.cpp
+  hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_observed_state_snapshot_builder.cpp
+  hostd/src/app/hostd_reporting_support.cpp
+  hostd/src/app/hostd_runtime_telemetry_support.cpp
+  hostd/src/app/hostd_system_telemetry_collector.cpp
+  hostd/src/backend/hostd_backend_factory.cpp
   hostd/src/backend/http_hostd_backend.cpp
+  hostd/src/backend/local_db_hostd_backend.cpp
   launcher/src/main.cpp
   launcher/src/app/launcher_app.cpp
 )

@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "naim/runtime/runtime_status.h"
 #include "naim/state/sqlite_store.h"
 
 namespace naim::hostd {
@@ -23,6 +24,8 @@ class IHttpHostdBackendSupport {
   virtual naim::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) const = 0;
   virtual nlohmann::json BuildHostObservationPayload(
       const naim::HostObservation& observation) const = 0;
+  virtual nlohmann::json BuildHostTelemetryPayload(
+      const naim::HostTelemetryFrame& frame) const = 0;
   virtual nlohmann::json BuildDiskRuntimeStatePayload(
       const naim::DiskRuntimeState& state) const = 0;
   virtual naim::DiskRuntimeState ParseDiskRuntimeStatePayload(

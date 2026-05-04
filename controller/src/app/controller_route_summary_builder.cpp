@@ -93,6 +93,8 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
       "/api/v1/rebalance-plan",
       "/api/v1/events",
       "/api/v1/events/stream",
+      "/api/v1/telemetry/snapshot",
+      "/api/v1/telemetry/stream",
   });
   AppendRoutes(routes, {
       "/api/v1/scheduler-tick",
@@ -107,6 +109,7 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
   });
   AppendRoutes(routes, {
       "/api/v1/hostd/hosts",
+      "/api/v1/hostd/telemetry",
       "/api/v1/hostd/peer-links",
       "/api/v1/hostd/file-transfer-tickets",
       "/api/v1/hostd/file-transfer-tickets/validate",

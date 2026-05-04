@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -26,10 +27,17 @@ class TelemetryLiveStore final {
 
   static TelemetryLiveStore& Instance();
 
+  void ConfigurePersistence(
+      const std::string& db_path,
+      std::size_t retention_capacity = 9600);
+  void ResetForTests();
+
   bool Upsert(naim::HostTelemetryFrame frame);
   nlohmann::json BuildSnapshot(
       const std::optional<std::string>& plane_name,
       int history_seconds) const;
+  nlohmann::json BuildHealth(
+      const std::optional<std::string>& plane_name) const;
   std::vector<naim::HostTelemetryFrame> LoadFramesAfter(
       std::uint64_t sequence,
       const std::optional<std::string>& plane_name) const;
@@ -46,9 +54,34 @@ class TelemetryLiveStore final {
     std::uint64_t last_pruned_sequence = 0;
   };
 
+  struct PersistenceState {
+    bool enabled = false;
+    std::string db_path;
+    std::size_t retention_capacity = 0;
+    std::uint64_t loaded_frames_total = 0;
+    std::uint64_t persisted_frames_total = 0;
+    std::uint64_t pruned_frames_total = 0;
+    std::uint64_t error_count = 0;
+    std::string last_error;
+  };
+
   static bool MatchesPlane(
       const naim::HostTelemetryFrame& frame,
       const std::optional<std::string>& plane_name);
+  bool UpsertInMemoryLocked(naim::HostTelemetryFrame frame);
+  void ConfigurePersistenceLocked(
+      const std::string& db_path,
+      std::size_t retention_capacity);
+  void PersistFrameLocked(const naim::HostTelemetryFrame& frame);
+  std::vector<naim::HostTelemetryFrame> LoadPersistedFramesLocked(
+      const std::string& db_path,
+      std::size_t retention_capacity);
+  nlohmann::json BuildPersistenceStatusLocked() const;
+  static nlohmann::json BuildAlerts(
+      const std::vector<const NodeBuffer*>& buffers,
+      const PersistenceState& persistence,
+      std::uint64_t dropped_frames_total,
+      std::uint64_t now_ms);
   static nlohmann::json FrameToJson(const naim::HostTelemetryFrame& frame);
   static nlohmann::json BuildLatencyBreakdown(
       const naim::HostTelemetryFrame& frame,
@@ -69,11 +102,13 @@ class TelemetryLiveStore final {
   static constexpr std::size_t StreamBatchLimit();
   static constexpr std::uint64_t WarmBucketMs();
   static constexpr std::uint64_t ColdBucketMs();
+  static constexpr std::size_t DurableHistoryCapacity();
 
   mutable std::mutex mutex_;
   std::vector<NodeBuffer> nodes_;
   std::uint64_t latest_sequence_ = 0;
   std::uint64_t dropped_frames_total_ = 0;
+  PersistenceState persistence_;
 };
 
 }  // namespace naim::controller

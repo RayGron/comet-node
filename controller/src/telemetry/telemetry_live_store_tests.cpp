@@ -1,6 +1,7 @@
 #include "telemetry/telemetry_live_store.h"
 
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 
@@ -237,6 +238,42 @@ void TestPlaneAggregatesAndDownsampling() {
   std::cout << "ok: telemetry-live-store-plane-aggregates-downsampling\n";
 }
 
+void TestSqlitePersistenceReplayAndHealth() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  const auto db_path =
+      std::filesystem::temp_directory_path() /
+      ("naim-telemetry-live-store-" + std::to_string(CurrentMillis()) + ".sqlite");
+  store.ResetForTests();
+  store.ConfigurePersistence(db_path.string(), 4);
+  Expect(store.Upsert(MakeFrame("node-durable", "plane-durable", 4000)), "durable frame one");
+  Expect(store.Upsert(MakeFrame("node-durable", "plane-durable", 4001)), "durable frame two");
+
+  const auto before = store.BuildHealth(std::string("plane-durable"));
+  Expect(
+      before.at("persistence").at("enabled").get<bool>(),
+      "sqlite persistence should be enabled");
+  Expect(
+      before.at("persistence").at("persisted_frames_total").get<std::uint64_t>() == 2,
+      "sqlite persistence should count persisted frames");
+
+  store.ResetForTests();
+  store.ConfigurePersistence(db_path.string(), 4);
+  const auto snapshot = store.BuildSnapshot(std::string("plane-durable"), 60);
+  Expect(snapshot.at("nodes").size() == 1, "durable replay should restore latest node");
+  Expect(
+      snapshot.at("latest_sequence").get<std::uint64_t>() == 4001,
+      "durable replay should restore latest sequence");
+  Expect(
+      snapshot.at("persistence").at("loaded_frames_total").get<std::uint64_t>() == 2,
+      "durable replay should count loaded frames");
+  const auto frames = store.LoadFramesAfter(0, std::string("plane-durable"));
+  Expect(frames.size() == 2, "durable replay should restore stream history");
+
+  std::filesystem::remove(db_path);
+  store.ResetForTests();
+  std::cout << "ok: telemetry-live-store-sqlite-persistence-health\n";
+}
+
 }  // namespace
 
 int main() {
@@ -246,6 +283,7 @@ int main() {
     TestCoherenceFieldsAndStaleProjection();
     TestBackpressureProjection();
     TestPlaneAggregatesAndDownsampling();
+    TestSqlitePersistenceReplayAndHealth();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "telemetry_live_store_tests failed: " << error.what() << "\n";

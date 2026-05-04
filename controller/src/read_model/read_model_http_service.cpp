@@ -88,6 +88,27 @@ std::optional<HttpResponse> ReadModelHttpService::HandleRequest(
     }
   }
 
+  if (request.path == "/api/v1/telemetry/health") {
+    if (request.method != "GET") {
+      return support_.build_json_response(
+          405, json{{"status", "method_not_allowed"}}, {});
+    }
+    try {
+      return support_.build_json_response(
+          200,
+          naim::controller::TelemetryLiveStore::Instance().BuildHealth(
+              support_.find_query_string(request, "plane")),
+          {});
+    } catch (const std::exception& error) {
+      return support_.build_json_response(
+          500,
+          json{{"status", "internal_error"},
+               {"message", error.what()},
+               {"path", request.path}},
+          {});
+    }
+  }
+
   if (request.path == "/api/v1/host-health") {
     if (request.method != "GET") {
       return support_.build_json_response(

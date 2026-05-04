@@ -3,7 +3,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <map>
+#include <stdexcept>
+
+#include <sqlite3.h>
+
+#include "naim/state/sqlite_statement.h"
 
 namespace naim::controller {
 namespace {
@@ -35,11 +42,90 @@ double GpuUtilizationAverage(const naim::HostTelemetryFrame& frame) {
   return sum / static_cast<double>(frame.gpu.devices.size());
 }
 
+void ExecuteSqlite(sqlite3* db, const std::string& sql) {
+  char* error_message = nullptr;
+  const int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &error_message);
+  if (rc != SQLITE_OK) {
+    std::string message = error_message != nullptr ? error_message : sqlite3_errmsg(db);
+    sqlite3_free(error_message);
+    throw std::runtime_error("sqlite exec failed: " + message);
+  }
+}
+
+class SqliteConnection final {
+ public:
+  explicit SqliteConnection(const std::string& db_path) {
+    if (sqlite3_open_v2(
+            db_path.c_str(),
+            &db_,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+            nullptr) != SQLITE_OK) {
+      std::string message = db_ != nullptr ? sqlite3_errmsg(db_) : "unknown";
+      if (db_ != nullptr) {
+        sqlite3_close(db_);
+      }
+      throw std::runtime_error("sqlite open failed: " + message);
+    }
+    sqlite3_busy_timeout(db_, 1000);
+  }
+
+  ~SqliteConnection() {
+    if (db_ != nullptr) {
+      sqlite3_close(db_);
+    }
+  }
+
+  sqlite3* get() const {
+    return db_;
+  }
+
+ private:
+  sqlite3* db_ = nullptr;
+};
+
+void EnsureTelemetryPersistenceSchema(sqlite3* db) {
+  ExecuteSqlite(
+      db,
+      "CREATE TABLE IF NOT EXISTS telemetry_ring_buffer ("
+      "sequence INTEGER PRIMARY KEY,"
+      "node_name TEXT NOT NULL,"
+      "plane_name TEXT,"
+      "schema_version TEXT NOT NULL,"
+      "sampled_at TEXT,"
+      "frame_json TEXT NOT NULL,"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+  ExecuteSqlite(
+      db,
+      "CREATE INDEX IF NOT EXISTS idx_telemetry_ring_buffer_plane_sequence "
+      "ON telemetry_ring_buffer(plane_name, sequence)");
+}
+
+std::int64_t SafeSequenceForSqlite(std::uint64_t sequence) {
+  return static_cast<std::int64_t>(std::min<std::uint64_t>(
+      sequence,
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())));
+}
+
 }  // namespace
 
 TelemetryLiveStore& TelemetryLiveStore::Instance() {
   static TelemetryLiveStore store;
   return store;
+}
+
+void TelemetryLiveStore::ConfigurePersistence(
+    const std::string& db_path,
+    const std::size_t retention_capacity) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ConfigurePersistenceLocked(db_path, retention_capacity);
+}
+
+void TelemetryLiveStore::ResetForTests() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  nodes_.clear();
+  latest_sequence_ = 0;
+  dropped_frames_total_ = 0;
+  persistence_ = PersistenceState{};
 }
 
 bool TelemetryLiveStore::Upsert(naim::HostTelemetryFrame frame) {
@@ -65,6 +151,14 @@ bool TelemetryLiveStore::Upsert(naim::HostTelemetryFrame frame) {
     frame.monotonic_timestamp_ms = frame.monotonic_ms;
   }
   std::lock_guard<std::mutex> lock(mutex_);
+  const bool updated = UpsertInMemoryLocked(frame);
+  if (updated) {
+    PersistFrameLocked(frame);
+  }
+  return updated;
+}
+
+bool TelemetryLiveStore::UpsertInMemoryLocked(naim::HostTelemetryFrame frame) {
   auto it = std::find_if(
       nodes_.begin(),
       nodes_.end(),
@@ -91,6 +185,99 @@ bool TelemetryLiveStore::Upsert(naim::HostTelemetryFrame frame) {
     }
   }
   return true;
+}
+
+void TelemetryLiveStore::ConfigurePersistenceLocked(
+    const std::string& db_path,
+    const std::size_t retention_capacity) {
+  persistence_.enabled = false;
+  persistence_.db_path = db_path;
+  persistence_.retention_capacity = std::max<std::size_t>(1, retention_capacity);
+  try {
+    const auto frames = LoadPersistedFramesLocked(db_path, persistence_.retention_capacity);
+    for (auto frame : frames) {
+      UpsertInMemoryLocked(std::move(frame));
+    }
+    persistence_.loaded_frames_total += frames.size();
+    persistence_.enabled = true;
+    persistence_.last_error.clear();
+  } catch (const std::exception& error) {
+    persistence_.error_count += 1;
+    persistence_.last_error = error.what();
+  }
+}
+
+void TelemetryLiveStore::PersistFrameLocked(const naim::HostTelemetryFrame& frame) {
+  if (!persistence_.enabled || persistence_.db_path.empty()) {
+    return;
+  }
+  try {
+    SqliteConnection connection(persistence_.db_path);
+    EnsureTelemetryPersistenceSchema(connection.get());
+    {
+      naim::SqliteStatement statement(
+          connection.get(),
+          "INSERT INTO telemetry_ring_buffer("
+          "sequence, node_name, plane_name, schema_version, sampled_at, frame_json) "
+          "VALUES(?, ?, ?, ?, ?, ?) "
+          "ON CONFLICT(sequence) DO UPDATE SET "
+          "node_name=excluded.node_name,"
+          "plane_name=excluded.plane_name,"
+          "schema_version=excluded.schema_version,"
+          "sampled_at=excluded.sampled_at,"
+          "frame_json=excluded.frame_json");
+      statement.BindInt64(1, SafeSequenceForSqlite(frame.sequence));
+      statement.BindText(2, frame.node_name);
+      statement.BindText(3, frame.plane_name);
+      statement.BindText(4, frame.schema_version);
+      statement.BindText(5, frame.sampled_at);
+      statement.BindText(6, naim::SerializeHostTelemetryFrameJson(frame));
+      statement.StepDone();
+    }
+    {
+      naim::SqliteStatement prune(
+          connection.get(),
+          "DELETE FROM telemetry_ring_buffer "
+          "WHERE sequence NOT IN ("
+          "SELECT sequence FROM telemetry_ring_buffer "
+          "ORDER BY sequence DESC LIMIT ?)");
+      prune.BindInt64(1, static_cast<std::int64_t>(persistence_.retention_capacity));
+      prune.StepDone();
+      const int changed = sqlite3_changes(connection.get());
+      if (changed > 0) {
+        persistence_.pruned_frames_total += static_cast<std::uint64_t>(changed);
+      }
+    }
+    persistence_.persisted_frames_total += 1;
+    persistence_.last_error.clear();
+  } catch (const std::exception& error) {
+    persistence_.error_count += 1;
+    persistence_.last_error = error.what();
+  }
+}
+
+std::vector<naim::HostTelemetryFrame> TelemetryLiveStore::LoadPersistedFramesLocked(
+    const std::string& db_path,
+    const std::size_t retention_capacity) {
+  SqliteConnection connection(db_path);
+  EnsureTelemetryPersistenceSchema(connection.get());
+  naim::SqliteStatement statement(
+      connection.get(),
+      "SELECT frame_json FROM telemetry_ring_buffer "
+      "ORDER BY sequence DESC LIMIT ?");
+  statement.BindInt64(1, static_cast<std::int64_t>(retention_capacity));
+  std::vector<std::string> payloads;
+  while (statement.StepRow()) {
+    const unsigned char* text = sqlite3_column_text(statement.raw(), 0);
+    if (text != nullptr) {
+      payloads.emplace_back(reinterpret_cast<const char*>(text));
+    }
+  }
+  std::vector<naim::HostTelemetryFrame> frames;
+  for (auto it = payloads.rbegin(); it != payloads.rend(); ++it) {
+    frames.push_back(naim::DeserializeHostTelemetryFrameJson(*it));
+  }
+  return frames;
 }
 
 nlohmann::json TelemetryLiveStore::BuildSnapshot(
@@ -129,6 +316,10 @@ nlohmann::json TelemetryLiveStore::BuildSnapshot(
     }
   }
   const bool overloaded = dropped_frames_total_ > 0;
+  const auto alerts =
+      BuildAlerts(matched_buffers, persistence_, dropped_frames_total_, now_ms);
+  const std::string status =
+      !alerts.empty() ? "degraded" : overloaded ? "overloaded" : "ok";
   return nlohmann::json{
       {"schema_version", "telemetry.snapshot.v2"},
       {"service", "naim-controller"},
@@ -140,15 +331,18 @@ nlohmann::json TelemetryLiveStore::BuildSnapshot(
       {"dropped_frames_total", dropped_frames_total_},
       {"history_capacity", HistoryCapacity()},
       {"stream_batch_limit", StreamBatchLimit()},
+      {"persistence", BuildPersistenceStatusLocked()},
+      {"alerts", alerts},
       {"retention",
        nlohmann::json{
            {"hot_history_capacity", HistoryCapacity()},
+           {"durable_history_capacity", persistence_.retention_capacity},
            {"warm_bucket_ms", WarmBucketMs()},
            {"cold_bucket_ms", ColdBucketMs()},
        }},
       {"telemetry_health",
        nlohmann::json{
-           {"status", overloaded ? "overloaded" : "ok"},
+           {"status", status},
            {"last_frame_age_ms",
             latest_sequence_ > 0 && now_ms >= latest_sequence_ ? now_ms - latest_sequence_ : 0},
            {"dropped_frames_total", dropped_frames_total_},
@@ -159,6 +353,52 @@ nlohmann::json TelemetryLiveStore::BuildSnapshot(
       {"history", std::move(history)},
       {"downsampled_history",
        BuildDownsampledHistory(matched_buffers, history_seconds, now_ms)},
+  };
+}
+
+nlohmann::json TelemetryLiveStore::BuildHealth(
+    const std::optional<std::string>& plane_name) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto now_ms = CurrentUnixMillis();
+  std::vector<const NodeBuffer*> matched_buffers;
+  for (const auto& buffer : nodes_) {
+    if (MatchesPlane(buffer.latest, plane_name)) {
+      matched_buffers.push_back(&buffer);
+    }
+  }
+  const auto alerts =
+      BuildAlerts(matched_buffers, persistence_, dropped_frames_total_, now_ms);
+  std::string status = "ok";
+  if (!alerts.empty()) {
+    status = "degraded";
+    for (const auto& alert : alerts) {
+      if (alert.value("severity", std::string{}) == "critical") {
+        status = "critical";
+        break;
+      }
+    }
+  }
+  return nlohmann::json{
+      {"schema_version", "telemetry.health.v1"},
+      {"service", "naim-controller"},
+      {"plane_name", plane_name.has_value() ? nlohmann::json(*plane_name) : nlohmann::json(nullptr)},
+      {"status", status},
+      {"observed_nodes", matched_buffers.size()},
+      {"latest_sequence", latest_sequence_},
+      {"last_frame_age_ms",
+       latest_sequence_ > 0 && now_ms >= latest_sequence_ ? now_ms - latest_sequence_ : 0},
+      {"dropped_frames_total", dropped_frames_total_},
+      {"stream_batch_limit", StreamBatchLimit()},
+      {"retention",
+       nlohmann::json{
+           {"hot_history_capacity", HistoryCapacity()},
+           {"durable_history_capacity", persistence_.retention_capacity},
+           {"warm_bucket_ms", WarmBucketMs()},
+           {"cold_bucket_ms", ColdBucketMs()},
+       }},
+      {"persistence", BuildPersistenceStatusLocked()},
+      {"planes", BuildPlaneAggregates(matched_buffers, now_ms)},
+      {"alerts", alerts},
   };
 }
 
@@ -254,6 +494,109 @@ bool TelemetryLiveStore::MatchesPlane(
       [&](const naim::RuntimeProcessStatus& status) {
         return status.instance_name.rfind(*plane_name + "-", 0) == 0;
       });
+}
+
+nlohmann::json TelemetryLiveStore::BuildPersistenceStatusLocked() const {
+  return nlohmann::json{
+      {"enabled", persistence_.enabled},
+      {"backend", persistence_.enabled ? "sqlite" : "memory"},
+      {"db_path", persistence_.db_path},
+      {"retention_capacity", persistence_.retention_capacity},
+      {"loaded_frames_total", persistence_.loaded_frames_total},
+      {"persisted_frames_total", persistence_.persisted_frames_total},
+      {"pruned_frames_total", persistence_.pruned_frames_total},
+      {"error_count", persistence_.error_count},
+      {"last_error", persistence_.last_error},
+  };
+}
+
+nlohmann::json TelemetryLiveStore::BuildAlerts(
+    const std::vector<const NodeBuffer*>& buffers,
+    const PersistenceState& persistence,
+    const std::uint64_t dropped_frames_total,
+    const std::uint64_t now_ms) {
+  nlohmann::json alerts = nlohmann::json::array();
+  constexpr std::uint64_t stale_warn_ms = 15000;
+  constexpr std::uint64_t stale_critical_ms = 60000;
+  constexpr std::uint64_t ingest_warn_ms = 3000;
+  constexpr std::uint64_t queue_warn_ms = 1000;
+  if (!persistence.enabled) {
+    alerts.push_back(nlohmann::json{
+        {"code", "telemetry.persistence.disabled"},
+        {"severity", "warning"},
+        {"message", "sqlite telemetry ring buffer is disabled"},
+    });
+  }
+  if (persistence.error_count > 0) {
+    alerts.push_back(nlohmann::json{
+        {"code", "telemetry.persistence.errors"},
+        {"severity", "warning"},
+        {"message", "sqlite telemetry ring buffer reported errors"},
+        {"count", persistence.error_count},
+        {"last_error", persistence.last_error},
+    });
+  }
+  if (dropped_frames_total > 0) {
+    alerts.push_back(nlohmann::json{
+        {"code", "telemetry.controller.dropped_frames"},
+        {"severity", "warning"},
+        {"message", "controller telemetry ring buffer pruned live frames"},
+        {"count", dropped_frames_total},
+    });
+  }
+  for (const auto* buffer : buffers) {
+    if (buffer == nullptr) {
+      continue;
+    }
+    const auto& frame = buffer->latest;
+    const auto ingest_ms = ControllerIngestDelayMs(frame, now_ms);
+    if (ingest_ms >= stale_critical_ms) {
+      alerts.push_back(nlohmann::json{
+          {"code", "telemetry.node.stale"},
+          {"severity", "critical"},
+          {"node_name", frame.node_name},
+          {"plane_name", PlaneKeyForFrame(frame)},
+          {"age_ms", ingest_ms},
+      });
+    } else if (ingest_ms >= stale_warn_ms) {
+      alerts.push_back(nlohmann::json{
+          {"code", "telemetry.node.slow"},
+          {"severity", "warning"},
+          {"node_name", frame.node_name},
+          {"plane_name", PlaneKeyForFrame(frame)},
+          {"age_ms", ingest_ms},
+      });
+    }
+    if (ingest_ms >= ingest_warn_ms) {
+      alerts.push_back(nlohmann::json{
+          {"code", "telemetry.controller.ingest_delay"},
+          {"severity", "warning"},
+          {"node_name", frame.node_name},
+          {"plane_name", PlaneKeyForFrame(frame)},
+          {"delay_ms", ingest_ms},
+      });
+    }
+    if (frame.publisher_queue_delay_ms >= queue_warn_ms) {
+      alerts.push_back(nlohmann::json{
+          {"code", "telemetry.publisher.queue_delay"},
+          {"severity", "warning"},
+          {"node_name", frame.node_name},
+          {"plane_name", PlaneKeyForFrame(frame)},
+          {"delay_ms", frame.publisher_queue_delay_ms},
+      });
+    }
+    if (frame.publish_error_count > 0) {
+      alerts.push_back(nlohmann::json{
+          {"code", "telemetry.publisher.errors"},
+          {"severity", "warning"},
+          {"node_name", frame.node_name},
+          {"plane_name", PlaneKeyForFrame(frame)},
+          {"count", frame.publish_error_count},
+          {"last_error", frame.last_publish_error},
+      });
+    }
+  }
+  return alerts;
 }
 
 nlohmann::json TelemetryLiveStore::FrameToJson(
@@ -516,6 +859,10 @@ constexpr std::uint64_t TelemetryLiveStore::WarmBucketMs() {
 
 constexpr std::uint64_t TelemetryLiveStore::ColdBucketMs() {
   return 60000;
+}
+
+constexpr std::size_t TelemetryLiveStore::DurableHistoryCapacity() {
+  return 9600;
 }
 
 }  // namespace naim::controller

@@ -21,6 +21,11 @@ class IHostdObservationSupport {
       naim::HostObservationStatus status,
       const std::string& status_message,
       const std::optional<int>& assignment_id = std::nullopt) const = 0;
+  virtual naim::HostTelemetryFrame BuildTelemetryFrame(
+      const std::string& node_name,
+      const std::string& state_root,
+      int interval_ms,
+      int ttl_ms) const = 0;
   virtual void AppendHostdEvent(
       HostdBackend& backend,
       const std::string& category,
@@ -56,6 +61,17 @@ class HostdObservationService {
       const std::string& node_name,
       const std::string& storage_root,
       const std::string& state_root) const;
+  void ReportLocalTelemetry(
+      const std::optional<std::string>& db_path,
+      const std::optional<std::string>& controller_url,
+      const std::optional<std::string>& host_private_key_path,
+      const std::optional<std::string>& controller_fingerprint,
+      const std::optional<std::string>& onboarding_key,
+      const std::string& node_name,
+      const std::string& storage_root,
+      const std::string& state_root,
+      int interval_ms,
+      int ttl_ms) const;
 
  private:
   const IHostdBackendFactory& backend_factory_;

@@ -35,6 +35,18 @@ naim::HostObservation HostdAppObservationSupport::BuildObservedStateSnapshot(
       assignment_id);
 }
 
+naim::HostTelemetryFrame HostdAppObservationSupport::BuildTelemetryFrame(
+    const std::string& node_name,
+    const std::string& state_root,
+    const int interval_ms,
+    const int ttl_ms) const {
+  return reporting_support_.BuildTelemetryFrame(
+      node_name,
+      state_root,
+      interval_ms,
+      ttl_ms);
+}
+
 void HostdAppObservationSupport::AppendHostdEvent(
     HostdBackend& backend,
     const std::string& category,

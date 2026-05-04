@@ -360,6 +360,59 @@ CpuTelemetrySnapshot CpuTelemetrySnapshotFromJson(const json& value) {
   return snapshot;
 }
 
+json ToJson(const HostTelemetryFrame& frame) {
+  json instance_runtime = json::array();
+  for (const auto& status : frame.instance_runtime) {
+    instance_runtime.push_back(ToJson(status));
+  }
+  return json{
+      {"contract_version", frame.contract_version},
+      {"node_name", frame.node_name},
+      {"plane_name", frame.plane_name},
+      {"sampled_at", frame.sampled_at},
+      {"sequence", frame.sequence},
+      {"interval_ms", frame.interval_ms},
+      {"ttl_ms", frame.ttl_ms},
+      {"instance_runtime", std::move(instance_runtime)},
+      {"gpu", ToJson(frame.gpu)},
+      {"network", ToJson(frame.network)},
+      {"cpu", ToJson(frame.cpu)},
+  };
+}
+
+HostTelemetryFrame HostTelemetryFrameFromJson(const json& value) {
+  HostTelemetryFrame frame;
+  frame.contract_version = value.value("contract_version", 1);
+  frame.node_name = value.value("node_name", std::string{});
+  frame.plane_name = value.value("plane_name", std::string{});
+  frame.sampled_at = value.value("sampled_at", std::string{});
+  if (value.contains("sequence") && value.at("sequence").is_number_unsigned()) {
+    frame.sequence = value.at("sequence").get<std::uint64_t>();
+  } else if (value.contains("sequence") && value.at("sequence").is_number_integer()) {
+    const auto raw = value.at("sequence").get<std::int64_t>();
+    if (raw > 0) {
+      frame.sequence = static_cast<std::uint64_t>(raw);
+    }
+  }
+  frame.interval_ms = value.value("interval_ms", 2000);
+  frame.ttl_ms = value.value("ttl_ms", 10000);
+  for (const auto& status : value.value("instance_runtime", json::array())) {
+    if (status.is_object()) {
+      frame.instance_runtime.push_back(RuntimeProcessStatusFromJson(status));
+    }
+  }
+  if (value.contains("gpu") && value.at("gpu").is_object()) {
+    frame.gpu = GpuTelemetrySnapshotFromJson(value.at("gpu"));
+  }
+  if (value.contains("network") && value.at("network").is_object()) {
+    frame.network = NetworkTelemetrySnapshotFromJson(value.at("network"));
+  }
+  if (value.contains("cpu") && value.at("cpu").is_object()) {
+    frame.cpu = CpuTelemetrySnapshotFromJson(value.at("cpu"));
+  }
+  return frame;
+}
+
 json ToJson(const RuntimeStatus& status) {
   return json{
       {"plane_name", status.plane_name},
@@ -587,6 +640,14 @@ std::string SerializeCpuTelemetryJson(const CpuTelemetrySnapshot& snapshot) {
 
 CpuTelemetrySnapshot DeserializeCpuTelemetryJson(const std::string& json_text) {
   return CpuTelemetryJsonCodec().Deserialize(json_text);
+}
+
+std::string SerializeHostTelemetryFrameJson(const HostTelemetryFrame& frame) {
+  return ToJson(frame).dump(2);
+}
+
+HostTelemetryFrame DeserializeHostTelemetryFrameJson(const std::string& json_text) {
+  return HostTelemetryFrameFromJson(json::parse(json_text));
 }
 
 std::optional<RuntimeStatus> RuntimeStatusFileStore::Load(const std::string& path) const {

@@ -1,8 +1,37 @@
 #include "app/hostd_observed_state_snapshot_builder.h"
 
+#include <chrono>
+#include <cstdint>
+#include <ctime>
+
 #include "naim/state/state_json.h"
 
 namespace naim::hostd {
+
+namespace {
+
+std::string CurrentTimestampString() {
+  const std::time_t now = std::time(nullptr);
+  std::tm tm{};
+#if defined(_WIN32)
+  localtime_s(&tm, &now);
+#else
+  localtime_r(&now, &tm);
+#endif
+  char buffer[32];
+  if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm) == 0) {
+    return {};
+  }
+  return buffer;
+}
+
+std::uint64_t CurrentSequenceMillis() {
+  const auto now = std::chrono::system_clock::now().time_since_epoch();
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+}
+
+}  // namespace
 
 HostdObservedStateSnapshotBuilder::HostdObservedStateSnapshotBuilder(
     const HostdLocalStateRepository& local_state_repository,
@@ -80,6 +109,36 @@ naim::HostObservation HostdObservedStateSnapshotBuilder::BuildObservedStateSnaps
       system_telemetry_collector_.CollectCpuTelemetry());
 
   return observation;
+}
+
+naim::HostTelemetryFrame HostdObservedStateSnapshotBuilder::BuildTelemetryFrame(
+    const std::string& node_name,
+    const std::string& state_root,
+    const int interval_ms,
+    const int ttl_ms) const {
+  naim::HostTelemetryFrame frame;
+  frame.node_name = node_name;
+  frame.sampled_at = CurrentTimestampString();
+  frame.sequence = CurrentSequenceMillis();
+  frame.interval_ms = interval_ms;
+  frame.ttl_ms = ttl_ms;
+
+  const auto local_state = local_state_repository_.LoadLocalAppliedState(state_root, node_name);
+  if (local_state.has_value()) {
+    frame.plane_name = local_state->plane_name;
+  }
+  const naim::DesiredState telemetry_state =
+      local_state.has_value() ? *local_state : naim::DesiredState{};
+  frame.instance_runtime =
+      runtime_telemetry_support_.LoadLocalInstanceRuntimeStatuses(state_root, node_name);
+  runtime_telemetry_support_.ResolveInstanceHostPids(&frame.instance_runtime);
+  frame.gpu = system_telemetry_collector_.CollectGpuTelemetry(
+      telemetry_state,
+      node_name,
+      frame.instance_runtime);
+  frame.network = system_telemetry_collector_.CollectNetworkTelemetry(state_root);
+  frame.cpu = system_telemetry_collector_.CollectCpuTelemetry();
+  return frame;
 }
 
 }  // namespace naim::hostd

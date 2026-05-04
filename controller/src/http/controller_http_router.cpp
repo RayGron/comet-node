@@ -794,6 +794,12 @@ HttpResponse ControllerHttpRouter::HandleRequest(
         json{{"status", "method_not_allowed"}},
         {});
   }
+  if (request.path == "/api/v1/telemetry/stream") {
+    return deps_.build_json_response(
+        405,
+        json{{"status", "method_not_allowed"}},
+        {});
+  }
   if (request.path == "/api/v1/retry-host-assignment") {
     if (request.method != "POST") {
       return deps_.build_json_response(

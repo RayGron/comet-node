@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "telemetry/telemetry_live_store.h"
+
 using nlohmann::json;
 
 ReadModelHttpService::ReadModelHttpService(ReadModelHttpSupport support)
@@ -53,6 +55,28 @@ std::optional<HttpResponse> ReadModelHttpService::HandleRequest(
               support_.find_query_string(request, "plane"),
               support_.find_query_int(request, "stale_after")
                   .value_or(support_.default_stale_after_seconds())),
+          {});
+    } catch (const std::exception& error) {
+      return support_.build_json_response(
+          500,
+          json{{"status", "internal_error"},
+               {"message", error.what()},
+               {"path", request.path}},
+          {});
+    }
+  }
+
+  if (request.path == "/api/v1/telemetry/snapshot") {
+    if (request.method != "GET") {
+      return support_.build_json_response(
+          405, json{{"status", "method_not_allowed"}}, {});
+    }
+    try {
+      return support_.build_json_response(
+          200,
+          naim::controller::TelemetryLiveStore::Instance().BuildSnapshot(
+              support_.find_query_string(request, "plane"),
+              support_.find_query_int(request, "history_seconds").value_or(0)),
           {});
     } catch (const std::exception& error) {
       return support_.build_json_response(

@@ -131,6 +131,18 @@ naim::HostObservation HostdReportingSupport::BuildObservedStateSnapshot(
       assignment_id);
 }
 
+naim::HostTelemetryFrame HostdReportingSupport::BuildTelemetryFrame(
+    const std::string& node_name,
+    const std::string& state_root,
+    const int interval_ms,
+    const int ttl_ms) const {
+  return observed_state_snapshot_builder_.BuildTelemetryFrame(
+      node_name,
+      state_root,
+      interval_ms,
+      ttl_ms);
+}
+
 std::string HostdReportingSupport::SerializeEventPayload(
     const nlohmann::json& payload) {
   return payload.dump();

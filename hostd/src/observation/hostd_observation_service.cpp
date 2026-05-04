@@ -94,4 +94,38 @@ void HostdObservationService::ReportLocalObservedState(
       "hostd report-observed-state");
 }
 
+void HostdObservationService::ReportLocalTelemetry(
+    const std::optional<std::string>& db_path,
+    const std::optional<std::string>& controller_url,
+    const std::optional<std::string>& host_private_key_path,
+    const std::optional<std::string>& controller_fingerprint,
+    const std::optional<std::string>& onboarding_key,
+    const std::string& node_name,
+    const std::string& storage_root,
+    const std::string& state_root,
+    const int interval_ms,
+    const int ttl_ms) const {
+  auto backend = backend_factory_.CreateBackend(
+      db_path,
+      controller_url,
+      host_private_key_path,
+      controller_fingerprint,
+      onboarding_key,
+      node_name,
+      storage_root);
+  const auto frame = support_.BuildTelemetryFrame(
+      node_name,
+      state_root,
+      interval_ms,
+      ttl_ms);
+  backend->UpsertHostTelemetry(frame);
+  std::cout << "hostd report-telemetry\n";
+  std::cout << "backend=hostd-control\n";
+  std::cout << "node=" << frame.node_name << "\n";
+  if (!frame.plane_name.empty()) {
+    std::cout << "plane=" << frame.plane_name << "\n";
+  }
+  std::cout << "sequence=" << frame.sequence << "\n";
+}
+
 }  // namespace naim::hostd

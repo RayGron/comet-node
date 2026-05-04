@@ -426,6 +426,7 @@ int LauncherRunService::RunHostdLoop(
   std::cout
       << "next_step=leave hostd running so it can receive assignments and upload telemetry\n";
   auto next_inventory_report_at = std::chrono::steady_clock::now();
+  auto next_telemetry_report_at = std::chrono::steady_clock::now();
   const auto self_update_marker =
       HostdSelfUpdateMarkerPath(options.state_root, options.node_name);
   std::error_code marker_error;
@@ -492,6 +493,32 @@ int LauncherRunService::RunHostdLoop(
     return args;
   };
 
+  const auto build_telemetry_args = [&]() {
+    std::vector<std::string> args = {
+        hostd_binary.string(),
+        "report-telemetry",
+        "--node",
+        options.node_name,
+        "--state-root",
+        options.state_root.string(),
+    };
+    if (!options.controller_url.empty()) {
+      args.insert(args.end(), {"--controller", options.controller_url});
+      if (!options.controller_fingerprint.empty()) {
+        args.insert(args.end(), {"--controller-fingerprint", options.controller_fingerprint});
+      }
+      if (!options.onboarding_key.empty()) {
+        args.insert(args.end(), {"--onboarding-key", options.onboarding_key});
+      }
+      if (!options.host_private_key_path.empty()) {
+        args.insert(args.end(), {"--host-private-key", options.host_private_key_path.string()});
+      }
+    } else {
+      args.insert(args.end(), {"--db", options.db_path.string()});
+    }
+    return args;
+  };
+
   const auto run_report_if_due = [&]() {
     const auto now = std::chrono::steady_clock::now();
     if (now < next_inventory_report_at) {
@@ -503,6 +530,19 @@ int LauncherRunService::RunHostdLoop(
     }
     next_inventory_report_at =
         now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
+  };
+
+  const auto run_telemetry_if_due = [&]() {
+    constexpr int kTelemetryIntervalMs = 2000;
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_telemetry_report_at) {
+      return;
+    }
+    const int telemetry_code = process_runner_.RunCommand(build_telemetry_args());
+    if (telemetry_code != 0) {
+      std::cerr << "naim-node: hostd report-telemetry exit=" << telemetry_code << "\n";
+    }
+    next_telemetry_report_at = now + std::chrono::milliseconds(kTelemetryIntervalMs);
   };
 
   const auto wait_for_self_update_recreate = [&]() -> int {
@@ -557,6 +597,7 @@ int LauncherRunService::RunHostdLoop(
 #endif
 
     run_report_if_due();
+    run_telemetry_if_due();
 
     for (int second = 0;
          second < options.poll_interval_sec && !signal_manager.stop_requested();
@@ -568,6 +609,7 @@ int LauncherRunService::RunHostdLoop(
       }
 #endif
       run_report_if_due();
+      run_telemetry_if_due();
     }
   }
 #if !defined(_WIN32)

@@ -100,6 +100,7 @@ class RecordingHostdBackend : public naim::hostd::HostdBackend {
   }
 
   void UpsertHostObservation(const naim::HostObservation&) override {}
+  void UpsertHostTelemetry(const naim::HostTelemetryFrame&) override {}
 
   void AppendEvent(const naim::EventRecord& event) override {
     events.push_back(event);

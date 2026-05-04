@@ -20,6 +20,7 @@ bool HostdCliCommandDispatcher::Dispatch(
          DispatchShowLocalState(command_line, node_name) ||
          DispatchShowRuntimeStatus(command_line, node_name) ||
          DispatchReportObservedState(command_line, node_config, node_name) ||
+         DispatchReportTelemetry(command_line, node_config, node_name) ||
          DispatchApplyStateOps(command_line, node_config, node_name) ||
          DispatchApplyNextAssignment(command_line, node_config, node_name);
 }
@@ -99,6 +100,29 @@ bool HostdCliCommandDispatcher::DispatchReportObservedState(
       request.common.node_name,
       request.common.storage_root,
       request.common.state_root);
+  return true;
+}
+
+bool HostdCliCommandDispatcher::DispatchReportTelemetry(
+    const HostdCommandLine& command_line,
+    const NaimNodeConfig& node_config,
+    const std::string& node_name) const {
+  if (command_line.command() != "report-telemetry") {
+    return false;
+  }
+  const auto request =
+      resolution_support_.ResolveAssignmentRequest(command_line, node_config, node_name);
+  observation_service_.ReportLocalTelemetry(
+      request.db_path,
+      request.controller_url,
+      request.host_private_key_path,
+      request.controller_fingerprint,
+      request.onboarding_key,
+      request.common.node_name,
+      request.common.storage_root,
+      request.common.state_root,
+      2000,
+      10000);
   return true;
 }
 

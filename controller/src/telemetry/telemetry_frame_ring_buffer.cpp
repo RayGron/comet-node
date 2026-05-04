@@ -13,12 +13,10 @@ bool TelemetryFrameRingBuffer::Upsert(
     std::uint64_t& dropped_frames_total,
     const TelemetryRetentionConfig& retention,
     naim::HostTelemetryFrame frame) const {
-  auto it = std::find_if(
-      nodes.begin(),
-      nodes.end(),
-      [&](const TelemetryNodeBuffer& candidate) {
-        return candidate.latest.node_name == frame.node_name;
-      });
+  auto it = nodes.begin();
+  while (it != nodes.end() && it->latest.node_name != frame.node_name) {
+    ++it;
+  }
   if (it != nodes.end() && frame.sequence <= it->latest.sequence) {
     return false;
   }

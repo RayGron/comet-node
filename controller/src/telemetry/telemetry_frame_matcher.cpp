@@ -1,7 +1,5 @@
 #include "telemetry/telemetry_frame_matcher.h"
 
-#include <algorithm>
-
 namespace naim::controller {
 
 bool TelemetryFrameMatcher::MatchesPlane(
@@ -13,12 +11,13 @@ bool TelemetryFrameMatcher::MatchesPlane(
   if (frame.plane_name == *plane_name) {
     return true;
   }
-  return std::any_of(
-      frame.instance_runtime.begin(),
-      frame.instance_runtime.end(),
-      [&](const naim::RuntimeProcessStatus& status) {
-        return status.instance_name.rfind(*plane_name + "-", 0) == 0;
-      });
+  const std::string prefix = *plane_name + "-";
+  for (const auto& status : frame.instance_runtime) {
+    if (status.instance_name.rfind(prefix, 0) == 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::string TelemetryFrameMatcher::PlaneKeyForFrame(

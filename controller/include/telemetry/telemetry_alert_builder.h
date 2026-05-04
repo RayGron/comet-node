@@ -5,8 +5,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include "telemetry/telemetry_frame_matcher.h"
 #include "telemetry/telemetry_live_store_types.h"
+#include "telemetry/telemetry_node_alert_builder.h"
+#include "telemetry/telemetry_pipeline_alert_builder.h"
 #include "telemetry/telemetry_state_types.h"
 
 namespace naim::controller {
@@ -22,7 +23,8 @@ class TelemetryAlertBuilder final {
       std::uint64_t now_ms) const;
 
  private:
-  TelemetryFrameMatcher matcher_;
+  TelemetryPipelineAlertBuilder pipeline_alert_builder_;
+  TelemetryNodeAlertBuilder node_alert_builder_;
 };
 
 }  // namespace naim::controller

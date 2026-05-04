@@ -14,6 +14,7 @@
 
 namespace naim::controller {
 
+class TelemetryLiveStoreServices;
 class TelemetryLiveStoreState;
 
 class TelemetryLiveStore final {
@@ -64,6 +65,7 @@ class TelemetryLiveStore final {
 
   mutable std::mutex mutex_;
   std::unique_ptr<TelemetryLiveStoreState> state_;
+  std::unique_ptr<TelemetryLiveStoreServices> services_;
 };
 
 }  // namespace naim::controller

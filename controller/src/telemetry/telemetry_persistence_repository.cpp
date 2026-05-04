@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <limits>
-#include <stdexcept>
 
 #include "naim/state/sqlite_statement.h"
 #include "telemetry/telemetry_sqlite_connection.h"
@@ -37,7 +36,7 @@ void TelemetryPersistenceRepository::PersistFrame(
   }
   try {
     TelemetrySqliteConnection connection(state.db_path);
-    EnsureSchema(connection.get());
+    schema_.Ensure(connection.get());
     {
       naim::SqliteStatement statement(
           connection.get(),
@@ -84,7 +83,7 @@ std::vector<naim::HostTelemetryFrame> TelemetryPersistenceRepository::LoadFrames
     const std::string& db_path,
     const std::size_t retention_capacity) const {
   TelemetrySqliteConnection connection(db_path);
-  EnsureSchema(connection.get());
+  schema_.Ensure(connection.get());
   naim::SqliteStatement statement(
       connection.get(),
       "SELECT frame_json FROM telemetry_ring_buffer "
@@ -106,44 +105,7 @@ std::vector<naim::HostTelemetryFrame> TelemetryPersistenceRepository::LoadFrames
 
 nlohmann::json TelemetryPersistenceRepository::BuildStatus(
     const TelemetryPersistenceState& state) const {
-  return nlohmann::json{
-      {"enabled", state.enabled},
-      {"backend", state.enabled ? "sqlite" : "memory"},
-      {"db_path", state.db_path},
-      {"retention_capacity", state.retention_capacity},
-      {"loaded_frames_total", state.loaded_frames_total},
-      {"persisted_frames_total", state.persisted_frames_total},
-      {"pruned_frames_total", state.pruned_frames_total},
-      {"error_count", state.error_count},
-      {"last_error", state.last_error},
-  };
-}
-
-void TelemetryPersistenceRepository::EnsureSchema(sqlite3* db) const {
-  Execute(
-      db,
-      "CREATE TABLE IF NOT EXISTS telemetry_ring_buffer ("
-      "sequence INTEGER PRIMARY KEY,"
-      "node_name TEXT NOT NULL,"
-      "plane_name TEXT,"
-      "schema_version TEXT NOT NULL,"
-      "sampled_at TEXT,"
-      "frame_json TEXT NOT NULL,"
-      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
-  Execute(
-      db,
-      "CREATE INDEX IF NOT EXISTS idx_telemetry_ring_buffer_plane_sequence "
-      "ON telemetry_ring_buffer(plane_name, sequence)");
-}
-
-void TelemetryPersistenceRepository::Execute(sqlite3* db, const std::string& sql) const {
-  char* error_message = nullptr;
-  const int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &error_message);
-  if (rc != SQLITE_OK) {
-    std::string message = error_message != nullptr ? error_message : sqlite3_errmsg(db);
-    sqlite3_free(error_message);
-    throw std::runtime_error("sqlite exec failed: " + message);
-  }
+  return status_builder_.Build(state);
 }
 
 std::int64_t TelemetryPersistenceRepository::SafeSequenceForSqlite(

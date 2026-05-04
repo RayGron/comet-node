@@ -5,9 +5,10 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
-#include <sqlite3.h>
 
 #include "naim/runtime/runtime_status.h"
+#include "telemetry/telemetry_persistence_schema.h"
+#include "telemetry/telemetry_persistence_status_builder.h"
 #include "telemetry/telemetry_state_types.h"
 
 namespace naim::controller {
@@ -27,9 +28,9 @@ class TelemetryPersistenceRepository final {
   nlohmann::json BuildStatus(const TelemetryPersistenceState& state) const;
 
  private:
-  void EnsureSchema(sqlite3* db) const;
-  void Execute(sqlite3* db, const std::string& sql) const;
   std::int64_t SafeSequenceForSqlite(std::uint64_t sequence) const;
+  TelemetryPersistenceSchema schema_;
+  TelemetryPersistenceStatusBuilder status_builder_;
 };
 
 }  // namespace naim::controller

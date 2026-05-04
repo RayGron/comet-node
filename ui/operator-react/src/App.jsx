@@ -52,6 +52,11 @@ import {
   normalizeKnowledgeResults,
   summarizeKnowledgeGraph,
 } from "./knowledgeVault.js";
+import {
+  createTelemetryStore,
+  reduceTelemetryStore,
+  selectTelemetryFrames,
+} from "./telemetryStore.js";
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
@@ -1077,6 +1082,18 @@ function hostObservationFromTelemetryFrame(frame) {
     telemetry_stale: stale,
     telemetry_degraded: Boolean(frame?.degraded_reason),
     telemetry_degraded_reason: frame?.degraded_reason || "",
+    telemetry_collector_duration_ms: Number(frame?.collector_duration_ms || 0),
+    telemetry_publish_duration_ms: Number(frame?.publish_duration_ms || 0),
+    telemetry_queue_delay_ms: Number(frame?.publisher_queue_delay_ms || 0),
+    telemetry_bus_depth: Number(frame?.telemetry_bus_depth || 0),
+    telemetry_dropped_frames: Number(
+      frame?.controller_dropped_frames_total ?? frame?.telemetry_dropped_frames ?? 0,
+    ),
+    telemetry_publish_errors: Number(frame?.publish_error_count || 0),
+    telemetry_adaptive_interval_ms: Number(frame?.adaptive_interval_ms || frame?.interval_ms || 0),
+    telemetry_adaptive_reason: frame?.adaptive_reason || "",
+    telemetry_controller_ingest_delay_ms: Number(frame?.controller_ingest_delay_ms || 0),
+    telemetry_last_publish_error: frame?.last_publish_error || "",
     runtime_status: { available: instanceRuntime.length > 0 },
     instance_runtimes: {
       available: instanceRuntime.length > 0,
@@ -2216,6 +2233,8 @@ function App() {
   const eventSourceRef = useRef(null);
   const telemetrySourceRef = useRef(null);
   const globalHostObservationsRef = useRef(null);
+  const globalTelemetryStoreRef = useRef(createTelemetryStore());
+  const planeTelemetryStoreRef = useRef(createTelemetryStore());
   const chatAbortRef = useRef(null);
   const interactionSplitRef = useRef(null);
   const chatTranscriptRef = useRef(null);
@@ -2225,6 +2244,7 @@ function App() {
 
   useEffect(() => {
     selectedPlaneRef.current = selectedPlane;
+    planeTelemetryStoreRef.current = createTelemetryStore();
   }, [selectedPlane]);
 
   function resetProtectedData() {
@@ -2233,6 +2253,9 @@ function App() {
     setDashboard(null);
     setHostObservations(null);
     setGlobalHostObservations(null);
+    globalHostObservationsRef.current = null;
+    globalTelemetryStoreRef.current = createTelemetryStore();
+    planeTelemetryStoreRef.current = createTelemetryStore();
     setHostdHosts([]);
     setDiskState(null);
     setRolloutState(null);
@@ -3937,18 +3960,36 @@ function App() {
       if (validFrames.length === 0) {
         return;
       }
-      const mergedGlobal = mergeTelemetryIntoObservationPayload(
-        globalHostObservationsRef.current,
-        validFrames,
-      );
+      const globalResult = reduceTelemetryStore(globalTelemetryStoreRef.current, validFrames);
+      if (globalResult.changed) {
+        globalTelemetryStoreRef.current = globalResult.store;
+      }
+      const mergedGlobal = globalResult.acceptedFrames.length > 0
+        ? mergeTelemetryIntoObservationPayload(
+            globalHostObservationsRef.current,
+            globalResult.acceptedFrames,
+          )
+        : globalHostObservationsRef.current;
       const globalChanged = mergedGlobal !== globalHostObservationsRef.current;
       if (globalChanged) {
         globalHostObservationsRef.current = mergedGlobal;
         setGlobalHostObservations(mergedGlobal);
       }
       if (selectedPlaneRef.current) {
+        const planeResult = reduceTelemetryStore(
+          planeTelemetryStoreRef.current,
+          validFrames,
+          selectedPlaneRef.current,
+        );
+        if (planeResult.changed) {
+          planeTelemetryStoreRef.current = planeResult.store;
+        }
         setHostObservations((current) =>
-          mergeTelemetryIntoObservationPayload(current, validFrames, selectedPlaneRef.current),
+          mergeTelemetryIntoObservationPayload(
+            current,
+            selectTelemetryFrames(planeTelemetryStoreRef.current),
+            selectedPlaneRef.current,
+          ),
         );
       }
       if (!globalChanged) {
@@ -4025,17 +4066,38 @@ function App() {
       fetchJson(queryPath("/api/v1/telemetry/snapshot", { history_seconds: 0 }))
         .then((payload) => {
           const frames = Array.isArray(payload?.nodes) ? payload.nodes : [];
-          const mergedGlobal = mergeTelemetryIntoObservationPayload(
-            globalHostObservationsRef.current,
-            frames,
-          );
+          const globalResult = reduceTelemetryStore(globalTelemetryStoreRef.current, frames);
+          if (!globalResult.changed && !selectedPlaneRef.current) {
+            return;
+          }
+          if (globalResult.changed) {
+            globalTelemetryStoreRef.current = globalResult.store;
+          }
+          const mergedGlobal = globalResult.acceptedFrames.length > 0
+            ? mergeTelemetryIntoObservationPayload(
+                globalHostObservationsRef.current,
+                globalResult.acceptedFrames,
+              )
+            : globalHostObservationsRef.current;
           if (mergedGlobal !== globalHostObservationsRef.current) {
             globalHostObservationsRef.current = mergedGlobal;
             setGlobalHostObservations(mergedGlobal);
           }
           if (selectedPlaneRef.current) {
+            const planeResult = reduceTelemetryStore(
+              planeTelemetryStoreRef.current,
+              frames,
+              selectedPlaneRef.current,
+            );
+            if (planeResult.changed) {
+              planeTelemetryStoreRef.current = planeResult.store;
+            }
             setHostObservations((current) =>
-              mergeTelemetryIntoObservationPayload(current, frames, selectedPlaneRef.current),
+              mergeTelemetryIntoObservationPayload(
+                current,
+                selectTelemetryFrames(planeTelemetryStoreRef.current),
+                selectedPlaneRef.current,
+              ),
             );
           }
         })
@@ -5211,6 +5273,24 @@ function App() {
                   <div className="metric-row"><span>Knowledge Vault</span><strong>{knowledgeVaultServiceLabel(host)}</strong></div>
                 </>
               ) : null}
+            </div>
+          </section>
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Telemetry pipeline</h3>
+              <span className="subpanel-meta">Collector, bus, publisher, and controller timing.</span>
+            </div>
+            <div className="metric-grid">
+              <div className="metric-row"><span>Cadence</span><strong>{host?.telemetry_adaptive_interval_ms ? `${host.telemetry_adaptive_interval_ms} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Cadence reason</span><strong>{host?.telemetry_adaptive_reason || "n/a"}</strong></div>
+              <div className="metric-row"><span>Collect</span><strong>{host?.telemetry_collector_duration_ms ? `${host.telemetry_collector_duration_ms} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Publish</span><strong>{host?.telemetry_publish_duration_ms ? `${host.telemetry_publish_duration_ms} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Queue delay</span><strong>{host?.telemetry_queue_delay_ms ? `${host.telemetry_queue_delay_ms} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Controller ingest</span><strong>{host?.telemetry_controller_ingest_delay_ms ? `${host.telemetry_controller_ingest_delay_ms} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Bus depth</span><strong>{host?.telemetry_bus_depth ?? "n/a"}</strong></div>
+              <div className="metric-row"><span>Dropped frames</span><strong>{host?.telemetry_dropped_frames ?? 0}</strong></div>
+              <div className="metric-row"><span>Publish errors</span><strong>{host?.telemetry_publish_errors ?? 0}</strong></div>
+              <div className="metric-row"><span>Last publish error</span><strong>{host?.telemetry_last_publish_error || "none"}</strong></div>
             </div>
           </section>
           {lanPeers.length > 0 ? (

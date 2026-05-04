@@ -157,6 +157,7 @@ void HostdObservationService::WatchLocalTelemetry(
       interval * 5,
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(10)));
   std::cout << "hostd report-telemetry watch\n";
+  std::cout << "mode=diagnostic\n";
   std::cout << "backend=hostd-control\n";
   std::cout << "node=" << node_name << "\n";
   std::cout << "interval_ms=" << interval.count() << "\n";

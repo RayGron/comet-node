@@ -147,6 +147,15 @@ struct HostTelemetryFrame {
   int ttl_ms = 10000;
   std::string lane = "fast";
   std::string degraded_reason;
+  std::uint64_t collector_duration_ms = 0;
+  std::uint64_t publish_duration_ms = 0;
+  std::uint64_t publisher_queue_delay_ms = 0;
+  std::uint64_t telemetry_bus_depth = 0;
+  std::uint64_t telemetry_dropped_frames = 0;
+  std::uint64_t publish_error_count = 0;
+  int adaptive_interval_ms = 2000;
+  std::string adaptive_reason;
+  std::string last_publish_error;
   std::vector<RuntimeProcessStatus> instance_runtime;
   GpuTelemetrySnapshot gpu;
   NetworkTelemetrySnapshot network;

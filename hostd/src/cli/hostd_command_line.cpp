@@ -16,7 +16,7 @@ void HostdCommandLine::PrintUsage(std::ostream& out) const {
       << "  naim-hostd show-local-state --node <node-name> [--state-root <path>]\n"
       << "  naim-hostd show-runtime-status --node <node-name> [--state-root <path>]\n"
       << "  naim-hostd report-observed-state --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--state-root <path>]\n"
-      << "  naim-hostd report-telemetry --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--state-root <path>] [--watch] [--interval-ms <ms>] [--ttl-ms <ms>]\n"
+      << "  naim-hostd report-telemetry --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--state-root <path>] [--watch diagnostic] [--interval-ms <ms>] [--ttl-ms <ms>]\n"
       << "  naim-hostd apply-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n"
       << "  naim-hostd apply-next-assignment --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n";
 }

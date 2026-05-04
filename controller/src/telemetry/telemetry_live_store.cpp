@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 
 namespace naim::controller {
 
@@ -36,8 +37,11 @@ bool TelemetryLiveStore::Upsert(naim::HostTelemetryFrame frame) {
   } else {
     it->latest = frame;
     it->history.push_back(std::move(frame));
-    while (it->history.size() > 300) {
+    while (it->history.size() > HistoryCapacity()) {
+      it->last_pruned_sequence = it->history.front().sequence;
       it->history.pop_front();
+      ++it->dropped_frames_total;
+      ++dropped_frames_total_;
     }
   }
   return true;
@@ -53,7 +57,10 @@ nlohmann::json TelemetryLiveStore::BuildSnapshot(
     if (!MatchesPlane(buffer.latest, plane_name)) {
       continue;
     }
-    nodes.push_back(FrameToJson(buffer.latest));
+    auto node = FrameToJson(buffer.latest);
+    node["controller_dropped_frames_total"] = buffer.dropped_frames_total;
+    node["controller_last_pruned_sequence"] = buffer.last_pruned_sequence;
+    nodes.push_back(std::move(node));
     if (history_seconds <= 0) {
       continue;
     }
@@ -69,6 +76,10 @@ nlohmann::json TelemetryLiveStore::BuildSnapshot(
       {"service", "naim-controller"},
       {"plane_name", plane_name.has_value() ? nlohmann::json(*plane_name) : nlohmann::json(nullptr)},
       {"latest_sequence", latest_sequence_},
+      {"telemetry_overloaded", dropped_frames_total_ > 0},
+      {"dropped_frames_total", dropped_frames_total_},
+      {"history_capacity", HistoryCapacity()},
+      {"stream_batch_limit", StreamBatchLimit()},
       {"nodes", std::move(nodes)},
       {"history", std::move(history)},
   };
@@ -92,6 +103,10 @@ std::vector<naim::HostTelemetryFrame> TelemetryLiveStore::LoadFramesAfter(
       [](const auto& left, const auto& right) {
         return left.sequence < right.sequence;
       });
+  if (frames.size() > StreamBatchLimit()) {
+    const auto erase_count = static_cast<std::ptrdiff_t>(frames.size() - StreamBatchLimit());
+    frames.erase(frames.begin(), frames.begin() + erase_count);
+  }
   return frames;
 }
 
@@ -129,7 +144,17 @@ nlohmann::json TelemetryLiveStore::FrameToJson(
   const bool stale = frame.sequence == 0 || ttl_ms == 0 || expires_at_ms <= now_ms;
   payload["stale"] = stale;
   payload["expires_in_ms"] = stale ? 0 : expires_at_ms - now_ms;
+  payload["controller_ingest_delay_ms"] =
+      frame.sequence > 0 && now_ms >= frame.sequence ? now_ms - frame.sequence : 0;
   return payload;
+}
+
+constexpr std::size_t TelemetryLiveStore::HistoryCapacity() {
+  return 300;
+}
+
+constexpr std::size_t TelemetryLiveStore::StreamBatchLimit() {
+  return 128;
 }
 
 }  // namespace naim::controller

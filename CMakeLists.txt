@@ -571,11 +571,16 @@ set(
   controller/src/telemetry/telemetry_health_builder.cpp
   controller/src/telemetry/telemetry_history_downsampler.cpp
   controller/src/telemetry/telemetry_live_store.cpp
+  controller/src/telemetry/telemetry_live_store_services.cpp
   controller/src/telemetry/telemetry_live_store_state.cpp
+  controller/src/telemetry/telemetry_node_alert_builder.cpp
   controller/src/telemetry/telemetry_node_health_builder.cpp
   controller/src/telemetry/telemetry_open_metrics_exporter.cpp
   controller/src/telemetry/telemetry_operational_config.cpp
   controller/src/telemetry/telemetry_persistence_repository.cpp
+  controller/src/telemetry/telemetry_persistence_schema.cpp
+  controller/src/telemetry/telemetry_persistence_status_builder.cpp
+  controller/src/telemetry/telemetry_pipeline_alert_builder.cpp
   controller/src/telemetry/telemetry_plane_aggregate_builder.cpp
   controller/src/telemetry/telemetry_snapshot_builder.cpp
   controller/src/telemetry/telemetry_sqlite_connection.cpp

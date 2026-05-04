@@ -1537,8 +1537,19 @@ add_executable(
   launcher/src/platform/signal_manager.cpp
   launcher/src/run/hostd_peer_service.cpp
   launcher/src/run/launcher_run_service.cpp
+  hostd/src/app/hostd_command_support.cpp
   hostd/src/app/hostd_controller_transport_support.cpp
+  hostd/src/app/hostd_desired_state_path_support.cpp
+  hostd/src/app/hostd_local_runtime_state_support.cpp
+  hostd/src/app/hostd_local_state_path_support.cpp
+  hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_observed_state_snapshot_builder.cpp
+  hostd/src/app/hostd_reporting_support.cpp
+  hostd/src/app/hostd_runtime_telemetry_support.cpp
+  hostd/src/app/hostd_system_telemetry_collector.cpp
+  hostd/src/backend/hostd_backend_factory.cpp
   hostd/src/backend/http_hostd_backend.cpp
+  hostd/src/backend/local_db_hostd_backend.cpp
   launcher/src/main.cpp
   launcher/src/app/launcher_app.cpp
 )

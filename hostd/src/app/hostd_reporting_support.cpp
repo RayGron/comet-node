@@ -133,14 +133,18 @@ naim::HostObservation HostdReportingSupport::BuildObservedStateSnapshot(
 
 naim::HostTelemetryFrame HostdReportingSupport::BuildTelemetryFrame(
     const std::string& node_name,
+    const std::string& storage_root,
     const std::string& state_root,
     const int interval_ms,
-    const int ttl_ms) const {
+    const int ttl_ms,
+    const bool include_slow_lane) const {
   return observed_state_snapshot_builder_.BuildTelemetryFrame(
       node_name,
+      storage_root,
       state_root,
       interval_ms,
-      ttl_ms);
+      ttl_ms,
+      include_slow_lane);
 }
 
 std::string HostdReportingSupport::SerializeEventPayload(

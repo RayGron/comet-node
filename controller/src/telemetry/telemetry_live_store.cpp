@@ -1,6 +1,7 @@
 #include "telemetry/telemetry_live_store.h"
 
 #include <algorithm>
+#include <chrono>
 
 namespace naim::controller {
 
@@ -12,6 +13,9 @@ TelemetryLiveStore& TelemetryLiveStore::Instance() {
 bool TelemetryLiveStore::Upsert(naim::HostTelemetryFrame frame) {
   if (frame.node_name.empty()) {
     return false;
+  }
+  if (frame.channel.empty()) {
+    frame.channel = "host.telemetry.v1";
   }
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = std::find_if(
@@ -115,7 +119,17 @@ bool TelemetryLiveStore::MatchesPlane(
 
 nlohmann::json TelemetryLiveStore::FrameToJson(
     const naim::HostTelemetryFrame& frame) {
-  return nlohmann::json::parse(naim::SerializeHostTelemetryFrameJson(frame));
+  auto payload = nlohmann::json::parse(naim::SerializeHostTelemetryFrameJson(frame));
+  const auto now = std::chrono::system_clock::now().time_since_epoch();
+  const auto now_ms = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+  const std::uint64_t ttl_ms =
+      frame.ttl_ms > 0 ? static_cast<std::uint64_t>(frame.ttl_ms) : 0;
+  const std::uint64_t expires_at_ms = frame.sequence + ttl_ms;
+  const bool stale = frame.sequence == 0 || ttl_ms == 0 || expires_at_ms <= now_ms;
+  payload["stale"] = stale;
+  payload["expires_in_ms"] = stale ? 0 : expires_at_ms - now_ms;
+  return payload;
 }
 
 }  // namespace naim::controller

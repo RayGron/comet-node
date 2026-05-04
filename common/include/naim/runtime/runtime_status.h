@@ -135,16 +135,23 @@ struct CpuTelemetrySnapshot {
 
 struct HostTelemetryFrame {
   int contract_version = 1;
+  std::string channel = "host.telemetry.v1";
   std::string node_name;
   std::string plane_name;
   std::string sampled_at;
+  std::string collected_at;
+  std::string expires_at;
   std::uint64_t sequence = 0;
+  std::uint64_t monotonic_ms = 0;
   int interval_ms = 2000;
   int ttl_ms = 10000;
+  std::string lane = "fast";
+  std::string degraded_reason;
   std::vector<RuntimeProcessStatus> instance_runtime;
   GpuTelemetrySnapshot gpu;
   NetworkTelemetrySnapshot network;
   CpuTelemetrySnapshot cpu;
+  DiskTelemetrySnapshot disk;
 };
 
 struct RuntimeStatus {

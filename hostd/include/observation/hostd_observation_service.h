@@ -23,9 +23,11 @@ class IHostdObservationSupport {
       const std::optional<int>& assignment_id = std::nullopt) const = 0;
   virtual naim::HostTelemetryFrame BuildTelemetryFrame(
       const std::string& node_name,
+      const std::string& storage_root,
       const std::string& state_root,
       int interval_ms,
-      int ttl_ms) const = 0;
+      int ttl_ms,
+      bool include_slow_lane) const = 0;
   virtual void AppendHostdEvent(
       HostdBackend& backend,
       const std::string& category,

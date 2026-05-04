@@ -30,9 +30,11 @@ class HostdObservedStateSnapshotBuilder final {
       const std::optional<int>& assignment_id = std::nullopt) const;
   naim::HostTelemetryFrame BuildTelemetryFrame(
       const std::string& node_name,
+      const std::string& storage_root,
       const std::string& state_root,
       int interval_ms,
-      int ttl_ms) const;
+      int ttl_ms,
+      bool include_slow_lane) const;
 
  private:
   const HostdLocalStateRepository& local_state_repository_;

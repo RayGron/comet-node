@@ -1036,19 +1036,47 @@ function summarizeNetworkTelemetryFrame(network) {
   };
 }
 
+function summarizeDiskTelemetryFrame(disk) {
+  const items = Array.isArray(disk?.items) ? disk.items : [];
+  return {
+    available: items.length > 0,
+    degraded: disk?.degraded === true,
+    source: disk?.source || "",
+    collected_at: disk?.collected_at || "",
+    summary: {
+      disk_count: items.length,
+      total_bytes: items.reduce((sum, item) => sum + Number(item?.total_bytes || 0), 0),
+      used_bytes: items.reduce((sum, item) => sum + Number(item?.used_bytes || 0), 0),
+      free_bytes: items.reduce((sum, item) => sum + Number(item?.free_bytes || 0), 0),
+      read_bytes: items.reduce((sum, item) => sum + Number(item?.read_bytes || 0), 0),
+      write_bytes: items.reduce((sum, item) => sum + Number(item?.write_bytes || 0), 0),
+    },
+    items,
+  };
+}
+
 function hostObservationFromTelemetryFrame(frame) {
   if (!frame?.node_name) {
     return null;
   }
   const cpuSnapshot = frame?.cpu || {};
   const instanceRuntime = Array.isArray(frame?.instance_runtime) ? frame.instance_runtime : [];
+  const stale = frame?.stale === true;
   return {
     node_name: frame.node_name,
     plane_name: frame.plane_name || "",
-    status: "healthy",
+    status: stale ? "stale" : "healthy",
     observed_at: frame.sampled_at || null,
     heartbeat_at: frame.sampled_at || null,
     telemetry_sequence: frame.sequence || 0,
+    telemetry_channel: frame.channel || "host.telemetry.v1",
+    telemetry_lane: frame.lane || "fast",
+    telemetry_monotonic_ms: frame.monotonic_ms || 0,
+    telemetry_expires_at: frame.expires_at || "",
+    telemetry_expires_in_ms: frame.expires_in_ms ?? null,
+    telemetry_stale: stale,
+    telemetry_degraded: Boolean(frame?.degraded_reason),
+    telemetry_degraded_reason: frame?.degraded_reason || "",
     runtime_status: { available: instanceRuntime.length > 0 },
     instance_runtimes: {
       available: instanceRuntime.length > 0,
@@ -1063,12 +1091,14 @@ function hostObservationFromTelemetryFrame(frame) {
     },
     gpu_telemetry: summarizeGpuTelemetryFrame(frame?.gpu),
     network_telemetry: summarizeNetworkTelemetryFrame(frame?.network),
+    disk_telemetry: summarizeDiskTelemetryFrame(frame?.disk),
   };
 }
 
 function mergeTelemetryIntoObservationPayload(currentPayload, frames, planeName = "") {
   const currentItems = hostObservationItemsFromPayload(currentPayload);
   const byNode = new Map(currentItems.filter((item) => item?.node_name).map((item) => [item.node_name, item]));
+  let changed = false;
   for (const frame of frames || []) {
     if (planeName && frame?.plane_name && frame.plane_name !== planeName) {
       continue;
@@ -1078,13 +1108,25 @@ function mergeTelemetryIntoObservationPayload(currentPayload, frames, planeName 
       continue;
     }
     const previous = byNode.get(telemetryItem.node_name) || {};
-    byNode.set(telemetryItem.node_name, {
+    const previousSequence = Number(previous.telemetry_sequence || 0);
+    const nextSequence = Number(telemetryItem.telemetry_sequence || 0);
+    if (previousSequence > 0 && nextSequence > 0 && nextSequence <= previousSequence) {
+      continue;
+    }
+    const nextItem = {
       ...previous,
       ...telemetryItem,
       observed_state: previous.observed_state,
       applied_generation: previous.applied_generation,
-      disk_telemetry: previous.disk_telemetry,
-    });
+      disk_telemetry: telemetryItem.disk_telemetry?.available
+        ? telemetryItem.disk_telemetry
+        : previous.disk_telemetry,
+    };
+    byNode.set(telemetryItem.node_name, nextItem);
+    changed = true;
+  }
+  if (!changed && currentPayload) {
+    return currentPayload;
   }
   return {
     ...(currentPayload || {}),
@@ -3895,19 +3937,23 @@ function App() {
       if (validFrames.length === 0) {
         return;
       }
-      setGlobalHostObservations((current) =>
-        mergeTelemetryIntoObservationPayload(current, validFrames),
+      const mergedGlobal = mergeTelemetryIntoObservationPayload(
+        globalHostObservationsRef.current,
+        validFrames,
       );
+      const globalChanged = mergedGlobal !== globalHostObservationsRef.current;
+      if (globalChanged) {
+        globalHostObservationsRef.current = mergedGlobal;
+        setGlobalHostObservations(mergedGlobal);
+      }
       if (selectedPlaneRef.current) {
         setHostObservations((current) =>
           mergeTelemetryIntoObservationPayload(current, validFrames, selectedPlaneRef.current),
         );
       }
-      const mergedGlobal = mergeTelemetryIntoObservationPayload(
-        globalHostObservationsRef.current,
-        validFrames,
-      );
-      globalHostObservationsRef.current = mergedGlobal;
+      if (!globalChanged) {
+        return;
+      }
       const globalItems = hostObservationItemsFromPayload(mergedGlobal);
       const serverSummary = summarizeGlobalObservations(globalItems);
       setMetricHistory((current) =>
@@ -3979,9 +4025,14 @@ function App() {
       fetchJson(queryPath("/api/v1/telemetry/snapshot", { history_seconds: 0 }))
         .then((payload) => {
           const frames = Array.isArray(payload?.nodes) ? payload.nodes : [];
-          setGlobalHostObservations((current) =>
-            mergeTelemetryIntoObservationPayload(current, frames),
+          const mergedGlobal = mergeTelemetryIntoObservationPayload(
+            globalHostObservationsRef.current,
+            frames,
           );
+          if (mergedGlobal !== globalHostObservationsRef.current) {
+            globalHostObservationsRef.current = mergedGlobal;
+            setGlobalHostObservations(mergedGlobal);
+          }
           if (selectedPlaneRef.current) {
             setHostObservations((current) =>
               mergeTelemetryIntoObservationPayload(current, frames, selectedPlaneRef.current),

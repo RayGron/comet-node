@@ -118,9 +118,11 @@ void HostdObservationService::ReportLocalTelemetry(
       storage_root);
   const auto frame = support_.BuildTelemetryFrame(
       node_name,
+      storage_root,
       state_root,
       interval_ms,
-      ttl_ms);
+      ttl_ms,
+      true);
   backend->UpsertHostTelemetry(frame);
   std::cout << "hostd report-telemetry\n";
   std::cout << "backend=hostd-control\n";
@@ -151,21 +153,33 @@ void HostdObservationService::WatchLocalTelemetry(
       node_name,
       storage_root);
   const auto interval = std::chrono::milliseconds(std::max(250, interval_ms));
+  const auto slow_interval = std::max(
+      interval * 5,
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(10)));
   std::cout << "hostd report-telemetry watch\n";
   std::cout << "backend=hostd-control\n";
   std::cout << "node=" << node_name << "\n";
   std::cout << "interval_ms=" << interval.count() << "\n";
+  std::cout << "slow_interval_ms=" << slow_interval.count() << "\n";
   std::cout.flush();
 
   auto next_tick = std::chrono::steady_clock::now();
+  auto next_slow_tick = next_tick;
   while (true) {
     next_tick += interval;
     try {
+      const auto now = std::chrono::steady_clock::now();
+      const bool include_slow_lane = now >= next_slow_tick;
+      if (include_slow_lane) {
+        next_slow_tick = now + slow_interval;
+      }
       const auto frame = support_.BuildTelemetryFrame(
           node_name,
+          storage_root,
           state_root,
           static_cast<int>(interval.count()),
-          ttl_ms);
+          ttl_ms,
+          include_slow_lane);
       backend->UpsertHostTelemetry(frame);
     } catch (const std::exception& error) {
       std::cerr << "hostd report-telemetry warning: " << error.what() << "\n";

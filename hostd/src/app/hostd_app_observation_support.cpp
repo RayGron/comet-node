@@ -37,14 +37,18 @@ naim::HostObservation HostdAppObservationSupport::BuildObservedStateSnapshot(
 
 naim::HostTelemetryFrame HostdAppObservationSupport::BuildTelemetryFrame(
     const std::string& node_name,
+    const std::string& storage_root,
     const std::string& state_root,
     const int interval_ms,
-    const int ttl_ms) const {
+    const int ttl_ms,
+    const bool include_slow_lane) const {
   return reporting_support_.BuildTelemetryFrame(
       node_name,
+      storage_root,
       state_root,
       interval_ms,
-      ttl_ms);
+      ttl_ms,
+      include_slow_lane);
 }
 
 void HostdAppObservationSupport::AppendHostdEvent(

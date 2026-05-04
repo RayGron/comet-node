@@ -3776,6 +3776,14 @@ export function PlaneV2FormBuilder({
               />
             </label>
           ) : null}
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.workerGpuDevice}>Worker GPU device</InfoLabel>
+            <input
+              className="text-input"
+              value={form.workerGpuDevice}
+              onChange={bindText("workerGpuDevice")}
+            />
+          </label>
         </div>
         {form.topologyEnabled ? (
           <>
@@ -3783,14 +3791,6 @@ export function PlaneV2FormBuilder({
               <label className="field-label">
                 <InfoLabel info={FIELD_INFO.workerNode}>Worker node</InfoLabel>
                 <input className="text-input" value={form.workerNode} onChange={bindText("workerNode")} />
-              </label>
-              <label className="field-label">
-                <InfoLabel info={FIELD_INFO.workerGpuDevice}>Worker GPU device</InfoLabel>
-                <input
-                  className="text-input"
-                  value={form.workerGpuDevice}
-                  onChange={bindText("workerGpuDevice")}
-                />
               </label>
               {form.planeMode === "llm" ? (
                 <label className="field-label">

@@ -8,6 +8,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 #include "http/controller_http_server_support.h"
 #include "infra/controller_network_manager.h"
@@ -38,6 +39,29 @@ struct SseStreamRequest {
 struct TelemetryStreamRequest {
   std::optional<std::string> plane_name;
   std::uint64_t last_sequence = 0;
+};
+
+class TelemetryStreamScope final {
+ public:
+  explicit TelemetryStreamScope(std::string stream_name)
+      : stream_name_(std::move(stream_name)) {
+    TelemetryLiveStore::Instance().RecordStreamOpened(stream_name_);
+  }
+
+  ~TelemetryStreamScope() {
+    TelemetryLiveStore::Instance().RecordStreamClosed(stream_name_);
+  }
+
+  void RecordSendFailure() const {
+    TelemetryLiveStore::Instance().RecordStreamSendFailure(stream_name_);
+  }
+
+  void RecordReplayRequired() const {
+    TelemetryLiveStore::Instance().RecordStreamReplayRequired(stream_name_);
+  }
+
+ private:
+  std::string stream_name_;
 };
 
 std::optional<std::string> FindQueryString(
@@ -204,13 +228,16 @@ void ControllerHttpServer::StreamTelemetrySse(
     const SocketHandle client_fd,
     const HttpRequest& request,
     std::shared_ptr<SharedState> state) {
+  const TelemetryStreamScope stream_scope("telemetry");
   const TelemetryStreamRequest stream_request = ParseTelemetryStreamRequest(request);
   std::uint64_t last_sequence = stream_request.last_sequence;
   if (!ControllerNetworkManager::SendSseHeaders(client_fd)) {
+    stream_scope.RecordSendFailure();
     ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
     return;
   }
   if (!ControllerNetworkManager::SendSseCommentFrame(client_fd, " telemetry connected")) {
+    stream_scope.RecordSendFailure();
     ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
     return;
   }
@@ -219,6 +246,9 @@ void ControllerHttpServer::StreamTelemetrySse(
       last_sequence,
       stream_request.plane_name);
   if (last_sequence == 0 || initial_delta.replay_required) {
+    if (initial_delta.replay_required) {
+      stream_scope.RecordReplayRequired();
+    }
     auto snapshot = TelemetryLiveStore::Instance().BuildSnapshot(
         stream_request.plane_name,
         0);
@@ -235,6 +265,7 @@ void ControllerHttpServer::StreamTelemetrySse(
             static_cast<int>(TelemetryLiveStore::Instance().LatestSequence() % 2147483647ULL),
             "telemetry.snapshot",
             snapshot.dump())) {
+      stream_scope.RecordSendFailure();
       ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
       return;
     }
@@ -246,6 +277,7 @@ void ControllerHttpServer::StreamTelemetrySse(
     auto delta =
         TelemetryLiveStore::Instance().LoadStreamDeltaAfter(last_sequence, stream_request.plane_name);
     if (delta.replay_required) {
+      stream_scope.RecordReplayRequired();
       auto snapshot = TelemetryLiveStore::Instance().BuildSnapshot(
           stream_request.plane_name,
           0);
@@ -262,6 +294,7 @@ void ControllerHttpServer::StreamTelemetrySse(
               static_cast<int>(delta.latest_sequence % 2147483647ULL),
               "telemetry.snapshot",
               snapshot.dump())) {
+        stream_scope.RecordSendFailure();
         ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
         return;
       }
@@ -276,6 +309,7 @@ void ControllerHttpServer::StreamTelemetrySse(
               static_cast<int>(frame.sequence % 2147483647ULL),
               "telemetry.node",
               payload)) {
+        stream_scope.RecordSendFailure();
         ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
         return;
       }
@@ -288,6 +322,7 @@ void ControllerHttpServer::StreamTelemetrySse(
       if (!ControllerNetworkManager::SendSseCommentFrame(
               client_fd,
               " telemetry keepalive")) {
+        stream_scope.RecordSendFailure();
         ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
         return;
       }
@@ -328,15 +363,18 @@ void ControllerHttpServer::StreamLiveSse(
     const HttpRequest& request,
     const BuildEventPayloadItemFn build_event_payload_item,
     std::shared_ptr<SharedState> state) {
+  const TelemetryStreamScope stream_scope("live");
   const SseStreamRequest event_request = ParseSseStreamRequest(request);
   const TelemetryStreamRequest telemetry_request = ParseTelemetryStreamRequest(request);
   int last_event_id = event_request.last_event_id.value_or(0);
   std::uint64_t last_sequence = telemetry_request.last_sequence;
   if (!ControllerNetworkManager::SendSseHeaders(client_fd)) {
+    stream_scope.RecordSendFailure();
     ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
     return;
   }
   if (!ControllerNetworkManager::SendSseCommentFrame(client_fd, " live connected")) {
+    stream_scope.RecordSendFailure();
     ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
     return;
   }
@@ -345,6 +383,9 @@ void ControllerHttpServer::StreamLiveSse(
       last_sequence,
       telemetry_request.plane_name);
   if (last_sequence == 0 || initial_delta.replay_required) {
+    if (initial_delta.replay_required) {
+      stream_scope.RecordReplayRequired();
+    }
     auto snapshot = TelemetryLiveStore::Instance().BuildSnapshot(
         telemetry_request.plane_name,
         0);
@@ -362,6 +403,7 @@ void ControllerHttpServer::StreamLiveSse(
             static_cast<int>(TelemetryLiveStore::Instance().LatestSequence() % 2147483647ULL),
             "telemetry.snapshot",
             snapshot.dump())) {
+      stream_scope.RecordSendFailure();
       ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
       return;
     }
@@ -388,6 +430,7 @@ void ControllerHttpServer::StreamLiveSse(
               event.id,
               "events." + BuildSseEventName(event),
               payload.dump())) {
+        stream_scope.RecordSendFailure();
         ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
         return;
       }
@@ -399,6 +442,7 @@ void ControllerHttpServer::StreamLiveSse(
         last_sequence,
         telemetry_request.plane_name);
     if (delta.replay_required) {
+      stream_scope.RecordReplayRequired();
       auto snapshot = TelemetryLiveStore::Instance().BuildSnapshot(
           telemetry_request.plane_name,
           0);
@@ -416,6 +460,7 @@ void ControllerHttpServer::StreamLiveSse(
               static_cast<int>(delta.latest_sequence % 2147483647ULL),
               "telemetry.snapshot",
               snapshot.dump())) {
+        stream_scope.RecordSendFailure();
         ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
         return;
       }
@@ -430,6 +475,7 @@ void ControllerHttpServer::StreamLiveSse(
               static_cast<int>(frame.sequence % 2147483647ULL),
               "telemetry.node",
               payload.dump())) {
+        stream_scope.RecordSendFailure();
         ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
         return;
       }
@@ -440,6 +486,7 @@ void ControllerHttpServer::StreamLiveSse(
     const auto now = std::chrono::steady_clock::now();
     if (now - last_keepalive >= std::chrono::seconds(5)) {
       if (!ControllerNetworkManager::SendSseCommentFrame(client_fd, " live keepalive")) {
+        stream_scope.RecordSendFailure();
         ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
         return;
       }
@@ -481,7 +528,7 @@ int ControllerHttpServer::Serve(const Config& config) {
 
   naim::ControllerStore store(config.db_path);
   store.Initialize();
-  TelemetryLiveStore::Instance().ConfigurePersistence(config.db_path);
+  TelemetryLiveStore::Instance().ConfigureFromEnvironment(config.db_path);
 
   const SocketHandle listen_fd = ControllerNetworkManager::CreateListenSocket(
       config.listen_host,

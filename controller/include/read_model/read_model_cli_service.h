@@ -43,6 +43,10 @@ class ReadModelCliService : public IReadModelCliService {
       const std::optional<std::string>& node_name,
       int stale_after_seconds) const override;
 
+  int ShowTelemetryHealth(
+      const std::string& db_path,
+      const std::optional<std::string>& plane_name) const override;
+
   int ShowEvents(
       const std::string& db_path,
       const std::optional<std::string>& plane_name,

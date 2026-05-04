@@ -2136,6 +2136,9 @@ function App() {
   const [hostObservations, setHostObservations] = useState(null);
   const [globalHostObservations, setGlobalHostObservations] = useState(null);
   const [telemetryHealthy, setTelemetryHealthy] = useState(false);
+  const [telemetryBrowserLatency, setTelemetryBrowserLatency] = useState(
+    createTelemetryStore().browserLatency,
+  );
   const [hostdHosts, setHostdHosts] = useState([]);
   const [protocolRegistry, setProtocolRegistry] = useState({ items: [], summary: {} });
   const [selectedHostNodeName, setSelectedHostNodeName] = useState("");
@@ -3979,35 +3982,38 @@ function App() {
             selectedPlaneRef.current,
           ),
         );
-        planeTelemetryStoreRef.current = updateTelemetryBrowserLatency(
-          planeTelemetryStoreRef.current,
-          {
-            receivedAtMs,
-            receiveDelayMs: Math.max(
-              0,
-              ...validFrames.map((frame) => Number(frame?.telemetry_browser_receive_delay_ms || 0)),
-            ),
-            parseMs,
-            reduceMs: planeReduceMs,
-            applyMs: performance.now() - applyStartedAt,
-            acceptedFrames: planeResult.acceptedFrames.length,
-          },
-        );
-      }
-      globalTelemetryStoreRef.current = updateTelemetryBrowserLatency(
-        globalTelemetryStoreRef.current,
-        {
+        const nextPlaneLatency = {
           receivedAtMs,
           receiveDelayMs: Math.max(
             0,
             ...validFrames.map((frame) => Number(frame?.telemetry_browser_receive_delay_ms || 0)),
           ),
           parseMs,
-          reduceMs,
+          reduceMs: planeReduceMs,
           applyMs: performance.now() - applyStartedAt,
-          acceptedFrames: globalResult.acceptedFrames.length,
-        },
+          acceptedFrames: planeResult.acceptedFrames.length,
+        };
+        planeTelemetryStoreRef.current = updateTelemetryBrowserLatency(
+          planeTelemetryStoreRef.current,
+          nextPlaneLatency,
+        );
+      }
+      const nextGlobalLatency = {
+        receivedAtMs,
+        receiveDelayMs: Math.max(
+          0,
+          ...validFrames.map((frame) => Number(frame?.telemetry_browser_receive_delay_ms || 0)),
+        ),
+        parseMs,
+        reduceMs,
+        applyMs: performance.now() - applyStartedAt,
+        acceptedFrames: globalResult.acceptedFrames.length,
+      };
+      globalTelemetryStoreRef.current = updateTelemetryBrowserLatency(
+        globalTelemetryStoreRef.current,
+        nextGlobalLatency,
       );
+      setTelemetryBrowserLatency(nextGlobalLatency);
       if (!globalChanged) {
         return;
       }
@@ -4141,20 +4147,22 @@ function App() {
             globalHostObservationsRef.current = mergedGlobal;
             setGlobalHostObservations(mergedGlobal);
           }
+          const nextGlobalLatency = {
+            receivedAtMs: Date.now(),
+            receiveDelayMs: Math.max(
+              0,
+              ...frames.map((frame) => Number(frame?.telemetry_browser_receive_delay_ms || 0)),
+            ),
+            parseMs: 0,
+            reduceMs: 0,
+            applyMs: 0,
+            acceptedFrames: globalResult.acceptedFrames.length,
+          };
           globalTelemetryStoreRef.current = updateTelemetryBrowserLatency(
             globalTelemetryStoreRef.current,
-            {
-              receivedAtMs: Date.now(),
-              receiveDelayMs: Math.max(
-                0,
-                ...frames.map((frame) => Number(frame?.telemetry_browser_receive_delay_ms || 0)),
-              ),
-              parseMs: 0,
-              reduceMs: 0,
-              applyMs: 0,
-              acceptedFrames: globalResult.acceptedFrames.length,
-            },
+            nextGlobalLatency,
           );
+          setTelemetryBrowserLatency(nextGlobalLatency);
           if (selectedPlaneRef.current) {
             planeTelemetryStoreRef.current = applyTelemetrySnapshotMetadata(
               planeTelemetryStoreRef.current,
@@ -8235,6 +8243,12 @@ function App() {
                   <span className="subpanel-meta">
                     Host-level CPU, GPU, temperature, network, disk, and runtime posture across all observed nodes
                   </span>
+                </div>
+                <div className="telemetry-latency-strip">
+                  <span>Receive <strong>{Math.round(telemetryBrowserLatency.receiveDelayMs || 0)} ms</strong></span>
+                  <span>Parse <strong>{Number(telemetryBrowserLatency.parseMs || 0).toFixed(1)} ms</strong></span>
+                  <span>Reduce <strong>{Number(telemetryBrowserLatency.reduceMs || 0).toFixed(1)} ms</strong></span>
+                  <span>Apply <strong>{Number(telemetryBrowserLatency.applyMs || 0).toFixed(1)} ms</strong></span>
                 </div>
                 <div className="summary-grid server-summary-grid">
                   <SummaryCard

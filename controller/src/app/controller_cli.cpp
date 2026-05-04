@@ -103,6 +103,12 @@ std::optional<int> ControllerCli::TryRun() const {
         command_line_.stale_after().value_or(300));
   }
 
+  if (command == "show-telemetry-health") {
+    return read_model_cli_service_.ShowTelemetryHealth(
+        command_line_.db().value_or("var/controller.sqlite"),
+        command_line_.plane());
+  }
+
   if (command == "show-disk-state") {
     return read_model_cli_service_.ShowDiskState(
         command_line_.db().value_or("var/controller.sqlite"),

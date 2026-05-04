@@ -6,9 +6,12 @@
 
 #include <nlohmann/json.hpp>
 
+#include "telemetry/telemetry_alert_builder.h"
 #include "telemetry/telemetry_frame_matcher.h"
 #include "telemetry/telemetry_live_store_types.h"
+#include "telemetry/telemetry_plane_aggregate_builder.h"
 #include "telemetry/telemetry_persistence_repository.h"
+#include "telemetry/telemetry_state_types.h"
 #include "telemetry/telemetry_stream_metrics_service.h"
 
 namespace naim::controller {
@@ -25,25 +28,12 @@ class TelemetryHealthBuilder final {
       std::uint64_t dropped_frames_total,
       const std::optional<std::string>& plane_name,
       std::uint64_t now_ms) const;
-  nlohmann::json BuildAlerts(
-      const std::vector<const TelemetryNodeBuffer*>& buffers,
-      const TelemetryPersistenceState& persistence,
-      const TelemetryStreamMetrics& streams,
-      const TelemetryAlertThresholds& thresholds,
-      std::uint64_t dropped_frames_total,
-      std::uint64_t now_ms) const;
-  nlohmann::json BuildTelemetryHealth(
-      const naim::HostTelemetryFrame& frame,
-      const TelemetryNodeBuffer& buffer,
-      std::uint64_t now_ms,
-      std::uint64_t controller_ingest_delay_ms) const;
-  nlohmann::json BuildPlaneAggregates(
-      const std::vector<const TelemetryNodeBuffer*>& buffers,
-      std::uint64_t now_ms) const;
 
  private:
   TelemetryFrameMatcher matcher_;
+  TelemetryAlertBuilder alert_builder_;
   TelemetryPersistenceRepository persistence_repository_;
+  TelemetryPlaneAggregateBuilder plane_aggregate_builder_;
   TelemetryStreamMetricsService stream_metrics_service_;
 };
 

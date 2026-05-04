@@ -6,6 +6,7 @@
 
 #include "telemetry/telemetry_frame_matcher.h"
 #include "telemetry/telemetry_live_store_types.h"
+#include "telemetry/telemetry_state_types.h"
 
 namespace naim::controller {
 

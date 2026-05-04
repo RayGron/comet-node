@@ -1,7 +1,7 @@
 #include "telemetry/telemetry_snapshot_builder.h"
 
 #include <algorithm>
-#include <map>
+#include <string>
 
 namespace naim::controller {
 
@@ -24,10 +24,10 @@ nlohmann::json TelemetrySnapshotBuilder::BuildSnapshot(
       continue;
     }
     matched_buffers.push_back(&buffer);
-    auto node = FrameToJson(buffer.latest, now_ms);
+    auto node = frame_json_builder_.Build(buffer.latest, now_ms);
     const auto controller_ingest_delay_ms =
         matcher_.ControllerIngestDelayMs(buffer.latest, now_ms);
-    node["telemetry_health"] = health_builder_.BuildTelemetryHealth(
+    node["telemetry_health"] = node_health_builder_.Build(
         buffer.latest,
         buffer,
         now_ms,
@@ -43,11 +43,11 @@ nlohmann::json TelemetrySnapshotBuilder::BuildSnapshot(
     const std::size_t begin =
         buffer.history.size() > max_samples ? buffer.history.size() - max_samples : 0;
     for (std::size_t index = begin; index < buffer.history.size(); ++index) {
-      history.push_back(FrameToJson(buffer.history[index], now_ms));
+      history.push_back(frame_json_builder_.Build(buffer.history[index], now_ms));
     }
   }
   const bool overloaded = dropped_frames_total > 0;
-  const auto alerts = health_builder_.BuildAlerts(
+  const auto alerts = alert_builder_.Build(
       matched_buffers,
       persistence,
       streams,
@@ -86,131 +86,17 @@ nlohmann::json TelemetrySnapshotBuilder::BuildSnapshot(
            {"dropped_frames_total", dropped_frames_total},
            {"stream_batch_limit", retention.stream_batch_limit},
        }},
-      {"planes", health_builder_.BuildPlaneAggregates(matched_buffers, now_ms)},
+      {"planes", plane_aggregate_builder_.Build(matched_buffers, now_ms)},
       {"nodes", std::move(node_payloads)},
       {"history", std::move(history)},
       {"downsampled_history",
-       BuildDownsampledHistory(
+       history_downsampler_.Build(
            matched_buffers,
            history_seconds,
            now_ms,
            retention.warm_bucket_ms,
            retention.cold_bucket_ms)},
   };
-}
-
-nlohmann::json TelemetrySnapshotBuilder::FrameToJson(
-    const naim::HostTelemetryFrame& frame,
-    const std::uint64_t now_ms) const {
-  auto payload = nlohmann::json::parse(naim::SerializeHostTelemetryFrameJson(frame));
-  const std::uint64_t ttl_ms =
-      frame.ttl_ms > 0 ? static_cast<std::uint64_t>(frame.ttl_ms) : 0;
-  const std::uint64_t expires_at_ms = frame.sequence + ttl_ms;
-  const bool stale = frame.sequence == 0 || ttl_ms == 0 || expires_at_ms <= now_ms;
-  payload["stale"] = stale;
-  payload["expires_in_ms"] = stale ? 0 : expires_at_ms - now_ms;
-  const auto controller_ingest_delay_ms = matcher_.ControllerIngestDelayMs(frame, now_ms);
-  payload["controller_ingest_delay_ms"] = controller_ingest_delay_ms;
-  payload["last_frame_age_ms"] = controller_ingest_delay_ms;
-  payload["telemetry_health_status"] =
-      stale ? "stale"
-            : frame.telemetry_dropped_frames > 0 || frame.publish_error_count > 0
-                ? "degraded"
-                : "ok";
-  payload["latency_breakdown"] = BuildLatencyBreakdown(frame, controller_ingest_delay_ms);
-  payload["transport"] = nlohmann::json{
-      {"primary", "sse"},
-      {"fallback", "snapshot-poll"},
-      {"sequence", frame.sequence},
-      {"schema_version", frame.schema_version},
-  };
-  return payload;
-}
-
-nlohmann::json TelemetrySnapshotBuilder::BuildLatencyBreakdown(
-    const naim::HostTelemetryFrame& frame,
-    const std::uint64_t controller_ingest_delay_ms) const {
-  const std::uint64_t total_observed_ms =
-      frame.collector_duration_ms + frame.publisher_queue_delay_ms +
-      frame.publish_duration_ms + controller_ingest_delay_ms;
-  return nlohmann::json{
-      {"collect_ms", frame.collector_duration_ms},
-      {"queue_ms", frame.publisher_queue_delay_ms},
-      {"publish_ms", frame.publish_duration_ms},
-      {"controller_ingest_ms", controller_ingest_delay_ms},
-      {"total_observed_ms", total_observed_ms},
-  };
-}
-
-nlohmann::json TelemetrySnapshotBuilder::BuildDownsampledHistory(
-    const std::vector<const TelemetryNodeBuffer*>& buffers,
-    const int history_seconds,
-    const std::uint64_t now_ms,
-    const std::uint64_t warm_bucket_ms,
-    const std::uint64_t cold_bucket_ms) const {
-  if (history_seconds <= 0) {
-    return nlohmann::json::array();
-  }
-  std::map<std::string, TelemetryHistoryBucketAccumulator> buckets;
-  const std::uint64_t horizon_ms =
-      static_cast<std::uint64_t>(std::max(1, history_seconds)) * 1000ULL;
-  for (const auto* buffer : buffers) {
-    if (buffer == nullptr) {
-      continue;
-    }
-    for (const auto& frame : buffer->history) {
-      if (frame.sequence == 0 || now_ms > frame.sequence + horizon_ms) {
-        continue;
-      }
-      const std::uint64_t age_ms = now_ms >= frame.sequence ? now_ms - frame.sequence : 0;
-      const std::uint64_t bucket_ms =
-          age_ms <= warm_bucket_ms ? warm_bucket_ms : cold_bucket_ms;
-      const std::uint64_t bucket_start_ms = (frame.sequence / bucket_ms) * bucket_ms;
-      const auto key =
-          frame.node_name + "|" + matcher_.PlaneKeyForFrame(frame) + "|" +
-          std::to_string(bucket_ms) + "|" + std::to_string(bucket_start_ms);
-      auto& bucket = buckets[key];
-      if (bucket.sample_count == 0) {
-        bucket.node_name = frame.node_name;
-        bucket.plane_name = matcher_.PlaneKeyForFrame(frame);
-        bucket.bucket_start_ms = bucket_start_ms;
-        bucket.bucket_ms = bucket_ms;
-        bucket.first_sequence = frame.sequence;
-      }
-      bucket.last_sequence = std::max(bucket.last_sequence, frame.sequence);
-      bucket.sample_count += 1;
-      bucket.cpu_utilization_sum += frame.cpu.utilization_pct;
-      const double gpu_util = matcher_.GpuUtilizationAverage(frame);
-      bucket.gpu_utilization_sum += gpu_util;
-      bucket.max_gpu_utilization_pct = std::max(bucket.max_gpu_utilization_pct, gpu_util);
-      bucket.max_queue_delay_ms =
-          std::max(bucket.max_queue_delay_ms, frame.publisher_queue_delay_ms);
-      bucket.max_publish_ms = std::max(bucket.max_publish_ms, frame.publish_duration_ms);
-      bucket.max_controller_ingest_ms = std::max(
-          bucket.max_controller_ingest_ms,
-          matcher_.ControllerIngestDelayMs(frame, now_ms));
-    }
-  }
-  nlohmann::json result = nlohmann::json::array();
-  for (const auto& [_, bucket] : buckets) {
-    const double count = static_cast<double>(std::max<std::uint64_t>(1, bucket.sample_count));
-    result.push_back(nlohmann::json{
-        {"node_name", bucket.node_name},
-        {"plane_name", bucket.plane_name},
-        {"bucket_start_ms", bucket.bucket_start_ms},
-        {"bucket_ms", bucket.bucket_ms},
-        {"sample_count", bucket.sample_count},
-        {"first_sequence", bucket.first_sequence},
-        {"last_sequence", bucket.last_sequence},
-        {"avg_cpu_utilization_pct", bucket.cpu_utilization_sum / count},
-        {"avg_gpu_utilization_pct", bucket.gpu_utilization_sum / count},
-        {"max_gpu_utilization_pct", bucket.max_gpu_utilization_pct},
-        {"max_queue_delay_ms", bucket.max_queue_delay_ms},
-        {"max_publish_ms", bucket.max_publish_ms},
-        {"max_controller_ingest_ms", bucket.max_controller_ingest_ms},
-    });
-  }
-  return result;
 }
 
 }  // namespace naim::controller

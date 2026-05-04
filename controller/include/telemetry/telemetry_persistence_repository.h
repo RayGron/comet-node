@@ -8,7 +8,7 @@
 #include <sqlite3.h>
 
 #include "naim/runtime/runtime_status.h"
-#include "telemetry/telemetry_live_store_types.h"
+#include "telemetry/telemetry_state_types.h"
 
 namespace naim::controller {
 

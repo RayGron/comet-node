@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -9,24 +10,20 @@
 #include <nlohmann/json.hpp>
 
 #include "naim/runtime/runtime_status.h"
-#include "telemetry/telemetry_clock.h"
-#include "telemetry/telemetry_frame_normalizer.h"
-#include "telemetry/telemetry_frame_ring_buffer.h"
-#include "telemetry/telemetry_health_builder.h"
 #include "telemetry/telemetry_live_store_types.h"
-#include "telemetry/telemetry_open_metrics_exporter.h"
-#include "telemetry/telemetry_operational_config.h"
-#include "telemetry/telemetry_persistence_repository.h"
-#include "telemetry/telemetry_snapshot_builder.h"
-#include "telemetry/telemetry_stream_metrics_service.h"
 
 namespace naim::controller {
+
+class TelemetryLiveStoreState;
 
 class TelemetryLiveStore final {
  public:
   using RetentionConfig = TelemetryRetentionConfig;
   using AlertThresholds = TelemetryAlertThresholds;
   using StreamDelta = TelemetryStreamDelta;
+
+  TelemetryLiveStore();
+  ~TelemetryLiveStore();
 
   static TelemetryLiveStore& Instance();
 
@@ -66,22 +63,7 @@ class TelemetryLiveStore final {
       std::size_t retention_capacity);
 
   mutable std::mutex mutex_;
-  std::vector<TelemetryNodeBuffer> nodes_;
-  std::uint64_t latest_sequence_ = 0;
-  std::uint64_t dropped_frames_total_ = 0;
-  RetentionConfig retention_;
-  AlertThresholds thresholds_;
-  TelemetryPersistenceState persistence_;
-  TelemetryStreamMetrics streams_;
-  TelemetryClock clock_;
-  TelemetryFrameNormalizer frame_normalizer_;
-  TelemetryOperationalConfig operational_config_;
-  TelemetryFrameRingBuffer ring_buffer_;
-  TelemetryPersistenceRepository persistence_repository_;
-  TelemetryStreamMetricsService stream_metrics_service_;
-  TelemetryHealthBuilder health_builder_;
-  TelemetrySnapshotBuilder snapshot_builder_;
-  TelemetryOpenMetricsExporter open_metrics_exporter_;
+  std::unique_ptr<TelemetryLiveStoreState> state_;
 };
 
 }  // namespace naim::controller

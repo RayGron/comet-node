@@ -70,6 +70,9 @@ class HostdHttpService {
   HttpResponse HandleObservations(
       const std::string& db_path,
       const HttpRequest& request) const;
+  HttpResponse HandleTelemetry(
+      const std::string& db_path,
+      const HttpRequest& request) const;
   HttpResponse HandleEvents(
       const std::string& db_path,
       const HttpRequest& request) const;

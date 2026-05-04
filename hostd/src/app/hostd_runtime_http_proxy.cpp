@@ -205,6 +205,20 @@ bool HostdRuntimeHttpProxy::IsAllowedProxyPath(
     }
     return false;
   }
+  if (policy == HostdRuntimeProxyPolicy::WebGateway) {
+    if (method == "GET" && route == "/health") {
+      return true;
+    }
+    if (route == "/v1/webgateway" && (method == "GET" || method == "POST")) {
+      return true;
+    }
+    if (route.rfind("/v1/webgateway/", 0) == 0 &&
+        (method == "GET" || method == "POST" || method == "PUT" ||
+         method == "PATCH" || method == "DELETE")) {
+      return true;
+    }
+    return false;
+  }
   return IsAllowedRuntimeProxyPath(method, path);
 }
 
@@ -214,6 +228,9 @@ std::string HostdRuntimeHttpProxy::PolicyLabel(HostdRuntimeProxyPolicy policy) {
   }
   if (policy == HostdRuntimeProxyPolicy::KnowledgeVault) {
     return "knowledge-vault-http";
+  }
+  if (policy == HostdRuntimeProxyPolicy::WebGateway) {
+    return "webgateway-runtime-http";
   }
   return "runtime-direct-http";
 }

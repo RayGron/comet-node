@@ -1,5 +1,7 @@
 #include "host/hostd_http_service.h"
 
+#include "telemetry/telemetry_live_store.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -563,6 +565,9 @@ std::optional<HttpResponse> HostdHttpService::HandleRequest(
   }
   if (request.path == "/api/v1/hostd/observations") {
     return HandleObservations(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/telemetry") {
+    return HandleTelemetry(db_path, request);
   }
   if (request.path == "/api/v1/hostd/events") {
     return HandleEvents(db_path, request);
@@ -2244,6 +2249,55 @@ HttpResponse HostdHttpService::HandleObservations(
         json{{"service", "naim-controller"},
              {"node_name", observation.node_name},
              {"updated", true}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleTelemetry(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "telemetry/upsert");
+    const auto frame = naim::DeserializeHostTelemetryFrameJson(body.dump());
+    if (frame.node_name.empty()) {
+      return context.Json(
+          400,
+          json{{"status", "bad_request"},
+               {"message", "missing required field 'node_name'"}});
+    }
+    if (host.node_name != frame.node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "node mismatch for host telemetry"}});
+    }
+    const bool updated = naim::controller::TelemetryLiveStore::Instance().Upsert(frame);
+    return context.EncryptedResponse(
+        &host,
+        "telemetry/upsert",
+        json{{"service", "naim-controller"},
+             {"node_name", frame.node_name},
+             {"updated", updated},
+             {"sequence", frame.sequence}});
   } catch (const std::exception& error) {
     return support_.build_json_response(
         500,

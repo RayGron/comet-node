@@ -21,6 +21,8 @@ class HostdAppControllerSupport final : public IHttpHostdBackendSupport {
   naim::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) const override;
   nlohmann::json BuildHostObservationPayload(
       const naim::HostObservation& observation) const override;
+  nlohmann::json BuildHostTelemetryPayload(
+      const naim::HostTelemetryFrame& frame) const override;
   nlohmann::json BuildDiskRuntimeStatePayload(
       const naim::DiskRuntimeState& state) const override;
   naim::DiskRuntimeState ParseDiskRuntimeStatePayload(

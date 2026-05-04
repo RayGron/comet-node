@@ -38,11 +38,16 @@ int main() {
     config.upstream_base = GetEnvOr(
         "NAIM_INTERACTION_UPSTREAM_BASE",
         "http://127.0.0.1:8000/v1");
+    config.webgateway_base_url = GetEnvOr("NAIM_WEBGATEWAY_BASE_URL", "");
 
     std::cout << "[naim-interaction] booting plane=" << config.plane_name
               << " instance=" << config.instance_name << "\n";
     std::cout << "[naim-interaction] status_path=" << config.status_path.string() << "\n";
     std::cout << "[naim-interaction] upstream_base=" << config.upstream_base << "\n";
+    if (!config.webgateway_base_url.empty()) {
+      std::cout << "[naim-interaction] webgateway_base_url="
+                << config.webgateway_base_url << "\n";
+    }
     std::cout << "[naim-interaction] port=" << config.port << "\n";
     std::cout.flush();
 

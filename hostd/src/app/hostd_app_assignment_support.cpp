@@ -573,6 +573,8 @@ void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
     policy = HostdRuntimeProxyPolicy::KnowledgeVault;
   } else if (policy_name == "skills") {
     policy = HostdRuntimeProxyPolicy::Skills;
+  } else if (policy_name == "webgateway") {
+    policy = HostdRuntimeProxyPolicy::WebGateway;
   }
   const auto headers = runtime_http_proxy_.ParseProxyHeaders(
       payload.value("headers", nlohmann::json::array()));

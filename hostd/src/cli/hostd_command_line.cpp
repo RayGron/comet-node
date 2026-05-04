@@ -16,6 +16,7 @@ void HostdCommandLine::PrintUsage(std::ostream& out) const {
       << "  naim-hostd show-local-state --node <node-name> [--state-root <path>]\n"
       << "  naim-hostd show-runtime-status --node <node-name> [--state-root <path>]\n"
       << "  naim-hostd report-observed-state --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--state-root <path>]\n"
+      << "  naim-hostd report-telemetry --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--state-root <path>] [--watch diagnostic] [--interval-ms <ms>] [--ttl-ms <ms>]\n"
       << "  naim-hostd apply-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n"
       << "  naim-hostd apply-next-assignment --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n";
 }
@@ -72,6 +73,20 @@ std::optional<std::string> HostdCommandLine::config_path() const {
   return FindOptionValue("--config");
 }
 
+std::optional<int> HostdCommandLine::telemetry_interval_ms() const {
+  const auto value = FindOptionValue("--interval-ms");
+  return value.has_value() ? std::optional<int>(std::stoi(*value)) : std::nullopt;
+}
+
+std::optional<int> HostdCommandLine::telemetry_ttl_ms() const {
+  const auto value = FindOptionValue("--ttl-ms");
+  return value.has_value() ? std::optional<int>(std::stoi(*value)) : std::nullopt;
+}
+
+bool HostdCommandLine::watch() const {
+  return HasFlag("--watch");
+}
+
 std::string HostdCommandLine::ResolveDbPath(
     const std::optional<std::string>& db_arg) const {
   return db_arg.value_or(DefaultDbPath());
@@ -107,6 +122,15 @@ std::optional<std::string> HostdCommandLine::FindOptionValue(
     }
   }
   return std::nullopt;
+}
+
+bool HostdCommandLine::HasFlag(const std::string& flag_name) const {
+  for (int index = 2; index < argc_; ++index) {
+    if (std::string(argv_[index]) == flag_name) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::string HostdCommandLine::DefaultDbPath() {

@@ -53,6 +53,7 @@ class LocalDbHostdBackend final : public HostdBackend {
       const std::string& target_node_name,
       const std::string& ticket_id) override;
   void UpsertHostObservation(const naim::HostObservation& observation) override;
+  void UpsertHostTelemetry(const naim::HostTelemetryFrame& frame) override;
   void AppendEvent(const naim::EventRecord& event) override;
   void UpsertDiskRuntimeState(const naim::DiskRuntimeState& state) override;
   std::optional<naim::DiskRuntimeState> LoadDiskRuntimeState(

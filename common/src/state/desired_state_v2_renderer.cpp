@@ -1302,6 +1302,12 @@ void DesiredStateV2Renderer::RenderInteractionInstance() {
       {"NAIM_CONTROLLER_URL", "http://controller.internal:18080"},
       {"NAIM_CONTROL_ROOT", state_.control_root},
   };
+  if (browsing_json_.value("enabled", false)) {
+    interaction.environment["NAIM_WEBGATEWAY_BASE_URL"] =
+        "http://" + BuildWebGatewayInstanceName() + ":" +
+        std::to_string(kWebGatewayContainerPort) + "/v1/webgateway";
+    interaction.depends_on.push_back(BuildWebGatewayInstanceName());
+  }
   interaction.labels = {
       {"naim.plane", state_.plane_name},
       {"naim.role", "interaction"},

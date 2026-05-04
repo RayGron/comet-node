@@ -340,13 +340,14 @@ HttpResponse PlaneHttpService::HandlePlanePath(
           }
           return support_.build_json_response(
               200,
-              browsing_service.BuildStatusPayload(*desired_state, plane_state),
+              browsing_service.BuildStatusPayload(db_path, *desired_state, plane_state),
               {});
         }
 
         std::string error_code;
         std::string error_message;
         const auto proxied = browsing_service.ProxyPlaneBrowsingRequest(
+            db_path,
             *desired_state,
             request.method,
             path_suffix,

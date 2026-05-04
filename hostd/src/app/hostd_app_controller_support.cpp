@@ -32,6 +32,11 @@ nlohmann::json HostdAppControllerSupport::BuildHostObservationPayload(
   return controller_transport_support::BuildHostObservationPayload(observation);
 }
 
+nlohmann::json HostdAppControllerSupport::BuildHostTelemetryPayload(
+    const naim::HostTelemetryFrame& frame) const {
+  return controller_transport_support::BuildHostTelemetryPayload(frame);
+}
+
 nlohmann::json HostdAppControllerSupport::BuildDiskRuntimeStatePayload(
     const naim::DiskRuntimeState& state) const {
   return controller_transport_support::BuildDiskRuntimeStatePayload(state);

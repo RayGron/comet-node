@@ -25,6 +25,7 @@ struct InteractionRuntimeConfig {
   std::string listen_host = "0.0.0.0";
   int port = 18110;
   std::string upstream_base = "http://127.0.0.1:8000/v1";
+  std::string webgateway_base_url;
 };
 
 class InteractionRuntimeServer final {
@@ -70,6 +71,15 @@ class InteractionRuntimeServer final {
       const naim::controller::PlaneInteractionResolution& resolution,
       naim::controller::InteractionRequestContext* request_context) const;
   std::optional<naim::controller::ControllerEndpointTarget> ResolvePlaneNetworkSkillsTarget(
+      const naim::DesiredState& desired_state) const;
+  int ResolvePlaneOwnedBrowsing(
+      const naim::controller::PlaneInteractionResolution& resolution,
+      naim::controller::InteractionRequestContext* request_context) const;
+  void ReviewPlaneOwnedBrowsingResponse(
+      const naim::controller::PlaneInteractionResolution& resolution,
+      const naim::controller::InteractionRequestContext& request_context,
+      HttpResponse* response) const;
+  std::optional<naim::controller::ControllerEndpointTarget> ResolvePlaneNetworkWebGatewayTarget(
       const naim::DesiredState& desired_state) const;
   nlohmann::json LoadPlaneStatePayload() const;
   nlohmann::json LoadPlaneStatePayloadFromSnapshot() const;

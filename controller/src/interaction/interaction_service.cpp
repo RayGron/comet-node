@@ -368,7 +368,9 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
   const auto skill_resolution_mode =
       request_contract_support.RequestSkillResolutionMode(request_context);
   const auto browsing_summary =
-      request_contract_support.RequestBrowsingSummary(request_context);
+      result.webgateway_summary.is_object() && !result.webgateway_summary.empty()
+          ? result.webgateway_summary
+          : request_contract_support.RequestBrowsingSummary(request_context);
   const auto skills_session_id =
       request_contract_support.RequestSkillsSessionId(request_context);
   nlohmann::json session_payload = BuildSessionPayload(result);
@@ -876,6 +878,17 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
         upstream.headers, "x-naim-dialog-estimate-after", 0);
     result.context_compression_ratio = ParseDoubleHeader(
         upstream.headers, "x-naim-context-compression-ratio", 1.0);
+    if (upstream_payload.contains("webgateway") &&
+        upstream_payload.at("webgateway").is_object()) {
+      result.webgateway_summary = upstream_payload.at("webgateway");
+    } else if (upstream_payload.contains("_naim_webgateway_context") &&
+               upstream_payload.at("_naim_webgateway_context").is_object()) {
+      result.webgateway_summary = upstream_payload.at("_naim_webgateway_context");
+    }
+    if (upstream_payload.contains("_naim_webgateway_policy") &&
+        upstream_payload.at("_naim_webgateway_policy").is_object()) {
+      result.webgateway_policy = upstream_payload.at("_naim_webgateway_policy");
+    }
 
     if (result.marker_seen &&
         session_reached_target_length_(policy, result.total_completion_tokens)) {
@@ -2059,8 +2072,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const bool browsing_enabled = browsing_service.IsEnabled(*desired_state);
   const auto browsing_target = browsing_service.ResolveTarget(*desired_state);
   const bool browsing_ready =
-      browsing_enabled && running_plane && browsing_target.has_value() &&
-      probe_controller_target_ok_(browsing_target, "/health");
+      browsing_enabled && running_plane && browsing_target.has_value();
   const auto browsing_instance = std::find_if(
       desired_state->instances.begin(),
       desired_state->instances.end(),

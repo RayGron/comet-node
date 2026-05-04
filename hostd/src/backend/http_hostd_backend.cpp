@@ -216,6 +216,14 @@ void HttpHostdBackend::UpsertHostObservation(const naim::HostObservation& observ
       "observations/upsert");
 }
 
+void HttpHostdBackend::UpsertHostTelemetry(const naim::HostTelemetryFrame& frame) {
+  EnsureSession(frame.node_name, "uploading telemetry");
+  SendEncryptedControllerJsonRequest(
+      "/api/v1/hostd/telemetry",
+      support_.BuildHostTelemetryPayload(frame),
+      "telemetry/upsert");
+}
+
 void HttpHostdBackend::AppendEvent(const naim::EventRecord& event) {
   if (!event.node_name.empty()) {
     EnsureSession(event.node_name, "appending event");

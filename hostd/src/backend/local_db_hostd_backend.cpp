@@ -87,6 +87,10 @@ void LocalDbHostdBackend::UpsertHostObservation(const naim::HostObservation& obs
   store_.UpsertHostObservation(observation);
 }
 
+void LocalDbHostdBackend::UpsertHostTelemetry(const naim::HostTelemetryFrame&) {
+  // Local DB mode has no long-lived controller process to receive live telemetry.
+}
+
 void LocalDbHostdBackend::AppendEvent(const naim::EventRecord& event) {
   store_.AppendEvent(event);
 }

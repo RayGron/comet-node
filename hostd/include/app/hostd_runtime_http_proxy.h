@@ -11,6 +11,7 @@ enum class HostdRuntimeProxyPolicy {
   Runtime,
   KnowledgeVault,
   Skills,
+  WebGateway,
 };
 
 struct HostdRuntimeHttpResponse {

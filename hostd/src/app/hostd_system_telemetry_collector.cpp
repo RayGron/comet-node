@@ -106,8 +106,8 @@ std::optional<std::uint64_t> ReadBlockDeviceIoErrorCount(const std::string& devi
     return std::nullopt;
   }
   const std::array<fs::path, 2> candidates{
-    fs::path("/sys/class/block") / *device_name / "ioerr_cnt",
-    fs::path("/sys/class/block") / *device_name / "device" / "ioerr_cnt",
+      fs::path("/sys/class/block") / *device_name / "ioerr_cnt",
+      fs::path("/sys/class/block") / *device_name / "device" / "ioerr_cnt",
   };
   for (const auto& candidate : candidates) {
     std::ifstream input(candidate);
@@ -171,13 +171,13 @@ std::optional<std::string> ReadTrimmedFile(const fs::path& path) {
 }
 
 std::map<std::string, std::vector<std::string>> LoadInterfaceAddresses(
-  const HostdCommandSupport& command_support) {
+    const HostdCommandSupport& command_support) {
   std::map<std::string, std::vector<std::string>> addresses_by_interface;
 #if defined(_WIN32)
   (void)command_support;
 #else
   const std::string output =
-    command_support.RunCommandCapture("ip -o -4 addr show 2>/dev/null || true");
+      command_support.RunCommandCapture("ip -o -4 addr show 2>/dev/null || true");
   std::istringstream lines(output);
   std::string line;
   while (std::getline(lines, line)) {
@@ -200,7 +200,7 @@ std::map<std::string, std::vector<std::string>> LoadInterfaceAddresses(
 }
 
 std::vector<naim::PeerDiscoveryTelemetry> LoadPeerDiscoveryTelemetry(
-  const std::string& state_root) {
+    const std::string& state_root) {
   std::vector<naim::PeerDiscoveryTelemetry> peers;
   if (state_root.empty()) {
     return peers;
@@ -247,10 +247,10 @@ std::uint64_t ReadUint64FileOrZero(const fs::path& path) {
 
 std::string Lowercase(std::string value) {
   std::transform(
-    value.begin(),
-    value.end(),
-    value.begin(),
-    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+      value.begin(),
+      value.end(),
+      value.begin(),
+      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   return value;
 }
 
@@ -291,10 +291,10 @@ std::vector<double> CollectCpuTemperatureSamples() {
         continue;
       }
       const std::string hwmon_name =
-        Lowercase(ReadTrimmedFile(hwmon_entry.path() / "name").value_or(std::string{}));
+          Lowercase(ReadTrimmedFile(hwmon_entry.path() / "name").value_or(std::string{}));
       const bool hwmon_cpu_related = ContainsAnyToken(
-        hwmon_name,
-        {"coretemp", "k10temp", "zenpower", "cpu", "package", "acpitz", "soc"});
+          hwmon_name,
+          {"coretemp", "k10temp", "zenpower", "cpu", "package", "acpitz", "soc"});
       for (const auto& sensor_entry : fs::directory_iterator(hwmon_entry.path())) {
         const std::string file_name = sensor_entry.path().filename().string();
         if (file_name.rfind("temp", 0) != 0 ||
@@ -302,12 +302,12 @@ std::vector<double> CollectCpuTemperatureSamples() {
           continue;
         }
         const std::string label_file =
-          file_name.substr(0, file_name.find("_input")) + "_label";
+            file_name.substr(0, file_name.find("_input")) + "_label";
         const std::string label = Lowercase(
-          ReadTrimmedFile(hwmon_entry.path() / label_file).value_or(std::string{}));
+            ReadTrimmedFile(hwmon_entry.path() / label_file).value_or(std::string{}));
         const bool label_cpu_related = ContainsAnyToken(
-          label,
-          {"package", "cpu", "core", "tctl", "tdie", "ccd", "soc"});
+            label,
+            {"package", "cpu", "core", "tctl", "tdie", "ccd", "soc"});
         if (!hwmon_cpu_related && !label_cpu_related) {
           continue;
         }
@@ -331,7 +331,7 @@ std::vector<double> CollectCpuTemperatureSamples() {
         continue;
       }
       const std::string zone_type = Lowercase(
-        ReadTrimmedFile(zone_entry.path() / "type").value_or(std::string{}));
+          ReadTrimmedFile(zone_entry.path() / "type").value_or(std::string{}));
       if (!ContainsAnyToken(zone_type, {"cpu", "pkg", "x86", "acpitz", "soc"})) {
         continue;
       }
@@ -345,19 +345,14 @@ std::vector<double> CollectCpuTemperatureSamples() {
   return samples;
 }
 
-struct CpuSample {
-  std::uint64_t idle = 0;
-  std::uint64_t total = 0;
-};
-
-std::optional<CpuSample> ReadCpuSample() {
+std::optional<HostdCpuCounterSample> ReadCpuSample() {
   std::ifstream input("/proc/stat");
   if (!input.is_open()) {
     return std::nullopt;
   }
 
   std::string cpu_label;
-  CpuSample sample;
+  HostdCpuCounterSample sample;
   std::uint64_t user = 0;
   std::uint64_t nice = 0;
   std::uint64_t system = 0;
@@ -453,9 +448,8 @@ naim::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
 }
 
 naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
-  const naim::DesiredState& state,
-  const std::string& node_name) const {
-
+    const naim::DesiredState& state,
+    const std::string& node_name) const {
   naim::DiskTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
 #if defined(_WIN32)
@@ -467,21 +461,21 @@ naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
 
   auto is_path_mounted = [this](const std::string& mount_point) {
     if (command_support_.RunCommandOk(
-          "/usr/bin/mountpoint -q " + command_support_.ShellQuote(mount_point) +
-          " >/dev/null 2>&1")) {
+            "/usr/bin/mountpoint -q " + command_support_.ShellQuote(mount_point) +
+            " >/dev/null 2>&1")) {
       return true;
     }
     const std::string normalized_mount_point = NormalizeMountPointPath(mount_point);
     return normalized_mount_point != mount_point &&
            command_support_.RunCommandOk(
-             "/usr/bin/mountpoint -q " + command_support_.ShellQuote(normalized_mount_point) +
-             " >/dev/null 2>&1");
+               "/usr/bin/mountpoint -q " + command_support_.ShellQuote(normalized_mount_point) +
+               " >/dev/null 2>&1");
   };
 
   auto current_mount_source = [&](const std::string& mount_point) -> std::optional<std::string> {
     const std::array<std::string, 2> candidates = {
-      mount_point,
-      NormalizeMountPointPath(mount_point),
+        mount_point,
+        NormalizeMountPointPath(mount_point),
     };
     std::ifstream input("/proc/self/mounts");
     if (!input.is_open()) {
@@ -504,7 +498,7 @@ naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
   };
 
   auto current_mount_filesystem_type =
-    [](const std::string& mount_point) -> std::optional<std::string> {
+      [](const std::string& mount_point) -> std::optional<std::string> {
     std::ifstream input("/proc/mounts");
     if (!input.is_open()) {
       return std::nullopt;
@@ -580,9 +574,9 @@ naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
           record.weighted_io_time_ms = io_stats->weighted_io_time_ms;
         } else {
           record.status_message =
-            record.status_message.empty()
-              ? "block io stats unavailable"
-              : record.status_message + "; block io stats unavailable";
+              record.status_message.empty()
+                  ? "block io stats unavailable"
+                  : record.status_message + "; block io stats unavailable";
           record.warning_count += 1;
           record.fault_reasons.push_back("block-io-stats-unavailable");
           if (record.health == "ok") {
@@ -611,7 +605,7 @@ naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
       record.total_bytes = space_info.capacity;
       record.free_bytes = space_info.available;
       record.used_bytes =
-        record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
+          record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
       if (record.health == "missing") {
         record.health = "ok";
       }
@@ -620,8 +614,8 @@ naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
       }
     } else {
       record.status_message =
-        record.status_message.empty() ? "filesystem::space unavailable"
-                                      : record.status_message + "; filesystem::space unavailable";
+          record.status_message.empty() ? "filesystem::space unavailable"
+                                        : record.status_message + "; filesystem::space unavailable";
       record.fault_count += 1;
       record.fault_reasons.push_back("filesystem-space-unavailable");
       if (record.health == "ok") {
@@ -635,7 +629,7 @@ naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
       record.total_bytes = static_cast<std::uint64_t>(stats.f_blocks) * block_size;
       record.free_bytes = static_cast<std::uint64_t>(stats.f_bavail) * block_size;
       record.used_bytes =
-        record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
+          record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
       if (record.health == "missing") {
         record.health = "ok";
       }
@@ -644,8 +638,8 @@ naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
       }
     } else {
       record.status_message =
-        record.status_message.empty() ? "statvfs unavailable"
-                                      : record.status_message + "; statvfs unavailable";
+          record.status_message.empty() ? "statvfs unavailable"
+                                        : record.status_message + "; statvfs unavailable";
       record.fault_count += 1;
       record.fault_reasons.push_back("statvfs-unavailable");
       if (record.health == "ok") {
@@ -661,8 +655,8 @@ naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
 }
 
 naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemetry(
-  const std::string& node_name,
-  const std::string& storage_root) const {
+    const std::string& node_name,
+    const std::string& storage_root) const {
   naim::DiskTelemetryRecord record;
   record.disk_name = "storage-root";
   record.node_name = node_name;
@@ -676,21 +670,21 @@ naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemet
 
   auto is_path_mounted = [this](const std::string& mount_point) {
     if (command_support_.RunCommandOk(
-          "/usr/bin/mountpoint -q " + command_support_.ShellQuote(mount_point) +
-          " >/dev/null 2>&1")) {
+            "/usr/bin/mountpoint -q " + command_support_.ShellQuote(mount_point) +
+            " >/dev/null 2>&1")) {
       return true;
     }
     const std::string normalized_mount_point = NormalizeMountPointPath(mount_point);
     return normalized_mount_point != mount_point &&
            command_support_.RunCommandOk(
-             "/usr/bin/mountpoint -q " + command_support_.ShellQuote(normalized_mount_point) +
-             " >/dev/null 2>&1");
+               "/usr/bin/mountpoint -q " + command_support_.ShellQuote(normalized_mount_point) +
+               " >/dev/null 2>&1");
   };
 
   auto current_mount_source = [&](const std::string& mount_point) -> std::optional<std::string> {
     const std::array<std::string, 2> candidates = {
-      mount_point,
-      NormalizeMountPointPath(mount_point),
+        mount_point,
+        NormalizeMountPointPath(mount_point),
     };
     std::ifstream input("/proc/self/mounts");
     if (!input.is_open()) {
@@ -712,7 +706,7 @@ naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemet
   };
 
   auto current_mount_filesystem_type =
-    [](const std::string& mount_point) -> std::optional<std::string> {
+      [](const std::string& mount_point) -> std::optional<std::string> {
     std::ifstream input("/proc/mounts");
     if (!input.is_open()) {
       return std::nullopt;
@@ -769,7 +763,7 @@ naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemet
     record.total_bytes = space_info.capacity;
     record.free_bytes = space_info.available;
     record.used_bytes =
-      record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
+        record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
   }
 #else
   struct statvfs stats {};
@@ -778,7 +772,7 @@ naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemet
     record.total_bytes = static_cast<std::uint64_t>(stats.f_blocks) * block_size;
     record.free_bytes = static_cast<std::uint64_t>(stats.f_bavail) * block_size;
     record.used_bytes =
-      record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
+        record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
   }
 #endif
 
@@ -793,13 +787,17 @@ naim::CpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectCpuTelemetry() 
   snapshot.core_count = static_cast<int>(std::thread::hardware_concurrency());
 
   const auto first = ReadCpuSample();
-  std::this_thread::sleep_for(std::chrono::milliseconds(150));
-  const auto second = ReadCpuSample();
-  if (first.has_value() && second.has_value() && second->total > first->total) {
-    const auto total_delta = static_cast<double>(second->total - first->total);
-    const auto idle_delta = static_cast<double>(second->idle - first->idle);
+  if (first.has_value() && last_cpu_sample_.has_value() &&
+      first->total > last_cpu_sample_->total) {
+    const auto total_delta = static_cast<double>(first->total - last_cpu_sample_->total);
+    const auto idle_delta = static_cast<double>(first->idle - last_cpu_sample_->idle);
     snapshot.utilization_pct =
-      total_delta > 0.0 ? std::max(0.0, 100.0 * (1.0 - (idle_delta / total_delta))) : 0.0;
+        total_delta > 0.0 ? std::max(0.0, 100.0 * (1.0 - (idle_delta / total_delta))) : 0.0;
+    last_cpu_sample_ = first;
+  } else if (first.has_value()) {
+    last_cpu_sample_ = first;
+    snapshot.degraded = true;
+    snapshot.source = "procfs-warmup";
   } else {
     snapshot.degraded = true;
     snapshot.source = "procfs-unavailable";
@@ -823,7 +821,7 @@ naim::CpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectCpuTelemetry() 
     }
     snapshot.temperature_available = true;
     snapshot.temperature_c =
-      total_temperature / static_cast<double>(temperature_samples.size());
+        total_temperature / static_cast<double>(temperature_samples.size());
     snapshot.max_temperature_c = max_temperature;
   }
 
@@ -844,9 +842,9 @@ naim::CpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectCpuTelemetry() 
     snapshot.total_memory_bytes = total_kb * 1024ULL;
     snapshot.available_memory_bytes = available_kb * 1024ULL;
     snapshot.used_memory_bytes =
-      snapshot.total_memory_bytes >= snapshot.available_memory_bytes
-        ? (snapshot.total_memory_bytes - snapshot.available_memory_bytes)
-        : 0;
+        snapshot.total_memory_bytes >= snapshot.available_memory_bytes
+            ? (snapshot.total_memory_bytes - snapshot.available_memory_bytes)
+            : 0;
   } else {
     snapshot.degraded = true;
   }
@@ -855,7 +853,7 @@ naim::CpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectCpuTelemetry() 
 }
 
 naim::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTelemetry(
-  const std::string& state_root) const {
+    const std::string& state_root) const {
   naim::NetworkTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
   snapshot.source = "sysfs";
@@ -877,7 +875,7 @@ naim::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTele
     naim::NetworkInterfaceTelemetry interface;
     interface.interface_name = entry.path().filename().string();
     interface.oper_state =
-      ReadTrimmedFile(entry.path() / "operstate").value_or(std::string{"unknown"});
+        ReadTrimmedFile(entry.path() / "operstate").value_or(std::string{"unknown"});
     const auto carrier = ReadTrimmedFile(entry.path() / "carrier");
     if (carrier.has_value()) {
       interface.link_state = (*carrier == "1") ? "up" : "down";
@@ -895,9 +893,9 @@ naim::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTele
   }
 
   std::sort(
-    snapshot.interfaces.begin(),
-    snapshot.interfaces.end(),
-    [](const auto& left, const auto& right) { return left.interface_name < right.interface_name; });
+      snapshot.interfaces.begin(),
+      snapshot.interfaces.end(),
+      [](const auto& left, const auto& right) { return left.interface_name < right.interface_name; });
   return snapshot;
 }
 

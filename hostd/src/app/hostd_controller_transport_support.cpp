@@ -287,6 +287,10 @@ nlohmann::json BuildHostObservationPayload(const naim::HostObservation& observat
   };
 }
 
+nlohmann::json BuildHostTelemetryPayload(const naim::HostTelemetryFrame& frame) {
+  return json::parse(naim::SerializeHostTelemetryFrameJson(frame));
+}
+
 nlohmann::json BuildDiskRuntimeStatePayload(const naim::DiskRuntimeState& state) {
   return json{
       {"disk_name", state.disk_name},

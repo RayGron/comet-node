@@ -199,7 +199,11 @@ lines = [
     f"- status: `{status}`",
     f"- captured at: `{snapshot.get('captured_at', 'n/a')}`",
     f"- backup root: `{snapshot.get('backup_root', 'n/a')}`",
+    f"- database backup: `{snapshot.get('db_backup_status', 'unknown')}`",
 ]
+db_backup_error = snapshot.get("db_backup_error")
+if db_backup_error:
+    lines.append(f"- database backup detail: {db_backup_error}")
 if detail:
     lines.append(f"- detail: {detail}")
 print("\n".join(lines))

@@ -18,8 +18,22 @@ class PlaneBrowsingService final {
       const DesiredState& desired_state) const;
 
   nlohmann::json BuildStatusPayload(
+      const std::string& db_path,
       const DesiredState& desired_state,
       const std::optional<std::string>& plane_state) const;
+
+  nlohmann::json BuildStatusPayload(
+      const DesiredState& desired_state,
+      const std::optional<std::string>& plane_state) const;
+
+  std::optional<HttpResponse> ProxyPlaneBrowsingRequest(
+      const std::string& db_path,
+      const DesiredState& desired_state,
+      const std::string& method,
+      const std::string& path_suffix,
+      const std::string& body,
+      std::string* error_code,
+      std::string* error_message) const;
 
   std::optional<HttpResponse> ProxyPlaneBrowsingRequest(
       const DesiredState& desired_state,

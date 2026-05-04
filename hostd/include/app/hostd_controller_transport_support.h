@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "naim/runtime/runtime_status.h"
 #include "naim/state/sqlite_store.h"
 
 namespace naim::hostd::controller_transport_support {
@@ -20,6 +21,7 @@ nlohmann::json SendControllerJsonRequest(
 
 naim::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload);
 nlohmann::json BuildHostObservationPayload(const naim::HostObservation& observation);
+nlohmann::json BuildHostTelemetryPayload(const naim::HostTelemetryFrame& frame);
 nlohmann::json BuildDiskRuntimeStatePayload(const naim::DiskRuntimeState& state);
 naim::DiskRuntimeState ParseDiskRuntimeStatePayload(const nlohmann::json& payload);
 

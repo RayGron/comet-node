@@ -1437,7 +1437,8 @@ naim::DesiredState BuildDesiredStateWithSkillsPort(
 
 naim::DesiredState BuildDesiredStateWithBrowsingPort(
     const std::string& host_ip,
-    const int host_port) {
+    const int host_port,
+    const std::string& node_name = "local-hostd") {
   naim::DesiredState desired_state;
   desired_state.plane_name = "maglev";
   desired_state.plane_mode = naim::PlaneMode::Llm;
@@ -1453,7 +1454,7 @@ naim::DesiredState BuildDesiredStateWithBrowsingPort(
   naim::InstanceSpec browsing;
   browsing.name = "webgateway-maglev";
   browsing.plane_name = "maglev";
-  browsing.node_name = "local-hostd";
+  browsing.node_name = node_name;
   browsing.role = naim::InstanceRole::Browsing;
   naim::PublishedPort published_port;
   published_port.host_ip = host_ip;
@@ -1569,6 +1570,9 @@ int main() {
       Expect(
           target->raw == "http://127.0.0.1:28130",
           "browsing target raw URL should use normalized published endpoint");
+      Expect(
+          !target->route_via_hostd_proxy,
+          "local browsing target should use direct runtime routing");
       std::cout << "ok: browsing-published-host-ip-target" << '\n';
     }
 
@@ -1581,6 +1585,23 @@ int main() {
           target->host == "127.0.0.1",
           "browsing target host should normalize wildcard host_ip to loopback");
       std::cout << "ok: browsing-wildcard-host-ip-normalization" << '\n';
+    }
+
+    {
+      naim::controller::PlaneBrowsingService browsing_service;
+      const auto target = browsing_service.ResolveTarget(
+          BuildDesiredStateWithBrowsingPort("127.0.0.1", 28130, "hpc1"));
+      Expect(target.has_value(), "remote browsing target should resolve");
+      Expect(
+          target->node_name == "hpc1",
+          "remote browsing target should preserve node binding");
+      Expect(
+          target->route_via_hostd_proxy,
+          "remote loopback browsing target should use hostd runtime proxy");
+      Expect(
+          target->route_mode == "hostd-runtime-proxy",
+          "remote loopback browsing target should expose hostd proxy route mode");
+      std::cout << "ok: remote-loopback-browsing-target-hostd-proxy" << '\n';
     }
 
     {

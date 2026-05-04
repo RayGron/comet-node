@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -8,6 +10,11 @@
 #include "naim/state/models.h"
 
 namespace naim::hostd {
+
+struct HostdCpuCounterSample {
+  std::uint64_t idle = 0;
+  std::uint64_t total = 0;
+};
 
 class HostdSystemTelemetryCollector final {
 public:
@@ -53,6 +60,7 @@ private:
 #endif
 
   HostdCommandSupport command_support_;
+  mutable std::optional<HostdCpuCounterSample> last_cpu_sample_;
 };
 
 }  // namespace naim::hostd

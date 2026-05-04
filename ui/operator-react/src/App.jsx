@@ -53,6 +53,7 @@ import {
   summarizeKnowledgeGraph,
 } from "./knowledgeVault.js";
 import {
+  applyTelemetrySnapshotMetadata,
   createTelemetryStore,
   reduceTelemetryStore,
   selectTelemetryFrames,
@@ -1074,12 +1075,19 @@ function hostObservationFromTelemetryFrame(frame) {
     observed_at: frame.sampled_at || null,
     heartbeat_at: frame.sampled_at || null,
     telemetry_sequence: frame.sequence || 0,
+    telemetry_schema_version: frame.schema_version || "host.telemetry.v1",
+    telemetry_source: frame.source || "hostd",
+    telemetry_node_id: frame.node_id || frame.node_name,
+    telemetry_plane_id: frame.plane_id || frame.plane_name || "",
     telemetry_channel: frame.channel || "host.telemetry.v1",
     telemetry_lane: frame.lane || "fast",
     telemetry_monotonic_ms: frame.monotonic_ms || 0,
+    telemetry_monotonic_timestamp_ms: frame.monotonic_timestamp_ms || frame.monotonic_ms || 0,
     telemetry_expires_at: frame.expires_at || "",
     telemetry_expires_in_ms: frame.expires_in_ms ?? null,
     telemetry_stale: stale,
+    telemetry_health_status: frame?.telemetry_health?.status || frame?.telemetry_health_status || (stale ? "stale" : "ok"),
+    telemetry_last_frame_age_ms: Number(frame?.telemetry_health?.last_frame_age_ms ?? frame?.last_frame_age_ms ?? 0),
     telemetry_degraded: Boolean(frame?.degraded_reason),
     telemetry_degraded_reason: frame?.degraded_reason || "",
     telemetry_collector_duration_ms: Number(frame?.collector_duration_ms || 0),
@@ -1093,7 +1101,12 @@ function hostObservationFromTelemetryFrame(frame) {
     telemetry_adaptive_interval_ms: Number(frame?.adaptive_interval_ms || frame?.interval_ms || 0),
     telemetry_adaptive_reason: frame?.adaptive_reason || "",
     telemetry_controller_ingest_delay_ms: Number(frame?.controller_ingest_delay_ms || 0),
+    telemetry_latency_total_ms: Number(frame?.latency_breakdown?.total_observed_ms || 0),
     telemetry_last_publish_error: frame?.last_publish_error || "",
+    telemetry_plane_instance_count: Number(frame?.plane_instance_count || 0),
+    telemetry_plane_ready_instance_count: Number(frame?.plane_ready_instance_count || 0),
+    telemetry_plane_not_ready_instance_count: Number(frame?.plane_not_ready_instance_count || 0),
+    telemetry_plane_runtime_health: frame?.plane_runtime_health || "unknown",
     runtime_status: { available: instanceRuntime.length > 0 },
     instance_runtimes: {
       available: instanceRuntime.length > 0,
@@ -4005,13 +4018,26 @@ function App() {
         ),
       );
     };
+    const applySnapshotPayload = (payload) => {
+      globalTelemetryStoreRef.current = applyTelemetrySnapshotMetadata(
+        globalTelemetryStoreRef.current,
+        payload,
+      );
+      if (selectedPlaneRef.current) {
+        planeTelemetryStoreRef.current = applyTelemetrySnapshotMetadata(
+          planeTelemetryStoreRef.current,
+          payload,
+        );
+      }
+      applyFrames([...(payload?.history || []), ...(payload?.nodes || [])]);
+    };
 
     fetchJson(queryPath("/api/v1/telemetry/snapshot", { history_seconds: 120 }))
       .then((payload) => {
         if (stopped) {
           return;
         }
-        applyFrames([...(payload?.history || []), ...(payload?.nodes || [])]);
+        applySnapshotPayload(payload);
       })
       .catch((error) => {
         if (error?.status === 401) {
@@ -4022,6 +4048,9 @@ function App() {
     const source = new EventSource(
       queryPath("/api/v1/telemetry/stream", {
         plane: selectedPlane || undefined,
+        since_sequence: selectedPlane
+          ? planeTelemetryStoreRef.current?.latestSequence || undefined
+          : globalTelemetryStoreRef.current?.latestSequence || undefined,
       }),
     );
     telemetrySourceRef.current = source;
@@ -4036,7 +4065,7 @@ function App() {
     source.addEventListener("telemetry.snapshot", (event) => {
       try {
         const payload = JSON.parse(event.data || "{}");
-        applyFrames(payload.nodes || []);
+        applySnapshotPayload(payload);
       } catch (_) {
         setTelemetryHealthy(false);
       }
@@ -4066,6 +4095,10 @@ function App() {
       fetchJson(queryPath("/api/v1/telemetry/snapshot", { history_seconds: 0 }))
         .then((payload) => {
           const frames = Array.isArray(payload?.nodes) ? payload.nodes : [];
+          globalTelemetryStoreRef.current = applyTelemetrySnapshotMetadata(
+            globalTelemetryStoreRef.current,
+            payload,
+          );
           const globalResult = reduceTelemetryStore(globalTelemetryStoreRef.current, frames);
           if (!globalResult.changed && !selectedPlaneRef.current) {
             return;
@@ -4084,6 +4117,10 @@ function App() {
             setGlobalHostObservations(mergedGlobal);
           }
           if (selectedPlaneRef.current) {
+            planeTelemetryStoreRef.current = applyTelemetrySnapshotMetadata(
+              planeTelemetryStoreRef.current,
+              payload,
+            );
             const planeResult = reduceTelemetryStore(
               planeTelemetryStoreRef.current,
               frames,
@@ -5281,12 +5318,19 @@ function App() {
               <span className="subpanel-meta">Collector, bus, publisher, and controller timing.</span>
             </div>
             <div className="metric-grid">
+              <div className="metric-row"><span>Schema</span><strong>{host?.telemetry_schema_version || "n/a"}</strong></div>
+              <div className="metric-row"><span>Source</span><strong>{host?.telemetry_source || "n/a"}</strong></div>
+              <div className="metric-row"><span>Health</span><strong>{host?.telemetry_health_status || "n/a"}</strong></div>
+              <div className="metric-row"><span>Plane runtime</span><strong>{host?.telemetry_plane_runtime_health || "n/a"}</strong></div>
+              <div className="metric-row"><span>Plane ready</span><strong>{`${host?.telemetry_plane_ready_instance_count ?? 0}/${host?.telemetry_plane_instance_count ?? 0}`}</strong></div>
+              <div className="metric-row"><span>Frame age</span><strong>{host?.telemetry_last_frame_age_ms ? `${host.telemetry_last_frame_age_ms} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Cadence</span><strong>{host?.telemetry_adaptive_interval_ms ? `${host.telemetry_adaptive_interval_ms} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Cadence reason</span><strong>{host?.telemetry_adaptive_reason || "n/a"}</strong></div>
               <div className="metric-row"><span>Collect</span><strong>{host?.telemetry_collector_duration_ms ? `${host.telemetry_collector_duration_ms} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Publish</span><strong>{host?.telemetry_publish_duration_ms ? `${host.telemetry_publish_duration_ms} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Queue delay</span><strong>{host?.telemetry_queue_delay_ms ? `${host.telemetry_queue_delay_ms} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Controller ingest</span><strong>{host?.telemetry_controller_ingest_delay_ms ? `${host.telemetry_controller_ingest_delay_ms} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Total observed</span><strong>{host?.telemetry_latency_total_ms ? `${host.telemetry_latency_total_ms} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Bus depth</span><strong>{host?.telemetry_bus_depth ?? "n/a"}</strong></div>
               <div className="metric-row"><span>Dropped frames</span><strong>{host?.telemetry_dropped_frames ?? 0}</strong></div>
               <div className="metric-row"><span>Publish errors</span><strong>{host?.telemetry_publish_errors ?? 0}</strong></div>

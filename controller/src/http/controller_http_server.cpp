@@ -83,6 +83,12 @@ TelemetryStreamRequest ParseTelemetryStreamRequest(const HttpRequest& request) {
   stream_request.plane_name = FindQueryString(request, "plane");
   if (const auto since = FindQueryString(request, "since_sequence"); since.has_value()) {
     stream_request.last_sequence = static_cast<std::uint64_t>(std::stoull(*since));
+  } else {
+    const auto header_value =
+        ControllerHttpServerSupport::FindHeaderString(request, "last-event-id");
+    if (header_value.has_value()) {
+      stream_request.last_sequence = static_cast<std::uint64_t>(std::stoull(*header_value));
+    }
   }
   return stream_request;
 }
@@ -209,24 +215,61 @@ void ControllerHttpServer::StreamTelemetrySse(
     return;
   }
 
-  const auto snapshot = TelemetryLiveStore::Instance().BuildSnapshot(
-      stream_request.plane_name,
-      0);
-  if (!ControllerNetworkManager::SendSseEventFrame(
-          client_fd,
-          static_cast<int>(TelemetryLiveStore::Instance().LatestSequence() % 2147483647ULL),
-          "telemetry.snapshot",
-          snapshot.dump())) {
-    ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
-    return;
+  auto initial_delta = TelemetryLiveStore::Instance().LoadStreamDeltaAfter(
+      last_sequence,
+      stream_request.plane_name);
+  if (last_sequence == 0 || initial_delta.replay_required) {
+    auto snapshot = TelemetryLiveStore::Instance().BuildSnapshot(
+        stream_request.plane_name,
+        0);
+    snapshot["replay"] = nlohmann::json{
+        {"required", initial_delta.replay_required},
+        {"reason", initial_delta.replay_reason},
+        {"requested_sequence", initial_delta.requested_sequence},
+        {"first_available_sequence", initial_delta.first_available_sequence},
+        {"latest_sequence", initial_delta.latest_sequence},
+        {"dropped_frames_total", initial_delta.dropped_frames_total},
+    };
+    if (!ControllerNetworkManager::SendSseEventFrame(
+            client_fd,
+            static_cast<int>(TelemetryLiveStore::Instance().LatestSequence() % 2147483647ULL),
+            "telemetry.snapshot",
+            snapshot.dump())) {
+      ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+      return;
+    }
+    last_sequence = std::max(last_sequence, TelemetryLiveStore::Instance().LatestSequence());
   }
-  last_sequence = std::max(last_sequence, TelemetryLiveStore::Instance().LatestSequence());
 
   auto last_keepalive = std::chrono::steady_clock::now();
   while (!state->stop_requested.load()) {
-    const auto frames =
-        TelemetryLiveStore::Instance().LoadFramesAfter(last_sequence, stream_request.plane_name);
-    for (const auto& frame : frames) {
+    auto delta =
+        TelemetryLiveStore::Instance().LoadStreamDeltaAfter(last_sequence, stream_request.plane_name);
+    if (delta.replay_required) {
+      auto snapshot = TelemetryLiveStore::Instance().BuildSnapshot(
+          stream_request.plane_name,
+          0);
+      snapshot["replay"] = nlohmann::json{
+          {"required", true},
+          {"reason", delta.replay_reason},
+          {"requested_sequence", delta.requested_sequence},
+          {"first_available_sequence", delta.first_available_sequence},
+          {"latest_sequence", delta.latest_sequence},
+          {"dropped_frames_total", delta.dropped_frames_total},
+      };
+      if (!ControllerNetworkManager::SendSseEventFrame(
+              client_fd,
+              static_cast<int>(delta.latest_sequence % 2147483647ULL),
+              "telemetry.snapshot",
+              snapshot.dump())) {
+        ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+        return;
+      }
+      last_sequence = std::max(last_sequence, delta.latest_sequence);
+      last_keepalive = std::chrono::steady_clock::now();
+      continue;
+    }
+    for (const auto& frame : delta.frames) {
       const std::string payload = naim::SerializeHostTelemetryFrameJson(frame);
       if (!ControllerNetworkManager::SendSseEventFrame(
               client_fd,

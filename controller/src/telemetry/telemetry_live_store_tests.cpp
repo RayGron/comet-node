@@ -24,12 +24,17 @@ naim::HostTelemetryFrame MakeFrame(
     std::uint64_t sequence) {
   naim::HostTelemetryFrame frame;
   frame.node_name = node_name;
+  frame.node_id = node_name;
   frame.plane_name = plane_name;
+  frame.plane_id = plane_name;
+  frame.schema_version = "host.telemetry.v2";
+  frame.source = "hostd";
   frame.sequence = sequence;
   frame.sampled_at = "2026-05-04 12:00:00";
   frame.collected_at = frame.sampled_at;
   frame.expires_at = "2026-05-04 12:00:10";
   frame.monotonic_ms = sequence;
+  frame.monotonic_timestamp_ms = sequence;
   frame.lane = "fast";
   frame.collector_duration_ms = 2;
   frame.publish_duration_ms = 3;
@@ -38,6 +43,10 @@ naim::HostTelemetryFrame MakeFrame(
   frame.telemetry_dropped_frames = 0;
   frame.adaptive_interval_ms = 2000;
   frame.adaptive_reason = "test";
+  frame.plane_instance_count = 2;
+  frame.plane_ready_instance_count = 1;
+  frame.plane_not_ready_instance_count = 1;
+  frame.plane_runtime_health = "changing";
   frame.cpu.source = "procfs";
   frame.cpu.total_memory_bytes = 100;
   frame.cpu.used_memory_bytes = 50;
@@ -86,6 +95,7 @@ void TestCoherenceFieldsAndStaleProjection() {
   auto fresh = MakeFrame("node-coherent", "plane-coherent", CurrentMillis());
   fresh.ttl_ms = 60000;
   fresh.monotonic_ms = 1234;
+  fresh.monotonic_timestamp_ms = 1234;
   fresh.lane = "full";
   fresh.degraded_reason = "cpu:procfs-warmup";
   fresh.disk.source = "hostd";
@@ -123,9 +133,25 @@ void TestCoherenceFieldsAndStaleProjection() {
   const auto snapshot = store.BuildSnapshot(std::string("plane-coherent"), 0);
   Expect(snapshot.at("nodes").size() == 1, "coherent snapshot should include one node");
   const auto node = snapshot.at("nodes").at(0);
+  Expect(
+      snapshot.at("schema_version").get<std::string>() == "telemetry.snapshot.v2",
+      "snapshot schema should be versioned");
+  Expect(
+      snapshot.at("transport").get<std::string>() == "sse-primary",
+      "snapshot should declare streaming transport");
+  Expect(snapshot.contains("planes"), "snapshot should include plane aggregates");
+  Expect(snapshot.contains("downsampled_history"), "snapshot should include downsampled history");
+  Expect(
+      node.at("schema_version").get<std::string>() == "host.telemetry.v2",
+      "frame schema should roundtrip");
+  Expect(node.at("source").get<std::string>() == "hostd", "source should roundtrip");
+  Expect(node.at("node_id").get<std::string>() == "node-coherent", "node_id should roundtrip");
   Expect(node.at("channel").get<std::string>() == "host.telemetry.v1", "channel should roundtrip");
   Expect(node.at("lane").get<std::string>() == "full", "lane should roundtrip");
   Expect(node.at("monotonic_ms").get<std::uint64_t>() == 1234, "monotonic_ms should roundtrip");
+  Expect(
+      node.at("monotonic_timestamp_ms").get<std::uint64_t>() == 1234,
+      "monotonic timestamp alias should roundtrip");
   Expect(
       node.at("collector_duration_ms").get<std::uint64_t>() == 2,
       "collector duration should roundtrip");
@@ -139,8 +165,16 @@ void TestCoherenceFieldsAndStaleProjection() {
       node.at("adaptive_reason").get<std::string>() == "test",
       "adaptive reason should roundtrip");
   Expect(
+      node.at("plane_runtime_health").get<std::string>() == "changing",
+      "plane runtime health should roundtrip");
+  Expect(
       node.contains("controller_ingest_delay_ms"),
       "controller ingest delay should be projected");
+  Expect(node.contains("latency_breakdown"), "latency breakdown should be projected");
+  Expect(node.contains("telemetry_health"), "telemetry health should be projected");
+  Expect(
+      node.at("telemetry_health").at("status").get<std::string>() == "degraded",
+      "degraded frame should project degraded health");
   Expect(
       node.at("degraded_reason").get<std::string>() == "cpu:procfs-warmup",
       "degraded reason should roundtrip");
@@ -179,7 +213,28 @@ void TestBackpressureProjection() {
   const auto frames = store.LoadFramesAfter(1000, std::string("plane-backpressure"));
   Expect(frames.size() == 128, "stream load should be capped");
   Expect(frames.front().sequence > 1000, "stream cap should retain newer frames");
+  const auto delta = store.LoadStreamDeltaAfter(1000, std::string("plane-backpressure"));
+  Expect(delta.replay_required, "stream delta should request replay after truncation");
+  Expect(delta.frames.size() == 128, "stream delta should be capped");
+  Expect(delta.first_available_sequence > 0, "stream delta should expose first available sequence");
   std::cout << "ok: telemetry-live-store-backpressure\n";
+}
+
+void TestPlaneAggregatesAndDownsampling() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  const auto now = CurrentMillis();
+  Expect(store.Upsert(MakeFrame("node-plane-agg-a", "plane-agg", now - 1000)), "agg a");
+  Expect(store.Upsert(MakeFrame("node-plane-agg-b", "plane-agg", now - 500)), "agg b");
+  const auto snapshot = store.BuildSnapshot(std::string("plane-agg"), 120);
+  Expect(!snapshot.at("planes").empty(), "snapshot should include plane aggregate");
+  const auto plane = snapshot.at("planes").at(0);
+  Expect(plane.at("plane_name").get<std::string>() == "plane-agg", "aggregate plane name");
+  Expect(plane.at("node_count").get<std::uint64_t>() == 2, "aggregate should count nodes");
+  Expect(
+      plane.at("runtime").at("instance_count").get<std::uint64_t>() == 4,
+      "aggregate should sum local runtime instances");
+  Expect(!snapshot.at("downsampled_history").empty(), "downsampled history should be populated");
+  std::cout << "ok: telemetry-live-store-plane-aggregates-downsampling\n";
 }
 
 }  // namespace
@@ -190,6 +245,7 @@ int main() {
     TestPlaneFilter();
     TestCoherenceFieldsAndStaleProjection();
     TestBackpressureProjection();
+    TestPlaneAggregatesAndDownsampling();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "telemetry_live_store_tests failed: " << error.what() << "\n";

@@ -367,14 +367,20 @@ json ToJson(const HostTelemetryFrame& frame) {
   }
   return json{
       {"contract_version", frame.contract_version},
+      {"schema_version", frame.schema_version},
       {"channel", frame.channel},
+      {"source", frame.source},
       {"node_name", frame.node_name},
+      {"node_id", frame.node_id.empty() ? frame.node_name : frame.node_id},
       {"plane_name", frame.plane_name},
+      {"plane_id", frame.plane_id.empty() ? frame.plane_name : frame.plane_id},
       {"sampled_at", frame.sampled_at},
       {"collected_at", frame.collected_at},
       {"expires_at", frame.expires_at},
       {"sequence", frame.sequence},
       {"monotonic_ms", frame.monotonic_ms},
+      {"monotonic_timestamp_ms",
+       frame.monotonic_timestamp_ms > 0 ? frame.monotonic_timestamp_ms : frame.monotonic_ms},
       {"interval_ms", frame.interval_ms},
       {"ttl_ms", frame.ttl_ms},
       {"lane", frame.lane},
@@ -388,6 +394,10 @@ json ToJson(const HostTelemetryFrame& frame) {
       {"adaptive_interval_ms", frame.adaptive_interval_ms},
       {"adaptive_reason", frame.adaptive_reason},
       {"last_publish_error", frame.last_publish_error},
+      {"plane_instance_count", frame.plane_instance_count},
+      {"plane_ready_instance_count", frame.plane_ready_instance_count},
+      {"plane_not_ready_instance_count", frame.plane_not_ready_instance_count},
+      {"plane_runtime_health", frame.plane_runtime_health},
       {"instance_runtime", std::move(instance_runtime)},
       {"gpu", ToJson(frame.gpu)},
       {"network", ToJson(frame.network)},
@@ -399,9 +409,13 @@ json ToJson(const HostTelemetryFrame& frame) {
 HostTelemetryFrame HostTelemetryFrameFromJson(const json& value) {
   HostTelemetryFrame frame;
   frame.contract_version = value.value("contract_version", 1);
+  frame.schema_version = value.value("schema_version", std::string{"host.telemetry.v2"});
   frame.channel = value.value("channel", std::string{"host.telemetry.v1"});
+  frame.source = value.value("source", std::string{"hostd"});
   frame.node_name = value.value("node_name", std::string{});
+  frame.node_id = value.value("node_id", frame.node_name);
   frame.plane_name = value.value("plane_name", std::string{});
+  frame.plane_id = value.value("plane_id", frame.plane_name);
   frame.sampled_at = value.value("sampled_at", std::string{});
   frame.collected_at = value.value("collected_at", frame.sampled_at);
   frame.expires_at = value.value("expires_at", std::string{});
@@ -422,6 +436,21 @@ HostTelemetryFrame HostTelemetryFrameFromJson(const json& value) {
       frame.monotonic_ms = static_cast<std::uint64_t>(raw);
     }
   }
+  if (value.contains("monotonic_timestamp_ms") &&
+      value.at("monotonic_timestamp_ms").is_number_unsigned()) {
+    frame.monotonic_timestamp_ms =
+        value.at("monotonic_timestamp_ms").get<std::uint64_t>();
+  } else if (
+      value.contains("monotonic_timestamp_ms") &&
+      value.at("monotonic_timestamp_ms").is_number_integer()) {
+    const auto raw = value.at("monotonic_timestamp_ms").get<std::int64_t>();
+    if (raw > 0) {
+      frame.monotonic_timestamp_ms = static_cast<std::uint64_t>(raw);
+    }
+  }
+  if (frame.monotonic_timestamp_ms == 0) {
+    frame.monotonic_timestamp_ms = frame.monotonic_ms;
+  }
   frame.interval_ms = value.value("interval_ms", 2000);
   frame.ttl_ms = value.value("ttl_ms", 10000);
   frame.lane = value.value("lane", std::string{"fast"});
@@ -441,6 +470,13 @@ HostTelemetryFrame HostTelemetryFrameFromJson(const json& value) {
   frame.adaptive_interval_ms = value.value("adaptive_interval_ms", frame.interval_ms);
   frame.adaptive_reason = value.value("adaptive_reason", std::string{});
   frame.last_publish_error = value.value("last_publish_error", std::string{});
+  frame.plane_instance_count =
+      value.value("plane_instance_count", static_cast<std::uint64_t>(0));
+  frame.plane_ready_instance_count =
+      value.value("plane_ready_instance_count", static_cast<std::uint64_t>(0));
+  frame.plane_not_ready_instance_count =
+      value.value("plane_not_ready_instance_count", static_cast<std::uint64_t>(0));
+  frame.plane_runtime_health = value.value("plane_runtime_health", std::string{"unknown"});
   for (const auto& status : value.value("instance_runtime", json::array())) {
     if (status.is_object()) {
       frame.instance_runtime.push_back(RuntimeProcessStatusFromJson(status));
@@ -457,6 +493,18 @@ HostTelemetryFrame HostTelemetryFrameFromJson(const json& value) {
   }
   if (value.contains("disk") && value.at("disk").is_object()) {
     frame.disk = DiskTelemetrySnapshotFromJson(value.at("disk"));
+  }
+  if (frame.plane_instance_count == 0 && !frame.instance_runtime.empty()) {
+    frame.plane_instance_count = frame.instance_runtime.size();
+    for (const auto& status : frame.instance_runtime) {
+      if (status.ready) {
+        ++frame.plane_ready_instance_count;
+      }
+    }
+    frame.plane_not_ready_instance_count =
+        frame.plane_instance_count - frame.plane_ready_instance_count;
+    frame.plane_runtime_health =
+        frame.plane_not_ready_instance_count > 0 ? "changing" : "ready";
   }
   return frame;
 }

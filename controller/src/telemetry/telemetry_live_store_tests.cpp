@@ -346,6 +346,73 @@ void TestRecoveredTelemetryCountersDoNotDegradeHealth() {
   std::cout << "ok: telemetry-live-store-recovered-counters-health\n";
 }
 
+void TestGpuUnavailableStorageNodeDoesNotDegradeHealth() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  store.ResetForTests();
+  const auto db_path =
+      std::filesystem::temp_directory_path() /
+      ("naim-telemetry-storage-gpu-health-" + std::to_string(CurrentMillis()) + ".sqlite");
+  store.ConfigurePersistence(db_path.string(), 8);
+
+  auto frame = MakeFrame("node-storage-gpuless", "plane-storage-gpuless", CurrentMillis());
+  frame.ttl_ms = 60000;
+  frame.adaptive_interval_ms = 10000;
+  frame.adaptive_reason = "idle-no-plane";
+  frame.degraded_reason = "gpu:unavailable";
+  frame.gpu.degraded = true;
+  frame.gpu.devices.clear();
+  frame.instance_runtime.clear();
+  Expect(store.Upsert(frame), "gpuless storage frame should update");
+
+  const auto health = store.BuildHealth(std::string("plane-storage-gpuless"));
+  Expect(
+      health.at("status").get<std::string>() == "ok",
+      "gpuless storage node should not degrade global health");
+  Expect(
+      health.at("planes").at(0).at("status").get<std::string>() == "ok",
+      "gpuless storage node should not degrade plane health");
+  Expect(
+      health.at("planes").at(0).at("degraded_nodes").get<std::uint64_t>() == 0,
+      "gpuless storage node should not count as degraded");
+
+  const auto snapshot = store.BuildSnapshot(std::string("plane-storage-gpuless"), 0);
+  const auto node = snapshot.at("nodes").at(0);
+  Expect(
+      node.at("telemetry_health").at("status").get<std::string>() == "ok",
+      "gpuless storage node telemetry health should remain ok");
+  Expect(
+      node.at("telemetry_health_status").get<std::string>() == "ok",
+      "gpuless storage frame health status should remain ok");
+
+  auto gpu_runtime_frame =
+      MakeFrame("node-gpu-runtime", "plane-gpu-runtime", CurrentMillis());
+  gpu_runtime_frame.ttl_ms = 60000;
+  gpu_runtime_frame.degraded_reason = "gpu:unavailable";
+  gpu_runtime_frame.gpu.devices.clear();
+  gpu_runtime_frame.instance_runtime.push_back(naim::RuntimeProcessStatus{
+      "worker-0",
+      "worker",
+      "node-gpu-runtime",
+      "/models/qwen",
+      "0",
+      "running",
+      "",
+      "",
+      0,
+      0,
+      false,
+  });
+  Expect(store.Upsert(gpu_runtime_frame), "gpu-bound runtime frame should update");
+  const auto gpu_runtime_health = store.BuildHealth(std::string("plane-gpu-runtime"));
+  Expect(
+      gpu_runtime_health.at("planes").at(0).at("status").get<std::string>() == "degraded",
+      "gpu-bound runtime should still degrade when gpu is unavailable");
+
+  std::filesystem::remove(db_path);
+  store.ResetForTests();
+  std::cout << "ok: telemetry-live-store-storage-gpu-health\n";
+}
+
 void TestStreamMetricsAndOpenMetrics() {
   auto& store = naim::controller::TelemetryLiveStore::Instance();
   store.ResetForTests();
@@ -384,6 +451,7 @@ int main() {
     TestSqlitePersistenceReplayAndHealth();
     TestConfigurableRetentionAndMetrics();
     TestRecoveredTelemetryCountersDoNotDegradeHealth();
+    TestGpuUnavailableStorageNodeDoesNotDegradeHealth();
     TestStreamMetricsAndOpenMetrics();
     return 0;
   } catch (const std::exception& error) {

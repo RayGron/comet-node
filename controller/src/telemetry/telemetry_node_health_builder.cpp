@@ -19,7 +19,7 @@ nlohmann::json TelemetryNodeHealthBuilder::Build(
   } else if (
       frame.telemetry_dropped_frames > 0 ||
       !frame.last_publish_error.empty() ||
-      !frame.degraded_reason.empty()) {
+      health_policy_.HasActionableDegradedReason(frame)) {
     status = "degraded";
   }
   return nlohmann::json{

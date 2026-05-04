@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include "naim/runtime/runtime_status.h"
+#include "telemetry/telemetry_frame_health_policy.h"
 #include "telemetry/telemetry_frame_matcher.h"
 
 namespace naim::controller {
@@ -19,6 +20,7 @@ class TelemetryFrameJsonBuilder final {
       std::uint64_t controller_ingest_delay_ms) const;
 
  private:
+  TelemetryFrameHealthPolicy health_policy_;
   TelemetryFrameMatcher matcher_;
 };
 

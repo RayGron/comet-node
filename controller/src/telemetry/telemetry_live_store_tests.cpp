@@ -304,6 +304,48 @@ void TestConfigurableRetentionAndMetrics() {
   std::cout << "ok: telemetry-live-store-configurable-retention\n";
 }
 
+void TestRecoveredTelemetryCountersDoNotDegradeHealth() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  store.ResetForTests();
+  naim::controller::TelemetryLiveStore::RetentionConfig retention;
+  retention.hot_history_capacity = 3;
+  retention.stream_batch_limit = 2;
+  retention.durable_history_capacity = 5;
+  naim::controller::TelemetryLiveStore::AlertThresholds thresholds;
+  store.ConfigureOperationalPolicy(retention, thresholds);
+  const auto db_path =
+      std::filesystem::temp_directory_path() /
+      ("naim-telemetry-recovered-counters-" + std::to_string(CurrentMillis()) + ".sqlite");
+  store.ConfigurePersistence(db_path.string(), retention.durable_history_capacity);
+
+  const auto now = CurrentMillis();
+  for (std::uint64_t index = 0; index < 6; ++index) {
+    auto frame = MakeFrame("node-recovered", "plane-recovered", now - 5000 + index);
+    frame.adaptive_interval_ms = 10000;
+    frame.adaptive_reason = "idle-no-plane";
+    frame.publish_error_count = 2;
+    frame.last_publish_error.clear();
+    Expect(store.Upsert(frame), "recovered counter frame should update");
+  }
+
+  const auto health = store.BuildHealth(std::string("plane-recovered"));
+  Expect(
+      health.at("status").get<std::string>() == "ok",
+      "retention pruning and recovered publish counters should not degrade health");
+  Expect(health.at("alerts").empty(), "recovered counters should not produce alerts");
+  Expect(
+      health.at("planes").at(0).at("status").get<std::string>() == "ok",
+      "plane status should not degrade on retention pruning alone");
+
+  const auto snapshot = store.BuildSnapshot(std::string("plane-recovered"), 0);
+  Expect(
+      snapshot.at("nodes").at(0).at("telemetry_health").at("status").get<std::string>() == "ok",
+      "node health should not degrade on recovered publish counters");
+  std::filesystem::remove(db_path);
+  store.ResetForTests();
+  std::cout << "ok: telemetry-live-store-recovered-counters-health\n";
+}
+
 void TestStreamMetricsAndOpenMetrics() {
   auto& store = naim::controller::TelemetryLiveStore::Instance();
   store.ResetForTests();
@@ -341,6 +383,7 @@ int main() {
     TestPlaneAggregatesAndDownsampling();
     TestSqlitePersistenceReplayAndHealth();
     TestConfigurableRetentionAndMetrics();
+    TestRecoveredTelemetryCountersDoNotDegradeHealth();
     TestStreamMetricsAndOpenMetrics();
     return 0;
   } catch (const std::exception& error) {

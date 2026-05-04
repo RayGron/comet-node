@@ -18,6 +18,11 @@ class TelemetryNodeAlertBuilder final {
       std::uint64_t now_ms) const;
 
  private:
+  std::uint64_t IngestWarningBudgetMs(
+      const naim::HostTelemetryFrame& frame,
+      const TelemetryAlertThresholds& thresholds) const;
+  bool HasActivePublishError(const naim::HostTelemetryFrame& frame) const;
+
   TelemetryFrameMatcher matcher_;
 };
 

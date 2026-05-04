@@ -19,7 +19,7 @@ nlohmann::json TelemetryFrameJsonBuilder::Build(
   payload["last_frame_age_ms"] = controller_ingest_delay_ms;
   payload["telemetry_health_status"] =
       stale ? "stale"
-            : frame.telemetry_dropped_frames > 0 || frame.publish_error_count > 0
+            : frame.telemetry_dropped_frames > 0 || !frame.last_publish_error.empty()
                 ? "degraded"
                 : "ok";
   payload["latency_breakdown"] = BuildLatencyBreakdown(frame, controller_ingest_delay_ms);

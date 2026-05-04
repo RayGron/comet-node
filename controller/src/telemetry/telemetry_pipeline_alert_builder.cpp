@@ -4,8 +4,7 @@ namespace naim::controller {
 
 nlohmann::json TelemetryPipelineAlertBuilder::Build(
     const TelemetryPersistenceState& persistence,
-    const TelemetryStreamMetrics& streams,
-    const std::uint64_t dropped_frames_total) const {
+    const TelemetryStreamMetrics& streams) const {
   nlohmann::json alerts = nlohmann::json::array();
   if (!persistence.enabled) {
     alerts.push_back(nlohmann::json{
@@ -21,14 +20,6 @@ nlohmann::json TelemetryPipelineAlertBuilder::Build(
         {"message", "sqlite telemetry ring buffer reported errors"},
         {"count", persistence.error_count},
         {"last_error", persistence.last_error},
-    });
-  }
-  if (dropped_frames_total > 0) {
-    alerts.push_back(nlohmann::json{
-        {"code", "telemetry.controller.dropped_frames"},
-        {"severity", "warning"},
-        {"message", "controller telemetry ring buffer pruned live frames"},
-        {"count", dropped_frames_total},
     });
   }
   if (streams.telemetry.send_failure_total > 0 || streams.live.send_failure_total > 0) {

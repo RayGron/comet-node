@@ -242,6 +242,26 @@ std::size_t HostdDesiredStateApplyPlanSupport::ExpectedRuntimeStatusCountForComp
   return count;
 }
 
+bool HostdDesiredStateApplyPlanSupport::StopAndRemoveComposeArtifactIfPresent(
+    const std::string& artifacts_root,
+    const std::string& plane_name,
+    const std::string& node_name,
+    ComposeMode compose_mode) const {
+  const std::filesystem::path compose_file_path =
+      std::filesystem::path(artifacts_root) / plane_name / node_name /
+      "docker-compose.yml";
+  if (!std::filesystem::exists(compose_file_path)) {
+    return false;
+  }
+  compose_runtime_support_.RunComposeCommand(
+      compose_file_path.string(),
+      "down",
+      compose_mode);
+  file_support_.RemoveFileIfExists(compose_file_path.string());
+  compose_runtime_support_.RemoveComposeMeshNetworkIfUnused(plane_name, compose_mode);
+  return true;
+}
+
 bool HostdDesiredStateApplyPlanSupport::IsDesiredNodeStateEmpty(
     const naim::DesiredState& state) {
   return state.disks.empty() && state.instances.empty();

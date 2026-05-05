@@ -67,16 +67,6 @@ bool LooksLikeJobMetadataFilename(const std::string& filename) {
              kJobMetadataSuffix.data()) == 0;
 }
 
-bool ShouldScanDefaultModelRoots(const std::string& db_path) {
-  std::error_code error;
-  const auto normalized = std::filesystem::weakly_canonical(db_path, error);
-  if (error) {
-    return false;
-  }
-  return normalized == "/var/lib/naim-node/hostd-state/controller.sqlite" ||
-         normalized == "/var/lib/naim-node/controller.sqlite";
-}
-
 bool IsDownloadJobComplete(
     const naim::ModelLibraryDownloadJobRecord& job) {
   if (job.status != "completed") {
@@ -1379,16 +1369,6 @@ std::vector<std::string> ModelLibraryService::DiscoverRoots(
     }
     if (IsUsableAbsoluteHostPath(summary.storage_root)) {
       roots.insert(NormalizePathString(std::filesystem::path(summary.storage_root)));
-    }
-  }
-  if (ShouldScanDefaultModelRoots(db_path)) {
-    for (const std::string& candidate : {
-             std::string("/mnt/shared-storage/models"),
-             std::string("/mnt/shared-storage/models/gguf"),
-         }) {
-      if (IsUsableAbsoluteHostPath(candidate)) {
-        roots.insert(NormalizePathString(candidate));
-      }
     }
   }
   if (const char* env_value = std::getenv("NAIM_NODE_MODEL_LIBRARY_ROOTS");

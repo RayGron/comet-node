@@ -1909,7 +1909,7 @@ int main() {
                       {{{"name", "whisper"},
                         {"source",
                          {{"type", "library"},
-                          {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"}}},
+                          {"path", "/models/whisper/ggml-base.bin"}}},
                         {"mount_path", "/models/whisper/ggml-base.bin"},
                         {"env", "WHISPER_MODEL_PATH"},
                         {"required", true}}})}}})},
@@ -1921,7 +1921,7 @@ int main() {
       Expect(voice.environment.at("WHISPER_MODEL_PATH") == "/models/whisper/ggml-base.bin",
              "app-model-plane: model env should point to container mount path");
       Expect(voice.app_model_mounts.front().source_path ==
-                 "/mnt/shared-storage/models/whisper/ggml-base.bin",
+                 "/models/whisper/ggml-base.bin",
              "app-model-plane: source path should be retained");
       const auto compose_plans = naim::BuildNodeComposePlans(state);
       const auto& service = *std::find_if(
@@ -1974,9 +1974,9 @@ int main() {
                {{"name", "whisper"},
                 {"source",
                  {{"type", "library"},
-                  {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"},
+                  {"path", "/models/whisper/ggml-base.bin"},
                   {"node", "storage1"},
-                  {"paths", json::array({"/mnt/shared-storage/models/whisper/ggml-base.bin"})}}},
+                  {"paths", json::array({"/models/whisper/ggml-base.bin"})}}},
                 {"mount_path", "/models/whisper/ggml-base.bin"},
                 {"env", "WHISPER_MODEL_PATH"},
                 {"required", true}}}}}}}
@@ -2037,7 +2037,7 @@ int main() {
                {{"name", "whisper"},
                 {"source",
                  {{"type", "library"},
-                  {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"}}},
+                  {"path", "/models/whisper/ggml-base.bin"}}},
                 {"mount_path", "/models/whisper/ggml-base.bin"},
                 {"env", "WHISPER_MODEL_PATH"},
                 {"required", true}}}}}}},

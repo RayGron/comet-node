@@ -730,6 +730,7 @@ int LauncherRunService::RunHostdLoop(
   };
 #else
   std::atomic_bool telemetry_runtime_stop{false};
+  std::atomic_bool telemetry_request_active{false};
   LauncherTelemetryBus telemetry_bus;
   LauncherTelemetryRuntimeMetrics telemetry_metrics;
   std::thread telemetry_collector_thread;
@@ -847,12 +848,16 @@ int LauncherRunService::RunHostdLoop(
                 telemetry_metrics.last_publish_duration_ms.load();
             item->frame.last_publish_error = LoadLastPublishError(telemetry_metrics);
             const auto publish_started_at = std::chrono::steady_clock::now();
+            telemetry_request_active.store(true);
             backend->UpsertHostTelemetry(item->frame);
+            telemetry_request_active.store(false);
             telemetry_metrics.last_publish_duration_ms.store(
                 DurationMillis(publish_started_at, std::chrono::steady_clock::now()));
             StoreLastPublishError(&telemetry_metrics, "");
           }
+          telemetry_request_active.store(false);
         } catch (const std::exception& error) {
+          telemetry_request_active.store(false);
           if (!telemetry_runtime_stop.load()) {
             telemetry_metrics.publish_error_count.fetch_add(1);
             StoreLastPublishError(&telemetry_metrics, error.what());
@@ -920,6 +925,13 @@ int LauncherRunService::RunHostdLoop(
     }
     if (apply_pid <= 0 && std::chrono::steady_clock::now() >= next_apply_spawn_at) {
       apply_session_owner_active.store(true);
+      const auto wait_until =
+          std::chrono::steady_clock::now() + kApplySessionHandoffGap;
+      while (telemetry_request_active.load() &&
+             std::chrono::steady_clock::now() < wait_until &&
+             !signal_manager.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+      }
       apply_pid = static_cast<pid_t>(process_runner_.SpawnCommand(build_apply_args()));
       if (apply_pid <= 0) {
         apply_session_owner_active.store(false);

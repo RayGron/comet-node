@@ -1540,6 +1540,7 @@ HttpResponse HostdHttpService::HandleNextAssignment(
   if (request.method != "POST") {
     return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
+  std::optional<naim::HostAssignment> claimed_assignment;
   try {
     HostdRequestContext context(support_, db_path);
     std::optional<std::string> node_name;
@@ -1591,6 +1592,7 @@ HttpResponse HostdHttpService::HandleNextAssignment(
     do {
       assignment = context.store().ClaimNextHostAssignment(*node_name);
       if (assignment.has_value()) {
+        claimed_assignment = assignment;
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -1615,6 +1617,18 @@ HttpResponse HostdHttpService::HandleNextAssignment(
     auto response_host = *authenticated;
     return context.EncryptedResponse(&response_host, "assignments/next", payload);
   } catch (const std::exception& error) {
+    if (claimed_assignment.has_value()) {
+      try {
+        naim::ControllerStore store(db_path);
+        store.Initialize();
+        store.TransitionClaimedHostAssignment(
+            claimed_assignment->id,
+            naim::HostAssignmentStatus::Pending,
+            "assignment claim response failed before delivery: " +
+                std::string(error.what()));
+      } catch (...) {
+      }
+    }
     return support_.build_json_response(
         500,
         json{{"status", "internal_error"},

@@ -111,12 +111,68 @@ void ExpiredRuntimeProxyPendingAssignmentsAreFailedBeforeClaim() {
   std::cout << "ok: runtime-proxy-expiry-before-claim\n";
 }
 
+void ExpiredClaimedAssignmentsAreRequeuedBeforeClaim() {
+  const auto db_path = TempDbPath("naim-assignment-claimed-lease-test");
+  naim::ControllerStore store(db_path.string());
+  store.Initialize();
+  store.EnqueueHostAssignments(
+      {MakeAssignment("hpc1", "plane-a", "apply-node-state")},
+      "test supersede");
+
+  const auto first_claim = store.ClaimNextHostAssignment("hpc1");
+  Expect(first_claim.has_value(), "expected first claim");
+  Expect(first_claim->attempt_count == 1, "first claim should increment attempt count");
+  ExecSql(
+      db_path,
+      "UPDATE host_assignments "
+      "SET updated_at = datetime('now', '-120 seconds') "
+      "WHERE id = " + std::to_string(first_claim->id) + ";");
+
+  const auto retry_claim = store.ClaimNextHostAssignment("hpc1");
+  Expect(retry_claim.has_value(), "expired claimed assignment should be requeued");
+  Expect(
+      retry_claim->id == first_claim->id,
+      "retry should claim the same expired assignment");
+  Expect(retry_claim->attempt_count == 2, "retry claim should increment attempt count");
+  std::filesystem::remove(db_path);
+  std::cout << "ok: claimed-assignment-lease-requeue\n";
+}
+
+void ExpiredClaimedAssignmentsFailAfterExhaustedAttempts() {
+  const auto db_path = TempDbPath("naim-assignment-claimed-exhausted-test");
+  naim::ControllerStore store(db_path.string());
+  store.Initialize();
+  auto assignment = MakeAssignment("hpc1", "plane-a", "apply-node-state");
+  assignment.max_attempts = 1;
+  store.EnqueueHostAssignments({assignment}, "test supersede");
+
+  const auto first_claim = store.ClaimNextHostAssignment("hpc1");
+  Expect(first_claim.has_value(), "expected first claim");
+  ExecSql(
+      db_path,
+      "UPDATE host_assignments "
+      "SET updated_at = datetime('now', '-120 seconds') "
+      "WHERE id = " + std::to_string(first_claim->id) + ";");
+
+  const auto retry_claim = store.ClaimNextHostAssignment("hpc1");
+  Expect(!retry_claim.has_value(), "exhausted expired claim should not be requeued");
+  const auto failed = store.LoadHostAssignments(
+      std::optional<std::string>("hpc1"),
+      std::optional<naim::HostAssignmentStatus>(naim::HostAssignmentStatus::Failed),
+      std::optional<std::string>("plane-a"));
+  Expect(failed.size() == 1, "exhausted expired claim should be marked failed");
+  std::filesystem::remove(db_path);
+  std::cout << "ok: claimed-assignment-lease-exhaustion\n";
+}
+
 }  // namespace
 
 int main() {
   try {
     RuntimeProxyInteractionClaimsAheadOfWebGatewayStatus();
     ExpiredRuntimeProxyPendingAssignmentsAreFailedBeforeClaim();
+    ExpiredClaimedAssignmentsAreRequeuedBeforeClaim();
+    ExpiredClaimedAssignmentsFailAfterExhaustedAttempts();
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "assignment_repository_tests failed: " << ex.what() << '\n';

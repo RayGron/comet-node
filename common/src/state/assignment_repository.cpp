@@ -189,6 +189,28 @@ std::optional<HostAssignment> AssignmentRepository::ClaimNextHostAssignment(
   Exec(db_, "BEGIN IMMEDIATE TRANSACTION;");
 
   try {
+    {
+      Statement statement(
+          db_,
+          "UPDATE host_assignments "
+          "SET status = CASE "
+          "  WHEN attempt_count >= max_attempts THEN 'failed' "
+          "  ELSE 'pending' "
+          "END, "
+          "status_message = CASE "
+          "  WHEN attempt_count >= max_attempts THEN "
+          "    'claimed assignment lease expired after exhausted attempts' "
+          "  ELSE "
+          "    'claimed assignment lease expired; retrying' "
+          "END, "
+          "updated_at = CURRENT_TIMESTAMP "
+          "WHERE node_name = ?1 "
+          "  AND status = 'claimed' "
+          "  AND updated_at <= datetime('now', '-60 seconds');");
+      statement.BindText(1, node_name);
+      statement.StepDone();
+    }
+
     std::optional<HostAssignment> assignment;
     {
       Statement statement(

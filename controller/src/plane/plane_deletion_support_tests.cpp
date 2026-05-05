@@ -322,6 +322,41 @@ int main() {
       store.Initialize();
       const naim::controller::HostAssignmentReconciliationService reconciliation_service;
 
+      store.ReplaceDesiredState(BuildDesiredState("plane-c-applying", {"node-c-applying"}), 2);
+      Expect(
+          store.UpdatePlaneAppliedGeneration("plane-c-applying", 2),
+          "plane-c-applying applied generation should update");
+      store.ReplaceHostAssignments(
+          {BuildHostAssignment(
+              "plane-c-applying",
+              "node-c-applying",
+              2,
+              naim::HostAssignmentStatus::Claimed)});
+      const auto inserted_assignments =
+          store.LoadHostAssignments(std::nullopt, std::nullopt, "plane-c-applying");
+      Expect(inserted_assignments.size() == 1, "plane-c-applying should have one assignment");
+      store.UpsertHostObservation(BuildHostObservation(
+          "plane-c-applying",
+          "node-c-applying",
+          999,
+          naim::HostObservationStatus::Applying,
+          inserted_assignments.front().id));
+
+      const auto result = reconciliation_service.Reconcile(store, "plane-c-applying");
+      const auto assignment = store.LoadHostAssignments(
+          std::nullopt, std::nullopt, "plane-c-applying");
+      Expect(result.applied == 0, "controller should not mark applying observation applied");
+      Expect(assignment.size() == 1, "plane-c-applying should still have one assignment");
+      Expect(
+          assignment.front().status == naim::HostAssignmentStatus::Claimed,
+          "applying observation claimed assignment should remain claimed");
+    }
+
+    {
+      naim::ControllerStore store(db_path.string());
+      store.Initialize();
+      const naim::controller::HostAssignmentReconciliationService reconciliation_service;
+
       store.ReplaceDesiredState(BuildDesiredState("plane-c-stale", {"node-c-stale"}), 7);
       Expect(
           store.UpdatePlaneAppliedGeneration("plane-c-stale", 7),

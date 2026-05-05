@@ -63,10 +63,12 @@ export function reduceTelemetryStore(store, frames, planeName = "") {
       Number(frame?.controller_dropped_frames_total ?? frame?.telemetry_dropped_frames ?? 0),
     ),
   );
-  const overloaded =
-    Boolean(current.overloaded) ||
-    acceptedFrames.some((frame) => frame?.telemetry_overloaded === true) ||
-    droppedFramesTotal > 0;
+  const overloadFrames = acceptedFrames.filter(
+    (frame) => typeof frame?.telemetry_overloaded === "boolean",
+  );
+  const overloaded = overloadFrames.length > 0
+    ? overloadFrames.some((frame) => frame.telemetry_overloaded === true)
+    : Boolean(current.overloaded);
   const replayRequired =
     Boolean(current.lastReplayRequired) ||
     acceptedFrames.some((frame) => frame?.replay?.required === true);
@@ -126,7 +128,10 @@ export function applyTelemetrySnapshotMetadata(store, payload) {
       Number(current.droppedFramesTotal || 0),
       Number(payload?.dropped_frames_total || replay?.dropped_frames_total || 0),
     ),
-    overloaded: Boolean(current.overloaded) || payload?.telemetry_overloaded === true,
+    overloaded:
+      typeof payload?.telemetry_overloaded === "boolean"
+        ? payload.telemetry_overloaded
+        : Boolean(current.overloaded),
     lastReplayRequired: replay?.required === true,
     lastReplayReason: replay?.reason || current.lastReplayReason || "",
     browserLatency: current.browserLatency || createTelemetryStore().browserLatency,

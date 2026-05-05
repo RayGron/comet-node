@@ -15,6 +15,14 @@ namespace {
 using SocketHandle = naim::platform::SocketHandle;
 using ControllerNetworkManager = naim::controller::ControllerNetworkManager;
 
+int SocketSendFlags() {
+#if defined(MSG_NOSIGNAL)
+  return MSG_NOSIGNAL;
+#else
+  return 0;
+#endif
+}
+
 std::string TrimCopy(const std::string& value) {
   std::size_t start = 0;
   while (start < value.size() &&
@@ -218,7 +226,7 @@ HttpResponse SendControllerHttpRequest(
   const char* data = request_text.c_str();
   std::size_t remaining = request_text.size();
   while (remaining > 0) {
-    const ssize_t written = send(fd, data, remaining, 0);
+    const ssize_t written = send(fd, data, remaining, SocketSendFlags());
     if (written <= 0) {
       const std::string error = ControllerNetworkManager::SocketErrorMessage();
       ControllerNetworkManager::CloseSocket(fd);

@@ -8,7 +8,7 @@ on:
 
 concurrency:
   group: naim-production-main
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

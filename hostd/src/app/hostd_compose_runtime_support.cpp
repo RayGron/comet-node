@@ -83,7 +83,7 @@ void HostdComposeRuntimeSupport::RunComposeCommand(
 
   std::string effective_subcommand = subcommand;
   if (subcommand == "up -d") {
-    effective_subcommand += " --remove-orphans";
+    effective_subcommand += " --remove-orphans --force-recreate";
   }
   const std::string command =
       command_support_.ResolvedDockerComposeCommand() + " -f " +

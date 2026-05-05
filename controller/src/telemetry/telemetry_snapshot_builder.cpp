@@ -5,6 +5,34 @@
 
 namespace naim::controller {
 
+bool TelemetrySnapshotBuilder::HasActiveBackpressure(const nlohmann::json& alerts) const {
+  for (const auto& alert : alerts) {
+    const auto code = alert.value("code", std::string{});
+    if (code == "telemetry.publisher.queue_delay" ||
+        code == "telemetry.publisher.errors" ||
+        code == "telemetry.stream.send_failures") {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string TelemetrySnapshotBuilder::StatusFromAlerts(
+    const nlohmann::json& alerts,
+    const bool overloaded) const {
+  std::string status = overloaded ? "overloaded" : "ok";
+  for (const auto& alert : alerts) {
+    const auto severity = alert.value("severity", std::string{});
+    if (severity == "critical") {
+      return "critical";
+    }
+    if (severity == "warning") {
+      status = "degraded";
+    }
+  }
+  return status;
+}
+
 nlohmann::json TelemetrySnapshotBuilder::BuildSnapshot(
     const std::vector<TelemetryNodeBuffer>& nodes,
     const TelemetryRetentionConfig& retention,
@@ -46,15 +74,14 @@ nlohmann::json TelemetrySnapshotBuilder::BuildSnapshot(
       history.push_back(frame_json_builder_.Build(buffer.history[index], now_ms));
     }
   }
-  const bool overloaded = dropped_frames_total > 0;
   const auto alerts = alert_builder_.Build(
       matched_buffers,
       persistence,
       streams,
       thresholds,
       now_ms);
-  const std::string status =
-      !alerts.empty() ? "degraded" : overloaded ? "overloaded" : "ok";
+  const bool overloaded = HasActiveBackpressure(alerts);
+  const std::string status = StatusFromAlerts(alerts, overloaded);
   return nlohmann::json{
       {"schema_version", "telemetry.snapshot.v2"},
       {"service", "naim-controller"},

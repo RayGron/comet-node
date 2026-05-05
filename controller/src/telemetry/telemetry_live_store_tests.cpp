@@ -198,7 +198,9 @@ void TestBackpressureProjection() {
         "backpressure frame should update");
   }
   const auto snapshot = store.BuildSnapshot(std::string("plane-backpressure"), 600);
-  Expect(snapshot.at("telemetry_overloaded").get<bool>(), "snapshot should expose overload");
+  Expect(
+      !snapshot.at("telemetry_overloaded").get<bool>(),
+      "retention pruning alone should not expose active overload");
   Expect(
       snapshot.at("dropped_frames_total").get<std::uint64_t>() >= 20,
       "snapshot should count dropped frames");
@@ -339,6 +341,12 @@ void TestRecoveredTelemetryCountersDoNotDegradeHealth() {
 
   const auto snapshot = store.BuildSnapshot(std::string("plane-recovered"), 0);
   Expect(
+      snapshot.at("telemetry_health").at("status").get<std::string>() == "ok",
+      "snapshot health should not degrade on recovered counters or retention pruning");
+  Expect(
+      !snapshot.at("telemetry_overloaded").get<bool>(),
+      "snapshot overload should report active backpressure, not historical retention pruning");
+  Expect(
       snapshot.at("nodes").at(0).at("telemetry_health").at("status").get<std::string>() == "ok",
       "node health should not degrade on recovered publish counters");
   std::filesystem::remove(db_path);
@@ -425,6 +433,10 @@ void TestStreamMetricsAndOpenMetrics() {
   Expect(
       replay_health.at("status").get<std::string>() == "ok",
       "stream replay alone should not degrade telemetry health");
+  const auto replay_snapshot = store.BuildSnapshot(std::string("plane-replay"), 0);
+  Expect(
+      replay_snapshot.at("telemetry_health").at("status").get<std::string>() == "ok",
+      "info-only stream replay should not degrade snapshot health");
   std::filesystem::remove(replay_db_path);
   store.ResetForTests();
 

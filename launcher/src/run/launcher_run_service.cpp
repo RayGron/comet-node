@@ -660,6 +660,8 @@ int LauncherRunService::RunHostdLoop(
     return args;
   };
 
+  std::atomic_bool apply_session_owner_active{false};
+
 #if defined(_WIN32)
   const auto build_telemetry_args = [&](const bool watch) {
     std::vector<std::string> args = {
@@ -698,6 +700,11 @@ int LauncherRunService::RunHostdLoop(
   const auto run_report_if_due = [&]() {
     const auto now = std::chrono::steady_clock::now();
     if (now < next_inventory_report_at) {
+      return;
+    }
+    if (!options.controller_url.empty() && apply_session_owner_active.load()) {
+      next_inventory_report_at =
+          now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
       return;
     }
     const int report_code = process_runner_.RunCommand(build_report_args());
@@ -822,6 +829,10 @@ int LauncherRunService::RunHostdLoop(
               options.node_name,
               options.storage_root);
           while (!telemetry_runtime_stop.load()) {
+            if (!options.controller_url.empty() && apply_session_owner_active.load()) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(250));
+              continue;
+            }
             auto item = telemetry_bus.WaitPop(telemetry_runtime_stop);
             if (!item.has_value()) {
               continue;
@@ -878,6 +889,7 @@ int LauncherRunService::RunHostdLoop(
       std::cerr << "naim-node: hostd apply-next-assignment exit=" << *apply_code << "\n";
     }
     apply_pid = -1;
+    apply_session_owner_active.store(false);
     if (std::filesystem::exists(self_update_marker)) {
       std::filesystem::remove(self_update_marker, marker_error);
       std::cout << "hostd_self_update_scheduled=waiting_for_container_recreate\n";
@@ -904,7 +916,11 @@ int LauncherRunService::RunHostdLoop(
       return wait_for_self_update_recreate();
     }
     if (apply_pid <= 0) {
+      apply_session_owner_active.store(true);
       apply_pid = static_cast<pid_t>(process_runner_.SpawnCommand(build_apply_args()));
+      if (apply_pid <= 0) {
+        apply_session_owner_active.store(false);
+      }
     }
 #endif
 
@@ -931,6 +947,7 @@ int LauncherRunService::RunHostdLoop(
 #if !defined(_WIN32)
   if (apply_pid > 0) {
     StopChildProcess(apply_pid);
+    apply_session_owner_active.store(false);
   }
   stop_telemetry_runtime();
 #endif

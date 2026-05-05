@@ -551,7 +551,11 @@ while time.time() < deadline:
             "where plane_name = ? and status in ('pending','claimed')",
             (plane_name,),
         ).fetchone()["count"]
-        if latest_assignment is not None and latest_assignment["status"] == "failed":
+        if (
+            plane_state == "running"
+            and latest_assignment is not None
+            and latest_assignment["status"] == "failed"
+        ):
             failed += 1
         planes[plane_name] = None if plane is None else {
             "generation": plane["generation"],
@@ -573,10 +577,14 @@ while time.time() < deadline:
         if plane is None:
             ready = False
             break
-        if plane["generation"] != plane["applied_generation"]:
-            ready = False
-            break
-        if plane_state == "running" and plane["state"] != "running":
+        if plane_state == "running":
+            if plane["generation"] != plane["applied_generation"]:
+                ready = False
+                break
+            if plane["state"] != "running":
+                ready = False
+                break
+        elif plane["state"] != plane_state:
             ready = False
             break
     last = {

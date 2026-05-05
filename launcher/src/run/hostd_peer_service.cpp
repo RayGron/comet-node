@@ -149,6 +149,18 @@ bool SendAll(int fd, const char* data, std::size_t size) {
   return true;
 }
 
+void ApplyHttpClientTimeouts(int fd) {
+#if !defined(_WIN32)
+  timeval timeout{};
+  timeout.tv_sec = 30;
+  timeout.tv_usec = 0;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#else
+  (void)fd;
+#endif
+}
+
 class LauncherHostdBackendSupport final : public naim::hostd::IHttpHostdBackendSupport {
  public:
   nlohmann::json SendControllerJsonRequest(
@@ -561,6 +573,7 @@ void HostdPeerService::HttpLoop() {
     if (client < 0) {
       continue;
     }
+    ApplyHttpClientTimeouts(client);
     std::thread([this, client]() { HandleHttpClient(client); }).detach();
   }
   close(fd);

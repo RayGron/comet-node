@@ -27,6 +27,8 @@ constexpr std::uintmax_t kControllerRelayedChunkBytes = 4ULL * 1024ULL * 1024ULL
 constexpr std::uintmax_t kPeerDirectChunkBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr int kControllerRelayedChunkPollAttempts = 600;
 constexpr std::chrono::milliseconds kControllerRelayedChunkPollInterval(500);
+constexpr int kPeerHttpTimeoutSeconds = 30;
+constexpr int kPeerHttpAttempts = 3;
 
 struct PeerHttpResponse {
   int status_code = 0;
@@ -70,6 +72,30 @@ PeerHttpResponse SendPeerHttpRawRequest(
     const std::string& content_type,
     const std::map<std::string, std::string>& extra_headers);
 
+void ApplyPeerSocketTimeouts(naim::platform::SocketHandle fd) {
+#if defined(_WIN32)
+  const DWORD timeout_ms = kPeerHttpTimeoutSeconds * 1000;
+  setsockopt(
+      fd,
+      SOL_SOCKET,
+      SO_RCVTIMEO,
+      reinterpret_cast<const char*>(&timeout_ms),
+      sizeof(timeout_ms));
+  setsockopt(
+      fd,
+      SOL_SOCKET,
+      SO_SNDTIMEO,
+      reinterpret_cast<const char*>(&timeout_ms),
+      sizeof(timeout_ms));
+#else
+  timeval timeout{};
+  timeout.tv_sec = kPeerHttpTimeoutSeconds;
+  timeout.tv_usec = 0;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+}
+
 PeerHttpResponse SendPeerHttpRequest(
     const std::string& endpoint,
     const std::string& path,
@@ -102,6 +128,7 @@ PeerHttpResponse SendPeerHttpRawRequest(
     if (!naim::platform::IsSocketValid(fd)) {
       continue;
     }
+    ApplyPeerSocketTimeouts(fd);
     if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
       break;
     }
@@ -128,8 +155,9 @@ PeerHttpResponse SendPeerHttpRawRequest(
   while (remaining > 0) {
     const ssize_t written = send(fd, data, remaining, 0);
     if (written <= 0) {
+      const std::string error = naim::platform::LastSocketErrorMessage();
       naim::platform::CloseSocket(fd);
-      throw std::runtime_error("failed to write peer request");
+      throw std::runtime_error("failed to write peer request: " + error);
     }
     data += written;
     remaining -= static_cast<std::size_t>(written);
@@ -140,8 +168,9 @@ PeerHttpResponse SendPeerHttpRawRequest(
   while (true) {
     const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
     if (read_count < 0) {
+      const std::string error = naim::platform::LastSocketErrorMessage();
       naim::platform::CloseSocket(fd);
-      throw std::runtime_error("failed to read peer response");
+      throw std::runtime_error("failed to read peer response: " + error);
     }
     if (read_count == 0) {
       break;
@@ -229,6 +258,28 @@ PeerHttpResponse SendPeerHttpRawRequest(
         (detail.empty() ? std::string{} : ": " + detail));
   }
   return response;
+}
+
+PeerHttpResponse SendPeerHttpRequestWithRetries(
+    const std::string& endpoint,
+    const std::string& path,
+    const nlohmann::json& payload,
+    const std::string& operation) {
+  std::string last_error;
+  for (int attempt = 1; attempt <= kPeerHttpAttempts; ++attempt) {
+    try {
+      return SendPeerHttpRequest(endpoint, path, payload);
+    } catch (const std::exception& error) {
+      last_error = error.what();
+      if (attempt == kPeerHttpAttempts) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(250 * attempt));
+    }
+  }
+  throw std::runtime_error(
+      operation + " failed after " + std::to_string(kPeerHttpAttempts) +
+      " attempts: " + last_error);
 }
 
 std::optional<std::uintmax_t> JsonUintmax(const nlohmann::json& payload, const std::string& key) {
@@ -457,14 +508,15 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
     if (ticket.value("status", std::string{}) == "issued") {
       peer_ticket_id = ticket.value("ticket_id", std::string{});
       peer_endpoint = ticket.value("source_endpoint", std::string{});
-      const PeerHttpResponse peer_manifest = SendPeerHttpRequest(
+      const PeerHttpResponse peer_manifest = SendPeerHttpRequestWithRetries(
           peer_endpoint,
           "/peer/v1/files/manifest",
           nlohmann::json{
               {"ticket_id", peer_ticket_id},
               {"source_paths", source_paths},
               {"defer_sha256", true},
-          });
+          },
+          "direct LAN manifest request");
       manifest = nlohmann::json::parse(peer_manifest.body);
       if (manifest.value("phase", std::string{}) == "manifest-ready" &&
           manifest.contains("files") &&
@@ -672,7 +724,7 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
         try {
           const std::uintmax_t expected_size =
               JsonUintmax(files[file_index], "size_bytes").value_or(0);
-          const PeerHttpResponse peer_chunk = SendPeerHttpRequest(
+          const PeerHttpResponse peer_chunk = SendPeerHttpRequestWithRetries(
               peer_endpoint,
               "/peer/v1/files/chunk",
               nlohmann::json{
@@ -680,7 +732,8 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
                   {"source_path", source_path},
                   {"offset", offset},
                   {"max_bytes", kPeerDirectChunkBytes},
-              });
+              },
+              "direct LAN chunk request at offset " + std::to_string(offset));
           if (peer_chunk.body.empty() && offset < expected_size) {
             throw std::runtime_error("direct LAN transfer returned an empty non-final chunk");
           }
@@ -1159,10 +1212,11 @@ bool HostdBootstrapModelSupport::TryWriteBackPreparedModel(
     }
     const std::string endpoint = ticket.value("target_endpoint", std::string{});
     const std::string ticket_id = ticket.value("ticket_id", std::string{});
-    const PeerHttpResponse start = SendPeerHttpRequest(
+    const PeerHttpResponse start = SendPeerHttpRequestWithRetries(
         endpoint,
         "/peer/v1/files/upload-start",
-        nlohmann::json{{"ticket_id", ticket_id}});
+        nlohmann::json{{"ticket_id", ticket_id}},
+        "peer upload start request");
     const auto start_json = nlohmann::json::parse(start.body, nullptr, false);
     if (!start_json.is_discarded() &&
         start_json.value("status", std::string{}) == "already_exists") {
@@ -1203,10 +1257,11 @@ bool HostdBootstrapModelSupport::TryWriteBackPreparedModel(
           offset,
           *size);
     }
-    const PeerHttpResponse complete = SendPeerHttpRequest(
+    const PeerHttpResponse complete = SendPeerHttpRequestWithRetries(
         endpoint,
         "/peer/v1/files/upload-complete",
-        nlohmann::json{{"ticket_id", ticket_id}});
+        nlohmann::json{{"ticket_id", ticket_id}},
+        "peer upload complete request");
     const auto complete_json = nlohmann::json::parse(complete.body, nullptr, false);
     return !complete_json.is_discarded() &&
            (complete_json.value("status", std::string{}) == "completed" ||

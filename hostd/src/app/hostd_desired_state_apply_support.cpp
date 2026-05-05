@@ -30,6 +30,8 @@ constexpr std::uintmax_t kAppModelChunkBytes = 4ULL * 1024ULL * 1024ULL;
 constexpr std::uintmax_t kAppModelPeerChunkBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr int kAppModelPollAttempts = 600;
 constexpr std::chrono::milliseconds kAppModelPollInterval(500);
+constexpr int kPeerHttpTimeoutSeconds = 30;
+constexpr int kPeerHttpAttempts = 3;
 
 struct PeerHttpResponse {
   int status_code = 0;
@@ -66,6 +68,30 @@ PeerEndpoint ParsePeerEndpoint(std::string endpoint) {
   return parsed;
 }
 
+void ApplyPeerSocketTimeouts(naim::platform::SocketHandle fd) {
+#if defined(_WIN32)
+  const DWORD timeout_ms = kPeerHttpTimeoutSeconds * 1000;
+  setsockopt(
+      fd,
+      SOL_SOCKET,
+      SO_RCVTIMEO,
+      reinterpret_cast<const char*>(&timeout_ms),
+      sizeof(timeout_ms));
+  setsockopt(
+      fd,
+      SOL_SOCKET,
+      SO_SNDTIMEO,
+      reinterpret_cast<const char*>(&timeout_ms),
+      sizeof(timeout_ms));
+#else
+  timeval timeout{};
+  timeout.tv_sec = kPeerHttpTimeoutSeconds;
+  timeout.tv_usec = 0;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+}
+
 PeerHttpResponse SendPeerHttpRawRequest(
     const std::string& endpoint,
     const std::string& path,
@@ -88,6 +114,7 @@ PeerHttpResponse SendPeerHttpRawRequest(
     if (!naim::platform::IsSocketValid(fd)) {
       continue;
     }
+    ApplyPeerSocketTimeouts(fd);
     if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
       break;
     }
@@ -111,8 +138,9 @@ PeerHttpResponse SendPeerHttpRawRequest(
   while (remaining > 0) {
     const ssize_t written = send(fd, data, remaining, 0);
     if (written <= 0) {
+      const std::string error = naim::platform::LastSocketErrorMessage();
       naim::platform::CloseSocket(fd);
-      throw std::runtime_error("failed to write peer request");
+      throw std::runtime_error("failed to write peer request: " + error);
     }
     data += written;
     remaining -= static_cast<std::size_t>(written);
@@ -123,8 +151,9 @@ PeerHttpResponse SendPeerHttpRawRequest(
   while (true) {
     const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
     if (read_count < 0) {
+      const std::string error = naim::platform::LastSocketErrorMessage();
       naim::platform::CloseSocket(fd);
-      throw std::runtime_error("failed to read peer response");
+      throw std::runtime_error("failed to read peer response: " + error);
     }
     if (read_count == 0) {
       break;
@@ -216,6 +245,28 @@ PeerHttpResponse SendPeerHttpRequest(
   return SendPeerHttpRawRequest(endpoint, path, payload.dump(), "application/json");
 }
 
+PeerHttpResponse SendPeerHttpRequestWithRetries(
+    const std::string& endpoint,
+    const std::string& path,
+    const nlohmann::json& payload,
+    const std::string& operation) {
+  std::string last_error;
+  for (int attempt = 1; attempt <= kPeerHttpAttempts; ++attempt) {
+    try {
+      return SendPeerHttpRequest(endpoint, path, payload);
+    } catch (const std::exception& error) {
+      last_error = error.what();
+      if (attempt == kPeerHttpAttempts) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(250 * attempt));
+    }
+  }
+  throw std::runtime_error(
+      operation + " failed after " + std::to_string(kPeerHttpAttempts) +
+      " attempts: " + last_error);
+}
+
 std::optional<std::uintmax_t> JsonUintmax(
     const nlohmann::json& value,
     const std::string& key) {
@@ -274,14 +325,15 @@ bool TryMaterializeAppModelMountDirectly(
       "app-model-direct",
       "Checking direct app model transfer from storage node " + mount.source_node_name + ".",
       20);
-  const PeerHttpResponse manifest_response = SendPeerHttpRequest(
+  const PeerHttpResponse manifest_response = SendPeerHttpRequestWithRetries(
       peer_endpoint,
       "/peer/v1/files/manifest",
       nlohmann::json{
           {"ticket_id", ticket_id},
           {"source_paths", source_paths},
           {"defer_sha256", true},
-      });
+      },
+      "direct app model manifest request");
   const nlohmann::json manifest = nlohmann::json::parse(manifest_response.body, nullptr, false);
   if (manifest.is_discarded() || manifest.value("phase", std::string{}) != "manifest-ready" ||
       !manifest.contains("files") || !manifest.at("files").is_array()) {
@@ -314,7 +366,7 @@ bool TryMaterializeAppModelMountDirectly(
 
   std::uintmax_t offset = 0;
   while (offset < *expected_size) {
-    const PeerHttpResponse chunk = SendPeerHttpRequest(
+    const PeerHttpResponse chunk = SendPeerHttpRequestWithRetries(
         peer_endpoint,
         "/peer/v1/files/chunk",
         nlohmann::json{
@@ -322,7 +374,8 @@ bool TryMaterializeAppModelMountDirectly(
             {"source_path", files.front().value("source_path", source_paths.front())},
             {"offset", offset},
             {"max_bytes", kAppModelPeerChunkBytes},
-        });
+        },
+        "direct app model chunk request at offset " + std::to_string(offset));
     if (chunk.body.empty() && offset < *expected_size) {
       throw std::runtime_error("direct app model transfer returned an empty non-final chunk");
     }

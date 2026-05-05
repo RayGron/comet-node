@@ -63,12 +63,7 @@ export function reduceTelemetryStore(store, frames, planeName = "") {
       Number(frame?.controller_dropped_frames_total ?? frame?.telemetry_dropped_frames ?? 0),
     ),
   );
-  const overloadFrames = acceptedFrames.filter(
-    (frame) => typeof frame?.telemetry_overloaded === "boolean",
-  );
-  const overloaded = overloadFrames.length > 0
-    ? overloadFrames.some((frame) => frame.telemetry_overloaded === true)
-    : Boolean(current.overloaded);
+  const overloaded = Boolean(current.overloaded);
   const replayRequired =
     Boolean(current.lastReplayRequired) ||
     acceptedFrames.some((frame) => frame?.replay?.required === true);

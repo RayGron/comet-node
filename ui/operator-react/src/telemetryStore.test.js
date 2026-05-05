@@ -56,6 +56,20 @@ describe("telemetryStore", () => {
     expect(result.store.overloaded).toBe(false);
   });
 
+  it("does not treat legacy frame overload flags as authoritative", () => {
+    const result = reduceTelemetryStore(createTelemetryStore(), [
+      {
+        node_name: "node-a",
+        plane_name: "plane-a",
+        sequence: 1000,
+        telemetry_overloaded: true,
+      },
+    ]);
+
+    expect(result.changed).toBe(true);
+    expect(result.store.overloaded).toBe(false);
+  });
+
   it("lets snapshot metadata clear recovered overload state", () => {
     const overloaded = {
       ...createTelemetryStore(),

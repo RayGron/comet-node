@@ -590,6 +590,7 @@ int LauncherRunService::RunHostdLoop(
       << "next_step=leave hostd running so it can receive assignments and upload telemetry\n";
   constexpr int kTelemetryIntervalMs = 2000;
   constexpr int kTelemetryTtlMs = 10000;
+  constexpr std::chrono::milliseconds kApplySessionHandoffGap(1500);
   auto next_inventory_report_at = std::chrono::steady_clock::now();
 #if defined(_WIN32)
   auto next_telemetry_report_at = std::chrono::steady_clock::now();
@@ -877,6 +878,7 @@ int LauncherRunService::RunHostdLoop(
 
 #if !defined(_WIN32)
   pid_t apply_pid = -1;
+  auto next_apply_spawn_at = std::chrono::steady_clock::now();
   const auto reap_apply_if_finished = [&]() -> bool {
     if (apply_pid <= 0) {
       return false;
@@ -890,6 +892,7 @@ int LauncherRunService::RunHostdLoop(
     }
     apply_pid = -1;
     apply_session_owner_active.store(false);
+    next_apply_spawn_at = std::chrono::steady_clock::now() + kApplySessionHandoffGap;
     if (std::filesystem::exists(self_update_marker)) {
       std::filesystem::remove(self_update_marker, marker_error);
       std::cout << "hostd_self_update_scheduled=waiting_for_container_recreate\n";
@@ -915,11 +918,12 @@ int LauncherRunService::RunHostdLoop(
     if (reap_apply_if_finished()) {
       return wait_for_self_update_recreate();
     }
-    if (apply_pid <= 0) {
+    if (apply_pid <= 0 && std::chrono::steady_clock::now() >= next_apply_spawn_at) {
       apply_session_owner_active.store(true);
       apply_pid = static_cast<pid_t>(process_runner_.SpawnCommand(build_apply_args()));
       if (apply_pid <= 0) {
         apply_session_owner_active.store(false);
+        next_apply_spawn_at = std::chrono::steady_clock::now() + kApplySessionHandoffGap;
       }
     }
 #endif

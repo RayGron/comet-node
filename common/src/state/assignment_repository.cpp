@@ -211,6 +211,21 @@ std::optional<HostAssignment> AssignmentRepository::ClaimNextHostAssignment(
       statement.StepDone();
     }
 
+    {
+      Statement statement(
+          db_,
+          "UPDATE host_assignments "
+          "SET status = 'failed', "
+          "status_message = 'runtime HTTP proxy request expired before hostd claimed it', "
+          "updated_at = CURRENT_TIMESTAMP "
+          "WHERE node_name = ?1 "
+          "  AND assignment_type = 'runtime-http-proxy' "
+          "  AND status = 'pending' "
+          "  AND updated_at <= datetime('now', '-45 seconds');");
+      statement.BindText(1, node_name);
+      statement.StepDone();
+    }
+
     std::optional<HostAssignment> assignment;
     {
       Statement statement(
@@ -219,7 +234,14 @@ std::optional<HostAssignment> AssignmentRepository::ClaimNextHostAssignment(
           "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json "
           "FROM host_assignments "
           "WHERE node_name = ?1 AND status = 'pending' AND attempt_count < max_attempts "
-          "ORDER BY id ASC LIMIT 1;");
+          "ORDER BY "
+          "CASE "
+          "  WHEN assignment_type != 'runtime-http-proxy' THEN 0 "
+          "  WHEN plane_name LIKE 'runtime-http-proxy:webgateway:%' THEN 30 "
+          "  WHEN plane_name LIKE 'runtime-http-proxy:skills:%' THEN 20 "
+          "  WHEN plane_name LIKE 'runtime-http-proxy:knowledge-vault:%' THEN 20 "
+          "  ELSE 10 "
+          "END ASC, id ASC LIMIT 1;");
       statement.BindText(1, node_name);
       if (statement.StepRow()) {
         assignment = ReadHostAssignment(statement.raw());

@@ -135,7 +135,8 @@ PeerHttpResponse SendPeerHttpRawRequest(
     remaining -= static_cast<std::size_t>(written);
   }
   std::string response_text;
-  std::array<char, 8192> buffer{};
+  std::array<char, 1024 * 1024> buffer{};
+  bool reserved_body = false;
   while (true) {
     const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
     if (read_count < 0) {
@@ -146,6 +147,42 @@ PeerHttpResponse SendPeerHttpRawRequest(
       break;
     }
     response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
+    if (!reserved_body) {
+      const std::size_t headers_end = response_text.find("\r\n\r\n");
+      if (headers_end != std::string::npos) {
+        const std::string headers = response_text.substr(0, headers_end);
+        std::istringstream header_lines(headers);
+        std::string header_line;
+        while (std::getline(header_lines, header_line)) {
+          if (!header_line.empty() && header_line.back() == '\r') {
+            header_line.pop_back();
+          }
+          const std::size_t colon = header_line.find(':');
+          if (colon == std::string::npos) {
+            continue;
+          }
+          std::string key = header_line.substr(0, colon);
+          std::transform(key.begin(), key.end(), key.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+          });
+          if (key != "content-length") {
+            continue;
+          }
+          std::string value = header_line.substr(colon + 1);
+          while (!value.empty() && value.front() == ' ') {
+            value.erase(value.begin());
+          }
+          try {
+            const std::size_t content_length =
+                static_cast<std::size_t>(std::stoull(value));
+            response_text.reserve(headers_end + 4 + content_length);
+          } catch (const std::exception&) {
+          }
+          break;
+        }
+        reserved_body = true;
+      }
+    }
   }
   naim::platform::CloseSocket(fd);
   const std::size_t headers_end = response_text.find("\r\n\r\n");

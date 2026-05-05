@@ -1101,6 +1101,18 @@ target_link_libraries(naim-hostd-install-layout-support-tests PRIVATE naim-commo
 naim_enable_strict_warnings(naim-hostd-install-layout-support-tests)
 
 add_executable(
+  naim-hostd-runtime-http-proxy-tests
+  hostd/src/app/hostd_runtime_http_proxy.cpp
+  hostd/src/app/hostd_runtime_http_proxy_tests.cpp
+)
+target_include_directories(
+  naim-hostd-runtime-http-proxy-tests PRIVATE common/include hostd/include)
+target_link_libraries(naim-hostd-runtime-http-proxy-tests PRIVATE naim-common)
+target_compile_definitions(
+  naim-hostd-runtime-http-proxy-tests PRIVATE NAIM_HOSTD_RUNTIME_HTTP_PROXY_TESTING)
+naim_enable_strict_warnings(naim-hostd-runtime-http-proxy-tests)
+
+add_executable(
   naim-hostd-post-deploy-support-tests
   hostd/src/app/hostd_command_support.cpp
   hostd/src/app/hostd_local_state_path_support.cpp

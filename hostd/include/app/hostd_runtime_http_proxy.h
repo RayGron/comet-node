@@ -46,6 +46,11 @@ class HostdRuntimeHttpProxy final {
       const std::string& method,
       const std::string& path);
   static std::string PolicyLabel(HostdRuntimeProxyPolicy policy);
+#ifdef NAIM_HOSTD_RUNTIME_HTTP_PROXY_TESTING
+ public:
+#endif
+  static bool HeaderValueContainsChunkedTransfer(const std::string& value);
+  static std::string DecodeCompleteChunkedBody(const std::string& encoded);
   static HostdRuntimeHttpResponse ParseHttpResponse(const std::string& response_text);
 };
 

@@ -128,6 +128,14 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(desiredState.network.server_name).toBe("maglev-web.local");
   });
 
+  it("does not emit a post-deploy hook unless one is configured", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "no-hook-plane";
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.hooks).toBeUndefined();
+  });
+
   it("round-trips factory skill ids through desired state v2", () => {
     const form = buildNewPlaneFormState();
     form.planeName = "skills-plane";

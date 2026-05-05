@@ -13,6 +13,8 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
+#include <iomanip>
 
 #include <nlohmann/json.hpp>
 
@@ -912,14 +914,6 @@ std::vector<std::string> HostdSystemTelemetryCollector::splitCsvRow(
 
   return result;
 }
-
-#include <vulkan/vulkan.h>
-#include <vector>
-#include <optional>
-#include <string>
-#include <chrono>
-#include <iomanip>
-#include <sstream>
 
 // Helper to get current ISO 8601 time
 std::string getCurrentTimestamp() {

@@ -5,6 +5,7 @@ import {
   createTelemetryStore,
   enrichTelemetryFrames,
   reduceTelemetryStore,
+  scopeTelemetryFrameToPlane,
   updateTelemetryBrowserLatency,
 } from "./telemetryStore.js";
 
@@ -83,5 +84,40 @@ describe("telemetryStore", () => {
 
     expect(recovered.droppedFramesTotal).toBe(12);
     expect(recovered.overloaded).toBe(false);
+  });
+
+  it("scopes aggregate node frames to a selected plane", () => {
+    const frame = {
+      node_name: "hpc1",
+      sequence: 1000,
+      instance_runtime: [
+        { instance_name: "worker-maglev-service", plane_name: "maglev-service", ready: true },
+        { instance_name: "worker-lt-cypher-ai", plane_name: "lt-cypher-ai", ready: false },
+      ],
+      gpu: {
+        devices: [
+          {
+            gpu_device: "0",
+            processes: [
+              { instance_name: "worker-maglev-service", used_vram_mb: 100 },
+              { instance_name: "worker-lt-cypher-ai", used_vram_mb: 200 },
+            ],
+          },
+        ],
+      },
+    };
+
+    const scoped = scopeTelemetryFrameToPlane(frame, "maglev-service");
+    expect(scoped.plane_name).toBe("maglev-service");
+    expect(scoped.instance_runtime).toHaveLength(1);
+    expect(scoped.plane_ready_instance_count).toBe(1);
+    expect(scoped.gpu.devices[0].processes).toHaveLength(1);
+
+    const result = reduceTelemetryStore(createTelemetryStore(), [frame], "maglev-service");
+    expect(result.changed).toBe(true);
+    expect(result.store.byNode.hpc1.plane_name).toBe("maglev-service");
+    expect(result.store.byNode.hpc1.instance_runtime[0].instance_name).toBe(
+      "worker-maglev-service",
+    );
   });
 });

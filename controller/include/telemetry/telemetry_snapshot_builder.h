@@ -36,6 +36,9 @@ class TelemetrySnapshotBuilder final {
  private:
   bool HasActiveBackpressure(const nlohmann::json& alerts) const;
   std::string StatusFromAlerts(const nlohmann::json& alerts, bool overloaded) const;
+  naim::HostTelemetryFrame ScopeFrameToPlane(
+      const naim::HostTelemetryFrame& frame,
+      const std::optional<std::string>& plane_name) const;
 
   TelemetryAlertBuilder alert_builder_;
   TelemetryFrameMatcher matcher_;

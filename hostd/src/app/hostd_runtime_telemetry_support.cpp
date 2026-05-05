@@ -231,6 +231,9 @@ naim::RuntimeProcessStatus HostdRuntimeTelemetrySupport::ToProcessStatus(
   if (status.node_name.empty()) {
     status.node_name = instance.node_name;
   }
+  if (status.plane_name.empty()) {
+    status.plane_name = instance.plane_name;
+  }
   if (status.gpu_device.empty() && instance.gpu_device.has_value()) {
     status.gpu_device = *instance.gpu_device;
   }
@@ -246,6 +249,7 @@ naim::RuntimeProcessStatus HostdRuntimeTelemetrySupport::ToProcessStatus(
   process.runtime_pid = status.runtime_pid;
   process.engine_pid = status.engine_pid;
   process.ready = status.ready || status.launch_ready || status.inference_ready;
+  process.plane_name = status.plane_name;
   return process;
 }
 

@@ -19,6 +19,7 @@ struct RuntimeProcessStatus {
   int runtime_pid = 0;
   int engine_pid = 0;
   bool ready = false;
+  std::string plane_name;
 };
 
 struct GpuProcessTelemetry {

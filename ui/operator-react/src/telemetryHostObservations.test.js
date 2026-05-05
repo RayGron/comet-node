@@ -49,4 +49,26 @@ describe("telemetryHostObservations", () => {
       "existing",
     );
   });
+
+  it("merges only selected plane runtime from aggregate telemetry frames", () => {
+    const merged = mergeTelemetryIntoObservationPayload(
+      { observations: [] },
+      [
+        {
+          node_name: "hpc1",
+          sequence: 20,
+          instance_runtime: [
+            { instance_name: "worker-maglev-service", plane_name: "maglev-service", ready: true },
+            { instance_name: "worker-lt-cypher-ai", plane_name: "lt-cypher-ai", ready: true },
+          ],
+        },
+      ],
+      "maglev-service",
+    );
+
+    const item = hostObservationItemsFromPayload(merged)[0];
+    expect(item.plane_name).toBe("maglev-service");
+    expect(item.instance_runtimes.items).toHaveLength(1);
+    expect(item.instance_runtimes.items[0].instance_name).toBe("worker-maglev-service");
+  });
 });

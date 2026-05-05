@@ -8,6 +8,43 @@
 
 namespace naim::controller {
 
+namespace {
+
+void AddFrameToPlane(
+    TelemetryPlaneAccumulator& plane,
+    const std::string& plane_name,
+    const naim::HostTelemetryFrame& frame,
+    const TelemetryNodeBuffer& buffer,
+    const nlohmann::json& health,
+    const std::uint64_t ingest_ms,
+    const std::uint64_t scoped_instance_count,
+    const std::uint64_t scoped_ready_instance_count,
+    const std::uint64_t scoped_gpu_count,
+    const double gpu_utilization_average) {
+  if (plane.plane_name.empty()) {
+    plane.plane_name = plane_name;
+  }
+  plane.node_count += 1;
+  plane.latest_sequence = std::max(plane.latest_sequence, frame.sequence);
+  plane.dropped_frames_total += buffer.dropped_frames_total;
+  plane.max_last_frame_age_ms = std::max(plane.max_last_frame_age_ms, ingest_ms);
+  plane.max_queue_delay_ms = std::max(plane.max_queue_delay_ms, frame.publisher_queue_delay_ms);
+  plane.max_publish_ms = std::max(plane.max_publish_ms, frame.publish_duration_ms);
+  plane.max_controller_ingest_ms = std::max(plane.max_controller_ingest_ms, ingest_ms);
+  plane.gpu_count += scoped_gpu_count;
+  plane.plane_instance_count += scoped_instance_count;
+  plane.plane_ready_instance_count += scoped_ready_instance_count;
+  plane.plane_not_ready_instance_count += scoped_instance_count - scoped_ready_instance_count;
+  plane.gpu_utilization_sum += gpu_utilization_average;
+  if (health.value("status", std::string{"ok"}) == "stale") {
+    plane.stale_nodes += 1;
+  } else if (health.value("status", std::string{"ok"}) == "degraded") {
+    plane.degraded_nodes += 1;
+  }
+}
+
+}  // namespace
+
 nlohmann::json TelemetryPlaneAggregateBuilder::Build(
     const std::vector<const TelemetryNodeBuffer*>& buffers,
     const std::uint64_t now_ms) const {
@@ -17,28 +54,36 @@ nlohmann::json TelemetryPlaneAggregateBuilder::Build(
       continue;
     }
     const auto& frame = buffer->latest;
-    auto& plane = planes[matcher_.PlaneKeyForFrame(frame)];
-    if (plane.plane_name.empty()) {
-      plane.plane_name = matcher_.PlaneKeyForFrame(frame);
-    }
     const auto ingest_ms = matcher_.ControllerIngestDelayMs(frame, now_ms);
     const auto health = node_health_builder_.Build(frame, *buffer, now_ms, ingest_ms);
-    plane.node_count += 1;
-    plane.latest_sequence = std::max(plane.latest_sequence, frame.sequence);
-    plane.dropped_frames_total += buffer->dropped_frames_total;
-    plane.max_last_frame_age_ms = std::max(plane.max_last_frame_age_ms, ingest_ms);
-    plane.max_queue_delay_ms = std::max(plane.max_queue_delay_ms, frame.publisher_queue_delay_ms);
-    plane.max_publish_ms = std::max(plane.max_publish_ms, frame.publish_duration_ms);
-    plane.max_controller_ingest_ms = std::max(plane.max_controller_ingest_ms, ingest_ms);
-    plane.gpu_count += frame.gpu.devices.size();
-    plane.plane_instance_count += frame.plane_instance_count;
-    plane.plane_ready_instance_count += frame.plane_ready_instance_count;
-    plane.plane_not_ready_instance_count += frame.plane_not_ready_instance_count;
-    plane.gpu_utilization_sum += matcher_.GpuUtilizationAverage(frame);
-    if (health.value("status", std::string{"ok"}) == "stale") {
-      plane.stale_nodes += 1;
-    } else if (health.value("status", std::string{"ok"}) == "degraded") {
-      plane.degraded_nodes += 1;
+    const auto plane_keys = matcher_.PlaneKeysForFrame(frame);
+    for (const auto& plane_key : plane_keys) {
+      std::uint64_t scoped_instance_count = frame.plane_instance_count;
+      std::uint64_t scoped_ready_instance_count = frame.plane_ready_instance_count;
+      if (frame.plane_name.empty() && plane_key != "unassigned") {
+        scoped_instance_count = 0;
+        scoped_ready_instance_count = 0;
+        for (const auto& status : frame.instance_runtime) {
+          if (!matcher_.RuntimeStatusMatchesPlane(status, plane_key)) {
+            continue;
+          }
+          ++scoped_instance_count;
+          if (status.ready) {
+            ++scoped_ready_instance_count;
+          }
+        }
+      }
+      AddFrameToPlane(
+          planes[plane_key],
+          plane_key,
+          frame,
+          *buffer,
+          health,
+          ingest_ms,
+          scoped_instance_count,
+          scoped_ready_instance_count,
+          frame.gpu.devices.size(),
+          matcher_.GpuUtilizationAverage(frame));
     }
   }
   nlohmann::json result = nlohmann::json::array();

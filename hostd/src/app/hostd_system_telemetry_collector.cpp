@@ -962,6 +962,12 @@ std::optional<GpuTelemetrySnapshot> HostdSystemTelemetryCollector::collectGpuTel
     // Get device name and properties
     VkPhysicalDeviceProperties deviceProps;
     vkGetPhysicalDeviceProperties(physDevice, &deviceProps);
+
+    // collect only discret GPU cards
+    if (deviceProps.deviceType != VkPhysicalDeviceType::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+      continue;
+    }
+
     deviceData.gpu_device = deviceProps.deviceName;
 
     // 3. Query Memory Budget

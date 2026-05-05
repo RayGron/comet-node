@@ -491,7 +491,7 @@ HttpResponse KnowledgeVaultService::SendHostdRuntimeProxy(
   assignment.node_name = record.node_name;
   assignment.plane_name = proxy_plane_name;
   assignment.desired_generation = 0;
-  assignment.max_attempts = 1;
+  assignment.max_attempts = 3;
   assignment.assignment_type = "runtime-http-proxy";
   assignment.desired_state_json =
       nlohmann::json{

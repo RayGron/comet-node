@@ -1384,7 +1384,7 @@ function MetricSparklineButton({ label, history, onOpen }) {
       title={`Open ${label} chart`}
       onClick={onOpen}
     >
-      <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
         <AreaChart data={series}>
           <YAxis type="number" domain={domain} hide />
           <Area
@@ -1617,7 +1617,7 @@ function TelemetryChartDialog({ chart, onClose }) {
         </div>
         <p className="editor-copy">{chart.meta || "Live metric history from controller polling."}</p>
         <div className="telemetry-chart-shell">
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
             <LineChart data={series}>
               <CartesianGrid stroke="rgba(120, 190, 255, 0.12)" vertical={false} />
               <XAxis

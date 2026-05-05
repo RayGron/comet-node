@@ -44,6 +44,12 @@ class HostdDesiredStateApplyPlanSupport final {
   std::size_t ExpectedRuntimeStatusCountForComposePlan(
       const naim::NodeComposePlan& compose_plan) const;
 
+  bool StopAndRemoveComposeArtifactIfPresent(
+      const std::string& artifacts_root,
+      const std::string& plane_name,
+      const std::string& node_name,
+      ComposeMode compose_mode) const;
+
   static bool IsDesiredNodeStateEmpty(const naim::DesiredState& state);
 
  private:

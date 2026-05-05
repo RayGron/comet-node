@@ -724,6 +724,20 @@ void HostdDesiredStateApplySupport::ApplyDesiredNodeState(
         node_name,
         backend,
         maybe_publish_progress);
+    if (desired_node_state.instances.empty()) {
+      maybe_publish_progress(
+          "stopping-runtime",
+          "Stopping runtime",
+          "Ensuring stale compose runtime is stopped on the node.",
+          92,
+          plane_name,
+          node_name);
+      apply_plan_support_.StopAndRemoveComposeArtifactIfPresent(
+          artifacts_root,
+          plane_name,
+          node_name,
+          compose_mode);
+    }
     if (HostdDesiredStateApplyPlanSupport::IsDesiredNodeStateEmpty(desired_node_state)) {
       local_state_repository_.RemoveLocalAppliedPlaneState(
           state_root,
@@ -780,6 +794,20 @@ void HostdDesiredStateApplySupport::ApplyDesiredNodeState(
       compose_mode,
       backend,
       maybe_publish_progress);
+  if (desired_node_state.instances.empty()) {
+    maybe_publish_progress(
+        "stopping-runtime",
+        "Stopping runtime",
+        "Ensuring stale compose runtime is stopped on the node.",
+        92,
+        plane_name,
+        node_name);
+    apply_plan_support_.StopAndRemoveComposeArtifactIfPresent(
+        artifacts_root,
+        plane_name,
+        node_name,
+        compose_mode);
+  }
   disk_runtime_support_.PersistDiskRuntimeStateForRemovedDisks(
       backend,
       current_local_state,

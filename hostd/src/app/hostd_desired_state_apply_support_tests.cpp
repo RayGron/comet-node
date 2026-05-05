@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -164,6 +166,62 @@ int main() {
     Expect(
         !phases.empty() && phases.back() == "completed",
         "ApplyDesiredNodeState should publish completed progress");
+
+    naim::DesiredState stopped_node_state = node_state;
+    stopped_node_state.instances.clear();
+    local_state_repository.RemoveLocalAppliedPlaneState(
+        state_root,
+        node_name,
+        plane_name);
+    local_state_repository.RewriteAggregateLocalState(state_root, node_name);
+    local_state_repository.RewriteAggregateLocalGeneration(state_root, node_name);
+    fs::create_directories(fs::path(artifacts_root) / plane_name / node_name);
+    const fs::path stale_compose_path =
+        fs::path(artifacts_root) / plane_name / node_name / "docker-compose.yml";
+    {
+      std::ofstream stale_compose(stale_compose_path, std::ios::binary | std::ios::trunc);
+      stale_compose << "name: stale\nservices: {}\n";
+    }
+    std::vector<std::string> stop_phases;
+    support.ApplyDesiredNodeState(
+        stopped_node_state,
+        artifacts_root,
+        storage_root,
+        runtime_root,
+        state_root,
+        naim::hostd::ComposeMode::Skip,
+        "test-stop-support",
+        8,
+        43,
+        nullptr,
+        [&](const std::string& phase,
+            const std::string&,
+            const std::string&,
+            int,
+            const std::string&,
+            const std::string&) {
+          stop_phases.push_back(phase);
+        });
+    Expect(
+        !fs::exists(stale_compose_path),
+        "stopped desired state should remove stale compose artifact even when local state is empty");
+    const auto stopped_persisted_state =
+        local_state_repository.LoadLocalAppliedState(state_root, node_name, plane_name);
+    Expect(
+        stopped_persisted_state.has_value(),
+        "stopped state should persist disk ownership without runtime instances");
+    Expect(
+        stopped_persisted_state->instances.empty(),
+        "stopped state should persist without runtime instances");
+    const auto stopped_generation =
+        local_state_repository.LoadLocalAppliedGeneration(state_root, node_name, plane_name);
+    Expect(
+        stopped_generation.has_value() && *stopped_generation == 8,
+        "stopped state should persist the applied generation");
+    Expect(
+        std::find(stop_phases.begin(), stop_phases.end(), "stopping-runtime") !=
+            stop_phases.end(),
+        "stopped empty state should publish stale runtime cleanup progress");
 
     fs::remove_all(temp_root, cleanup_error);
 

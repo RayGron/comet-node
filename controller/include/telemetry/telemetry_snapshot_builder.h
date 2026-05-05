@@ -34,6 +34,9 @@ class TelemetrySnapshotBuilder final {
       std::uint64_t now_ms) const;
 
  private:
+  bool HasActiveBackpressure(const nlohmann::json& alerts) const;
+  std::string StatusFromAlerts(const nlohmann::json& alerts, bool overloaded) const;
+
   TelemetryAlertBuilder alert_builder_;
   TelemetryFrameMatcher matcher_;
   TelemetryFrameJsonBuilder frame_json_builder_;

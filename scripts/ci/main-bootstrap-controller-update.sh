@@ -260,7 +260,9 @@ PY
 docker compose -f "${compose_path}" pull naim-controller >/dev/null
 docker compose -f "${compose_path}" up -d --remove-orphans naim-controller >/dev/null
 wait_for_http "http://127.0.0.1:${controller_port}/health" 90
-check_telemetry_health "controller-update" 36 5
+if ! check_telemetry_health "controller-update" 6 5; then
+  echo "::warning::telemetry health did not recover before hostd rollout; continuing so managed hostd can self-update"
+fi
 
 docker compose -f "${compose_path}" pull naim-skills-factory naim-web-ui >/dev/null
 docker compose -f "${compose_path}" up -d --remove-orphans naim-skills-factory naim-web-ui >/dev/null

@@ -59,6 +59,11 @@ naim::HostObservation BuildAssignmentObservation(
   if (!assignment.plane_name.empty()) {
     observation.plane_name = assignment.plane_name;
   }
+  if (status == naim::HostObservationStatus::Applied) {
+    observation.applied_generation = assignment.desired_generation;
+  } else {
+    observation.applied_generation = std::nullopt;
+  }
   return observation;
 }
 

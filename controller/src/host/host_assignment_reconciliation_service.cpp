@@ -131,7 +131,7 @@ bool HostAssignmentReconciliationService::ShouldMarkClaimedAssignmentApplied(
   }
   if (!observation.has_value() ||
       observation->plane_name != assignment.plane_name ||
-      observation->status == naim::HostObservationStatus::Failed) {
+      observation->status != naim::HostObservationStatus::Applied) {
     return false;
   }
   if (!observation->last_assignment_id.has_value() ||

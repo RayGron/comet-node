@@ -89,6 +89,10 @@ bool IsDownloadJobComplete(
   return true;
 }
 
+bool AllowsModelLibraryStorageRoot(const ModelLibraryNodeSummary& summary) {
+  return summary.storage_role_enabled || summary.derived_role == "storage";
+}
+
 std::uintmax_t ExistingDownloadBytesForTarget(
     const std::filesystem::path& target_path) {
   std::error_code error;
@@ -141,10 +145,7 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
       if (summary.storage_root.empty()) {
         continue;
       }
-      if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
-              summary.derived_role,
-              summary.storage_role_enabled,
-              false)) {
+      if (!AllowsModelLibraryStorageRoot(summary)) {
         continue;
       }
       if (NormalizePathString(std::filesystem::path(summary.storage_root)) == entry.root) {
@@ -1361,10 +1362,7 @@ std::vector<std::string> ModelLibraryService::DiscoverRoots(
   std::set<std::string> roots;
   for (const auto& host : store.LoadRegisteredHosts()) {
     const auto summary = ModelLibraryNodePlacement::BuildSummary(host);
-    if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
-            summary.derived_role,
-            summary.storage_role_enabled,
-            false)) {
+    if (!AllowsModelLibraryStorageRoot(summary)) {
       continue;
     }
     if (IsUsableAbsoluteHostPath(summary.storage_root)) {

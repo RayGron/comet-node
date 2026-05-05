@@ -1,160 +1,183 @@
 #include "telemetry/telemetry_live_store.h"
 
-#include <algorithm>
-#include <chrono>
-#include <cstddef>
+#include <utility>
+
+#include "telemetry/telemetry_live_store_services.h"
+#include "telemetry/telemetry_live_store_state.h"
+#include "telemetry/telemetry_state_types.h"
 
 namespace naim::controller {
+
+TelemetryLiveStore::TelemetryLiveStore()
+    : state_(std::make_unique<TelemetryLiveStoreState>()),
+      services_(std::make_unique<TelemetryLiveStoreServices>()) {}
+
+TelemetryLiveStore::~TelemetryLiveStore() = default;
 
 TelemetryLiveStore& TelemetryLiveStore::Instance() {
   static TelemetryLiveStore store;
   return store;
 }
 
+void TelemetryLiveStore::ConfigurePersistence(
+    const std::string& db_path,
+    const std::size_t retention_capacity) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ConfigurePersistenceLocked(db_path, retention_capacity);
+}
+
+void TelemetryLiveStore::ConfigureFromEnvironment(const std::string& db_path) {
+  const auto retention =
+      services_->operational_config.RetentionFromEnvironment(state_->retention);
+  const auto thresholds =
+      services_->operational_config.ThresholdsFromEnvironment(state_->thresholds);
+  ConfigureOperationalPolicy(retention, thresholds);
+  ConfigurePersistence(db_path, retention.durable_history_capacity);
+}
+
+void TelemetryLiveStore::ConfigureOperationalPolicy(
+    RetentionConfig retention,
+    AlertThresholds thresholds) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  state_->retention = services_->operational_config.NormalizeRetention(retention);
+  state_->thresholds = thresholds;
+  services_->ring_buffer.ApplyHotRetention(
+      state_->nodes,
+      state_->dropped_frames_total,
+      state_->retention);
+}
+
+void TelemetryLiveStore::ResetForTests() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  state_->nodes.clear();
+  state_->latest_sequence = 0;
+  state_->dropped_frames_total = 0;
+  state_->retention = RetentionConfig{};
+  state_->thresholds = AlertThresholds{};
+  state_->persistence = TelemetryPersistenceState{};
+  state_->streams = TelemetryStreamMetrics{};
+}
+
 bool TelemetryLiveStore::Upsert(naim::HostTelemetryFrame frame) {
   if (frame.node_name.empty()) {
     return false;
   }
-  if (frame.channel.empty()) {
-    frame.channel = "host.telemetry.v1";
-  }
+  frame = services_->frame_normalizer.Normalize(std::move(frame));
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = std::find_if(
-      nodes_.begin(),
-      nodes_.end(),
-      [&](const NodeBuffer& candidate) {
-        return candidate.latest.node_name == frame.node_name;
-      });
-  if (it != nodes_.end() && frame.sequence <= it->latest.sequence) {
-    return false;
+  const bool updated = UpsertInMemoryLocked(frame);
+  if (updated) {
+    services_->persistence_repository.PersistFrame(state_->persistence, frame);
   }
-  latest_sequence_ = std::max(latest_sequence_, frame.sequence);
-  if (it == nodes_.end()) {
-    NodeBuffer buffer;
-    buffer.latest = frame;
-    buffer.history.push_back(std::move(frame));
-    nodes_.push_back(std::move(buffer));
-  } else {
-    it->latest = frame;
-    it->history.push_back(std::move(frame));
-    while (it->history.size() > HistoryCapacity()) {
-      it->last_pruned_sequence = it->history.front().sequence;
-      it->history.pop_front();
-      ++it->dropped_frames_total;
-      ++dropped_frames_total_;
-    }
-  }
-  return true;
+  return updated;
 }
 
 nlohmann::json TelemetryLiveStore::BuildSnapshot(
     const std::optional<std::string>& plane_name,
     const int history_seconds) const {
   std::lock_guard<std::mutex> lock(mutex_);
-  nlohmann::json nodes = nlohmann::json::array();
-  nlohmann::json history = nlohmann::json::array();
-  for (const auto& buffer : nodes_) {
-    if (!MatchesPlane(buffer.latest, plane_name)) {
-      continue;
-    }
-    auto node = FrameToJson(buffer.latest);
-    node["controller_dropped_frames_total"] = buffer.dropped_frames_total;
-    node["controller_last_pruned_sequence"] = buffer.last_pruned_sequence;
-    nodes.push_back(std::move(node));
-    if (history_seconds <= 0) {
-      continue;
-    }
-    const std::size_t max_samples =
-        static_cast<std::size_t>(std::max(1, history_seconds / 2));
-    const std::size_t begin =
-        buffer.history.size() > max_samples ? buffer.history.size() - max_samples : 0;
-    for (std::size_t index = begin; index < buffer.history.size(); ++index) {
-      history.push_back(FrameToJson(buffer.history[index]));
-    }
-  }
-  return nlohmann::json{
-      {"service", "naim-controller"},
-      {"plane_name", plane_name.has_value() ? nlohmann::json(*plane_name) : nlohmann::json(nullptr)},
-      {"latest_sequence", latest_sequence_},
-      {"telemetry_overloaded", dropped_frames_total_ > 0},
-      {"dropped_frames_total", dropped_frames_total_},
-      {"history_capacity", HistoryCapacity()},
-      {"stream_batch_limit", StreamBatchLimit()},
-      {"nodes", std::move(nodes)},
-      {"history", std::move(history)},
-  };
+  return services_->snapshot_builder.BuildSnapshot(
+      state_->nodes,
+      state_->retention,
+      state_->thresholds,
+      state_->persistence,
+      state_->streams,
+      state_->latest_sequence,
+      state_->dropped_frames_total,
+      plane_name,
+      history_seconds,
+      services_->clock.CurrentUnixMillis());
+}
+
+nlohmann::json TelemetryLiveStore::BuildHealth(
+    const std::optional<std::string>& plane_name) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return services_->health_builder.BuildHealth(
+      state_->nodes,
+      state_->retention,
+      state_->thresholds,
+      state_->persistence,
+      state_->streams,
+      state_->latest_sequence,
+      state_->dropped_frames_total,
+      plane_name,
+      services_->clock.CurrentUnixMillis());
+}
+
+std::string TelemetryLiveStore::BuildOpenMetrics(
+    const std::optional<std::string>& plane_name) const {
+  return services_->open_metrics_exporter.Build(BuildHealth(plane_name), plane_name);
 }
 
 std::vector<naim::HostTelemetryFrame> TelemetryLiveStore::LoadFramesAfter(
     const std::uint64_t sequence,
     const std::optional<std::string>& plane_name) const {
   std::lock_guard<std::mutex> lock(mutex_);
-  std::vector<naim::HostTelemetryFrame> frames;
-  for (const auto& buffer : nodes_) {
-    for (const auto& frame : buffer.history) {
-      if (frame.sequence > sequence && MatchesPlane(frame, plane_name)) {
-        frames.push_back(frame);
-      }
-    }
-  }
-  std::sort(
-      frames.begin(),
-      frames.end(),
-      [](const auto& left, const auto& right) {
-        return left.sequence < right.sequence;
-      });
-  if (frames.size() > StreamBatchLimit()) {
-    const auto erase_count = static_cast<std::ptrdiff_t>(frames.size() - StreamBatchLimit());
-    frames.erase(frames.begin(), frames.begin() + erase_count);
-  }
-  return frames;
+  return services_->ring_buffer.LoadFramesAfter(
+      state_->nodes,
+      state_->retention,
+      sequence,
+      plane_name);
+}
+
+TelemetryLiveStore::StreamDelta TelemetryLiveStore::LoadStreamDeltaAfter(
+    const std::uint64_t sequence,
+    const std::optional<std::string>& plane_name) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return services_->ring_buffer.LoadStreamDeltaAfter(
+      state_->nodes,
+      state_->retention,
+      state_->latest_sequence,
+      state_->dropped_frames_total,
+      sequence,
+      plane_name);
 }
 
 std::uint64_t TelemetryLiveStore::LatestSequence() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return latest_sequence_;
+  return state_->latest_sequence;
 }
 
-bool TelemetryLiveStore::MatchesPlane(
-    const naim::HostTelemetryFrame& frame,
-    const std::optional<std::string>& plane_name) {
-  if (!plane_name.has_value() || plane_name->empty()) {
-    return true;
+void TelemetryLiveStore::RecordStreamOpened(const std::string& stream_name) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  services_->stream_metrics_service.RecordOpened(state_->streams, stream_name);
+}
+
+void TelemetryLiveStore::RecordStreamClosed(const std::string& stream_name) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  services_->stream_metrics_service.RecordClosed(state_->streams, stream_name);
+}
+
+void TelemetryLiveStore::RecordStreamReplayRequired(const std::string& stream_name) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  services_->stream_metrics_service.RecordReplayRequired(state_->streams, stream_name);
+}
+
+void TelemetryLiveStore::RecordStreamSendFailure(const std::string& stream_name) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  services_->stream_metrics_service.RecordSendFailure(state_->streams, stream_name);
+}
+
+bool TelemetryLiveStore::UpsertInMemoryLocked(naim::HostTelemetryFrame frame) {
+  return services_->ring_buffer.Upsert(
+      state_->nodes,
+      state_->latest_sequence,
+      state_->dropped_frames_total,
+      state_->retention,
+      std::move(frame));
+}
+
+void TelemetryLiveStore::ConfigurePersistenceLocked(
+    const std::string& db_path,
+    const std::size_t retention_capacity) {
+  const auto frames =
+      services_->persistence_repository.Configure(
+          state_->persistence,
+          db_path,
+          retention_capacity);
+  for (auto frame : frames) {
+    frame = services_->frame_normalizer.Normalize(std::move(frame));
+    UpsertInMemoryLocked(std::move(frame));
   }
-  if (frame.plane_name == *plane_name) {
-    return true;
-  }
-  return std::any_of(
-      frame.instance_runtime.begin(),
-      frame.instance_runtime.end(),
-      [&](const naim::RuntimeProcessStatus& status) {
-        return status.instance_name.rfind(*plane_name + "-", 0) == 0;
-      });
-}
-
-nlohmann::json TelemetryLiveStore::FrameToJson(
-    const naim::HostTelemetryFrame& frame) {
-  auto payload = nlohmann::json::parse(naim::SerializeHostTelemetryFrameJson(frame));
-  const auto now = std::chrono::system_clock::now().time_since_epoch();
-  const auto now_ms = static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
-  const std::uint64_t ttl_ms =
-      frame.ttl_ms > 0 ? static_cast<std::uint64_t>(frame.ttl_ms) : 0;
-  const std::uint64_t expires_at_ms = frame.sequence + ttl_ms;
-  const bool stale = frame.sequence == 0 || ttl_ms == 0 || expires_at_ms <= now_ms;
-  payload["stale"] = stale;
-  payload["expires_in_ms"] = stale ? 0 : expires_at_ms - now_ms;
-  payload["controller_ingest_delay_ms"] =
-      frame.sequence > 0 && now_ms >= frame.sequence ? now_ms - frame.sequence : 0;
-  return payload;
-}
-
-constexpr std::size_t TelemetryLiveStore::HistoryCapacity() {
-  return 300;
-}
-
-constexpr std::size_t TelemetryLiveStore::StreamBatchLimit() {
-  return 128;
 }
 
 }  // namespace naim::controller

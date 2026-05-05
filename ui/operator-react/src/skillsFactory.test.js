@@ -128,6 +128,14 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(desiredState.network.server_name).toBe("maglev-web.local");
   });
 
+  it("does not emit a post-deploy hook unless one is configured", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "no-hook-plane";
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.hooks).toBeUndefined();
+  });
+
   it("round-trips factory skill ids through desired state v2", () => {
     const form = buildNewPlaneFormState();
     form.planeName = "skills-plane";
@@ -180,18 +188,50 @@ describe("planeV2Form SkillsFactory mapping", () => {
     form.modelPath = "/models/qwen";
     form.browsingEnabled = true;
     form.browserSessionEnabled = true;
+    form.renderedBrowserEnabled = true;
+    form.browsingLoginEnabled = false;
 
     const desiredState = buildDesiredStateV2FromForm(form);
-    expect(desiredState.browsing).toEqual({
+    expect(desiredState.webgateway).toEqual({
       enabled: true,
       policy: {
         browser_session_enabled: true,
+        rendered_browser_enabled: true,
+        login_enabled: false,
+        max_search_results: 8,
+        max_fetch_bytes: 262144,
       },
     });
 
     const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
     expect(reparsed.browsingEnabled).toBe(true);
     expect(reparsed.browserSessionEnabled).toBe(true);
+    expect(reparsed.renderedBrowserEnabled).toBe(true);
+  });
+
+  it("loads legacy browsing desired state into WebGateway form fields", () => {
+    const reparsed = buildPlaneFormStateFromDesiredStateV2({
+      version: 2,
+      plane_name: "legacy-browsing-plane",
+      plane_mode: "llm",
+      model: { source: { type: "library", path: "/models/qwen" } },
+      browsing: {
+        enabled: true,
+        policy: {
+          browser_session_enabled: true,
+          rendered_browser_enabled: false,
+          login_enabled: true,
+          max_search_results: 4,
+          max_fetch_bytes: 65536,
+        },
+      },
+    });
+    expect(reparsed.browsingEnabled).toBe(true);
+    expect(reparsed.browserSessionEnabled).toBe(true);
+    expect(reparsed.renderedBrowserEnabled).toBe(false);
+    expect(reparsed.browsingLoginEnabled).toBe(true);
+    expect(reparsed.browsingMaxSearchResults).toBe(4);
+    expect(reparsed.browsingMaxFetchBytes).toBe(65536);
   });
 
   it("round-trips knowledge base selection through desired state v2", () => {
@@ -295,6 +335,23 @@ describe("planeV2Form SkillsFactory mapping", () => {
         env: "WHISPER_MODEL_PATH",
         required: true,
       },
+      env: {
+        HOST: "0.0.0.0",
+        PORT: "18140",
+        VOICE_ASR_LANGUAGE: "auto",
+        VOICE_ASR_THREADS: "8",
+        VOICE_LISTENER_WAKE_PHRASE: "Hey Jex",
+      },
+      storage: {
+        mount_path: "/naim/private",
+        size_gb: 1,
+      },
+    });
+    expect(desiredState.resources.voice_module).toEqual({
+      gpu_enabled: true,
+      gpu_fraction: 0.2,
+      memory_cap_mb: 4096,
+      share_mode: "shared",
     });
 
     const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);

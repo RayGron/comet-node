@@ -49,6 +49,7 @@ void ControllerCommandLine::PrintUsage(std::ostream& output) const {
       << "  naim-controller show-host-assignments [--db <path>] [--node <node-name>]\n"
       << "  naim-controller show-host-observations [--db <path>] [--plane <plane-name>] [--node <node-name>] [--stale-after <seconds>]\n"
       << "  naim-controller show-host-health [--db <path>] [--node <node-name>] [--stale-after <seconds>]\n"
+      << "  naim-controller show-telemetry-health [--db <path>] [--plane <plane-name>]\n"
       << "  naim-controller show-disk-state [--db <path>] [--plane <plane-name>] [--node <node-name>]\n"
       << "  naim-controller show-rollout-actions [--db <path>] [--plane <plane-name>] [--node <node-name>]\n"
       << "  naim-controller show-rebalance-plan [--db <path>] [--plane <plane-name>] [--node <node-name>]\n"
@@ -86,6 +87,7 @@ void ControllerCommandLine::PrintUsage(std::ostream& output) const {
       << "Remote operator CLI:\n"
       << "  most inspection and mutation commands also accept --controller <http://host:port>\n"
       << "  target resolution order: --controller, NAIM_CONTROLLER, ~/.config/naim/controller\n"
+      << "  auth token order: NAIM_CONTROLLER_SESSION_TOKEN, NAIM_CONTROLLER_TOKEN, NAIM_CONTROLLER_BEARER_TOKEN, NAIM_CONTROLLER_COOKIE\n"
       << "  explicit --db keeps the command local\n";
 }
 

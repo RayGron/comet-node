@@ -22,6 +22,8 @@ const CONTEXT_COMPRESSION_DEFAULT_MEMORY_PRIORITY = "balanced";
 const VOICE_LISTENER_DEFAULT_WAKE_PHRASE = "Hey Jex";
 const VOICE_LISTENER_DEFAULT_LANGUAGE = "auto";
 const VOICE_LISTENER_DEFAULT_MOUNT_PATH = "/models/whisper/model.bin";
+const WEBGATEWAY_DEFAULT_MAX_SEARCH_RESULTS = 8;
+const WEBGATEWAY_DEFAULT_MAX_FETCH_BYTES = 262144;
 const LT_CYPHER_PLANE_NAME = "lt-cypher-ai";
 const LT_CYPHER_HARBOR_IMAGE_PREFIX = "chainzano.com/localtrade/lt-cypher-ai:";
 const LT_CYPHER_DEFAULT_IMAGE = `${LT_CYPHER_HARBOR_IMAGE_PREFIX}<git-sha>`;
@@ -91,6 +93,11 @@ const FIELD_INFO = {
   voiceListenerWakePhrase: "Phrase that activates the listener before a transcript is submitted to chat.",
   voiceListenerLanguage: "Language hint for whisper.cpp. Use auto unless a plane must listen in one fixed language.",
   browserSessionEnabled: "Allow approval-gated browser session APIs for this plane. Search and sanitized fetch stay enabled when Isolated Browsing is on.",
+  renderedBrowserEnabled: "Allow the plane WebGateway to use rendered browser sessions when a request explicitly needs them.",
+  browsingLoginEnabled: "Allow login-capable browser sessions for this plane WebGateway. Keep disabled unless the plane needs authenticated browsing.",
+  browsingMaxSearchResults: "Maximum number of web search results returned by one WebGateway search request.",
+  browsingMaxFetchBytes: "Maximum sanitized fetch response size returned by WebGateway.",
+  webgatewayImage: "Optional WebGateway runtime image override. Leave blank to use the controller default.",
   turboquantEnabled: "Enable KV-cache quantization for llama.cpp + llama_rpc planes. This requires a compatible turboquant-capable llama.cpp build.",
   turboquantCacheTypeK: "KV cache type used for K cache pages. Defaults to turbo4 when TurboQuant is enabled.",
   turboquantCacheTypeV: "KV cache type used for V cache pages. Defaults to turbo4 when TurboQuant is enabled.",
@@ -740,6 +747,11 @@ export function buildNewPlaneFormState() {
     knowledgeServiceId: "kv_default",
     selectedKnowledgeIds: [],
     browserSessionEnabled: false,
+    renderedBrowserEnabled: true,
+    browsingLoginEnabled: false,
+    browsingMaxSearchResults: WEBGATEWAY_DEFAULT_MAX_SEARCH_RESULTS,
+    browsingMaxFetchBytes: WEBGATEWAY_DEFAULT_MAX_FETCH_BYTES,
+    webgatewayImage: "",
     turboquantEnabled: false,
     turboquantCacheTypeK: TURBOQUANT_DEFAULT_CACHE_TYPE_K,
     turboquantCacheTypeV: TURBOQUANT_DEFAULT_CACHE_TYPE_V,
@@ -755,6 +767,7 @@ export function buildNewPlaneFormState() {
     voiceListenerModelNodeName: "",
     voiceListenerModelPaths: [],
     voiceListenerModelMountPath: VOICE_LISTENER_DEFAULT_MOUNT_PATH,
+    voiceListenerImage: "",
     planeMode: "llm",
     protectedPlane: false,
     factorySkillIds: [],
@@ -844,7 +857,7 @@ export function buildNewPlaneFormState() {
     gpuFraction: 1.0,
     memoryCapMb: 24576,
     sharedDiskGb: 40,
-    postDeployScript: "bundle://deploy/scripts/post-deploy.sh",
+    postDeployScript: "",
   });
 }
 
@@ -894,6 +907,10 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
   const voiceListener = value?.features?.voice_listener || {};
   const voiceListenerModel = voiceListener?.model || {};
   const voiceListenerModelSource = voiceListenerModel?.source || {};
+  const browsing = value?.webgateway && typeof value.webgateway === "object"
+    ? value.webgateway
+    : (value?.browsing && typeof value.browsing === "object" ? value.browsing : {});
+  const browsingPolicy = browsing?.policy || {};
   const planeName = value?.plane_name || defaults.planeName;
   const servedModelName = value?.model?.served_model_name || deriveServedModelName(planeName);
   const serverName = network.server_name || deriveServerName(planeName);
@@ -904,13 +921,23 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     ...defaults,
     planeName,
     skillsEnabled: Boolean(value?.skills?.enabled),
-    browsingEnabled: Boolean(value?.browsing?.enabled),
+    browsingEnabled: Boolean(browsing?.enabled),
     knowledgeEnabled: Boolean(value?.knowledge?.enabled),
     knowledgeServiceId: value?.knowledge?.service_id || defaults.knowledgeServiceId,
     selectedKnowledgeIds: Array.isArray(value?.knowledge?.selected_knowledge_ids)
       ? value.knowledge.selected_knowledge_ids.filter((item) => typeof item === "string" && item)
       : [],
-    browserSessionEnabled: Boolean(value?.browsing?.policy?.browser_session_enabled),
+    browserSessionEnabled: Boolean(browsingPolicy?.browser_session_enabled),
+    renderedBrowserEnabled:
+      browsingPolicy?.rendered_browser_enabled === undefined
+        ? defaults.renderedBrowserEnabled
+        : Boolean(browsingPolicy.rendered_browser_enabled),
+    browsingLoginEnabled: Boolean(browsingPolicy?.login_enabled),
+    browsingMaxSearchResults:
+      browsingPolicy?.max_search_results || defaults.browsingMaxSearchResults,
+    browsingMaxFetchBytes:
+      browsingPolicy?.max_fetch_bytes || defaults.browsingMaxFetchBytes,
+    webgatewayImage: browsing?.image || defaults.webgatewayImage,
     turboquantEnabled: Boolean(turboquant?.enabled),
     turboquantCacheTypeK: normalizeTurboQuantCacheType(
       turboquant?.cache_type_k,
@@ -941,6 +968,7 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
       : [],
     voiceListenerModelMountPath:
       voiceListenerModel?.mount_path || VOICE_LISTENER_DEFAULT_MOUNT_PATH,
+    voiceListenerImage: voiceListener?.image || defaults.voiceListenerImage,
     planeMode: value?.plane_mode || defaults.planeMode,
     protectedPlane: Boolean(value?.protected),
     factorySkillIds: Array.isArray(value?.skills?.factory_skill_ids)
@@ -1242,12 +1270,25 @@ export function buildDesiredStateV2FromForm(form) {
       };
     }
     if (form.browsingEnabled) {
-      desiredState.browsing = {
+      desiredState.webgateway = {
         enabled: true,
         policy: {
           browser_session_enabled: Boolean(form.browserSessionEnabled),
+          rendered_browser_enabled: Boolean(form.renderedBrowserEnabled),
+          login_enabled: Boolean(form.browsingLoginEnabled),
+          max_search_results: parseNumber(
+            form.browsingMaxSearchResults,
+            WEBGATEWAY_DEFAULT_MAX_SEARCH_RESULTS,
+          ),
+          max_fetch_bytes: parseNumber(
+            form.browsingMaxFetchBytes,
+            WEBGATEWAY_DEFAULT_MAX_FETCH_BYTES,
+          ),
         },
       };
+      if (String(form.webgatewayImage || "").trim()) {
+        desiredState.webgateway.image = String(form.webgatewayImage || "").trim();
+      }
     }
     if (form.knowledgeEnabled) {
       desiredState.knowledge = {
@@ -1324,9 +1365,35 @@ export function buildDesiredStateV2FromForm(form) {
           required: true,
         },
       };
+      if (String(form.voiceListenerImage || "").trim()) {
+        features.voice_listener.image = String(form.voiceListenerImage || "").trim();
+      }
+      features.voice_listener.env = {
+        HOST: "0.0.0.0",
+        PORT: "18140",
+        VOICE_ASR_LANGUAGE:
+          String(form.voiceListenerLanguage || "").trim() ||
+          VOICE_LISTENER_DEFAULT_LANGUAGE,
+        VOICE_ASR_THREADS: "8",
+        VOICE_LISTENER_WAKE_PHRASE:
+          String(form.voiceListenerWakePhrase || "").trim() ||
+          VOICE_LISTENER_DEFAULT_WAKE_PHRASE,
+      };
+      features.voice_listener.storage = {
+        mount_path: "/naim/private",
+        size_gb: 1,
+      };
     }
     if (Object.keys(features).length > 0) {
       desiredState.features = features;
+    }
+    if (form.voiceListenerEnabled) {
+      desiredState.resources.voice_module = {
+        gpu_enabled: true,
+        gpu_fraction: 0.2,
+        memory_cap_mb: 4096,
+        share_mode: "shared",
+      };
     }
   }
 
@@ -2816,6 +2883,56 @@ export function PlaneV2FormBuilder({
             message={fieldWarning("Browser sessions are ignored until Isolated Browsing is enabled.")}
             severity="warning"
           />
+          <div className="plane-form-grid">
+            <label className="field-label plane-checkbox">
+              <input
+                type="checkbox"
+                checked={form.renderedBrowserEnabled}
+                onChange={bindCheck("renderedBrowserEnabled")}
+              />
+              <InfoLabel info={FIELD_INFO.renderedBrowserEnabled} className="field-label-inline">
+                Enable rendered browser
+              </InfoLabel>
+            </label>
+            <label className="field-label plane-checkbox">
+              <input
+                type="checkbox"
+                checked={form.browsingLoginEnabled}
+                onChange={bindCheck("browsingLoginEnabled")}
+              />
+              <InfoLabel info={FIELD_INFO.browsingLoginEnabled} className="field-label-inline">
+                Enable login sessions
+              </InfoLabel>
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.browsingMaxSearchResults}>Max search results</InfoLabel>
+              <input
+                className="text-input"
+                type="number"
+                min="1"
+                value={form.browsingMaxSearchResults}
+                onChange={bindNumber("browsingMaxSearchResults")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.browsingMaxFetchBytes}>Max fetch bytes</InfoLabel>
+              <input
+                className="text-input"
+                type="number"
+                min="1"
+                value={form.browsingMaxFetchBytes}
+                onChange={bindNumber("browsingMaxFetchBytes")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.webgatewayImage}>WebGateway image</InfoLabel>
+              <input
+                className="text-input"
+                value={form.webgatewayImage}
+                onChange={bindText("webgatewayImage")}
+              />
+            </label>
+          </div>
         </div>
       ) : null}
 
@@ -2906,6 +3023,82 @@ export function PlaneV2FormBuilder({
         </div>
       ) : null}
 
+      {form.planeMode === "llm" && form.voiceListenerEnabled ? (
+        <div className="plane-form-toggle">
+          <div className="plane-form-section-header">
+            <InfoLabel info={FIELD_INFO.voiceListenerEnabled}>Voice Listener</InfoLabel>
+            <p className="plane-form-section-copy">
+              Plane-owned whisper.cpp ASR listener and wake phrase configuration.
+            </p>
+          </div>
+          <div className="plane-form-grid">
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.voiceListenerWakePhrase}>Wake phrase</InfoLabel>
+              <input
+                className={inputClassName(Boolean(fieldError("Voice Listener Wake Phrase is required.")))}
+                value={form.voiceListenerWakePhrase}
+                onChange={bindText("voiceListenerWakePhrase")}
+              />
+              <FieldHint message={fieldError("Voice Listener Wake Phrase is required.")} />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.voiceListenerLanguage}>Language</InfoLabel>
+              <input
+                className="text-input"
+                value={form.voiceListenerLanguage}
+                onChange={bindText("voiceListenerLanguage")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.voiceListenerModel}>Whisper model path</InfoLabel>
+              <input
+                className={inputClassName(Boolean(fieldError("Voice Listener requires a Whisper model.")))}
+                value={form.voiceListenerModelPath}
+                onChange={bindText("voiceListenerModelPath")}
+              />
+              <FieldHint message={fieldError("Voice Listener requires a Whisper model.")} />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.sourceStorageNode}>Whisper model node</InfoLabel>
+              <input
+                className="text-input"
+                value={form.voiceListenerModelNodeName}
+                onChange={bindText("voiceListenerModelNodeName")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.voiceListenerModel}>Container mount path</InfoLabel>
+              <input
+                className="text-input"
+                value={form.voiceListenerModelMountPath}
+                onChange={bindText("voiceListenerModelMountPath")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.voiceListenerModel}>Voice image</InfoLabel>
+              <input
+                className="text-input"
+                value={form.voiceListenerImage}
+                onChange={bindText("voiceListenerImage")}
+              />
+            </label>
+          </div>
+          <div className="field-label">
+            <InfoLabel
+              info="Choose one whisper.cpp artifact from Model Library. The selected row becomes the Voice Listener model source."
+              className="field-label-title"
+            >
+              Whisper Model Library
+            </InfoLabel>
+            <ModelLibraryPicker
+              items={whisperModelLibraryItems}
+              selectedPath={form.voiceListenerModelPath}
+              onSelect={selectVoiceListenerModel}
+            />
+          </div>
+        </div>
+      ) : null}
+
       <SectionHeader
         title="Runtime"
         description={
@@ -2989,6 +3182,22 @@ export function PlaneV2FormBuilder({
             </label>
           </div>
 
+          <div className="plane-form-grid">
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.modelRef}>Model ref</InfoLabel>
+              <input
+                className={inputClassName(
+                  Boolean(fieldError("Model ref is required for catalog or huggingface sources")),
+                )}
+                value={form.modelRef}
+                onChange={bindText("modelRef")}
+              />
+              <FieldHint
+                message={fieldError("Model ref is required for catalog or huggingface sources")}
+              />
+            </label>
+          </div>
+
           {form.modelSourceType === "library" || form.modelSourceType === "local" ? (
             <div className="field-label">
               <InfoLabel
@@ -3008,24 +3217,6 @@ export function PlaneV2FormBuilder({
                   fieldError("Model Library selection is required when model source type is library")
                 }
               />
-            </div>
-          ) : null}
-
-          {form.modelSourceType !== "local" && form.modelSourceType !== "library" ? (
-            <div className="plane-form-grid">
-              <label className="field-label">
-                <InfoLabel info={FIELD_INFO.modelRef}>Model ref</InfoLabel>
-                <input
-                  className={inputClassName(
-                    Boolean(fieldError("Model ref is required for catalog or huggingface sources")),
-                  )}
-                  value={form.modelRef}
-                  onChange={bindText("modelRef")}
-                />
-                <FieldHint
-                  message={fieldError("Model ref is required for catalog or huggingface sources")}
-                />
-              </label>
             </div>
           ) : null}
 
@@ -3585,6 +3776,14 @@ export function PlaneV2FormBuilder({
               />
             </label>
           ) : null}
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.workerGpuDevice}>Worker GPU device</InfoLabel>
+            <input
+              className="text-input"
+              value={form.workerGpuDevice}
+              onChange={bindText("workerGpuDevice")}
+            />
+          </label>
         </div>
         {form.topologyEnabled ? (
           <>
@@ -3592,14 +3791,6 @@ export function PlaneV2FormBuilder({
               <label className="field-label">
                 <InfoLabel info={FIELD_INFO.workerNode}>Worker node</InfoLabel>
                 <input className="text-input" value={form.workerNode} onChange={bindText("workerNode")} />
-              </label>
-              <label className="field-label">
-                <InfoLabel info={FIELD_INFO.workerGpuDevice}>Worker GPU device</InfoLabel>
-                <input
-                  className="text-input"
-                  value={form.workerGpuDevice}
-                  onChange={bindText("workerGpuDevice")}
-                />
               </label>
               {form.planeMode === "llm" ? (
                 <label className="field-label">

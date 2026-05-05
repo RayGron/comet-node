@@ -53,10 +53,23 @@ import {
   summarizeKnowledgeGraph,
 } from "./knowledgeVault.js";
 import {
+  applyTelemetrySnapshotMetadata,
   createTelemetryStore,
+  enrichTelemetryFrames,
   reduceTelemetryStore,
   selectTelemetryFrames,
+  updateTelemetryBrowserLatency,
 } from "./telemetryStore.js";
+import {
+  hostObservationItemsFromPayload,
+  mergeTelemetryIntoObservationPayload,
+} from "./telemetryHostObservations.js";
+import {
+  buildTelemetryBrowserLatency,
+  maxTelemetryReceiveDelayMs,
+  parseTelemetryEventPayload,
+  telemetryFramesFromSnapshot,
+} from "./telemetryStreamClient.js";
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
@@ -984,171 +997,6 @@ function observedStateForObservation(observation) {
 function observedInstancesForObservation(observation) {
   const state = observedStateForObservation(observation);
   return Array.isArray(state.instances) ? state.instances : [];
-}
-
-function hostObservationItemsFromPayload(payload) {
-  if (Array.isArray(payload?.observations)) {
-    return payload.observations.map((item) => ({
-      ...item,
-      observed_at: item?.observed_at || item?.heartbeat_at || null,
-    }));
-  }
-  if (Array.isArray(payload?.items)) {
-    return payload.items.map((item) => ({
-      ...item,
-      observed_at: item?.observed_at || item?.heartbeat_at || null,
-    }));
-  }
-  return [];
-}
-
-function summarizeGpuTelemetryFrame(gpu) {
-  const devices = Array.isArray(gpu?.devices) ? gpu.devices : [];
-  return {
-    available: devices.length > 0,
-    degraded: gpu?.degraded === true,
-    source: gpu?.source || "",
-    collected_at: gpu?.collected_at || "",
-    summary: {
-      device_count: devices.length,
-      total_vram_mb: devices.reduce((sum, item) => sum + Number(item?.total_vram_mb || 0), 0),
-      used_vram_mb: devices.reduce((sum, item) => sum + Number(item?.used_vram_mb || 0), 0),
-      free_vram_mb: devices.reduce((sum, item) => sum + Number(item?.free_vram_mb || 0), 0),
-      temperature_device_count: devices.filter((item) => item?.temperature_available).length,
-      hottest_temperature_c: devices.reduce(
-        (max, item) => Math.max(max, Number(item?.temperature_c || 0)),
-        0,
-      ),
-    },
-    devices,
-  };
-}
-
-function summarizeNetworkTelemetryFrame(network) {
-  const interfaces = Array.isArray(network?.interfaces) ? network.interfaces : [];
-  return {
-    available: interfaces.length > 0,
-    degraded: network?.degraded === true,
-    source: network?.source || "",
-    collected_at: network?.collected_at || "",
-    summary: {
-      interface_count: interfaces.length,
-      rx_bytes: interfaces.reduce((sum, item) => sum + Number(item?.rx_bytes || 0), 0),
-      tx_bytes: interfaces.reduce((sum, item) => sum + Number(item?.tx_bytes || 0), 0),
-    },
-    interfaces,
-    peer_discovery: Array.isArray(network?.peer_discovery) ? network.peer_discovery : [],
-  };
-}
-
-function summarizeDiskTelemetryFrame(disk) {
-  const items = Array.isArray(disk?.items) ? disk.items : [];
-  return {
-    available: items.length > 0,
-    degraded: disk?.degraded === true,
-    source: disk?.source || "",
-    collected_at: disk?.collected_at || "",
-    summary: {
-      disk_count: items.length,
-      total_bytes: items.reduce((sum, item) => sum + Number(item?.total_bytes || 0), 0),
-      used_bytes: items.reduce((sum, item) => sum + Number(item?.used_bytes || 0), 0),
-      free_bytes: items.reduce((sum, item) => sum + Number(item?.free_bytes || 0), 0),
-      read_bytes: items.reduce((sum, item) => sum + Number(item?.read_bytes || 0), 0),
-      write_bytes: items.reduce((sum, item) => sum + Number(item?.write_bytes || 0), 0),
-    },
-    items,
-  };
-}
-
-function hostObservationFromTelemetryFrame(frame) {
-  if (!frame?.node_name) {
-    return null;
-  }
-  const cpuSnapshot = frame?.cpu || {};
-  const instanceRuntime = Array.isArray(frame?.instance_runtime) ? frame.instance_runtime : [];
-  const stale = frame?.stale === true;
-  return {
-    node_name: frame.node_name,
-    plane_name: frame.plane_name || "",
-    status: stale ? "stale" : "healthy",
-    observed_at: frame.sampled_at || null,
-    heartbeat_at: frame.sampled_at || null,
-    telemetry_sequence: frame.sequence || 0,
-    telemetry_channel: frame.channel || "host.telemetry.v1",
-    telemetry_lane: frame.lane || "fast",
-    telemetry_monotonic_ms: frame.monotonic_ms || 0,
-    telemetry_expires_at: frame.expires_at || "",
-    telemetry_expires_in_ms: frame.expires_in_ms ?? null,
-    telemetry_stale: stale,
-    telemetry_degraded: Boolean(frame?.degraded_reason),
-    telemetry_degraded_reason: frame?.degraded_reason || "",
-    telemetry_collector_duration_ms: Number(frame?.collector_duration_ms || 0),
-    telemetry_publish_duration_ms: Number(frame?.publish_duration_ms || 0),
-    telemetry_queue_delay_ms: Number(frame?.publisher_queue_delay_ms || 0),
-    telemetry_bus_depth: Number(frame?.telemetry_bus_depth || 0),
-    telemetry_dropped_frames: Number(
-      frame?.controller_dropped_frames_total ?? frame?.telemetry_dropped_frames ?? 0,
-    ),
-    telemetry_publish_errors: Number(frame?.publish_error_count || 0),
-    telemetry_adaptive_interval_ms: Number(frame?.adaptive_interval_ms || frame?.interval_ms || 0),
-    telemetry_adaptive_reason: frame?.adaptive_reason || "",
-    telemetry_controller_ingest_delay_ms: Number(frame?.controller_ingest_delay_ms || 0),
-    telemetry_last_publish_error: frame?.last_publish_error || "",
-    runtime_status: { available: instanceRuntime.length > 0 },
-    instance_runtimes: {
-      available: instanceRuntime.length > 0,
-      items: instanceRuntime,
-    },
-    cpu_telemetry: {
-      available: Boolean(cpuSnapshot?.source),
-      degraded: cpuSnapshot?.degraded === true,
-      source: cpuSnapshot?.source || "",
-      collected_at: cpuSnapshot?.collected_at || "",
-      summary: cpuSnapshot,
-    },
-    gpu_telemetry: summarizeGpuTelemetryFrame(frame?.gpu),
-    network_telemetry: summarizeNetworkTelemetryFrame(frame?.network),
-    disk_telemetry: summarizeDiskTelemetryFrame(frame?.disk),
-  };
-}
-
-function mergeTelemetryIntoObservationPayload(currentPayload, frames, planeName = "") {
-  const currentItems = hostObservationItemsFromPayload(currentPayload);
-  const byNode = new Map(currentItems.filter((item) => item?.node_name).map((item) => [item.node_name, item]));
-  let changed = false;
-  for (const frame of frames || []) {
-    if (planeName && frame?.plane_name && frame.plane_name !== planeName) {
-      continue;
-    }
-    const telemetryItem = hostObservationFromTelemetryFrame(frame);
-    if (!telemetryItem?.node_name) {
-      continue;
-    }
-    const previous = byNode.get(telemetryItem.node_name) || {};
-    const previousSequence = Number(previous.telemetry_sequence || 0);
-    const nextSequence = Number(telemetryItem.telemetry_sequence || 0);
-    if (previousSequence > 0 && nextSequence > 0 && nextSequence <= previousSequence) {
-      continue;
-    }
-    const nextItem = {
-      ...previous,
-      ...telemetryItem,
-      observed_state: previous.observed_state,
-      applied_generation: previous.applied_generation,
-      disk_telemetry: telemetryItem.disk_telemetry?.available
-        ? telemetryItem.disk_telemetry
-        : previous.disk_telemetry,
-    };
-    byNode.set(telemetryItem.node_name, nextItem);
-    changed = true;
-  }
-  if (!changed && currentPayload) {
-    return currentPayload;
-  }
-  return {
-    ...(currentPayload || {}),
-    observations: [...byNode.values()],
-  };
 }
 
 function instanceRole(instance) {
@@ -2119,6 +1967,9 @@ function App() {
   const [hostObservations, setHostObservations] = useState(null);
   const [globalHostObservations, setGlobalHostObservations] = useState(null);
   const [telemetryHealthy, setTelemetryHealthy] = useState(false);
+  const [telemetryBrowserLatency, setTelemetryBrowserLatency] = useState(
+    createTelemetryStore().browserLatency,
+  );
   const [hostdHosts, setHostdHosts] = useState([]);
   const [protocolRegistry, setProtocolRegistry] = useState({ items: [], summary: {} });
   const [selectedHostNodeName, setSelectedHostNodeName] = useState("");
@@ -3901,48 +3752,13 @@ function App() {
   }, [authState.authenticated, hasActiveModelJobsForPolling, selectedPage]);
 
   useEffect(() => {
-    if (!authState.authenticated) {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
-      setStreamHealthy(false);
-      return;
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
-
-    const source = new EventSource(
-      queryPath("/api/v1/events/stream", {
-        limit: EVENT_LIMIT,
-      }),
-    );
-    eventSourceRef.current = source;
     setStreamHealthy(false);
-
-    source.onopen = () => {
-      setStreamHealthy(true);
-    };
-    source.onerror = () => {
-      setStreamHealthy(false);
-    };
-    const handleRefreshEvent = (event) => {
-      setLastEventName(event.type || "message");
-      scheduleRefresh(selectedPlane);
-    };
-    source.onmessage = handleRefreshEvent;
-    for (const eventName of REFRESH_EVENT_NAMES) {
-      source.addEventListener(eventName, handleRefreshEvent);
-    }
-
-    return () => {
-      for (const eventName of REFRESH_EVENT_NAMES) {
-        source.removeEventListener(eventName, handleRefreshEvent);
-      }
-      source.close();
-      if (eventSourceRef.current === source) {
-        eventSourceRef.current = null;
-      }
-    };
-  }, [authState.authenticated, selectedPlane]);
+    return undefined;
+  }, [authState.authenticated]);
 
   useEffect(() => {
     if (!authState.authenticated) {
@@ -3955,12 +3771,16 @@ function App() {
     }
 
     let stopped = false;
-    const applyFrames = (frames) => {
-      const validFrames = (frames || []).filter((frame) => frame?.node_name);
+    const applyFrames = (frames, parseMs = 0) => {
+      const applyStartedAt = performance.now();
+      const receivedAtMs = Date.now();
+      const validFrames = enrichTelemetryFrames(frames, receivedAtMs, parseMs);
       if (validFrames.length === 0) {
         return;
       }
+      const reduceStartedAt = performance.now();
       const globalResult = reduceTelemetryStore(globalTelemetryStoreRef.current, validFrames);
+      const reduceMs = performance.now() - reduceStartedAt;
       if (globalResult.changed) {
         globalTelemetryStoreRef.current = globalResult.store;
       }
@@ -3976,11 +3796,13 @@ function App() {
         setGlobalHostObservations(mergedGlobal);
       }
       if (selectedPlaneRef.current) {
+        const planeReduceStartedAt = performance.now();
         const planeResult = reduceTelemetryStore(
           planeTelemetryStoreRef.current,
           validFrames,
           selectedPlaneRef.current,
         );
+        const planeReduceMs = performance.now() - planeReduceStartedAt;
         if (planeResult.changed) {
           planeTelemetryStoreRef.current = planeResult.store;
         }
@@ -3991,7 +3813,32 @@ function App() {
             selectedPlaneRef.current,
           ),
         );
+        const nextPlaneLatency = buildTelemetryBrowserLatency({
+          frames: validFrames,
+          receivedAtMs,
+          parseMs,
+          reduceMs: planeReduceMs,
+          applyStartedAt,
+          acceptedFrames: planeResult.acceptedFrames.length,
+        });
+        planeTelemetryStoreRef.current = updateTelemetryBrowserLatency(
+          planeTelemetryStoreRef.current,
+          nextPlaneLatency,
+        );
       }
+      const nextGlobalLatency = buildTelemetryBrowserLatency({
+        frames: validFrames,
+        receivedAtMs,
+        parseMs,
+        reduceMs,
+        applyStartedAt,
+        acceptedFrames: globalResult.acceptedFrames.length,
+      });
+      globalTelemetryStoreRef.current = updateTelemetryBrowserLatency(
+        globalTelemetryStoreRef.current,
+        nextGlobalLatency,
+      );
+      setTelemetryBrowserLatency(nextGlobalLatency);
       if (!globalChanged) {
         return;
       }
@@ -4005,13 +3852,29 @@ function App() {
         ),
       );
     };
+    const applySnapshotPayload = (payload) => {
+      globalTelemetryStoreRef.current = applyTelemetrySnapshotMetadata(
+        globalTelemetryStoreRef.current,
+        payload,
+      );
+      if (selectedPlaneRef.current) {
+        planeTelemetryStoreRef.current = applyTelemetrySnapshotMetadata(
+          planeTelemetryStoreRef.current,
+          payload,
+        );
+      }
+      applyFrames(
+        telemetryFramesFromSnapshot(payload),
+        Number(payload?.__telemetry_browser_parse_ms || 0),
+      );
+    };
 
     fetchJson(queryPath("/api/v1/telemetry/snapshot", { history_seconds: 120 }))
       .then((payload) => {
         if (stopped) {
           return;
         }
-        applyFrames([...(payload?.history || []), ...(payload?.nodes || [])]);
+        applySnapshotPayload(payload);
       })
       .catch((error) => {
         if (error?.status === 401) {
@@ -4020,36 +3883,55 @@ function App() {
       });
 
     const source = new EventSource(
-      queryPath("/api/v1/telemetry/stream", {
+      queryPath("/api/v1/live/stream", {
+        limit: EVENT_LIMIT,
         plane: selectedPlane || undefined,
+        since_sequence: selectedPlane
+          ? planeTelemetryStoreRef.current?.latestSequence || undefined
+          : globalTelemetryStoreRef.current?.latestSequence || undefined,
       }),
     );
     telemetrySourceRef.current = source;
     setTelemetryHealthy(false);
+    setStreamHealthy(false);
 
     source.onopen = () => {
       setTelemetryHealthy(true);
+      setStreamHealthy(true);
     };
     source.onerror = () => {
       setTelemetryHealthy(false);
+      setStreamHealthy(false);
     };
+    const handleRefreshEvent = (event) => {
+      setLastEventName((event.type || "message").replace(/^events\./, ""));
+      scheduleRefresh(selectedPlaneRef.current);
+    };
+    for (const eventName of REFRESH_EVENT_NAMES) {
+      source.addEventListener(`events.${eventName}`, handleRefreshEvent);
+    }
     source.addEventListener("telemetry.snapshot", (event) => {
       try {
-        const payload = JSON.parse(event.data || "{}");
-        applyFrames(payload.nodes || []);
+        const { payload, parseMs } = parseTelemetryEventPayload(event);
+        payload.__telemetry_browser_parse_ms = parseMs;
+        applySnapshotPayload(payload);
       } catch (_) {
         setTelemetryHealthy(false);
       }
     });
     source.addEventListener("telemetry.node", (event) => {
       try {
-        applyFrames([JSON.parse(event.data || "{}")]);
+        const { payload: frame, parseMs } = parseTelemetryEventPayload(event);
+        applyFrames([frame], parseMs);
       } catch (_) {
         setTelemetryHealthy(false);
       }
     });
 
     return () => {
+      for (const eventName of REFRESH_EVENT_NAMES) {
+        source.removeEventListener(`events.${eventName}`, handleRefreshEvent);
+      }
       stopped = true;
       source.close();
       if (telemetrySourceRef.current === source) {
@@ -4066,6 +3948,10 @@ function App() {
       fetchJson(queryPath("/api/v1/telemetry/snapshot", { history_seconds: 0 }))
         .then((payload) => {
           const frames = Array.isArray(payload?.nodes) ? payload.nodes : [];
+          globalTelemetryStoreRef.current = applyTelemetrySnapshotMetadata(
+            globalTelemetryStoreRef.current,
+            payload,
+          );
           const globalResult = reduceTelemetryStore(globalTelemetryStoreRef.current, frames);
           if (!globalResult.changed && !selectedPlaneRef.current) {
             return;
@@ -4083,7 +3969,24 @@ function App() {
             globalHostObservationsRef.current = mergedGlobal;
             setGlobalHostObservations(mergedGlobal);
           }
+          const nextGlobalLatency = {
+            receivedAtMs: Date.now(),
+            receiveDelayMs: maxTelemetryReceiveDelayMs(frames),
+            parseMs: 0,
+            reduceMs: 0,
+            applyMs: 0,
+            acceptedFrames: globalResult.acceptedFrames.length,
+          };
+          globalTelemetryStoreRef.current = updateTelemetryBrowserLatency(
+            globalTelemetryStoreRef.current,
+            nextGlobalLatency,
+          );
+          setTelemetryBrowserLatency(nextGlobalLatency);
           if (selectedPlaneRef.current) {
+            planeTelemetryStoreRef.current = applyTelemetrySnapshotMetadata(
+              planeTelemetryStoreRef.current,
+              payload,
+            );
             const planeResult = reduceTelemetryStore(
               planeTelemetryStoreRef.current,
               frames,
@@ -4177,7 +4080,10 @@ function App() {
   const skillsEnabled =
     Boolean(desiredStateV2?.skills?.enabled) || Boolean(desiredState?.skills?.enabled);
   const browsingEnabled =
-    Boolean(desiredStateV2?.browsing?.enabled) || Boolean(desiredState?.browsing?.enabled);
+    Boolean(desiredStateV2?.webgateway?.enabled) ||
+    Boolean(desiredStateV2?.browsing?.enabled) ||
+    Boolean(desiredState?.webgateway?.enabled) ||
+    Boolean(desiredState?.browsing?.enabled);
   const knowledgeEnabled =
     Boolean(desiredStateV2?.knowledge?.enabled) || Boolean(desiredState?.knowledge?.enabled);
   const selectedKnowledgeIds = selectedKnowledgeIdsFromDesiredState(desiredStateV2 || desiredState);
@@ -5281,12 +5187,21 @@ function App() {
               <span className="subpanel-meta">Collector, bus, publisher, and controller timing.</span>
             </div>
             <div className="metric-grid">
+              <div className="metric-row"><span>Schema</span><strong>{host?.telemetry_schema_version || "n/a"}</strong></div>
+              <div className="metric-row"><span>Source</span><strong>{host?.telemetry_source || "n/a"}</strong></div>
+              <div className="metric-row"><span>Health</span><strong>{host?.telemetry_health_status || "n/a"}</strong></div>
+              <div className="metric-row"><span>Plane runtime</span><strong>{host?.telemetry_plane_runtime_health || "n/a"}</strong></div>
+              <div className="metric-row"><span>Plane ready</span><strong>{`${host?.telemetry_plane_ready_instance_count ?? 0}/${host?.telemetry_plane_instance_count ?? 0}`}</strong></div>
+              <div className="metric-row"><span>Frame age</span><strong>{host?.telemetry_last_frame_age_ms ? `${host.telemetry_last_frame_age_ms} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Cadence</span><strong>{host?.telemetry_adaptive_interval_ms ? `${host.telemetry_adaptive_interval_ms} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Cadence reason</span><strong>{host?.telemetry_adaptive_reason || "n/a"}</strong></div>
               <div className="metric-row"><span>Collect</span><strong>{host?.telemetry_collector_duration_ms ? `${host.telemetry_collector_duration_ms} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Publish</span><strong>{host?.telemetry_publish_duration_ms ? `${host.telemetry_publish_duration_ms} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Queue delay</span><strong>{host?.telemetry_queue_delay_ms ? `${host.telemetry_queue_delay_ms} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Controller ingest</span><strong>{host?.telemetry_controller_ingest_delay_ms ? `${host.telemetry_controller_ingest_delay_ms} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Total observed</span><strong>{host?.telemetry_latency_total_ms ? `${host.telemetry_latency_total_ms} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Browser receive</span><strong>{host?.telemetry_browser_receive_delay_ms ? `${host.telemetry_browser_receive_delay_ms} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Browser parse</span><strong>{host?.telemetry_browser_parse_ms ? `${host.telemetry_browser_parse_ms.toFixed(1)} ms` : "n/a"}</strong></div>
               <div className="metric-row"><span>Bus depth</span><strong>{host?.telemetry_bus_depth ?? "n/a"}</strong></div>
               <div className="metric-row"><span>Dropped frames</span><strong>{host?.telemetry_dropped_frames ?? 0}</strong></div>
               <div className="metric-row"><span>Publish errors</span><strong>{host?.telemetry_publish_errors ?? 0}</strong></div>
@@ -8150,6 +8065,12 @@ function App() {
                   <span className="subpanel-meta">
                     Host-level CPU, GPU, temperature, network, disk, and runtime posture across all observed nodes
                   </span>
+                </div>
+                <div className="telemetry-latency-strip">
+                  <span>Receive <strong>{Math.round(telemetryBrowserLatency.receiveDelayMs || 0)} ms</strong></span>
+                  <span>Parse <strong>{Number(telemetryBrowserLatency.parseMs || 0).toFixed(1)} ms</strong></span>
+                  <span>Reduce <strong>{Number(telemetryBrowserLatency.reduceMs || 0).toFixed(1)} ms</strong></span>
+                  <span>Apply <strong>{Number(telemetryBrowserLatency.applyMs || 0).toFixed(1)} ms</strong></span>
                 </div>
                 <div className="summary-grid server-summary-grid">
                   <SummaryCard

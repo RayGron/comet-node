@@ -203,9 +203,47 @@ wait_for_container_http_contains() {
   return 1
 }
 
+check_telemetry_health() {
+  local phase="$1"
+  local output_path
+  output_path="$(mktemp)"
+  docker run --rm \
+    -v "${main_root}/state:/naim/state" \
+    "${controller_image}" \
+    show-telemetry-health \
+      --db /naim/state/controller.sqlite > "${output_path}"
+  python3 - "${output_path}" "${phase}" <<'PY'
+import json
+import sys
+
+path, phase = sys.argv[1:3]
+payload = json.load(open(path, encoding="utf-8"))
+status = payload.get("status", "unknown")
+persistence = payload.get("persistence") or {}
+if status == "critical":
+    raise SystemExit(f"telemetry health is critical during {phase}: {json.dumps(payload, sort_keys=True)}")
+if not persistence.get("enabled"):
+    raise SystemExit(f"telemetry SQLite persistence is disabled during {phase}: {json.dumps(payload, sort_keys=True)}")
+if persistence.get("error_count", 0):
+    raise SystemExit(f"telemetry SQLite persistence has errors during {phase}: {json.dumps(payload, sort_keys=True)}")
+print("telemetry health", phase, json.dumps({
+    "status": status,
+    "latest_sequence": payload.get("latest_sequence", 0),
+    "observed_nodes": payload.get("observed_nodes", 0),
+    "persistence": {
+        "enabled": persistence.get("enabled", False),
+        "retention_capacity": persistence.get("retention_capacity", 0),
+        "error_count": persistence.get("error_count", 0),
+    },
+}, sort_keys=True))
+PY
+  rm -f "${output_path}"
+}
+
 docker compose -f "${compose_path}" pull naim-controller >/dev/null
 docker compose -f "${compose_path}" up -d --remove-orphans naim-controller >/dev/null
 wait_for_http "http://127.0.0.1:${controller_port}/health" 90
+check_telemetry_health "controller-update"
 
 docker compose -f "${compose_path}" pull naim-skills-factory naim-web-ui >/dev/null
 docker compose -f "${compose_path}" up -d --remove-orphans naim-skills-factory naim-web-ui >/dev/null
@@ -350,6 +388,7 @@ raise SystemExit(
     + json.dumps(last, sort_keys=True)
 )
 PY
+check_telemetry_health "managed-rollout"
 
 plane_refresh_root="$(mktemp -d)"
 plane_refresh_plan="${plane_refresh_root}/planes.tsv"

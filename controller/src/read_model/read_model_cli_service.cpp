@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "telemetry/telemetry_live_store.h"
+
 namespace naim::controller {
 
 namespace {
@@ -143,6 +145,16 @@ int ReadModelCliService::ShowHostHealth(
       view.availability_overrides,
       view.node_name,
       view.stale_after_seconds);
+  return 0;
+}
+
+int ReadModelCliService::ShowTelemetryHealth(
+    const std::string& db_path,
+    const std::optional<std::string>& plane_name) const {
+  auto& store = TelemetryLiveStore::Instance();
+  store.ResetForTests();
+  store.ConfigureFromEnvironment(db_path);
+  std::cout << store.BuildHealth(plane_name).dump(2) << "\n";
   return 0;
 }
 

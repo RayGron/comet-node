@@ -32,6 +32,15 @@ void WriteSelfUpdateMarker(
   }
 }
 
+template <typename Fn>
+void RunBestEffort(const std::string& label, Fn&& fn) {
+  try {
+    fn();
+  } catch (const std::exception& error) {
+    std::cerr << "hostd warning: " << label << " failed: " << error.what() << "\n";
+  }
+}
+
 }  // namespace
 
 HostdAssignmentService::HostdAssignmentService(
@@ -368,16 +377,18 @@ void HostdAssignmentService::ApplyNextAssignment(
                                  ? "hostd eviction-assignment-ops"
                                  : "hostd apply-assignment-ops")));
 
-    observation_service_.ReportObservedState(
-        *backend,
-        support_.BuildObservedStateSnapshot(
-            node_name,
-            storage_root,
-            state_root,
-            naim::HostObservationStatus::Applying,
-            applying_status_message,
-            assignment->id),
-        "hostd observed-state-update");
+    RunBestEffort("report applying observed state", [&]() {
+      observation_service_.ReportObservedState(
+          *backend,
+          support_.BuildObservedStateSnapshot(
+              node_name,
+              storage_root,
+              state_root,
+              naim::HostObservationStatus::Applying,
+              applying_status_message,
+              assignment->id),
+          "hostd observed-state-update");
+    });
 
     support_.ApplyDesiredNodeState(
         rebased_state,
@@ -402,22 +413,24 @@ void HostdAssignmentService::ApplyNextAssignment(
       throw std::runtime_error("eviction verification timed out; gpu resources were not released");
     }
 
-    observation_service_.ReportObservedState(
-        *backend,
-        support_.BuildObservedStateSnapshot(
-            node_name,
-            storage_root,
-            state_root,
-            naim::HostObservationStatus::Applied,
-            (is_drain_assignment ? "drained node for desired generation "
-                                 : (is_stop_assignment
-                                        ? "stopped plane state for desired generation "
-                                 : (is_eviction_assignment
-                                        ? "evicted rollout workers for desired generation "
-                                        : "applied desired generation "))) +
-                std::to_string(assignment->desired_generation) + assignment_context,
-            assignment->id),
-        "hostd observed-state-update");
+    RunBestEffort("report applied observed state", [&]() {
+      observation_service_.ReportObservedState(
+          *backend,
+          support_.BuildObservedStateSnapshot(
+              node_name,
+              storage_root,
+              state_root,
+              naim::HostObservationStatus::Applied,
+              (is_drain_assignment ? "drained node for desired generation "
+                                   : (is_stop_assignment
+                                          ? "stopped plane state for desired generation "
+                                   : (is_eviction_assignment
+                                          ? "evicted rollout workers for desired generation "
+                                          : "applied desired generation "))) +
+                  std::to_string(assignment->desired_generation) + assignment_context,
+              assignment->id),
+          "hostd observed-state-update");
+    });
 
     backend->TransitionClaimedHostAssignment(
         assignment->id,
@@ -432,45 +445,51 @@ void HostdAssignmentService::ApplyNextAssignment(
             assignment_context +
             " on attempt " + std::to_string(assignment->attempt_count) + "/" +
             std::to_string(assignment->max_attempts));
-    support_.AppendHostdEvent(
-        *backend,
-        "host-assignment",
-        "applied",
-        "applied assignment on node " + node_name,
-        nlohmann::json{
-            {"assignment_type", assignment->assignment_type},
-            {"desired_generation", assignment->desired_generation},
-            {"attempt_count", assignment->attempt_count},
-            {"max_attempts", assignment->max_attempts},
-        },
-        assignment->plane_name,
-        node_name,
-        "",
-        assignment->id,
-        std::nullopt,
-        "info");
+    RunBestEffort("append applied hostd event", [&]() {
+      support_.AppendHostdEvent(
+          *backend,
+          "host-assignment",
+          "applied",
+          "applied assignment on node " + node_name,
+          nlohmann::json{
+              {"assignment_type", assignment->assignment_type},
+              {"desired_generation", assignment->desired_generation},
+              {"attempt_count", assignment->attempt_count},
+              {"max_attempts", assignment->max_attempts},
+          },
+          assignment->plane_name,
+          node_name,
+          "",
+          assignment->id,
+          std::nullopt,
+          "info");
+    });
   } catch (const std::exception& error) {
     const std::string error_message = error.what();
-    support_.PublishAssignmentProgress(
-        backend.get(),
-        assignment->id,
-        support_.BuildAssignmentProgressPayload(
-            "failed",
-            "Assignment failed",
-            error_message,
-            100,
-            assignment->plane_name,
-            node_name));
-    observation_service_.ReportObservedState(
-        *backend,
-        support_.BuildObservedStateSnapshot(
-            node_name,
-            storage_root,
-            state_root,
-            naim::HostObservationStatus::Failed,
-            error_message,
-            assignment->id),
-        "hostd observed-state-update");
+    RunBestEffort("publish failed assignment progress", [&]() {
+      support_.PublishAssignmentProgress(
+          backend.get(),
+          assignment->id,
+          support_.BuildAssignmentProgressPayload(
+              "failed",
+              "Assignment failed",
+              error_message,
+              100,
+              assignment->plane_name,
+              node_name));
+    });
+    RunBestEffort("report failed observed state", [&]() {
+      observation_service_.ReportObservedState(
+          *backend,
+          support_.BuildObservedStateSnapshot(
+              node_name,
+              storage_root,
+              state_root,
+              naim::HostObservationStatus::Failed,
+              error_message,
+              assignment->id),
+          "hostd observed-state-update");
+    });
     if (assignment->attempt_count < assignment->max_attempts) {
       backend->TransitionClaimedHostAssignment(
           assignment->id,
@@ -486,23 +505,25 @@ void HostdAssignmentService::ApplyNextAssignment(
               std::to_string(assignment->max_attempts) + " exhausted: " +
               error_message + assignment_context);
     }
-    support_.AppendHostdEvent(
-        *backend,
-        "host-assignment",
-        "failed",
-        error_message,
-        nlohmann::json{
-            {"assignment_type", assignment->assignment_type},
-            {"desired_generation", assignment->desired_generation},
-            {"attempt_count", assignment->attempt_count},
-            {"max_attempts", assignment->max_attempts},
-        },
-        assignment->plane_name,
-        node_name,
-        "",
-        assignment->id,
-        std::nullopt,
-        "error");
+    RunBestEffort("append failed hostd event", [&]() {
+      support_.AppendHostdEvent(
+          *backend,
+          "host-assignment",
+          "failed",
+          error_message,
+          nlohmann::json{
+              {"assignment_type", assignment->assignment_type},
+              {"desired_generation", assignment->desired_generation},
+              {"attempt_count", assignment->attempt_count},
+              {"max_attempts", assignment->max_attempts},
+          },
+          assignment->plane_name,
+          node_name,
+          "",
+          assignment->id,
+          std::nullopt,
+          "error");
+    });
     throw;
   }
 }

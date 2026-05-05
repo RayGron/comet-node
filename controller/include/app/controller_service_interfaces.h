@@ -89,6 +89,9 @@ class IReadModelCliService {
       const std::string& db_path,
       const std::optional<std::string>& node_name,
       int stale_after_seconds) const = 0;
+  virtual int ShowTelemetryHealth(
+      const std::string& db_path,
+      const std::optional<std::string>& plane_name) const = 0;
   virtual int ShowEvents(
       const std::string& db_path,
       const std::optional<std::string>& plane_name,

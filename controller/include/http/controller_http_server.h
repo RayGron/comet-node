@@ -68,6 +68,12 @@ class ControllerHttpServer {
       SocketHandle client_fd,
       const HttpRequest& request,
       std::shared_ptr<SharedState> state);
+  static void StreamLiveSse(
+      SocketHandle client_fd,
+      const std::string& db_path,
+      const HttpRequest& request,
+      BuildEventPayloadItemFn build_event_payload_item,
+      std::shared_ptr<SharedState> state);
 
   Deps deps_;
 };

@@ -27,7 +27,7 @@ naim::DesiredState BuildDesiredState(
     const std::vector<std::string>& node_names = {}) {
   naim::DesiredState state;
   state.plane_name = plane_name;
-  state.plane_mode = naim::PlaneMode::Llm;
+  state.plane_mode = naim::PlaneMode::Compute;
   state.control_root = "/tmp/" + plane_name;
   for (const auto& node_name : node_names) {
     naim::NodeInventory node;
@@ -80,6 +80,9 @@ class TestPlaneStatePresentationSupport final
 
 class TestPlaneLifecycleSupport final : public naim::controller::PlaneLifecycleSupport {
  public:
+  explicit TestPlaneLifecycleSupport(bool build_delete_assignments = false)
+      : build_delete_assignments_(build_delete_assignments) {}
+
   void PrepareDesiredState(
       naim::ControllerStore&,
       naim::DesiredState*) const override {}
@@ -122,19 +125,41 @@ class TestPlaneLifecycleSupport final : public naim::controller::PlaneLifecycleS
   }
 
   std::vector<naim::HostAssignment> BuildDeleteAssignments(
-      const naim::DesiredState&,
-      int,
-      const std::string&) const override {
-    return {};
+      const naim::DesiredState& desired_state,
+      int desired_generation,
+      const std::string& artifacts_root) const override {
+    if (!build_delete_assignments_) {
+      return {};
+    }
+    std::vector<naim::HostAssignment> assignments;
+    for (const auto& node : desired_state.nodes) {
+      naim::HostAssignment assignment;
+      assignment.node_name = node.name;
+      assignment.plane_name = desired_state.plane_name;
+      assignment.desired_generation = desired_generation;
+      assignment.assignment_type = "delete-plane-state";
+      assignment.desired_state_json = "{}";
+      assignment.artifacts_root = artifacts_root;
+      assignment.status = naim::HostAssignmentStatus::Pending;
+      assignment.status_message = "test delete";
+      assignments.push_back(std::move(assignment));
+    }
+    return assignments;
   }
 
   std::string DefaultArtifactsRoot() const override { return "/tmp/artifacts"; }
+
+ private:
+  bool build_delete_assignments_ = false;
 };
 
-naim::controller::PlaneService BuildPlaneService(const std::string& db_path) {
+naim::controller::PlaneService BuildPlaneService(
+    const std::string& db_path,
+    bool build_delete_assignments = false) {
   auto state_presentation_support =
       std::make_shared<TestPlaneStatePresentationSupport>();
-  auto lifecycle_support = std::make_shared<TestPlaneLifecycleSupport>();
+  auto lifecycle_support =
+      std::make_shared<TestPlaneLifecycleSupport>(build_delete_assignments);
   return naim::controller::PlaneService(
       db_path,
       std::move(state_presentation_support),
@@ -384,6 +409,30 @@ int main() {
       Expect(
           assignment.front().status == naim::HostAssignmentStatus::Claimed,
           "unconverged assignment should remain claimed");
+    }
+
+    {
+      naim::ControllerStore store(db_path.string());
+      store.Initialize();
+      store.ReplaceDesiredState(BuildDesiredState("plane-delete-offline", {"hpc-delete"}), 11);
+
+      auto plane_service = BuildPlaneService(db_path.string(), true);
+      Expect(
+          plane_service.DeletePlane("plane-delete-offline") == 0,
+          "delete-plane should accept offline runtime cleanup");
+
+      const auto plane = store.LoadPlane("plane-delete-offline");
+      Expect(plane.has_value(), "plane-delete-offline should remain in registry during cleanup");
+      Expect(plane->state == "deleting", "plane-delete-offline should enter deleting state");
+      const auto assignments = store.LoadHostAssignments(
+          std::nullopt, std::nullopt, "plane-delete-offline");
+      Expect(assignments.size() == 1, "delete should enqueue cleanup for desired node");
+      Expect(
+          assignments.front().assignment_type == "delete-plane-state",
+          "delete should enqueue a delete-plane-state assignment");
+      Expect(
+          assignments.front().node_name == "hpc-delete",
+          "delete cleanup should target the desired runtime node");
     }
 
     fs::remove(db_path, error);

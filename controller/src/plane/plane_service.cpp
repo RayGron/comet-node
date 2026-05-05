@@ -306,28 +306,9 @@ int PlaneService::DeletePlane(const std::string& plane_name) const {
     throw std::runtime_error("failed to update plane state for '" + plane_name + "'");
   }
 
-  const auto all_observations = store.LoadHostObservations();
-  const auto registered_hosts = store.LoadRegisteredHosts();
   std::set<std::string> cleanup_nodes;
-  std::vector<std::string> skipped_nodes;
   for (const auto& node : desired_state->nodes) {
-    const bool has_observation = std::any_of(
-        all_observations.begin(),
-        all_observations.end(),
-        [&](const auto& observation) { return observation.node_name == node.name; });
-    const bool connected_host = std::any_of(
-        registered_hosts.begin(),
-        registered_hosts.end(),
-        [&](const auto& host) {
-          return host.node_name == node.name &&
-                 host.registration_state == "registered" &&
-                 host.session_state == "connected";
-        });
-    if (has_observation || connected_host) {
-      cleanup_nodes.insert(node.name);
-    } else {
-      skipped_nodes.push_back(node.name);
-    }
+    cleanup_nodes.insert(node.name);
   }
 
   store.ReplaceRolloutActions(plane_name, plane->generation, {});
@@ -359,7 +340,7 @@ int PlaneService::DeletePlane(const std::string& plane_name) const {
           {"superseded_assignments", superseded},
           {"desired_generation", plane->generation},
           {"cleanup_nodes", cleanup_nodes},
-          {"skipped_nodes", skipped_nodes},
+          {"skipped_nodes", nlohmann::json::array()},
       },
       plane_name);
   std::cout << "plane delete started: " << plane_name

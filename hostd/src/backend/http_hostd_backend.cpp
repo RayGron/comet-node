@@ -47,7 +47,7 @@ std::optional<naim::HostAssignment> HttpHostdBackend::ClaimNextHostAssignment(
       nlohmann::json{
           {"node_name", node_name},
           {"preferred_control_transport", "http-long-poll"},
-          {"wait_ms", 15000},
+          {"wait_ms", 1000},
       },
       "assignments/next");
   if (!payload.contains("assignment") || payload["assignment"].is_null()) {

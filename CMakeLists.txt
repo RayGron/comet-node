@@ -348,6 +348,14 @@ target_link_libraries(naim-model-adapter-tests PRIVATE naim-common)
 naim_enable_strict_warnings(naim-model-adapter-tests)
 
 add_executable(
+  naim-runtime-status-tests
+  common/src/runtime/runtime_status_tests.cpp
+)
+target_include_directories(naim-runtime-status-tests PRIVATE common/include)
+target_link_libraries(naim-runtime-status-tests PRIVATE naim-common)
+naim_enable_strict_warnings(naim-runtime-status-tests)
+
+add_executable(
   naim-state-v2-tests
   common/src/state/desired_state_v2_validator_tests.cpp
 )

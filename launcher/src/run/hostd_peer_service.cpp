@@ -612,17 +612,19 @@ void HostdPeerService::HandleHttpClient(int client_fd) const {
               << " node=" << options_.node_name
               << " message=" << error.what() << std::endl;
   }
-  std::ostringstream response;
-  response << "HTTP/1.1 " << status_code << " " << HttpReason(status_code) << "\r\n";
-  response << "Content-Type: " << content_type << "\r\n";
+  std::ostringstream response_headers_text;
+  response_headers_text << "HTTP/1.1 " << status_code << " " << HttpReason(status_code) << "\r\n";
+  response_headers_text << "Content-Type: " << content_type << "\r\n";
   for (const auto& [key, value] : response_headers) {
-    response << key << ": " << value << "\r\n";
+    response_headers_text << key << ": " << value << "\r\n";
   }
-  response << "Content-Length: " << response_body.size() << "\r\n";
-  response << "Connection: close\r\n\r\n";
-  response << response_body;
-  const std::string text = response.str();
-  SendAll(client_fd, text.data(), text.size());
+  response_headers_text << "Content-Length: " << response_body.size() << "\r\n";
+  response_headers_text << "Connection: close\r\n\r\n";
+  const std::string headers = response_headers_text.str();
+  SendAll(client_fd, headers.data(), headers.size());
+  if (!response_body.empty()) {
+    SendAll(client_fd, response_body.data(), response_body.size());
+  }
   close(client_fd);
 }
 

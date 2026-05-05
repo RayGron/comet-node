@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyTelemetrySnapshotMetadata,
   createTelemetryStore,
   enrichTelemetryFrames,
   reduceTelemetryStore,
@@ -37,5 +38,36 @@ describe("telemetryStore", () => {
     expect(result.changed).toBe(true);
     expect(result.store.browserLatency.receiveDelayMs).toBe(250);
     expect(result.store.browserLatency.applyMs).toBe(3);
+  });
+
+  it("does not treat historical dropped frame counters as active overload", () => {
+    const result = reduceTelemetryStore(createTelemetryStore(), [
+      {
+        node_name: "node-a",
+        plane_name: "plane-a",
+        sequence: 1000,
+        controller_dropped_frames_total: 25,
+        telemetry_dropped_frames: 4,
+      },
+    ]);
+
+    expect(result.changed).toBe(true);
+    expect(result.store.droppedFramesTotal).toBe(25);
+    expect(result.store.overloaded).toBe(false);
+  });
+
+  it("lets snapshot metadata clear recovered overload state", () => {
+    const overloaded = {
+      ...createTelemetryStore(),
+      overloaded: true,
+      droppedFramesTotal: 10,
+    };
+    const recovered = applyTelemetrySnapshotMetadata(overloaded, {
+      telemetry_overloaded: false,
+      dropped_frames_total: 12,
+    });
+
+    expect(recovered.droppedFramesTotal).toBe(12);
+    expect(recovered.overloaded).toBe(false);
   });
 });

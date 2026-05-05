@@ -857,7 +857,7 @@ export function buildNewPlaneFormState() {
     gpuFraction: 1.0,
     memoryCapMb: 24576,
     sharedDiskGb: 40,
-    postDeployScript: "bundle://deploy/scripts/post-deploy.sh",
+    postDeployScript: "",
   });
 }
 

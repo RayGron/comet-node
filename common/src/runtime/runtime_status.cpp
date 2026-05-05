@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 
 #include <nlohmann/json.hpp>
@@ -756,8 +757,20 @@ std::optional<RuntimeStatus> RuntimeStatusFileStore::Load(const std::string& pat
     throw std::runtime_error("failed to open runtime status file: " + path);
   }
 
-  json value;
-  input >> value;
+  std::string text(
+      (std::istreambuf_iterator<char>(input)),
+      std::istreambuf_iterator<char>());
+  if (!input.good() && !input.eof()) {
+    throw std::runtime_error("failed to read runtime status file: " + path);
+  }
+  const auto first_non_space = text.find_first_not_of(" \t\r\n");
+  if (first_non_space == std::string::npos) {
+    return std::nullopt;
+  }
+  const json value = json::parse(text, nullptr, false);
+  if (value.is_discarded()) {
+    return std::nullopt;
+  }
   return RuntimeStatusFromJson(value);
 }
 

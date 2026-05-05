@@ -66,6 +66,7 @@ import {
 } from "./telemetryHostObservations.js";
 import {
   buildTelemetryBrowserLatency,
+  latestTelemetryFramesByNode,
   maxTelemetryReceiveDelayMs,
   parseTelemetryEventPayload,
   telemetryFramesFromSnapshot,
@@ -3695,13 +3696,20 @@ function App() {
     const refreshDelay = selectedPage === "dashboard" ? FLEET_REFRESH_MS : AUTO_REFRESH_MS;
     const timer = setInterval(() => {
       if (selectedPlane && selectedPage === "dashboard") {
-        refreshSelectedPlaneLive(selectedPlane);
+        const selectedPlaneDetailLoaded =
+          planeDetail?.plane_name === selectedPlane ||
+          (planeDetail?.planes || []).some((item) => item?.name === selectedPlane);
+        if (selectedPlaneDetailLoaded) {
+          refreshSelectedPlaneLive(selectedPlane);
+        } else {
+          refreshAll(selectedPlane);
+        }
         return;
       }
       refreshAll(selectedPlane);
     }, refreshDelay);
     return () => clearInterval(timer);
-  }, [authState.authenticated, selectedPlane, selectedPage]);
+  }, [authState.authenticated, selectedPlane, selectedPage, planeDetail]);
 
   useEffect(() => {
     globalHostObservationsRef.current = globalHostObservations;
@@ -3825,7 +3833,7 @@ function App() {
         );
       }
       const nextGlobalLatency = buildTelemetryBrowserLatency({
-        frames: validFrames,
+        frames: globalResult.acceptedFrames,
         receivedAtMs,
         parseMs,
         reduceMs,
@@ -3969,7 +3977,9 @@ function App() {
           }
           const nextGlobalLatency = {
             receivedAtMs: Date.now(),
-            receiveDelayMs: maxTelemetryReceiveDelayMs(frames),
+            receiveDelayMs: maxTelemetryReceiveDelayMs(
+              latestTelemetryFramesByNode(globalResult.acceptedFrames),
+            ),
             parseMs: 0,
             reduceMs: 0,
             applyMs: 0,
@@ -4068,7 +4078,10 @@ function App() {
   const desiredState = planeDetail?.desired_state || null;
   const desiredStateV2 = planeDetail?.desired_state_v2 || null;
   const planeRecord =
-    planeDetail?.planes?.find((item) => item.name === selectedPlane) || null;
+    planeDetail?.planes?.find((item) => item.name === selectedPlane) ||
+    dashboard?.planes?.find((item) => item.name === selectedPlane) ||
+    planes.find((item) => item.name === selectedPlane) ||
+    null;
   const planeMode =
     dashboard?.plane?.plane_mode ||
     desiredState?.plane_mode ||

@@ -17,7 +17,6 @@ nlohmann::json TelemetryNodeHealthBuilder::Build(
   if (stale) {
     status = "stale";
   } else if (
-      frame.telemetry_dropped_frames > 0 ||
       !frame.last_publish_error.empty() ||
       health_policy_.HasActionableDegradedReason(frame)) {
     status = "degraded";
@@ -26,6 +25,7 @@ nlohmann::json TelemetryNodeHealthBuilder::Build(
       {"status", status},
       {"last_frame_age_ms", controller_ingest_delay_ms},
       {"dropped_frames_total", buffer.dropped_frames_total},
+      {"publisher_dropped_frames_total", frame.telemetry_dropped_frames},
       {"publish_error_count", frame.publish_error_count},
       {"publish_error", frame.last_publish_error},
       {"degraded_reason", frame.degraded_reason},

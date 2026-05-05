@@ -325,6 +325,7 @@ void TestRecoveredTelemetryCountersDoNotDegradeHealth() {
     auto frame = MakeFrame("node-recovered", "plane-recovered", now - 5000 + index);
     frame.adaptive_interval_ms = 10000;
     frame.adaptive_reason = "idle-no-plane";
+    frame.telemetry_dropped_frames = 12;
     frame.publish_error_count = 2;
     frame.last_publish_error.clear();
     Expect(store.Upsert(frame), "recovered counter frame should update");
@@ -348,7 +349,14 @@ void TestRecoveredTelemetryCountersDoNotDegradeHealth() {
       "snapshot overload should report active backpressure, not historical retention pruning");
   Expect(
       snapshot.at("nodes").at(0).at("telemetry_health").at("status").get<std::string>() == "ok",
-      "node health should not degrade on recovered publish counters");
+      "node health should not degrade on historical publisher counters");
+  Expect(
+      snapshot.at("nodes").at(0).at("telemetry_health_status").get<std::string>() == "ok",
+      "frame health should not degrade on historical publisher counters");
+  Expect(
+      snapshot.at("nodes").at(0).at("telemetry_health").at("publisher_dropped_frames_total")
+          .get<std::uint64_t>() == 12,
+      "node health should still expose historical publisher drops");
   std::filesystem::remove(db_path);
   store.ResetForTests();
   std::cout << "ok: telemetry-live-store-recovered-counters-health\n";

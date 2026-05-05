@@ -4077,10 +4077,13 @@ function App() {
 
   const desiredState = planeDetail?.desired_state || null;
   const desiredStateV2 = planeDetail?.desired_state_v2 || null;
+  const matchesSelectedPlane = (item) =>
+    item?.name === selectedPlane || item?.plane_name === selectedPlane;
   const planeRecord =
-    planeDetail?.planes?.find((item) => item.name === selectedPlane) ||
-    dashboard?.planes?.find((item) => item.name === selectedPlane) ||
-    planes.find((item) => item.name === selectedPlane) ||
+    planeDetail?.planes?.find(matchesSelectedPlane) ||
+    dashboard?.planes?.find(matchesSelectedPlane) ||
+    planes.find(matchesSelectedPlane) ||
+    (selectedPlane ? { name: selectedPlane, plane_name: selectedPlane } : null) ||
     null;
   const planeMode =
     dashboard?.plane?.plane_mode ||

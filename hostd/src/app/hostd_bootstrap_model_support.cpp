@@ -689,9 +689,6 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
               aggregate_total_progress);
           continue;
         } catch (const std::exception& direct_error) {
-          if (deferred_peer_sha256) {
-            throw;
-          }
           output.close();
           std::error_code cleanup_error;
           fs::remove(temp_path, cleanup_error);

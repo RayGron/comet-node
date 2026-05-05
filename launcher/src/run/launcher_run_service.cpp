@@ -839,6 +839,10 @@ int LauncherRunService::RunHostdLoop(
             if (!item.has_value()) {
               continue;
             }
+            if (!options.controller_url.empty() && apply_session_owner_active.load()) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(250));
+              continue;
+            }
             item->frame.publisher_queue_delay_ms =
                 DurationMillis(item->enqueued_at, std::chrono::steady_clock::now());
             item->frame.telemetry_bus_depth = telemetry_bus.Depth();

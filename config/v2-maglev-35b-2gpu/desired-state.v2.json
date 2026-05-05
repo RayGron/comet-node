@@ -6,12 +6,12 @@
   "model": {
     "source": {
       "type": "local",
-      "path": "/mnt/shared-storage/models/Google/Gemma-4-31B-it/Gemma-4-31B-it-Q8_0.gguf",
+      "path": "/models/Google/Gemma-4-31B-it/Gemma-4-31B-it-Q8_0.gguf",
       "ref": "Google/Gemma-4-31B-it"
     },
     "materialization": {
       "mode": "reference",
-      "local_path": "/mnt/shared-storage/models/Google/Gemma-4-31B-it/Gemma-4-31B-it-Q8_0.gguf"
+      "local_path": "/models/Google/Gemma-4-31B-it/Gemma-4-31B-it-Q8_0.gguf"
     },
     "served_model_name": "gemma-4-31b-it-maglev"
   },

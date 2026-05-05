@@ -3910,10 +3910,7 @@ function App() {
     const source = new EventSource(
       queryPath("/api/v1/live/stream", {
         limit: EVENT_LIMIT,
-        plane: selectedPlane || undefined,
-        since_sequence: selectedPlane
-          ? planeTelemetryStoreRef.current?.latestSequence || undefined
-          : globalTelemetryStoreRef.current?.latestSequence || undefined,
+        since_sequence: globalTelemetryStoreRef.current?.latestSequence || undefined,
       }),
     );
     telemetrySourceRef.current = source;
@@ -3963,7 +3960,7 @@ function App() {
         telemetrySourceRef.current = null;
       }
     };
-  }, [authState.authenticated, selectedPlane]);
+  }, [authState.authenticated]);
 
   useEffect(() => {
     if (!authState.authenticated || telemetryHealthy) {

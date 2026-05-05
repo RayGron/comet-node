@@ -6,12 +6,12 @@
   "model": {
     "source": {
       "type": "local",
-      "path": "/mnt/shared-storage/models/gguf/Qwen3.5-9B",
+      "path": "/models/gguf/Qwen3.5-9B",
       "ref": "Qwen/Qwen3.5-9B"
     },
     "materialization": {
       "mode": "reference",
-      "local_path": "/mnt/shared-storage/models/gguf/Qwen3.5-9B"
+      "local_path": "/models/gguf/Qwen3.5-9B"
     },
     "served_model_name": "qwen3.5-9b-rpc"
   },

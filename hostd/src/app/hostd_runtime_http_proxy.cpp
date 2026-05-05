@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -235,6 +236,62 @@ std::string HostdRuntimeHttpProxy::PolicyLabel(HostdRuntimeProxyPolicy policy) {
   return "runtime-direct-http";
 }
 
+bool HostdRuntimeHttpProxy::HeaderValueContainsChunkedTransfer(
+    const std::string& value) {
+  return LowercaseAscii(value).find("chunked") != std::string::npos;
+}
+
+std::string HostdRuntimeHttpProxy::DecodeCompleteChunkedBody(
+    const std::string& encoded) {
+  std::string decoded;
+  std::size_t offset = 0;
+  while (true) {
+    const std::size_t line_end = encoded.find("\r\n", offset);
+    if (line_end == std::string::npos) {
+      throw std::runtime_error("incomplete HTTP chunk size");
+    }
+    std::string chunk_size_text = encoded.substr(offset, line_end - offset);
+    const std::size_t extensions = chunk_size_text.find(';');
+    if (extensions != std::string::npos) {
+      chunk_size_text = chunk_size_text.substr(0, extensions);
+    }
+    chunk_size_text = TrimAscii(chunk_size_text);
+    if (chunk_size_text.empty()) {
+      throw std::runtime_error("empty HTTP chunk size");
+    }
+
+    std::size_t parsed = 0;
+    std::size_t chunk_size = 0;
+    try {
+      const unsigned long long value = std::stoull(chunk_size_text, &parsed, 16);
+      if (parsed != chunk_size_text.size() ||
+          value > std::numeric_limits<std::size_t>::max()) {
+        throw std::runtime_error("invalid");
+      }
+      chunk_size = static_cast<std::size_t>(value);
+    } catch (const std::exception&) {
+      throw std::runtime_error(
+          "invalid HTTP chunk size '" + chunk_size_text + "'");
+    }
+
+    const std::size_t chunk_begin = line_end + 2;
+    if (chunk_size == 0) {
+      if (encoded.size() < chunk_begin + 2) {
+        throw std::runtime_error("incomplete final HTTP chunk");
+      }
+      return decoded;
+    }
+    if (encoded.size() < chunk_begin + chunk_size + 2) {
+      throw std::runtime_error("incomplete HTTP chunk body");
+    }
+    if (encoded.compare(chunk_begin + chunk_size, 2, "\r\n") != 0) {
+      throw std::runtime_error("invalid HTTP chunk terminator");
+    }
+    decoded.append(encoded, chunk_begin, chunk_size);
+    offset = chunk_begin + chunk_size + 2;
+  }
+}
+
 HostdRuntimeHttpResponse HostdRuntimeHttpProxy::ParseHttpResponse(
     const std::string& response_text) {
   HostdRuntimeHttpResponse response;
@@ -270,6 +327,13 @@ HostdRuntimeHttpResponse HostdRuntimeHttpProxy::ParseHttpResponse(
       break;
     }
     offset = next + 2;
+  }
+  const auto transfer_encoding = response.headers.find("transfer-encoding");
+  if (transfer_encoding != response.headers.end() &&
+      HeaderValueContainsChunkedTransfer(transfer_encoding->second)) {
+    response.body = DecodeCompleteChunkedBody(response.body);
+    response.headers.erase("transfer-encoding");
+    response.headers.erase("content-length");
   }
   return response;
 }

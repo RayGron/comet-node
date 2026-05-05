@@ -1384,19 +1384,17 @@ function MetricSparklineButton({ label, history, onOpen }) {
       title={`Open ${label} chart`}
       onClick={onOpen}
     >
-      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-        <AreaChart data={series}>
-          <YAxis type="number" domain={domain} hide />
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke="rgba(255, 213, 94, 0.96)"
-            fill="rgba(120, 190, 255, 0.18)"
-            strokeWidth={1.8}
-            isAnimationActive={false}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
+      <AreaChart width={76} height={24} data={series} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>
+        <YAxis type="number" domain={domain} hide />
+        <Area
+          type="monotone"
+          dataKey="value"
+          stroke="rgba(255, 213, 94, 0.96)"
+          fill="rgba(120, 190, 255, 0.18)"
+          strokeWidth={1.8}
+          isAnimationActive={false}
+        />
+      </AreaChart>
     </button>
   );
 }

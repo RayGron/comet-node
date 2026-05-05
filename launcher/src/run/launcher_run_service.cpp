@@ -830,6 +830,10 @@ int LauncherRunService::RunHostdLoop(
               options.node_name,
               options.storage_root);
           while (!telemetry_runtime_stop.load()) {
+            if (!options.controller_url.empty() && apply_session_owner_active.load()) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(250));
+              continue;
+            }
             auto item = telemetry_bus.WaitPop(telemetry_runtime_stop);
             if (!item.has_value()) {
               continue;

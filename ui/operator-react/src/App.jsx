@@ -5611,7 +5611,7 @@ function App() {
   }
 
   function renderDashboardPlaneDetailModal() {
-    if (!selectedPlane || !planeRecord || !dashboard) {
+    if (!selectedPlane || !planeRecord) {
       return null;
     }
 
@@ -5734,7 +5734,7 @@ function App() {
                 <SummaryCard
                   label="Ready nodes"
                   value={readyNodes}
-                  meta={`${dashboard.plane?.node_count ?? 0} total / ${notReadyNodes} not ready`}
+                  meta={`${dashboard?.plane?.node_count ?? 0} total / ${notReadyNodes} not ready`}
                   history={planeReadyNodesHistory}
                     onOpenTrend={() =>
                       openTelemetryChart(
@@ -5773,8 +5773,8 @@ function App() {
                 />
                 <SummaryCard
                   label="Rollout actions"
-                  value={dashboard.rollout?.total_actions ?? 0}
-                  meta={`${dashboard.rollout?.loop_status ?? "n/a"} / ${dashboard.rollout?.loop_reason ?? "n/a"}`}
+                  value={dashboard?.rollout?.total_actions ?? 0}
+                  meta={`${dashboard?.rollout?.loop_status ?? "n/a"} / ${dashboard?.rollout?.loop_reason ?? "n/a"}`}
                   history={planeRolloutHistory}
                     onOpenTrend={() =>
                       openTelemetryChart(

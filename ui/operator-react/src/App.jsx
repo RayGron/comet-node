@@ -2668,6 +2668,17 @@ function App() {
       if (!shouldCommitError()) {
         return;
       }
+      if (error?.status === 404 && requestedPlane && selectedPlaneRef.current === requestedPlane) {
+        selectedPlaneRef.current = "";
+        startTransition(() => {
+          setSelectedPlane("");
+          setPlaneDetail(null);
+          setHostObservations(null);
+        });
+        setApiError("");
+        setApiHealthy(true);
+        return;
+      }
       setApiHealthy(false);
       setApiError(error.message || String(error));
     } finally {
@@ -3197,6 +3208,14 @@ function App() {
         planeName,
         startedAt: new Date().toISOString(),
       });
+      if (action === "delete") {
+        selectedPlaneRef.current = "";
+        setSelectedPlane("");
+        setPlaneDetail(null);
+        setHostObservations(null);
+        await refreshAll("");
+        return;
+      }
       await refreshAll(planeName);
     } catch (error) {
       setApiError(error.message || String(error));

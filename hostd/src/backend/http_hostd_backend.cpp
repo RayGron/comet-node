@@ -60,6 +60,7 @@ bool HttpHostdBackend::TransitionClaimedHostAssignment(
     const int assignment_id,
     const naim::HostAssignmentStatus status,
     const std::string& status_message) {
+  EnsureSession(configured_node_name_, "transitioning assignment status");
   if (status == naim::HostAssignmentStatus::Applied) {
     SendEncryptedControllerJsonRequest(
         "/api/v1/hostd/assignments/" + std::to_string(assignment_id) + "/applied",

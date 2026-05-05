@@ -1312,6 +1312,16 @@ target_link_libraries(naim-hostd-reporting-support-tests PRIVATE naim-common)
 naim_enable_strict_warnings(naim-hostd-reporting-support-tests)
 
 add_executable(
+  naim-http-hostd-backend-tests
+  hostd/src/backend/http_hostd_backend.cpp
+  hostd/src/backend/http_hostd_backend_tests.cpp
+)
+target_include_directories(
+  naim-http-hostd-backend-tests PRIVATE common/include hostd/include)
+target_link_libraries(naim-http-hostd-backend-tests PRIVATE naim-common)
+naim_enable_strict_warnings(naim-http-hostd-backend-tests)
+
+add_executable(
   naim-hostd-repo-root-support-tests
   hostd/src/app/hostd_repo_root_support.cpp
   hostd/src/app/hostd_repo_root_support_tests.cpp

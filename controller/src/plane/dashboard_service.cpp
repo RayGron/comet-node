@@ -790,6 +790,12 @@ nlohmann::json DashboardService::BuildPayload(
 
   const std::optional<std::string> selected_plane_state =
       ResolveSelectedPlaneState(view.planes, plane_name);
+  std::optional<std::string> webgateway_plane_state = selected_plane_state;
+  if (dashboard_plane_record.has_value() &&
+      dashboard_plane_record->state == "running" &&
+      dashboard_plane_record->generation > effective_plane_applied_generation) {
+    webgateway_plane_state = "starting";
+  }
   const auto dashboard_nodes =
       BuildDashboardNodes(plane_name, *view.desired_state, view.desired_states);
   const auto nodes_payload = BuildNodesPayload(
@@ -823,7 +829,7 @@ nlohmann::json DashboardService::BuildPayload(
   payload["webgateway"] = PlaneBrowsingService().BuildStatusPayload(
       db_path,
       *view.desired_state,
-      selected_plane_state);
+      webgateway_plane_state);
 
   const auto latest_assignments_by_node =
       BuildLatestPlaneAssignmentsByNode(

@@ -41,7 +41,8 @@ class HostdComposeRuntimeSupport final {
       const std::string& image) const;
   void EnsureLocalRuntimeBinary(
       const std::filesystem::path& repo_root,
-      const std::string& image) const;
+      const std::string& image,
+      bool force_rebuild = false) const;
   void BuildNaimRuntimeImage(
       const std::filesystem::path& repo_root,
       const std::string& image) const;

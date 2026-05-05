@@ -143,8 +143,9 @@ bool HostdComposeRuntimeSupport::TurboQuantRuntimeBinaryExists(
 
 void HostdComposeRuntimeSupport::EnsureLocalRuntimeBinary(
     const std::filesystem::path& repo_root,
-    const std::string& image) const {
-  if (LocalRuntimeBinaryExists(repo_root, image)) {
+    const std::string& image,
+    const bool force_rebuild) const {
+  if (!force_rebuild && LocalRuntimeBinaryExists(repo_root, image)) {
     return;
   }
 
@@ -218,7 +219,7 @@ void HostdComposeRuntimeSupport::BuildNaimRuntimeImage(
     if (!DockerImageExists("naim/base-runtime:dev")) {
       build_base();
     }
-    EnsureLocalRuntimeBinary(repo_root, image);
+    EnsureLocalRuntimeBinary(repo_root, image, true);
     build_runtime("runtime/infer/Dockerfile", image);
     return;
   }
@@ -226,7 +227,7 @@ void HostdComposeRuntimeSupport::BuildNaimRuntimeImage(
     if (!DockerImageExists("naim/base-runtime:dev")) {
       build_base();
     }
-    EnsureLocalRuntimeBinary(repo_root, image);
+    EnsureLocalRuntimeBinary(repo_root, image, true);
     build_runtime("runtime/worker/Dockerfile", image);
     return;
   }
@@ -234,7 +235,7 @@ void HostdComposeRuntimeSupport::BuildNaimRuntimeImage(
     if (!DockerImageExists("naim/base-runtime:dev")) {
       build_base();
     }
-    EnsureLocalRuntimeBinary(repo_root, image);
+    EnsureLocalRuntimeBinary(repo_root, image, true);
     build_runtime("runtime/skills/Dockerfile", image);
     return;
   }
@@ -242,7 +243,7 @@ void HostdComposeRuntimeSupport::BuildNaimRuntimeImage(
     if (!DockerImageExists("naim/base-runtime:dev")) {
       build_base();
     }
-    EnsureLocalRuntimeBinary(repo_root, image);
+    EnsureLocalRuntimeBinary(repo_root, image, true);
     build_runtime("runtime/browsing/Dockerfile", image);
     return;
   }
@@ -250,7 +251,7 @@ void HostdComposeRuntimeSupport::BuildNaimRuntimeImage(
     if (!DockerImageExists("naim/base-runtime:dev")) {
       build_base();
     }
-    EnsureLocalRuntimeBinary(repo_root, image);
+    EnsureLocalRuntimeBinary(repo_root, image, true);
     build_runtime("runtime/interaction/Dockerfile", image);
     return;
   }
@@ -270,13 +271,9 @@ void HostdComposeRuntimeSupport::BuildNaimRuntimeImage(
 
 void HostdComposeRuntimeSupport::EnsureRuntimeImageAvailable(const std::string& image) const {
   static std::set<std::string> ensured_images;
-  if (image.empty() || ensured_images.count(image) > 0 || DockerImageExists(image)) {
-    if (!image.empty()) {
-      ensured_images.insert(image);
-    }
+  if (image.empty()) {
     return;
   }
-
   if (image.rfind("naim/", 0) == 0 && image.ends_with(":dev")) {
     if (const auto repo_root = repo_root_support_.DetectNaimRepoRoot(); repo_root.has_value()) {
       BuildNaimRuntimeImage(*repo_root, image);
@@ -285,6 +282,11 @@ void HostdComposeRuntimeSupport::EnsureRuntimeImageAvailable(const std::string& 
         return;
       }
     }
+  }
+
+  if (ensured_images.count(image) > 0 || DockerImageExists(image)) {
+    ensured_images.insert(image);
+    return;
   }
 
   if (!command_support_.RunCommandOk(

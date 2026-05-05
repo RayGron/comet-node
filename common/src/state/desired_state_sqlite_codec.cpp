@@ -443,6 +443,9 @@ DiskKind DesiredStateSqliteCodec::ParseDiskKind(const std::string& value) {
   if (value == "interaction-private") {
     return DiskKind::InteractionPrivate;
   }
+  if (value == "voice-module-private") {
+    return DiskKind::VoiceModulePrivate;
+  }
   throw std::runtime_error("unknown disk kind '" + value + "'");
 }
 
@@ -467,6 +470,9 @@ InstanceRole DesiredStateSqliteCodec::ParseInstanceRole(const std::string& value
   }
   if (value == "interaction") {
     return InstanceRole::Interaction;
+  }
+  if (value == "voice-module") {
+    return InstanceRole::VoiceModule;
   }
   throw std::runtime_error("unknown instance role '" + value + "'");
 }

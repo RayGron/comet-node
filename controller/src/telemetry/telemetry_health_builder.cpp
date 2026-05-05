@@ -27,13 +27,14 @@ nlohmann::json TelemetryHealthBuilder::BuildHealth(
       thresholds,
       now_ms);
   std::string status = "ok";
-  if (!alerts.empty()) {
-    status = "degraded";
-    for (const auto& alert : alerts) {
-      if (alert.value("severity", std::string{}) == "critical") {
-        status = "critical";
-        break;
-      }
+  for (const auto& alert : alerts) {
+    const auto severity = alert.value("severity", std::string{});
+    if (severity == "critical") {
+      status = "critical";
+      break;
+    }
+    if (severity == "warning") {
+      status = "degraded";
     }
   }
   return nlohmann::json{

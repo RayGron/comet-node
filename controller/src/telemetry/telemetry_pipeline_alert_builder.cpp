@@ -34,7 +34,7 @@ nlohmann::json TelemetryPipelineAlertBuilder::Build(
   if (streams.telemetry.replay_required_total > 0 || streams.live.replay_required_total > 0) {
     alerts.push_back(nlohmann::json{
         {"code", "telemetry.stream.replay_required"},
-        {"severity", "warning"},
+        {"severity", "info"},
         {"message", "telemetry stream replay was required"},
         {"telemetry_replay_required_total", streams.telemetry.replay_required_total},
         {"live_replay_required_total", streams.live.replay_required_total},

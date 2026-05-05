@@ -416,6 +416,18 @@ void TestGpuUnavailableStorageNodeDoesNotDegradeHealth() {
 void TestStreamMetricsAndOpenMetrics() {
   auto& store = naim::controller::TelemetryLiveStore::Instance();
   store.ResetForTests();
+  const auto replay_db_path =
+      (std::filesystem::temp_directory_path() / "naim-telemetry-replay-health-test.sqlite").string();
+  store.ConfigurePersistence(replay_db_path);
+  Expect(store.Upsert(MakeFrame("node-replay", "plane-replay", CurrentMillis())), "replay frame");
+  store.RecordStreamReplayRequired("live");
+  const auto replay_health = store.BuildHealth(std::string("plane-replay"));
+  Expect(
+      replay_health.at("status").get<std::string>() == "ok",
+      "stream replay alone should not degrade telemetry health");
+  std::filesystem::remove(replay_db_path);
+  store.ResetForTests();
+
   Expect(store.Upsert(MakeFrame("node-metrics", "plane-metrics", CurrentMillis())), "metrics frame");
   store.RecordStreamOpened("live");
   store.RecordStreamOpened("live");

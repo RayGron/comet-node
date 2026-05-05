@@ -207,6 +207,20 @@ HttpResponse SendControllerHttpRequest(
   return ParseHttpResponse(response_text);
 }
 
+std::string ResponseBodyExcerpt(std::string body) {
+  body = Trim(body);
+  for (char& ch : body) {
+    if (ch == '\n' || ch == '\r' || ch == '\t') {
+      ch = ' ';
+    }
+  }
+  constexpr std::size_t kMaxExcerptSize = 240;
+  if (body.size() > kMaxExcerptSize) {
+    body.resize(kMaxExcerptSize);
+  }
+  return body;
+}
+
 }  // namespace
 
 std::string Trim(const std::string& value) {
@@ -234,12 +248,25 @@ nlohmann::json SendControllerJsonRequest(
           path,
           payload.is_null() ? std::string{} : payload.dump(),
           headers);
-  const json body = response.body.empty() ? json::object() : json::parse(response.body);
+  json body = json::object();
+  if (!response.body.empty()) {
+    try {
+      body = json::parse(response.body);
+    } catch (const std::exception&) {
+      if (response.status_code < 400) {
+        throw;
+      }
+    }
+  }
   if (response.status_code >= 400) {
+    if (body.contains("message") && body["message"].is_string()) {
+      throw std::runtime_error(body.value("message", "controller request failed"));
+    }
     throw std::runtime_error(
         body.contains("error") && body["error"].is_object()
             ? body["error"].value("message", "controller request failed")
-            : "controller request failed with status " + std::to_string(response.status_code));
+            : "controller request failed with status " + std::to_string(response.status_code) +
+                  (response.body.empty() ? "" : ": " + ResponseBodyExcerpt(response.body)));
   }
   return body;
 }

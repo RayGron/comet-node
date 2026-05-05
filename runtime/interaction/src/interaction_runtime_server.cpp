@@ -59,10 +59,7 @@ bool RequestWantsStream(const HttpRequest& request) {
   try {
     const auto wrapped_request =
         naim::controller::InteractionRuntimeRequestCodec{}.Deserialize(request.body);
-    if (wrapped_request.force_stream) {
-      return true;
-    }
-    return wrapped_request.payload.value("stream", false);
+    return wrapped_request.force_stream;
   } catch (const std::exception&) {
   }
   try {

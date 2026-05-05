@@ -3734,6 +3734,37 @@ int main() {
       std::cout << "ok: interaction-payload-builder-sanitizes-invalid-utf8" << '\n';
     }
 
+    {
+      naim::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = BuildDesiredStateWithBrowsingPort("127.0.0.1", 28130);
+      resolution.desired_state.interaction = naim::InteractionSettings{};
+      resolution.status_payload =
+          json{{"active_model_id", "test-model"},
+               {"served_model_name", "test-model"}};
+      json payload{
+          {"stream", true},
+          {"messages",
+           json::array(
+               {json{{"role", "user"}, {"content", std::string("hello")}}})},
+      };
+      const auto resolved_policy =
+          naim::controller::InteractionCompletionPolicySupport{}.ResolvePolicy(
+              resolution.desired_state,
+              payload);
+      const json parsed = json::parse(
+          naim::controller::BuildInteractionUpstreamBodyPayload(
+              resolution,
+              payload,
+              false,
+              resolved_policy,
+              false));
+      Expect(
+          parsed.contains("stream") && parsed.at("stream").is_boolean() &&
+              !parsed.at("stream").get<bool>(),
+          "payload builder should force non-stream mode when requested");
+      std::cout << "ok: interaction-payload-builder-forces-non-stream" << '\n';
+    }
+
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "plane_skills_service_tests failed: " << error.what() << '\n';

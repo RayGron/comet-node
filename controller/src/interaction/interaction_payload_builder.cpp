@@ -194,9 +194,7 @@ std::string BuildInteractionUpstreamBodyPayload(
       &payload,
       model_identity_builder.BuildStatusPreferred(resolution),
       naim::runtime::ModelAdapterPolicy{thinking_enabled});
-  if (force_stream) {
-    payload["stream"] = true;
-  }
+  payload["stream"] = force_stream;
   payload["max_tokens"] = policy.max_tokens;
   if (!payload.contains("temperature")) {
     payload["temperature"] =

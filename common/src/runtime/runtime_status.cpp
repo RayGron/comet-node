@@ -26,6 +26,7 @@ json ToJson(const RuntimeProcessStatus& status) {
       {"runtime_pid", status.runtime_pid},
       {"engine_pid", status.engine_pid},
       {"ready", status.ready},
+      {"plane_name", status.plane_name},
   };
 }
 
@@ -42,6 +43,7 @@ RuntimeProcessStatus RuntimeProcessStatusFromJson(const json& value) {
   status.runtime_pid = value.value("runtime_pid", 0);
   status.engine_pid = value.value("engine_pid", 0);
   status.ready = value.value("ready", false);
+  status.plane_name = value.value("plane_name", std::string{});
   return status;
 }
 

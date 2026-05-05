@@ -240,6 +240,76 @@ void TestPlaneAggregatesAndDownsampling() {
   std::cout << "ok: telemetry-live-store-plane-aggregates-downsampling\n";
 }
 
+void TestMultiPlaneNodeTelemetryIsPlaneScoped() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  store.ResetForTests();
+  auto frame = MakeFrame("node-multi-plane", "", CurrentMillis());
+  frame.ttl_ms = 60000;
+  frame.instance_runtime = {
+      naim::RuntimeProcessStatus{
+          "worker-maglev-service",
+          "worker",
+          "node-multi-plane",
+          "/models/qwen",
+          "0",
+          "running",
+          "",
+          "",
+          0,
+          0,
+          true,
+          "maglev-service",
+      },
+      naim::RuntimeProcessStatus{
+          "worker-lt-cypher-ai",
+          "worker",
+          "node-multi-plane",
+          "/models/qwen",
+          "1",
+          "running",
+          "",
+          "",
+          0,
+          0,
+          false,
+          "lt-cypher-ai",
+      },
+  };
+  frame.plane_instance_count = frame.instance_runtime.size();
+  frame.plane_ready_instance_count = 1;
+  frame.plane_not_ready_instance_count = 1;
+  Expect(store.Upsert(frame), "multi-plane node frame should update");
+
+  const auto maglev = store.BuildSnapshot(std::string("maglev-service"), 0);
+  Expect(maglev.at("nodes").size() == 1, "maglev snapshot should match aggregate node frame");
+  Expect(
+      maglev.at("nodes").at(0).at("plane_name").get<std::string>() == "maglev-service",
+      "maglev node frame should be scoped to selected plane");
+  Expect(
+      maglev.at("nodes").at(0).at("instance_runtime").size() == 1,
+      "maglev node frame should include only maglev runtime");
+  Expect(
+      maglev.at("planes").at(0).at("plane_name").get<std::string>() == "maglev-service",
+      "maglev aggregate should be keyed by runtime plane");
+  Expect(
+      maglev.at("planes").at(0).at("runtime").at("instance_count").get<std::uint64_t>() == 1,
+      "maglev aggregate should count only maglev instances");
+  Expect(
+      maglev.at("planes").at(0).at("runtime").at("ready_instance_count").get<std::uint64_t>() == 1,
+      "maglev aggregate should count only maglev ready instances");
+
+  const auto cypher = store.BuildSnapshot(std::string("lt-cypher-ai"), 0);
+  Expect(cypher.at("nodes").size() == 1, "lt-cypher snapshot should match aggregate node frame");
+  Expect(
+      cypher.at("planes").at(0).at("runtime").at("instance_count").get<std::uint64_t>() == 1,
+      "lt-cypher aggregate should count only lt-cypher instances");
+  Expect(
+      cypher.at("planes").at(0).at("runtime").at("ready_instance_count").get<std::uint64_t>() == 0,
+      "lt-cypher aggregate should preserve not-ready status");
+  store.ResetForTests();
+  std::cout << "ok: telemetry-live-store-multi-plane-node-scoping\n";
+}
+
 void TestSqlitePersistenceReplayAndHealth() {
   auto& store = naim::controller::TelemetryLiveStore::Instance();
   const auto db_path =
@@ -417,6 +487,7 @@ void TestGpuUnavailableStorageNodeDoesNotDegradeHealth() {
       0,
       0,
       false,
+      "plane-gpu-runtime",
   });
   Expect(store.Upsert(gpu_runtime_frame), "gpu-bound runtime frame should update");
   const auto gpu_runtime_health = store.BuildHealth(std::string("plane-gpu-runtime"));
@@ -480,6 +551,7 @@ int main() {
     TestCoherenceFieldsAndStaleProjection();
     TestBackpressureProjection();
     TestPlaneAggregatesAndDownsampling();
+    TestMultiPlaneNodeTelemetryIsPlaneScoped();
     TestSqlitePersistenceReplayAndHealth();
     TestConfigurableRetentionAndMetrics();
     TestRecoveredTelemetryCountersDoNotDegradeHealth();

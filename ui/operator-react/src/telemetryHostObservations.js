@@ -1,3 +1,5 @@
+import { scopeTelemetryFrameToPlane } from "./telemetryStore.js";
+
 export function hostObservationItemsFromPayload(payload) {
   if (Array.isArray(payload?.observations)) {
     return payload.observations.map((item) => ({
@@ -147,10 +149,8 @@ export function mergeTelemetryIntoObservationPayload(currentPayload, frames, pla
     currentItems.filter((item) => item?.node_name).map((item) => [item.node_name, item]),
   );
   let changed = false;
-  for (const frame of frames || []) {
-    if (planeName && frame?.plane_name && frame.plane_name !== planeName) {
-      continue;
-    }
+  for (const rawFrame of frames || []) {
+    const frame = scopeTelemetryFrameToPlane(rawFrame, planeName);
     const telemetryItem = hostObservationFromTelemetryFrame(frame);
     if (!telemetryItem?.node_name) {
       continue;

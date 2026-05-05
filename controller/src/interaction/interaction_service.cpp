@@ -1620,6 +1620,14 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
     return fallback_result;
   };
 
+  if (resolution.target.has_value() && resolution.target->route_via_hostd_proxy) {
+    if (const auto fallback = run_non_stream_fallback();
+        fallback.has_value()) {
+      return *fallback;
+    }
+    throw std::runtime_error("hostd runtime proxy interaction request failed");
+  }
+
   try {
     const auto prompt_build_started_at = std::chrono::steady_clock::now();
     const std::string upstream_body = build_interaction_upstream_body_(

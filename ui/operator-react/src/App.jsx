@@ -4135,7 +4135,15 @@ function App() {
     ? dashboard.peer_links.items
     : [];
   const chatLanguageOptions = supportedChatLanguageOptions(desiredState, interactionStatus);
-  const interactionReady = interactionStatus?.ready === true;
+  const selectedPlaneApplied =
+    Number(planeRecord?.generation || 0) > 0 &&
+    Number(planeRecord?.applied_generation || 0) === Number(planeRecord?.generation || 0);
+  const interactionReady =
+    interactionStatus?.ready === true ||
+    (interactionStatus === null &&
+      llmPlane &&
+      planeRecord?.state === "running" &&
+      selectedPlaneApplied);
   const nodeItems = dashboard?.nodes || [];
   const observationItems = hostObservationItemsFromPayload(hostObservations);
   const globalObservationItems = hostObservationItemsFromPayload(globalHostObservations);

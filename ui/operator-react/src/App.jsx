@@ -2063,7 +2063,16 @@ function App() {
   const [planes, setPlanes] = useState([]);
   const [selectedPlane, setSelectedPlane] = useState(initialPlane);
   const [selectedPage, setSelectedPage] = useState(
-    ["dashboard", "planes", "models", "knowledge-vault", "protocols", "skills-factory", "access"].includes(initialPage)
+    [
+      "dashboard",
+      "planes",
+      "models",
+      "knowledge-vault",
+      "protocols",
+      "skills-factory",
+      "user-storage",
+      "access",
+    ].includes(initialPage)
       ? initialPage
       : "dashboard",
   );
@@ -7770,7 +7779,7 @@ function App() {
     );
   }
 
-  function renderAccessPage() {
+  function renderUserStoragePage() {
     const userStorageNeedle = String(userStorage.search || "").trim().toLowerCase();
     const filteredUserStorageItems = (Array.isArray(userStorage.items) ? userStorage.items : [])
       .filter((item) => {
@@ -7790,6 +7799,149 @@ function App() {
           .join(" ")
           .includes(userStorageNeedle);
       });
+
+    return (
+      <section className="panel page-panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-label">User Storage</div>
+            <h2>SSH identities</h2>
+          </div>
+          <div className="toolbar">
+            <button
+              className="ghost-button"
+              type="button"
+              disabled={accessBusy !== ""}
+              onClick={() => refreshAccessData()}
+            >
+              Refresh users
+            </button>
+          </div>
+        </div>
+        {accessError ? <div className="error-banner">{accessError}</div> : null}
+        {authState.user?.role === "admin" ? (
+          <div className="panel-grid">
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>Add identity</h3>
+                <span className="subpanel-meta">SSH identities allowed by Secured Connection</span>
+              </div>
+              <form className="list-card access-form-card" onSubmit={handleAddUserStorageUser}>
+                <label className="field-label" htmlFor="user-storage-name">Name</label>
+                <input
+                  id="user-storage-name"
+                  className="text-input"
+                  type="text"
+                  value={userStorageForm.name}
+                  onChange={(event) =>
+                    setUserStorageForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                  placeholder="trading-terminal"
+                />
+                <label className="field-label" htmlFor="user-storage-public">Public key</label>
+                <textarea
+                  id="user-storage-public"
+                  className="editor-textarea"
+                  value={userStorageForm.publicKey}
+                  onChange={(event) =>
+                    setUserStorageForm((current) => ({ ...current, publicKey: event.target.value }))
+                  }
+                  placeholder="ssh-ed25519 AAAA..."
+                />
+                <div className="toolbar">
+                  <button
+                    className="ghost-button"
+                    type="submit"
+                    disabled={
+                      accessBusy !== "" ||
+                      !userStorageForm.name.trim() ||
+                      !userStorageForm.publicKey.trim()
+                    }
+                  >
+                    Add user
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>Directory</h3>
+                <span className="subpanel-meta">{filteredUserStorageItems.length} matching identities</span>
+              </div>
+              <label className="field-label">
+                <span className="field-label-title">Filter users</span>
+                <input
+                  className="text-input"
+                  value={userStorage.search}
+                  onChange={(event) =>
+                    setUserStorage((current) => ({ ...current, search: event.target.value }))
+                  }
+                  placeholder="Search name, key, fingerprint, or last auth"
+                />
+              </label>
+              <div className="list-column">
+                {filteredUserStorageItems.length === 0 ? (
+                  <EmptyState title="No User Storage users" detail="Add a public SSH key to allow selection in Secured Connection." />
+                ) : (
+                  filteredUserStorageItems.map((item) => (
+                    <article className="list-card" key={item.id}>
+                      <div className="card-row">
+                        <strong>{item.name || "User Storage user"}</strong>
+                        <span className="tag">{item.fingerprint}</span>
+                      </div>
+                      <div className="list-detail">
+                        <div>{item.public_key}</div>
+                        <div>last auth {formatTimestamp(item.last_authorized_at)}</div>
+                      </div>
+                      <div className="toolbar">
+                        <button
+                          className="ghost-button compact-button danger-button"
+                          type="button"
+                          disabled={accessBusy !== ""}
+                          onClick={() => handleDeleteUserStorageUser(item.id)}
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>Authorization log</h3>
+                <span className="subpanel-meta">Recent secured connection attempts</span>
+              </div>
+              <div className="list-column">
+                {(Array.isArray(userStorage.authLog) ? userStorage.authLog : []).slice(0, 10).map((entry) => (
+                  <article className="list-card" key={entry.id}>
+                    <div className="card-row">
+                      <strong>{entry.event_type} / {entry.outcome}</strong>
+                      <span className="tag">{entry.plane_name || "no-plane"}</span>
+                    </div>
+                    <div className="list-detail">
+                      <div>{entry.user_name || entry.user_id || "unknown-user"}</div>
+                      <div>{formatTimestamp(entry.created_at)} {entry.message ? `- ${entry.message}` : ""}</div>
+                    </div>
+                  </article>
+                ))}
+                {(Array.isArray(userStorage.authLog) ? userStorage.authLog : []).length === 0 ? (
+                  <EmptyState title="No auth log entries" detail="Secured Connection authorization events will appear here." />
+                ) : null}
+              </div>
+            </section>
+          </div>
+        ) : (
+          <EmptyState title="Admin access required" detail="User Storage is available to controller admins only." />
+        )}
+      </section>
+    );
+  }
+
+  function renderAccessPage() {
     return (
       <section className="panel page-panel">
         <div className="panel-header">
@@ -7882,104 +8034,6 @@ function App() {
                     </article>
                   ))
                 )}
-              </div>
-            </section>
-          ) : null}
-
-          {authState.user?.role === "admin" ? (
-            <section className="subpanel">
-              <div className="subpanel-header">
-                <h3>User Storage</h3>
-                <span className="subpanel-meta">SSH identities allowed by Secured Connection</span>
-              </div>
-              <form className="list-card access-form-card" onSubmit={handleAddUserStorageUser}>
-                <label className="field-label" htmlFor="user-storage-name">Name</label>
-                <input
-                  id="user-storage-name"
-                  className="text-input"
-                  type="text"
-                  value={userStorageForm.name}
-                  onChange={(event) =>
-                    setUserStorageForm((current) => ({ ...current, name: event.target.value }))
-                  }
-                  placeholder="trading-terminal"
-                />
-                <label className="field-label" htmlFor="user-storage-public">Public key</label>
-                <textarea
-                  id="user-storage-public"
-                  className="editor-textarea"
-                  value={userStorageForm.publicKey}
-                  onChange={(event) =>
-                    setUserStorageForm((current) => ({ ...current, publicKey: event.target.value }))
-                  }
-                  placeholder="ssh-ed25519 AAAA..."
-                />
-                <div className="toolbar">
-                  <button
-                    className="ghost-button"
-                    type="submit"
-                    disabled={
-                      accessBusy !== "" ||
-                      !userStorageForm.name.trim() ||
-                      !userStorageForm.publicKey.trim()
-                    }
-                  >
-                    Add user
-                  </button>
-                </div>
-              </form>
-              <label className="field-label">
-                <span className="field-label-title">Filter users</span>
-                <input
-                  className="text-input"
-                  value={userStorage.search}
-                  onChange={(event) =>
-                    setUserStorage((current) => ({ ...current, search: event.target.value }))
-                  }
-                  placeholder="Search name, key, fingerprint, or last auth"
-                />
-              </label>
-              <div className="list-column">
-                {filteredUserStorageItems.length === 0 ? (
-                  <EmptyState title="No User Storage users" detail="Add a public SSH key to allow selection in Secured Connection." />
-                ) : (
-                  filteredUserStorageItems.map((item) => (
-                    <article className="list-card" key={item.id}>
-                      <div className="card-row">
-                        <strong>{item.name || "User Storage user"}</strong>
-                        <span className="tag">{item.fingerprint}</span>
-                      </div>
-                      <div className="list-detail">
-                        <div>{item.public_key}</div>
-                        <div>last auth {formatTimestamp(item.last_authorized_at)}</div>
-                      </div>
-                      <div className="toolbar">
-                        <button
-                          className="ghost-button compact-button danger-button"
-                          type="button"
-                          disabled={accessBusy !== ""}
-                          onClick={() => handleDeleteUserStorageUser(item.id)}
-                        >
-                          Revoke
-                        </button>
-                      </div>
-                    </article>
-                  ))
-                )}
-              </div>
-              <div className="list-column">
-                {(Array.isArray(userStorage.authLog) ? userStorage.authLog : []).slice(0, 5).map((entry) => (
-                  <article className="list-card" key={entry.id}>
-                    <div className="card-row">
-                      <strong>{entry.event_type} / {entry.outcome}</strong>
-                      <span className="tag">{entry.plane_name || "no-plane"}</span>
-                    </div>
-                    <div className="list-detail">
-                      <div>{entry.user_name || entry.user_id || "unknown-user"}</div>
-                      <div>{formatTimestamp(entry.created_at)} {entry.message ? `- ${entry.message}` : ""}</div>
-                    </div>
-                  </article>
-                ))}
               </div>
             </section>
           ) : null}
@@ -8431,6 +8485,19 @@ function App() {
                 <span>{authState.user?.role || "user"}</span>
               </span>
             </button>
+            <button
+              className={`side-menu-item ${selectedPage === "user-storage" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setSelectedPage("user-storage")}
+            >
+              <div className="side-menu-copy">
+                <span className="side-menu-title">User Storage</span>
+                <span className="side-menu-meta">Secured Connection identities</span>
+              </div>
+              <span className="tag">
+                <span>{Array.isArray(userStorage.items) ? userStorage.items.length : 0} users</span>
+              </span>
+            </button>
           </div>
         </aside>
 
@@ -8444,6 +8511,8 @@ function App() {
           renderProtocolsPage()
         ) : selectedPage === "skills-factory" ? (
           renderSkillsFactoryPage()
+        ) : selectedPage === "user-storage" ? (
+          renderUserStoragePage()
         ) : selectedPage === "access" ? (
           renderAccessPage()
         ) : (

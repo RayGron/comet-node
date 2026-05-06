@@ -7,6 +7,7 @@ RUN apt-get update \
       bash \
       ca-certificates \
       libssl3t64 \
+      openssh-client \
       tini \
     && rm -rf /var/lib/apt/lists/*
 

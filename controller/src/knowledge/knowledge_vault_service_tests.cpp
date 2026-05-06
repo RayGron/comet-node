@@ -142,6 +142,12 @@ naim::DesiredState BuildKnowledgePlaneState() {
   return desired_state;
 }
 
+naim::DesiredState BuildProtectedKnowledgePlaneState() {
+  auto desired_state = BuildKnowledgePlaneState();
+  desired_state.protected_plane = true;
+  return desired_state;
+}
+
 void TestPlaneScopedContextRequestAddsPlaneAndSelectedKnowledge() {
   HttpRequest request;
   request.method = "POST";
@@ -218,6 +224,55 @@ void TestPlaneScopedSearchRequestKeepsExplicitBody() {
   Expect(!body.contains("selected_knowledge_ids"), "search should not force selected ids");
 }
 
+void TestPlaneScopedMutationRequestsCarryProtectedPlane() {
+  HttpRequest overlay_request;
+  overlay_request.method = "POST";
+  overlay_request.path = "/api/v1/planes/knowledge-plane/knowledge-vault/overlays";
+  overlay_request.headers["Content-Type"] = "application/json";
+  overlay_request.body = R"({"capsule_id":"cap-test","change_type":"claim_add"})";
+
+  const auto rewritten_overlay =
+      naim::controller::KnowledgeVaultHttpService::BuildPlaneScopedRequest(
+          overlay_request,
+          BuildProtectedKnowledgePlaneState(),
+          "knowledge-plane");
+  const auto overlay_body = nlohmann::json::parse(rewritten_overlay.body);
+
+  Expect(
+      rewritten_overlay.path == "/api/v1/knowledge-vault/overlays",
+      "plane overlay path should rewrite to canonical knowledge route");
+  Expect(
+      overlay_body.value("plane_id", std::string{}) == "knowledge-plane",
+      "plane overlay should include plane id");
+  Expect(
+      overlay_body.value("protected_plane", false),
+      "protected plane overlay should carry protected_plane flag");
+
+  HttpRequest merge_request;
+  merge_request.method = "POST";
+  merge_request.path =
+      "/api/v1/planes/knowledge-plane/knowledge-vault/replica-merges/trigger";
+  merge_request.headers["Content-Type"] = "application/json";
+  merge_request.body = R"({"capsule_id":"cap-test"})";
+
+  const auto rewritten_merge =
+      naim::controller::KnowledgeVaultHttpService::BuildPlaneScopedRequest(
+          merge_request,
+          BuildProtectedKnowledgePlaneState(),
+          "knowledge-plane");
+  const auto merge_body = nlohmann::json::parse(rewritten_merge.body);
+
+  Expect(
+      rewritten_merge.path == "/api/v1/knowledge-vault/replica-merges/trigger",
+      "plane replica-merge path should rewrite to canonical knowledge route");
+  Expect(
+      merge_body.value("plane_id", std::string{}) == "knowledge-plane",
+      "plane replica merge should include plane id");
+  Expect(
+      merge_body.value("protected_plane", false),
+      "protected plane replica merge should carry protected_plane flag");
+}
+
 }  // namespace
 
 int main() {
@@ -227,5 +282,6 @@ int main() {
   TestPlaneScopedContextRequestAddsPlaneAndSelectedKnowledge();
   TestPlaneScopedGraphRequestDefaultsToSelectedKnowledge();
   TestPlaneScopedSearchRequestKeepsExplicitBody();
+  TestPlaneScopedMutationRequestsCarryProtectedPlane();
   return 0;
 }

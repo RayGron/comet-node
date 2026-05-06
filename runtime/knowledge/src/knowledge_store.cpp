@@ -87,7 +87,11 @@ int TokenSearchScore(
 }  // namespace
 
 KnowledgeStore::KnowledgeStore(std::filesystem::path store_path)
-    : repository_(std::make_unique<RocksDbJsonRepository>(std::move(store_path))) {}
+    : KnowledgeStore(std::move(store_path), false) {}
+
+KnowledgeStore::KnowledgeStore(std::filesystem::path store_path, bool protected_plane)
+    : repository_(std::make_unique<RocksDbJsonRepository>(std::move(store_path))),
+      protected_plane_(protected_plane) {}
 
 KnowledgeStore::~KnowledgeStore() = default;
 
@@ -616,6 +620,9 @@ nlohmann::json KnowledgeStore::WriteOverlay(const nlohmann::json& payload) {
       nlohmann::json{{"overlay_change_id", proposal.overlay_change_id}});
   auto proposal_json = naim::knowledge::KnowledgeJsonCodec::ToJson(proposal);
   proposal_json["overlay_event_seq"] = sequence;
+  if (ProtectedPlaneRequested(payload)) {
+    proposal_json["protected_plane"] = true;
+  }
   const std::string sequence_key = KnowledgeStoreKeys::EventKey(sequence).substr(std::string("events:").size());
   rocksdb::WriteBatch batch;
   batch.Put(
@@ -647,6 +654,7 @@ nlohmann::json KnowledgeStore::ScheduleReplicaMerge(const nlohmann::json& payloa
       {"plane_id", plane_id},
       {"capsule_id", capsule_id},
       {"cadence", cadence},
+      {"protected_plane", ProtectedPlaneRequested(payload)},
       {"next_run_at", next_run_at},
       {"last_checkpoint", nlohmann::json::object()},
       {"status", "scheduled"},
@@ -676,6 +684,12 @@ nlohmann::json KnowledgeStore::RunScheduledReplicaMerges(const nlohmann::json& p
     if (!force) {
       // Controller owns wall-clock cadence; the runtime reconciles schedules selected by controller.
     }
+    if (ProtectedPlaneRequested(payload) || schedule.value("protected_plane", false)) {
+      jobs.push_back(BuildProtectedReplicaMergeSkip(
+          plane_id,
+          schedule.value("capsule_id", std::string{})));
+      continue;
+    }
     auto result = TriggerReplicaMerge(nlohmann::json{
         {"plane_id", plane_id},
         {"capsule_id", schedule.value("capsule_id", std::string{})},
@@ -698,6 +712,9 @@ nlohmann::json KnowledgeStore::TriggerReplicaMerge(const nlohmann::json& payload
   checkpoint.capsule_id = payload.value("capsule_id", std::string{});
   if (checkpoint.plane_id.empty() || checkpoint.capsule_id.empty()) {
     throw std::runtime_error("plane_id and capsule_id are required");
+  }
+  if (ProtectedPlaneRequested(payload)) {
+    return BuildProtectedReplicaMergeSkip(checkpoint.plane_id, checkpoint.capsule_id);
   }
   checkpoint.base_event_seq = payload.value("base_event_seq", 0);
   checkpoint.overlay_event_seq_from =
@@ -726,6 +743,10 @@ nlohmann::json KnowledgeStore::TriggerReplicaMerge(const nlohmann::json& payload
         continue;
       }
       max_overlay_seq = std::max(max_overlay_seq, overlay_seq);
+      if (overlay_json.value("protected_plane", false)) {
+        ++rejected;
+        continue;
+      }
       const auto proposal = naim::knowledge::KnowledgeJsonCodec::OverlayFromJson(overlay_json);
       bool conflict = false;
       std::string conflict_knowledge_id;
@@ -838,6 +859,13 @@ nlohmann::json KnowledgeStore::ReconcileDailyReplicaSchedules(const nlohmann::js
     if (!plane_filter.empty() && plane_filter != plane_id) {
       continue;
     }
+    if (ProtectedPlaneRequested(payload) || schedule.value("protected_plane", false)) {
+      skipped.push_back(nlohmann::json{
+          {"plane_id", plane_id},
+          {"capsule_id", schedule.value("capsule_id", std::string{})},
+          {"reason", "protected_plane"}});
+      continue;
+    }
     reconciled.push_back(TriggerReplicaMerge(nlohmann::json{
         {"plane_id", plane_id},
         {"capsule_id", schedule.value("capsule_id", std::string{})},
@@ -865,6 +893,64 @@ nlohmann::json KnowledgeStore::ReplicaMergeStatus(const std::string& plane_id) c
   return nlohmann::json{
       {"last_successful_checkpoint", latest},
       {"status", latest.is_null() ? "skipped" : "completed"},
+  };
+}
+
+bool KnowledgeStore::ProtectedPlaneRequested(const nlohmann::json& payload) const {
+  if (protected_plane_) {
+    return true;
+  }
+  if (!payload.contains("protected_plane")) {
+    return false;
+  }
+  const auto& value = payload.at("protected_plane");
+  if (value.is_boolean()) {
+    return value.get<bool>();
+  }
+  if (value.is_string()) {
+    const std::string text = KnowledgeTextProcessor::Lowercase(value.get<std::string>());
+    return text == "1" || text == "true" || text == "yes";
+  }
+  return false;
+}
+
+nlohmann::json KnowledgeStore::BuildProtectedReplicaMergeSkip(
+    const std::string& plane_id,
+    const std::string& capsule_id) {
+  naim::knowledge::ReplicaMergeCheckpoint checkpoint;
+  checkpoint.replica_merge_id = NewId("rm");
+  checkpoint.plane_id = plane_id;
+  checkpoint.capsule_id = capsule_id;
+  checkpoint.base_event_seq = 0;
+  checkpoint.overlay_event_seq_from = LastCheckpointSequence(plane_id, capsule_id) + 1;
+  checkpoint.overlay_event_seq_to = checkpoint.overlay_event_seq_from - 1;
+  checkpoint.canonical_event_seq_before = LatestEventSequence();
+  checkpoint.started_at = UtcNow();
+  checkpoint.completed_at = checkpoint.started_at;
+  checkpoint.status = "skipped";
+  checkpoint.canonical_event_seq_after = AppendEvent(
+      "replica.merge.skipped",
+      {},
+      {},
+      nlohmann::json{
+          {"replica_merge_id", checkpoint.replica_merge_id},
+          {"plane_id", checkpoint.plane_id},
+          {"capsule_id", checkpoint.capsule_id},
+          {"reason", "protected_plane"},
+      });
+  const auto checkpoint_json = naim::knowledge::KnowledgeJsonCodec::ToJson(checkpoint);
+  repository_->PutJson(
+      "replica_checkpoints:" + checkpoint.plane_id + ":" + checkpoint.capsule_id + ":" +
+          checkpoint.replica_merge_id,
+      checkpoint_json);
+  return nlohmann::json{
+      {"replica_merge_id", checkpoint.replica_merge_id},
+      {"status", "skipped"},
+      {"reason", "protected_plane"},
+      {"accepted", 0},
+      {"review", 0},
+      {"rejected", 0},
+      {"checkpoint", checkpoint_json},
   };
 }
 

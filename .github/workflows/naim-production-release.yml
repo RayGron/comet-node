@@ -17,7 +17,7 @@ env:
   NAIM_RELEASE_BRANCH: main
   NAIM_HPC1_SSH: ${{ vars.NAIM_HPC1_SSH || 'baal@195.168.22.186' }}
   NAIM_HPC1_SSH_PORT: ${{ vars.NAIM_HPC1_SSH_PORT || '2222' }}
-  NAIM_HPC1_REPO_PATH: ${{ vars.NAIM_HPC1_REPO_PATH || '/mnt/shared-storage/naim/repos/naim-node' }}
+  NAIM_HPC1_REPO_PATH: ${{ vars.NAIM_HPC1_REPO_PATH || '/opt/naim/repos/naim-node' }}
   NAIM_MAIN_SSH: ${{ vars.NAIM_MAIN_SSH || 'baal@51.68.181.52' }}
   NAIM_REGISTRY: ${{ vars.NAIM_REGISTRY || 'chainzano.com' }}
   NAIM_REGISTRY_PROJECT: ${{ vars.NAIM_REGISTRY_PROJECT || 'naim' }}

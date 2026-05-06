@@ -24,12 +24,12 @@ SCALED_CONCURRENCY="${SCALED_CONCURRENCY:-$((12 * REPLICA_COUNT))}"
 SCALED_REQUESTS_PER_WORKER="${SCALED_REQUESTS_PER_WORKER:-3}"
 SCALED_MAX_TOKENS="${SCALED_MAX_TOKENS:-128}"
 
-if [[ -w "/mnt/shared-storage/backups/${USER:-$(id -un)}" ]]; then
-  BENCH_ROOT_DEFAULT="/mnt/shared-storage/backups/${USER:-$(id -un)}/tmp/llama-rpc-replicas"
-elif [[ -w "/mnt/shared-storage/backups/baal" ]]; then
-  BENCH_ROOT_DEFAULT="/mnt/shared-storage/backups/baal/tmp/llama-rpc-replicas"
+if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
+  BENCH_ROOT_DEFAULT="${XDG_CACHE_HOME}/naim/tmp/llama-rpc-replicas"
+elif [[ -n "${HOME:-}" ]]; then
+  BENCH_ROOT_DEFAULT="${HOME}/.cache/naim/tmp/llama-rpc-replicas"
 else
-  BENCH_ROOT_DEFAULT="/tmp/llama-rpc-replicas"
+  BENCH_ROOT_DEFAULT="/tmp/naim/llama-rpc-replicas"
 fi
 BENCH_ROOT="${BENCH_ROOT:-$BENCH_ROOT_DEFAULT}"
 

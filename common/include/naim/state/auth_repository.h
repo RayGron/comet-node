@@ -77,6 +77,8 @@ class AuthRepository final {
   std::optional<SecuredConnectionUserRecord> LoadActiveSecuredConnectionUserByNameAndFingerprint(
       const std::string& name,
       const std::string& fingerprint) const;
+  std::optional<SecuredConnectionUserRecord> LoadActiveSecuredConnectionUserByFingerprint(
+      const std::string& fingerprint) const;
   std::vector<SecuredConnectionUserRecord> LoadSecuredConnectionUsers(
       const std::optional<std::string>& search,
       bool include_revoked) const;

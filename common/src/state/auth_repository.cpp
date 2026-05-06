@@ -500,6 +500,22 @@ AuthRepository::LoadActiveSecuredConnectionUserByNameAndFingerprint(
   return ReadSecuredConnectionUser(statement.raw());
 }
 
+std::optional<SecuredConnectionUserRecord>
+AuthRepository::LoadActiveSecuredConnectionUserByFingerprint(
+    const std::string& fingerprint) const {
+  Statement statement(
+      db_,
+      "SELECT id, name, public_key, fingerprint, search_text, last_authorized_at, "
+      "created_at, updated_at, revoked_at "
+      "FROM secured_connection_users "
+      "WHERE fingerprint = ?1 AND revoked_at = '';");
+  statement.BindText(1, fingerprint);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return ReadSecuredConnectionUser(statement.raw());
+}
+
 std::vector<SecuredConnectionUserRecord> AuthRepository::LoadSecuredConnectionUsers(
     const std::optional<std::string>& search,
     bool include_revoked) const {

@@ -1104,6 +1104,13 @@ ControllerStore::LoadActiveSecuredConnectionUserByNameAndFingerprint(
       .LoadActiveSecuredConnectionUserByNameAndFingerprint(name, fingerprint);
 }
 
+std::optional<SecuredConnectionUserRecord>
+ControllerStore::LoadActiveSecuredConnectionUserByFingerprint(
+    const std::string& fingerprint) const {
+  return AuthRepository(AsSqlite(db_))
+      .LoadActiveSecuredConnectionUserByFingerprint(fingerprint);
+}
+
 std::vector<SecuredConnectionUserRecord> ControllerStore::LoadSecuredConnectionUsers(
     const std::optional<std::string>& search,
     bool include_revoked) const {

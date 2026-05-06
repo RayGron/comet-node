@@ -158,6 +158,54 @@ void InitializeSchema(
       "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
       "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
       ");");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS secured_connection_users("
+      "id TEXT PRIMARY KEY,"
+      "name TEXT NOT NULL UNIQUE,"
+      "public_key TEXT NOT NULL,"
+      "fingerprint TEXT NOT NULL UNIQUE,"
+      "search_text TEXT NOT NULL DEFAULT '',"
+      "last_authorized_at TEXT NOT NULL DEFAULT '',"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "revoked_at TEXT NOT NULL DEFAULT ''"
+      ");");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS secured_connection_sessions("
+      "token TEXT PRIMARY KEY,"
+      "user_id TEXT NOT NULL,"
+      "plane_name TEXT NOT NULL,"
+      "expires_at TEXT NOT NULL,"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "revoked_at TEXT NOT NULL DEFAULT '',"
+      "last_used_at TEXT NOT NULL DEFAULT '',"
+      "FOREIGN KEY (user_id) REFERENCES secured_connection_users(id) ON DELETE CASCADE"
+      ");");
+  Exec(
+      db,
+      "CREATE INDEX IF NOT EXISTS idx_secured_connection_sessions_plane "
+      "ON secured_connection_sessions(plane_name, user_id);");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS secured_connection_auth_log("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "plane_name TEXT NOT NULL DEFAULT '',"
+      "user_id TEXT NOT NULL DEFAULT '',"
+      "user_name TEXT NOT NULL DEFAULT '',"
+      "fingerprint TEXT NOT NULL DEFAULT '',"
+      "event_type TEXT NOT NULL,"
+      "outcome TEXT NOT NULL,"
+      "remote_addr TEXT NOT NULL DEFAULT '',"
+      "message TEXT NOT NULL DEFAULT '',"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "payload_json TEXT NOT NULL DEFAULT '{}'"
+      ");");
+  Exec(
+      db,
+      "CREATE INDEX IF NOT EXISTS idx_secured_connection_auth_log_plane_created "
+      "ON secured_connection_auth_log(plane_name, created_at DESC);");
   EnsureColumn(
       db,
       "planes",

@@ -137,6 +137,58 @@ int main() {
     }
 
     {
+      const json secured_connection_enabled{
+          {"version", 2},
+          {"plane_name", "secured-connection-enabled"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-secured"},
+           }},
+          {"features",
+           {{"secured_connection",
+             {{"enabled", true}, {"user_ids", json::array({"scu-alpha"})}}}}},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(secured_connection_enabled, "secured-connection-enabled");
+      Expect(state.protected_plane, "secured-connection-enabled: should imply protected plane");
+      Expect(
+          state.secured_connection.has_value() &&
+              state.secured_connection->user_ids == std::vector<std::string>{"scu-alpha"},
+          "secured-connection-enabled: user ids mismatch");
+      std::cout << "ok: secured-connection-enabled" << '\n';
+    }
+
+    {
+      json invalid_secured_connection{
+          {"version", 2},
+          {"plane_name", "secured-connection-empty"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-secured"},
+           }},
+          {"features",
+           {{"secured_connection", {{"enabled", true}, {"user_ids", json::array()}}}}},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      ExpectInvalid(invalid_secured_connection, "secured-connection-empty");
+      invalid_secured_connection["features"]["secured_connection"]["user_ids"] =
+          json::array({"scu-alpha", "scu-alpha"});
+      ExpectInvalid(invalid_secured_connection, "secured-connection-duplicate-user");
+    }
+
+    {
       ExpectInvalid(
           json{
               {"version", 2},

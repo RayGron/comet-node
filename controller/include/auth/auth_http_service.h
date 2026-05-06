@@ -64,6 +64,16 @@ class AuthHttpService {
   HttpResponse HandleSshKeyDelete(
       const std::string& db_path,
       const HttpRequest& request) const;
+  HttpResponse HandleUserStorage(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleUserStorageItem(
+      const std::string& db_path,
+      const HttpRequest& request,
+      const std::string& user_id) const;
+  HttpResponse HandleUserStorageAuthLog(
+      const std::string& db_path,
+      const HttpRequest& request) const;
   HttpResponse HandleSshChallenge(
       const std::string& db_path,
       const HttpRequest& request) const;

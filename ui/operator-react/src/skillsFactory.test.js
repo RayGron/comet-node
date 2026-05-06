@@ -153,6 +153,25 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(reparsed.factorySkillIds).toEqual(["skill-alpha", "skill-beta"]);
   });
 
+  it("round-trips secured connection user ids through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "secured-plane";
+    form.modelPath = "/models/qwen";
+    form.securedConnectionEnabled = true;
+    form.securedConnectionUserIds = ["scu-alpha", "scu-beta"];
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.protected).toBe(true);
+    expect(desiredState.features.secured_connection).toEqual({
+      enabled: true,
+      user_ids: ["scu-alpha", "scu-beta"],
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.securedConnectionEnabled).toBe(true);
+    expect(reparsed.securedConnectionUserIds).toEqual(["scu-alpha", "scu-beta"]);
+  });
+
   it("clears stale plane dialog errors when the form changes", () => {
     let dialog = {
       form: buildNewPlaneFormState(),

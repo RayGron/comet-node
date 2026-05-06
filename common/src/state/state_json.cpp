@@ -184,13 +184,22 @@ json ToJson(const VoiceListenerFeatureSpec& voice_listener) {
   return result;
 }
 
+json ToJson(const SecuredConnectionFeatureSpec& secured_connection) {
+  return json{
+      {"enabled", secured_connection.enabled},
+      {"user_ids", secured_connection.user_ids},
+  };
+}
+
 json DesiredStateToJson(const DesiredState& state) {
   json result = {
       {"plane_name", state.plane_name},
       {"plane_shared_disk_name", state.plane_shared_disk_name},
       {"control_root", state.control_root},
       {"plane_mode", ToString(state.plane_mode)},
-      {"protected", state.protected_plane},
+      {"protected",
+       state.protected_plane ||
+           (state.secured_connection.has_value() && state.secured_connection->enabled)},
       {"inference",
        {
            {"primary_infer_node", state.inference.primary_infer_node},
@@ -257,7 +266,7 @@ json DesiredStateToJson(const DesiredState& state) {
     result["knowledge"] = SettingsCodecs::ToJson(*state.knowledge);
   }
   if (state.turboquant.has_value() || state.context_compression.has_value() ||
-      state.voice_listener.has_value()) {
+      state.voice_listener.has_value() || state.secured_connection.has_value()) {
     json features = json::object();
     if (state.turboquant.has_value()) {
       features["turboquant"] = ToJson(*state.turboquant);
@@ -267,6 +276,9 @@ json DesiredStateToJson(const DesiredState& state) {
     }
     if (state.voice_listener.has_value()) {
       features["voice_listener"] = ToJson(*state.voice_listener);
+    }
+    if (state.secured_connection.has_value()) {
+      features["secured_connection"] = ToJson(*state.secured_connection);
     }
     result["features"] = std::move(features);
   }
@@ -402,6 +414,22 @@ DesiredState DesiredStateFromJson(const json& value) {
         voice_listener.model.required = model_json.value("required", true);
       }
       state.voice_listener = std::move(voice_listener);
+    }
+    if (features.contains("secured_connection") &&
+        features.at("secured_connection").is_object()) {
+      SecuredConnectionFeatureSpec secured_connection;
+      const auto& secured_connection_json = features.at("secured_connection");
+      secured_connection.enabled =
+          secured_connection_json.value("enabled", secured_connection.enabled);
+      if (secured_connection_json.contains("user_ids") &&
+          secured_connection_json.at("user_ids").is_array()) {
+        secured_connection.user_ids =
+            secured_connection_json.at("user_ids").get<std::vector<std::string>>();
+      }
+      state.secured_connection = std::move(secured_connection);
+      if (state.secured_connection->enabled) {
+        state.protected_plane = true;
+      }
     }
   }
   if (value.contains("app_host") && value.at("app_host").is_object()) {
@@ -617,6 +645,7 @@ DesiredState SliceDesiredStateForNode(
   result.browsing = state.browsing;
   result.turboquant = state.turboquant;
   result.context_compression = state.context_compression;
+  result.secured_connection = state.secured_connection;
   result.app_host = state.app_host;
   result.inference = state.inference;
   result.worker_group = state.worker_group;

@@ -92,6 +92,8 @@ const FIELD_INFO = {
   voiceListenerModel: "Whisper model artifact used by the Voice Listener. Only whisper.cpp models are selectable here.",
   voiceListenerWakePhrase: "Phrase that activates the listener before a transcript is submitted to chat.",
   voiceListenerLanguage: "Language hint for whisper.cpp. Use auto unless a plane must listen in one fixed language.",
+  securedConnectionEnabled: "Require HTTPS/TLS plus SSH key authentication for users explicitly selected from User Storage.",
+  securedConnectionUserIds: "Select User Storage identities that are allowed to authenticate to this plane.",
   browserSessionEnabled: "Allow approval-gated browser session APIs for this plane. Search and sanitized fetch stay enabled when Isolated Browsing is on.",
   renderedBrowserEnabled: "Allow the plane WebGateway to use rendered browser sessions when a request explicitly needs them.",
   browsingLoginEnabled: "Allow login-capable browser sessions for this plane WebGateway. Keep disabled unless the plane needs authenticated browsing.",
@@ -497,6 +499,29 @@ function NodeNameDatalist({ id, hostdHosts }) {
   );
 }
 
+function buildUserStorageSearchHaystack(user) {
+  return [
+    user?.id,
+    user?.name,
+    user?.public_key,
+    user?.fingerprint,
+    user?.last_authorized_at,
+    user?.created_at,
+    user?.updated_at,
+  ]
+    .map((item) => String(item || "").toLowerCase())
+    .join(" ");
+}
+
+function filterUserStorageItems(items, filter) {
+  const needle = String(filter || "").trim().toLowerCase();
+  const users = Array.isArray(items) ? items : [];
+  if (!needle) {
+    return users;
+  }
+  return users.filter((item) => buildUserStorageSearchHaystack(item).includes(needle));
+}
+
 function applyLtCypherPresetToForm(form, modelLibraryItems, hostdHosts = []) {
   const modelItem = findLtCypherModelItem(modelLibraryItems);
   const sourcePaths = modelLibraryPaths(modelItem);
@@ -768,6 +793,8 @@ export function buildNewPlaneFormState() {
     voiceListenerModelPaths: [],
     voiceListenerModelMountPath: VOICE_LISTENER_DEFAULT_MOUNT_PATH,
     voiceListenerImage: "",
+    securedConnectionEnabled: false,
+    securedConnectionUserIds: [],
     planeMode: "llm",
     protectedPlane: false,
     factorySkillIds: [],
@@ -905,6 +932,7 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
   const turboquant = value?.features?.turboquant || {};
   const contextCompression = value?.features?.context_compression || {};
   const voiceListener = value?.features?.voice_listener || {};
+  const securedConnection = value?.features?.secured_connection || {};
   const voiceListenerModel = voiceListener?.model || {};
   const voiceListenerModelSource = voiceListenerModel?.source || {};
   const browsing = value?.webgateway && typeof value.webgateway === "object"
@@ -969,6 +997,10 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     voiceListenerModelMountPath:
       voiceListenerModel?.mount_path || VOICE_LISTENER_DEFAULT_MOUNT_PATH,
     voiceListenerImage: voiceListener?.image || defaults.voiceListenerImage,
+    securedConnectionEnabled: Boolean(securedConnection?.enabled),
+    securedConnectionUserIds: Array.isArray(securedConnection?.user_ids)
+      ? securedConnection.user_ids.filter((item) => typeof item === "string" && item)
+      : [],
     planeMode: value?.plane_mode || defaults.planeMode,
     protectedPlane: Boolean(value?.protected),
     factorySkillIds: Array.isArray(value?.skills?.factory_skill_ids)
@@ -1129,7 +1161,7 @@ export function buildDesiredStateV2FromForm(form) {
     version: 2,
     plane_name: planeName,
     plane_mode: form.planeMode,
-    protected: Boolean(form.protectedPlane),
+    protected: Boolean(form.protectedPlane || form.securedConnectionEnabled),
     runtime: {
       engine: form.planeMode === "compute" ? "custom" : "llama.cpp",
       workers: parseNumber(form.workers, 1),
@@ -1384,6 +1416,20 @@ export function buildDesiredStateV2FromForm(form) {
         size_gb: 1,
       };
     }
+    if (form.securedConnectionEnabled) {
+      features.secured_connection = {
+        enabled: true,
+        user_ids: [
+          ...new Set(
+            (Array.isArray(form.securedConnectionUserIds)
+              ? form.securedConnectionUserIds
+              : [])
+              .map((item) => String(item || "").trim())
+              .filter(Boolean),
+          ),
+        ],
+      };
+    }
     if (Object.keys(features).length > 0) {
       desiredState.features = features;
     }
@@ -1395,6 +1441,22 @@ export function buildDesiredStateV2FromForm(form) {
         share_mode: "shared",
       };
     }
+  }
+
+  if (form.securedConnectionEnabled) {
+    desiredState.features = desiredState.features || {};
+    desiredState.features.secured_connection = {
+      enabled: true,
+      user_ids: [
+        ...new Set(
+          (Array.isArray(form.securedConnectionUserIds)
+            ? form.securedConnectionUserIds
+            : [])
+            .map((item) => String(item || "").trim())
+            .filter(Boolean),
+        ),
+      ],
+    };
   }
 
   if (
@@ -1723,6 +1785,10 @@ export function validatePlaneV2Form(form) {
   }
   if (!form?.skillsEnabled && Array.isArray(form?.factorySkillIds) && form.factorySkillIds.length > 0) {
     warnings.push("Selected Skills Factory records are ignored until Skills is enabled.");
+  }
+  if (form?.securedConnectionEnabled &&
+      (!Array.isArray(form?.securedConnectionUserIds) || form.securedConnectionUserIds.length === 0)) {
+    errors.push("Secured Connection requires at least one selected User Storage user.");
   }
   if (!form?.browsingEnabled && form?.browserSessionEnabled) {
     warnings.push("Browser sessions are ignored until Isolated Browsing is enabled.");
@@ -2168,6 +2234,7 @@ export function PlaneV2FormBuilder({
   modelLibraryItems = [],
   skillsFactoryItems = [],
   skillsFactoryGroups = [],
+  userStorageItems = [],
   hostdHosts = [],
   peerLinks = null,
   showValidation = false,
@@ -2178,6 +2245,7 @@ export function PlaneV2FormBuilder({
   const validation = showValidation ? rawValidation : { errors: [], warnings: [] };
   const [ltCypherPreflight, setLtCypherPreflight] = useState(null);
   const [factorySkillFilter, setFactorySkillFilter] = useState("");
+  const [securedUserFilter, setSecuredUserFilter] = useState("");
   const [knowledgeSelectorOpen, setKnowledgeSelectorOpen] = useState(false);
   const [selectedFactoryGroupPath, setSelectedFactoryGroupPath] = useState("");
   const [expandedFactoryGroupPaths, setExpandedFactoryGroupPaths] = useState([""]);
@@ -2549,6 +2617,20 @@ export function PlaneV2FormBuilder({
     });
   }
 
+  function toggleSecuredConnectionUser(userId) {
+    updatePlaneDialogForm(setDialog, (current) => {
+      const currentIds = Array.isArray(current.securedConnectionUserIds)
+        ? current.securedConnectionUserIds
+        : [];
+      return {
+        ...current,
+        securedConnectionUserIds: currentIds.includes(userId)
+          ? currentIds.filter((item) => item !== userId)
+          : [...currentIds, userId],
+      };
+    });
+  }
+
   function applyLtCypherPreset() {
     updatePlaneDialogForm(setDialog, (current) =>
       applyLtCypherPresetToForm(current, modelLibraryItems, hostdHosts),
@@ -2589,6 +2671,7 @@ export function PlaneV2FormBuilder({
     factorySkillFilter,
     selectedFactoryGroupPath,
   );
+  const filteredSecuredUsers = filterUserStorageItems(userStorageItems, securedUserFilter);
   const factoryGroupTree = buildSkillsFactoryGroupTree(skillsFactoryItems, skillsFactoryGroups);
   const factoryTreePaths = collectSkillsFactoryTreePaths(factoryGroupTree);
   const whisperModelLibraryItems = (Array.isArray(modelLibraryItems) ? modelLibraryItems : [])
@@ -2822,9 +2905,17 @@ export function PlaneV2FormBuilder({
           onToggle={toggleFeature("appEnabled")}
         />
         <FeatureToggle
+          title="Secured Connection"
+          info={FIELD_INFO.securedConnectionEnabled}
+          active={form.securedConnectionEnabled}
+          onToggle={toggleFeature("securedConnectionEnabled")}
+        />
+        <FeatureToggle
           title="Protected Plane"
           info={FIELD_INFO.protectedPlane}
-          active={form.protectedPlane}
+          active={form.protectedPlane || form.securedConnectionEnabled}
+          disabled={form.securedConnectionEnabled}
+          disabledLabel="Secured"
           onToggle={toggleFeature("protectedPlane")}
         />
       </div>
@@ -2836,6 +2927,70 @@ export function PlaneV2FormBuilder({
         onSelectAll={selectKnowledgeIds}
         onUnselectAll={unselectKnowledgeIds}
       />
+
+      {form.securedConnectionEnabled ? (
+        <div className="plane-form-toggle">
+          <div className="plane-form-section-header">
+            <InfoLabel info={FIELD_INFO.securedConnectionEnabled}>Secured Connection</InfoLabel>
+            <p className="plane-form-section-copy">
+              HTTPS/TLS is required and only selected User Storage identities can obtain SSH API sessions.
+            </p>
+          </div>
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.securedConnectionUserIds}>Filter users</InfoLabel>
+            <input
+              className="text-input"
+              value={securedUserFilter}
+              onChange={(event) => setSecuredUserFilter(event.target.value)}
+              placeholder="Search by name, key, fingerprint, or authorization date"
+            />
+          </label>
+          <div className="factory-skill-table-shell">
+            <table className="factory-skill-table">
+              <thead>
+                <tr>
+                  <th>Select</th>
+                  <th>Name</th>
+                  <th>Fingerprint</th>
+                  <th>Last auth</th>
+                  <th>Id</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredSecuredUsers.length === 0 ? (
+                  <tr>
+                    <td colSpan="5" className="factory-skill-table-empty">
+                      No User Storage records match the current filter.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredSecuredUsers.map((item) => {
+                    const selected = Array.isArray(form.securedConnectionUserIds)
+                      ? form.securedConnectionUserIds.includes(item.id)
+                      : false;
+                    return (
+                      <tr key={item.id}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleSecuredConnectionUser(item.id)}
+                          />
+                        </td>
+                        <td>{item.name || "unnamed-user"}</td>
+                        <td className="factory-skill-table-id">{item.fingerprint || "none"}</td>
+                        <td>{item.last_authorized_at || "never"}</td>
+                        <td className="factory-skill-table-id">{item.id}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+          <FieldHint message={fieldError("Secured Connection requires at least one selected User Storage user.")} />
+        </div>
+      ) : null}
 
       {form.planeMode === "llm" && form.knowledgeEnabled ? (
         <div className="plane-form-toggle">

@@ -389,6 +389,20 @@ void DesiredStateV2Renderer::RenderFeatures() {
       state_.voice_listener = std::move(voice_listener);
     }
   }
+  if (features_json_.contains("secured_connection") &&
+      features_json_.at("secured_connection").is_object()) {
+    const auto& secured_json = features_json_.at("secured_connection");
+    if (secured_json.value("enabled", false)) {
+      SecuredConnectionFeatureSpec secured_connection;
+      secured_connection.enabled = true;
+      if (secured_json.contains("user_ids") && secured_json.at("user_ids").is_array()) {
+        secured_connection.user_ids =
+            secured_json.at("user_ids").get<std::vector<std::string>>();
+      }
+      state_.secured_connection = std::move(secured_connection);
+      state_.protected_plane = true;
+    }
+  }
 }
 
 void DesiredStateV2Renderer::RenderHooks() {

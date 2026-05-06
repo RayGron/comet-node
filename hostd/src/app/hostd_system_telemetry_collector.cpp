@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -378,21 +377,6 @@ naim::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
   const naim::DesiredState& state,
   const std::string& node_name,
   const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const {
-
-  auto populate_gpu_processes_from_nvidia_smi =
-      [&](naim::GpuTelemetrySnapshot* snapshot) {
-        if (snapshot == nullptr) {
-          return;
-        }
-        std::map<int, std::string> pid_to_instance_name;
-        for (const auto& status : instance_statuses) {
-          if (status.engine_pid > 0) {
-            pid_to_instance_name[status.engine_pid] = status.instance_name;
-          }
-          if (status.runtime_pid > 0) {
-            pid_to_instance_name[status.runtime_pid] = status.instance_name;
-          }
-        }
 
 #ifdef NAIM_RUNTIME_CUDA
 

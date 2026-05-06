@@ -36,6 +36,11 @@ class HostdSystemTelemetryCollector final {
       const std::string& state_root) const;
 
  private:
+
+  void CollectBlockDeviceStats(
+    naim::DiskTelemetryRecord& record,
+    const std::string& source) const;
+
   HostdCommandSupport command_support_;
   mutable std::optional<HostdCpuCounterSample> last_cpu_sample_;
 };

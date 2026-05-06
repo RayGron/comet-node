@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <chrono>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -41,19 +40,6 @@ std::string CurrentTimestampString() {
     return {};
   }
   return buffer;
-}
-
-std::string NormalizeManagedPath(const std::string& path) {
-  std::error_code error;
-  const auto normalized = fs::weakly_canonical(path, error);
-  if (!error) {
-    return normalized.string();
-  }
-  return fs::path(path).lexically_normal().string();
-}
-
-std::string NormalizeMountPointPath(const std::string& mount_point) {
-  return NormalizeManagedPath(mount_point);
 }
 
 struct BlockDeviceIoStats {
@@ -619,75 +605,101 @@ naim::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
   return snapshot;
 }
 
+#ifdef _WIN32
+std::wstring ToWString(const std::string& str) {
+  if (str.empty()) return L"";
+  int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+  std::wstring wstrTo(size_needed, 0);
+  MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
+  return wstrTo;
+}
+
+std::string FromWString(const std::wstring& wstr) {
+  if (wstr.empty()) return "";
+  int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
+  std::string strTo(size_needed, 0);
+  WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], size_needed, NULL, NULL);
+  return strTo;
+}
+#endif
+
+struct MountInfo {
+  std::string source;
+  std::string fs_type;
+};
+
+std::optional<MountInfo> GetMountInfo(const std::string& mount_point) {
+#if defined(_WIN32)
+  std::wstring wpath = ToWString(path);
+  if (!wpath.empty() && wpath.back() != L'\\' && wpath.back() != L'/') {
+    wpath += L'\\';
+  }
+
+  WCHAR volume_name[MAX_PATH];
+  WCHAR file_system_name[MAX_PATH];
+  DWORD serial_number, max_component_len, file_system_flags;
+
+  // GetVolumeInformation получает имя файловой системы (NTFS/FAT32)
+  if (GetVolumeInformationW(
+        wpath.c_str(),
+        NULL, 0, // Нам не нужна метка тома (Volume Label)
+        &serial_number,
+        &max_component_len,
+        &file_system_flags,
+        file_system_name,
+        MAX_PATH)) {
+
+    MountInfo info;
+    info.fs_type = FromWString(file_system_name);
+
+    if (GetVolumeNameForVolumeMountPointW(wpath.c_str(), volume_name, MAX_PATH)) {
+      info.source = FromWString(volume_name);
+    } else {
+      info.source = "Local Disk";
+    }
+
+    return info;
+  }
+  return std::nullopt;
+#else
+  std::ifstream input("/proc/self/mounts");
+  if (!input.is_open()) return std::nullopt;
+
+  std::string src, target, type;
+  while (input >> src >> target >> type) {
+    std::string dummy;
+    std::getline(input, dummy);
+    if (target == mount_point) {
+      return MountInfo{src, type};
+    }
+  }
+  return std::nullopt;
+#endif
+}
+
+bool IsPathMounted(const std::string& path) {
+#if defined(_WIN32)
+  std::wstring wpath = ToWString(path);
+
+  if (!wpath.empty() && wpath.back() != L'\\' && wpath.back() != L'/') {
+    wpath += L'\\';
+  }
+
+  UINT drive_type = GetDriveTypeW(wpath.c_str());
+  return (drive_type != DRIVE_UNKNOWN && drive_type != DRIVE_NO_ROOT_DIR);
+#else
+  return GetMountInfo(path).has_value();
+#endif
+}
+
 naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
-    const naim::DesiredState& state,
-    const std::string& node_name) const {
+  const naim::DesiredState& state,
+  const std::string& node_name) const {
+
   naim::DiskTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
-#if defined(_WIN32)
-  snapshot.source = "filesystem::space";
-#else
-  snapshot.source = "statvfs";
-#endif
+  snapshot.source = "std::filesystem::space";
   snapshot.collected_at = CurrentTimestampString();
-
-  auto is_path_mounted = [this](const std::string& mount_point) {
-    if (command_support_.RunCommandOk(
-            "/usr/bin/mountpoint -q " + command_support_.ShellQuote(mount_point) +
-            " >/dev/null 2>&1")) {
-      return true;
-    }
-    const std::string normalized_mount_point = NormalizeMountPointPath(mount_point);
-    return normalized_mount_point != mount_point &&
-           command_support_.RunCommandOk(
-               "/usr/bin/mountpoint -q " + command_support_.ShellQuote(normalized_mount_point) +
-               " >/dev/null 2>&1");
-  };
-
-  auto current_mount_source = [&](const std::string& mount_point) -> std::optional<std::string> {
-    const std::array<std::string, 2> candidates = {
-        mount_point,
-        NormalizeMountPointPath(mount_point),
-    };
-    std::ifstream input("/proc/self/mounts");
-    if (!input.is_open()) {
-      return std::nullopt;
-    }
-
-    std::string source;
-    std::string target;
-    std::string fs_type;
-    while (input >> source >> target >> fs_type) {
-      std::string rest_of_line;
-      std::getline(input, rest_of_line);
-      for (const auto& candidate : candidates) {
-        if (!candidate.empty() && target == candidate) {
-          return source;
-        }
-      }
-    }
-    return std::nullopt;
-  };
-
-  auto current_mount_filesystem_type =
-      [](const std::string& mount_point) -> std::optional<std::string> {
-    std::ifstream input("/proc/mounts");
-    if (!input.is_open()) {
-      return std::nullopt;
-    }
-
-    std::string source;
-    std::string target;
-    std::string fs_type;
-    while (input >> source >> target >> fs_type) {
-      std::string rest_of_line;
-      std::getline(input, rest_of_line);
-      if (target == mount_point) {
-        return fs_type;
-      }
-    }
-    return std::nullopt;
-  };
 
   for (const auto& disk : state.disks) {
     if (disk.node_name != node_name) {
@@ -699,131 +711,97 @@ naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
     record.plane_name = disk.plane_name;
     record.node_name = disk.node_name;
     record.mount_point = disk.host_path;
-    record.runtime_state = fs::exists(disk.host_path) ? "present" : "missing";
-    record.health = fs::exists(disk.host_path) ? "ok" : "missing";
-    if (record.health == "missing") {
+
+    std::error_code ec;
+    bool exists = fs::exists(disk.host_path, ec);
+
+    record.runtime_state = exists ? "present" : "missing";
+    record.health = exists ? "ok" : "missing";
+
+    if (!exists) {
       record.fault_count += 1;
       record.fault_reasons.push_back("host-path-missing");
     }
 
-    if (is_path_mounted(disk.host_path)) {
+    if (IsPathMounted(disk.host_path)) {
       record.mounted = true;
       record.runtime_state = "mounted";
-      const auto mount_fs = current_mount_filesystem_type(disk.host_path);
-      if (mount_fs.has_value()) {
-        record.filesystem_type = *mount_fs;
-      }
-      const auto mount_source = current_mount_source(disk.host_path);
-      if (mount_source.has_value()) {
-        record.mount_source = *mount_source;
+
+      if (auto mount_info = GetMountInfo(disk.host_path)) {
+        record.filesystem_type = mount_info->fs_type;
+        record.mount_source = mount_info->source;
+
+        if (record.mount_source.rfind("/dev/", 0) == 0) {
+          CollectBlockDeviceStats(record, record.mount_source);
+        }
       } else {
         record.warning_count += 1;
         record.fault_reasons.push_back("mount-source-unavailable");
-        if (record.health == "ok") {
-          record.health = "degraded";
-        }
-      }
-      if (mount_source.has_value() && mount_source->rfind("/dev/", 0) == 0) {
-        if (const auto read_only = ReadBlockDeviceReadOnly(*mount_source);
-            read_only.has_value()) {
-          record.read_only = *read_only;
-          if (*read_only) {
-            record.warning_count += 1;
-            record.fault_reasons.push_back("read-only-device");
-            if (record.health == "ok") {
-              record.health = "degraded";
-            }
-          }
-        }
-        if (const auto io_stats = ReadBlockDeviceIoStats(*mount_source); io_stats.has_value()) {
-          record.perf_counters_available = true;
-          record.read_ios = io_stats->read_ios;
-          record.write_ios = io_stats->write_ios;
-          record.read_bytes = io_stats->read_sectors * 512ULL;
-          record.write_bytes = io_stats->write_sectors * 512ULL;
-          record.io_in_progress = static_cast<int>(io_stats->io_in_progress);
-          record.io_time_ms = io_stats->io_time_ms;
-          record.weighted_io_time_ms = io_stats->weighted_io_time_ms;
-        } else {
-          record.status_message =
-              record.status_message.empty()
-                  ? "block io stats unavailable"
-                  : record.status_message + "; block io stats unavailable";
-          record.warning_count += 1;
-          record.fault_reasons.push_back("block-io-stats-unavailable");
-          if (record.health == "ok") {
-            record.health = "degraded";
-          }
-        }
-        if (const auto io_error_count = ReadBlockDeviceIoErrorCount(*mount_source);
-            io_error_count.has_value()) {
-          record.io_error_counters_available = true;
-          record.io_error_count = *io_error_count;
-          if (*io_error_count > 0) {
-            record.fault_count += 1;
-            record.fault_reasons.push_back("io-error-count-nonzero");
-            if (record.health == "ok") {
-              record.health = "degraded";
-            }
-          }
-        }
+        if (record.health == "ok") record.health = "degraded";
       }
     }
 
-#if defined(_WIN32)
-    std::error_code space_error;
-    const auto space_info = fs::space(disk.host_path, space_error);
-    if (!space_error) {
-      record.total_bytes = space_info.capacity;
-      record.free_bytes = space_info.available;
-      record.used_bytes =
-          record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
-      if (record.health == "missing") {
-        record.health = "ok";
-      }
-      if (record.runtime_state == "missing") {
-        record.runtime_state = "available";
-      }
+    fs::space_info space = fs::space(disk.host_path, ec);
+    if (!ec) {
+      record.total_bytes = space.capacity;
+      record.free_bytes = space.available;
+      record.used_bytes = (space.capacity >= space.available)
+                            ? (space.capacity - space.available) : 0;
+
+      if (record.health == "missing") record.health = "ok";
+      if (record.runtime_state == "missing") record.runtime_state = "available";
     } else {
-      record.status_message =
-          record.status_message.empty() ? "filesystem::space unavailable"
-                                        : record.status_message + "; filesystem::space unavailable";
+      record.status_message = record.status_message.empty()
+      ? "fs::space failed"
+      : record.status_message + "; fs::space failed";
+
       record.fault_count += 1;
       record.fault_reasons.push_back("filesystem-space-unavailable");
-      if (record.health == "ok") {
-        record.health = "degraded";
-      }
+      if (record.health == "ok") record.health = "degraded";
     }
-#else
-    struct statvfs stats {};
-    if (statvfs(disk.host_path.c_str(), &stats) == 0) {
-      const std::uint64_t block_size = static_cast<std::uint64_t>(stats.f_frsize);
-      record.total_bytes = static_cast<std::uint64_t>(stats.f_blocks) * block_size;
-      record.free_bytes = static_cast<std::uint64_t>(stats.f_bavail) * block_size;
-      record.used_bytes =
-          record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
-      if (record.health == "missing") {
-        record.health = "ok";
-      }
-      if (record.runtime_state == "missing") {
-        record.runtime_state = "available";
-      }
-    } else {
-      record.status_message =
-          record.status_message.empty() ? "statvfs unavailable"
-                                        : record.status_message + "; statvfs unavailable";
-      record.fault_count += 1;
-      record.fault_reasons.push_back("statvfs-unavailable");
-      if (record.health == "ok") {
-        record.health = "degraded";
-      }
-    }
-#endif
 
     snapshot.items.push_back(std::move(record));
   }
 
   return snapshot;
+}
+
+void HostdSystemTelemetryCollector::CollectBlockDeviceStats(
+  naim::DiskTelemetryRecord& record,
+  const std::string& source) const {
+
+  // ReadBlockDeviceReadOnly
+  if (auto ro = ReadBlockDeviceReadOnly(source)) {
+    record.read_only = *ro;
+    if (*ro) {
+      record.warning_count += 1;
+      record.fault_reasons.push_back("read-only-device");
+      if (record.health == "ok") record.health = "degraded";
+    }
+  }
+
+  // ReadBlockDeviceIoStats
+  if (auto io_stats = ReadBlockDeviceIoStats(source)) {
+    record.perf_counters_available = true;
+    record.read_ios = io_stats->read_ios;
+    record.write_ios = io_stats->write_ios;
+    record.read_bytes = io_stats->read_sectors * 512ULL;
+    record.write_bytes = io_stats->write_sectors * 512ULL;
+    record.io_in_progress = static_cast<int>(io_stats->io_in_progress);
+    record.io_time_ms = io_stats->io_time_ms;
+    record.weighted_io_time_ms = io_stats->weighted_io_time_ms;
+  }
+
+  // ReadBlockDeviceIoErrorCount
+  if (auto errors = ReadBlockDeviceIoErrorCount(source)) {
+    record.io_error_counters_available = true;
+    record.io_error_count = *errors;
+    if (*errors > 0) {
+      record.fault_count += 1;
+      record.fault_reasons.push_back("io-error-count-nonzero");
+      if (record.health == "ok") record.health = "degraded";
+    }
+  }
 }
 
 naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemetry(
@@ -840,76 +818,19 @@ naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemet
     record.fault_reasons.push_back("storage-root-missing");
   }
 
-  auto is_path_mounted = [this](const std::string& mount_point) {
-    if (command_support_.RunCommandOk(
-            "/usr/bin/mountpoint -q " + command_support_.ShellQuote(mount_point) +
-            " >/dev/null 2>&1")) {
-      return true;
-    }
-    const std::string normalized_mount_point = NormalizeMountPointPath(mount_point);
-    return normalized_mount_point != mount_point &&
-           command_support_.RunCommandOk(
-               "/usr/bin/mountpoint -q " + command_support_.ShellQuote(normalized_mount_point) +
-               " >/dev/null 2>&1");
-  };
-
-  auto current_mount_source = [&](const std::string& mount_point) -> std::optional<std::string> {
-    const std::array<std::string, 2> candidates = {
-        mount_point,
-        NormalizeMountPointPath(mount_point),
-    };
-    std::ifstream input("/proc/self/mounts");
-    if (!input.is_open()) {
-      return std::nullopt;
-    }
-    std::string source;
-    std::string target;
-    std::string fs_type;
-    while (input >> source >> target >> fs_type) {
-      std::string rest_of_line;
-      std::getline(input, rest_of_line);
-      for (const auto& candidate : candidates) {
-        if (!candidate.empty() && target == candidate) {
-          return source;
-        }
-      }
-    }
-    return std::nullopt;
-  };
-
-  auto current_mount_filesystem_type =
-      [](const std::string& mount_point) -> std::optional<std::string> {
-    std::ifstream input("/proc/mounts");
-    if (!input.is_open()) {
-      return std::nullopt;
-    }
-    std::string source;
-    std::string target;
-    std::string fs_type;
-    while (input >> source >> target >> fs_type) {
-      std::string rest_of_line;
-      std::getline(input, rest_of_line);
-      if (target == mount_point) {
-        return fs_type;
-      }
-    }
-    return std::nullopt;
-  };
-
-  if (is_path_mounted(storage_root)) {
+  if (IsPathMounted(storage_root)) {
     record.mounted = true;
     record.runtime_state = "mounted";
-    if (const auto mount_fs = current_mount_filesystem_type(storage_root); mount_fs.has_value()) {
-      record.filesystem_type = *mount_fs;
-    }
-    if (const auto mount_source = current_mount_source(storage_root); mount_source.has_value()) {
-      record.mount_source = *mount_source;
-      if (mount_source->rfind("/dev/", 0) == 0) {
-        if (const auto read_only = ReadBlockDeviceReadOnly(*mount_source);
+    if (auto mount_info = GetMountInfo(storage_root)) {
+      record.filesystem_type = mount_info->fs_type;
+      record.mount_source = mount_info->source;
+
+      if (mount_info->source.rfind("/dev/", 0) == 0) {
+        if (const auto read_only = ReadBlockDeviceReadOnly(mount_info->source);
             read_only.has_value()) {
           record.read_only = *read_only;
         }
-        if (const auto io_stats = ReadBlockDeviceIoStats(*mount_source); io_stats.has_value()) {
+        if (const auto io_stats = ReadBlockDeviceIoStats(mount_info->source); io_stats.has_value()) {
           record.perf_counters_available = true;
           record.read_ios = io_stats->read_ios;
           record.write_ios = io_stats->write_ios;
@@ -919,7 +840,7 @@ naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemet
           record.io_time_ms = io_stats->io_time_ms;
           record.weighted_io_time_ms = io_stats->weighted_io_time_ms;
         }
-        if (const auto io_error_count = ReadBlockDeviceIoErrorCount(*mount_source);
+        if (const auto io_error_count = ReadBlockDeviceIoErrorCount(mount_info->source);
             io_error_count.has_value()) {
           record.io_error_counters_available = true;
           record.io_error_count = *io_error_count;
@@ -928,25 +849,14 @@ naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemet
     }
   }
 
-#if defined(_WIN32)
   std::error_code space_error;
   const auto space_info = fs::space(storage_root, space_error);
   if (!space_error) {
     record.total_bytes = space_info.capacity;
     record.free_bytes = space_info.available;
     record.used_bytes =
-        record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
+      record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
   }
-#else
-  struct statvfs stats {};
-  if (statvfs(storage_root.c_str(), &stats) == 0) {
-    const std::uint64_t block_size = static_cast<std::uint64_t>(stats.f_frsize);
-    record.total_bytes = static_cast<std::uint64_t>(stats.f_blocks) * block_size;
-    record.free_bytes = static_cast<std::uint64_t>(stats.f_bavail) * block_size;
-    record.used_bytes =
-        record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
-  }
-#endif
 
   return record;
 }
@@ -1070,5 +980,6 @@ naim::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTele
       [](const auto& left, const auto& right) { return left.interface_name < right.interface_name; });
   return snapshot;
 }
+
 
 }  // namespace naim::hostd

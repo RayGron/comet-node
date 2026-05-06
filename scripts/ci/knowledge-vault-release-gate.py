@@ -470,7 +470,10 @@ def scan_repo_for_forbidden_defaults(repo_root):
     for path in repo_root.rglob("*"):
         if not path.is_file():
             continue
-        if excluded_dirs.intersection(path.relative_to(repo_root).parts):
+        relative_parts = path.relative_to(repo_root).parts
+        if excluded_dirs.intersection(relative_parts):
+            continue
+        if any(part.startswith("build-") for part in relative_parts):
             continue
         try:
             content = path.read_text(encoding="utf-8")

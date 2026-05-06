@@ -42,6 +42,8 @@ class HostdRuntimeTelemetrySupport final {
   naim::RuntimeProcessStatus ToProcessStatus(
       naim::RuntimeStatus status,
       const naim::InstanceSpec& instance) const;
+  std::optional<naim::RuntimeProcessStatus> BuildContainerRuntimeStatusForInstance(
+      const naim::InstanceSpec& instance) const;
   std::optional<std::string> ParseTaggedValue(
       const std::string& text,
       const std::string& key) const;

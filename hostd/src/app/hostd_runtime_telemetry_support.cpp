@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "app/hostd_local_state_path_support.h"
@@ -66,6 +67,10 @@ std::vector<naim::RuntimeProcessStatus> HostdRuntimeTelemetrySupport::LoadLocalI
       const auto selected_path =
           infer_status_path.has_value() ? infer_status_path : status_path;
       if (!selected_path.has_value() || !fs::exists(*selected_path)) {
+        if (const auto container_status = BuildContainerRuntimeStatusForInstance(instance);
+            container_status.has_value()) {
+          result.push_back(*container_status);
+        }
         continue;
       }
       const auto status = naim::LoadRuntimeStatusJson(*selected_path);
@@ -194,6 +199,8 @@ std::optional<std::string> HostdRuntimeTelemetrySupport::WorkerRuntimeStatusPath
     const naim::InstanceSpec& instance) const {
   if (instance.role != naim::InstanceRole::Worker &&
       instance.role != naim::InstanceRole::Skills &&
+      instance.role != naim::InstanceRole::Browsing &&
+      instance.role != naim::InstanceRole::VoiceModule &&
       instance.role != naim::InstanceRole::Interaction) {
     return std::nullopt;
   }
@@ -203,6 +210,10 @@ std::optional<std::string> HostdRuntimeTelemetrySupport::WorkerRuntimeStatusPath
          disk.kind == naim::DiskKind::WorkerPrivate) ||
         (instance.role == naim::InstanceRole::Skills &&
          disk.kind == naim::DiskKind::SkillsPrivate) ||
+        (instance.role == naim::InstanceRole::Browsing &&
+         disk.kind == naim::DiskKind::BrowsingPrivate) ||
+        (instance.role == naim::InstanceRole::VoiceModule &&
+         disk.kind == naim::DiskKind::VoiceModulePrivate) ||
         (instance.role == naim::InstanceRole::Interaction &&
          disk.kind == naim::DiskKind::InteractionPrivate);
     if (matching_disk_kind && disk.owner_name == instance.name &&
@@ -210,6 +221,10 @@ std::optional<std::string> HostdRuntimeTelemetrySupport::WorkerRuntimeStatusPath
       return (fs::path(disk.host_path) /
               (instance.role == naim::InstanceRole::Skills
                    ? "skills-runtime-status.json"
+                   : instance.role == naim::InstanceRole::Browsing
+                         ? "webgateway-runtime-status.json"
+                   : instance.role == naim::InstanceRole::VoiceModule
+                         ? "voice-module-runtime-status.json"
                    : instance.role == naim::InstanceRole::Interaction
                          ? "interaction-runtime-status.json"
                    : "worker-runtime-status.json"))
@@ -251,6 +266,32 @@ naim::RuntimeProcessStatus HostdRuntimeTelemetrySupport::ToProcessStatus(
   process.ready = status.ready || status.launch_ready || status.inference_ready;
   process.plane_name = status.plane_name;
   return process;
+}
+
+std::optional<naim::RuntimeProcessStatus>
+HostdRuntimeTelemetrySupport::BuildContainerRuntimeStatusForInstance(
+    const naim::InstanceSpec& instance) const {
+  if (instance.role != naim::InstanceRole::VoiceModule) {
+    return std::nullopt;
+  }
+  const auto host_pid = ResolveServiceHostPid(instance.name);
+  if (!host_pid.has_value()) {
+    return std::nullopt;
+  }
+  naim::RuntimeStatus status;
+  status.instance_name = instance.name;
+  status.instance_role = naim::ToString(instance.role);
+  status.node_name = instance.node_name;
+  status.plane_name = instance.plane_name;
+  status.runtime_phase = "running";
+  status.runtime_backend = "container";
+  status.ready = true;
+  status.launch_ready = true;
+  status.inference_ready = true;
+  status.active_model_ready = true;
+  status.runtime_pid = *host_pid;
+  status.engine_pid = *host_pid;
+  return ToProcessStatus(std::move(status), instance);
 }
 
 std::optional<std::string> HostdRuntimeTelemetrySupport::ParseTaggedValue(

@@ -13,6 +13,7 @@
 #include "app/hostd_local_state_path_support.h"
 #include "app/hostd_local_state_repository.h"
 #include "app/hostd_runtime_telemetry_support.h"
+#include "naim/runtime/runtime_status.h"
 #include "naim/state/desired_state_v2_renderer.h"
 
 namespace {
@@ -153,10 +154,12 @@ int main() {
             .has_value(),
         "plane-b state should remain present");
 
-    const auto aggregate_state = local_state_repository.LoadLocalAppliedState(state_root, node_name);
+    const auto aggregate_state =
+        local_state_repository.LoadLocalAppliedState(state_root, node_name);
     Expect(aggregate_state.has_value(), "aggregate state should still exist");
-    Expect(aggregate_state->instances.size() == 4,
-           "aggregate should only contain plane-b infer aggregator, infer leaf, worker, and skills instances");
+    Expect(
+        aggregate_state->instances.size() == 5,
+        "aggregate should only contain plane-b runtime instances");
     Expect(
         std::all_of(
             aggregate_state->instances.begin(),
@@ -166,8 +169,60 @@ int main() {
     Expect(
         local_runtime_state_support.ExpectedRuntimeStatusCountForNode(
             *aggregate_state,
-            node_name) == 4,
-        "infer aggregator, infer leaf, worker, and skills instances should all contribute runtime statuses");
+            node_name) == 5,
+        "plane-b runtime instances should all contribute runtime statuses");
+
+    const std::string telemetry_plane = "plane-telemetry";
+    naim::DesiredState telemetry_state = BuildState(telemetry_plane, node_name);
+    naim::InstanceSpec webgateway;
+    webgateway.name = "webgateway-" + telemetry_plane;
+    webgateway.role = naim::InstanceRole::Browsing;
+    webgateway.plane_name = telemetry_plane;
+    webgateway.node_name = node_name;
+    webgateway.private_disk_name = webgateway.name + "-private";
+    telemetry_state.instances.push_back(webgateway);
+    naim::DiskSpec webgateway_disk;
+    webgateway_disk.name = webgateway.private_disk_name;
+    webgateway_disk.kind = naim::DiskKind::BrowsingPrivate;
+    webgateway_disk.plane_name = telemetry_plane;
+    webgateway_disk.owner_name = webgateway.name;
+    webgateway_disk.node_name = node_name;
+    webgateway_disk.host_path = (temp_root / "webgateway-private").string();
+    webgateway_disk.container_path = "/naim/private";
+    telemetry_state.disks.push_back(webgateway_disk);
+    local_state_repository.SaveLocalAppliedState(
+        state_root,
+        node_name,
+        telemetry_state,
+        telemetry_plane);
+    fs::create_directories(webgateway_disk.host_path);
+    naim::RuntimeStatus webgateway_status;
+    webgateway_status.instance_name = webgateway.name;
+    webgateway_status.instance_role = "webgateway";
+    webgateway_status.node_name = node_name;
+    webgateway_status.plane_name = telemetry_plane;
+    webgateway_status.runtime_phase = "running";
+    webgateway_status.ready = true;
+    webgateway_status.launch_ready = true;
+    webgateway_status.inference_ready = true;
+    naim::SaveRuntimeStatusJson(
+        webgateway_status,
+        (fs::path(webgateway_disk.host_path) / "webgateway-runtime-status.json").string());
+    const auto telemetry_statuses =
+        runtime_telemetry_support.LoadLocalInstanceRuntimeStatuses(
+            state_root,
+            node_name,
+            telemetry_plane);
+    Expect(
+        std::any_of(
+            telemetry_statuses.begin(),
+            telemetry_statuses.end(),
+            [&](const naim::RuntimeProcessStatus& status) {
+              return status.instance_name == webgateway.name &&
+                     status.instance_role == "webgateway" &&
+                     status.ready;
+            }),
+        "webgateway runtime status should be collected from its private disk");
 
     const std::string partial_plane = "plane-partial";
     const naim::DesiredState partial_state =
@@ -213,6 +268,7 @@ int main() {
     std::cout << "ok: recursive-plane-state-removal\n";
     std::cout << "ok: partial-llm-state-roundtrip\n";
     std::cout << "ok: require-single-node-sliced-state\n";
+    std::cout << "ok: webgateway-runtime-telemetry\n";
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';

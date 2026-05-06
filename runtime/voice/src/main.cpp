@@ -22,6 +22,8 @@
 #include <thread>
 #include <vector>
 
+#include <unistd.h>
+
 namespace {
 
 struct Config {
@@ -32,6 +34,10 @@ struct Config {
   std::string wake_phrase = "Hey Jex";
   std::string ffmpeg_bin = "ffmpeg";
   std::string language = "auto";
+  std::string plane_name;
+  std::string instance_name;
+  std::string node_name;
+  std::string runtime_status_path;
   int threads = std::max(1u, std::thread::hardware_concurrency());
   int max_body_bytes = 16 * 1024 * 1024;
   bool translate = false;
@@ -88,6 +94,10 @@ Config load_config() {
   config.wake_phrase = getenv_string("VOICE_LISTENER_WAKE_PHRASE", getenv_string("NAIM_VOICE_LISTENER_WAKE_PHRASE", config.wake_phrase));
   config.ffmpeg_bin = getenv_string("VOICE_ASR_FFMPEG_BIN", config.ffmpeg_bin);
   config.language = getenv_string("VOICE_ASR_LANGUAGE", config.language);
+  config.plane_name = getenv_string("NAIM_PLANE_NAME");
+  config.instance_name = getenv_string("NAIM_INSTANCE_NAME");
+  config.node_name = getenv_string("NAIM_NODE_NAME");
+  config.runtime_status_path = getenv_string("NAIM_VOICE_MODULE_RUNTIME_STATUS_PATH");
   config.threads = getenv_int("VOICE_ASR_THREADS", config.threads);
   config.max_body_bytes = getenv_int("VOICE_BODY_LIMIT_BYTES", config.max_body_bytes);
   config.translate = getenv_bool("VOICE_ASR_TRANSLATE", config.translate);
@@ -118,6 +128,38 @@ std::string json_escape(const std::string &input) {
 
 std::string make_json_error(const std::string &message) {
   return "{\"error\":\"" + json_escape(message) + "\"}";
+}
+
+void write_runtime_status(const Config &config, const std::string &phase, bool ready) {
+  if (config.runtime_status_path.empty()) {
+    return;
+  }
+  const std::filesystem::path status_path(config.runtime_status_path);
+  if (status_path.has_parent_path()) {
+    std::filesystem::create_directories(status_path.parent_path());
+  }
+  std::ofstream out(status_path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    std::cerr << "failed to write voice-module runtime status: "
+              << status_path.string() << "\n";
+    return;
+  }
+  const int pid = static_cast<int>(getpid());
+  out << "{\n"
+      << "  \"plane_name\": \"" << json_escape(config.plane_name) << "\",\n"
+      << "  \"instance_name\": \"" << json_escape(config.instance_name) << "\",\n"
+      << "  \"instance_role\": \"voice-module\",\n"
+      << "  \"node_name\": \"" << json_escape(config.node_name) << "\",\n"
+      << "  \"runtime_backend\": \"whisper.cpp\",\n"
+      << "  \"runtime_phase\": \"" << json_escape(phase) << "\",\n"
+      << "  \"model_path\": \"" << json_escape(config.model_path) << "\",\n"
+      << "  \"runtime_pid\": " << pid << ",\n"
+      << "  \"engine_pid\": " << pid << ",\n"
+      << "  \"ready\": " << (ready ? "true" : "false") << ",\n"
+      << "  \"launch_ready\": " << (ready ? "true" : "false") << ",\n"
+      << "  \"inference_ready\": " << (ready ? "true" : "false") << ",\n"
+      << "  \"active_model_ready\": " << (ready ? "true" : "false") << "\n"
+      << "}\n";
 }
 
 std::string request_id() {
@@ -437,6 +479,7 @@ int main() {
   const Config config = load_config();
   if (config.model_path.empty()) {
     std::cerr << "WHISPER_MODEL_PATH is required\n";
+    write_runtime_status(config, "failed", false);
     return 2;
   }
 
@@ -444,8 +487,10 @@ int main() {
   whisper_context *ctx = whisper_init_from_file_with_params(config.model_path.c_str(), cparams);
   if (!ctx) {
     std::cerr << "failed to load whisper model: " << config.model_path << "\n";
+    write_runtime_status(config, "failed", false);
     return 2;
   }
+  write_runtime_status(config, "running", true);
 
   httplib::Server server;
   server.set_payload_max_length(static_cast<size_t>(config.max_body_bytes));

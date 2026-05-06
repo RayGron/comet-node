@@ -161,6 +161,10 @@ async function mockApi(page) {
             status: "idle",
             heartbeat_at: "2026-05-06 07:20:00",
             runtime_status: { available: true, runtime: { runtime_phase: "running" } },
+            telemetry_last_frame_age_ms: 0,
+            telemetry_controller_ingest_delay_ms: 0,
+            telemetry_latency_total_ms: 0,
+            telemetry_browser_parse_ms: 0,
             cpu_telemetry: {
               summary: {
                 total_memory_bytes: 269_960_683_520,
@@ -317,6 +321,8 @@ test("dashboard renders host roles, capacity, LAN peers, and node overview", asy
   await expect(overviewDialog).toBeVisible();
   await expect(overviewDialog.getByText("Runtime", { exact: true })).toBeVisible();
   await expect(overviewDialog.getByText("running", { exact: true })).toBeVisible();
+  await expect(overviewDialog.getByText("0 ms", { exact: true }).first()).toBeVisible();
+  await expect(overviewDialog.getByText("0.0 ms", { exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 

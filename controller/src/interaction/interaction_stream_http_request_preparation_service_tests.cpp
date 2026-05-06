@@ -7,6 +7,7 @@
 
 #include "auth/auth_support_service.h"
 #include "interaction/interaction_stream_http_request_preparation_service.h"
+#include "naim/state/sqlite_store.h"
 
 namespace {
 
@@ -121,12 +122,79 @@ void TestPrepareRejectsUnauthorizedProtectedPlane() {
   std::filesystem::remove(db_path);
 }
 
+void TestPrepareUsesExternalOwnerForSecuredConnectionSession() {
+  const std::string db_path =
+      MakeTempDbPath("interaction-stream-http-prepare-secured");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  store.UpsertSecuredConnectionUser({
+      "scu-test",
+      "terminal-a",
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnly test@example",
+      "SHA256:test",
+      "terminal-a SHA256:test",
+      "",
+      "2026-05-06 00:00:00",
+      "2026-05-06 00:00:00",
+      "",
+  });
+  store.InsertSecuredConnectionSession({
+      "secured-token-test",
+      "scu-test",
+      "protected-plane",
+      "2099-01-01 00:00:00",
+      "2026-05-06 00:00:00",
+      "",
+      "",
+  });
+
+  const naim::controller::InteractionStreamRequestResolver resolver(
+      [](const std::string&, const std::string& plane_name) {
+        return BuildReadyResolution(plane_name, true);
+      },
+      [](const naim::controller::PlaneInteractionResolution&,
+         naim::controller::InteractionRequestContext*) {
+        return std::optional<naim::controller::InteractionValidationError>{};
+      });
+  const naim::controller::InteractionStreamHttpRequestPreparationService service(
+      resolver,
+      [](const naim::controller::PlaneInteractionResolution&,
+         naim::controller::InteractionRequestContext*) {
+        return std::optional<naim::controller::InteractionValidationError>{};
+      });
+  AuthSupportService auth_support;
+  HttpRequest request;
+  request.method = "POST";
+  request.path = "/api/v1/planes/protected-plane/interaction/chat/completions/stream";
+  request.headers["x-naim-session-token"] = "secured-token-test";
+  request.body = R"({"messages":[{"role":"user","content":"hello"}]})";
+
+  const auto result = service.Prepare(db_path, request, "req-3", auth_support);
+  Expect(!result.error_response.has_value(),
+         "secured connection session should authorize protected plane request");
+  Expect(result.setup.has_value(), "secured connection request should return setup");
+  Expect(
+      result.setup->request_context.owner_kind ==
+          "secured_connection:7fff86ef51c3be788e2bafec",
+      "secured connection conversation owner should not use users table ids");
+  Expect(
+      !result.setup->request_context.owner_user_id.has_value(),
+      "secured connection conversation owner_user_id should remain null");
+  Expect(
+      result.setup->request_context.auth_session_kind == "secured_ssh",
+      "secured connection auth session kind should be preserved");
+  std::cout << "ok: interaction-stream-http-prepare-secured-owner" << '\n';
+
+  std::filesystem::remove(db_path);
+}
+
 }  // namespace
 
 int main() {
   try {
     TestPrepareBuildsSetupForReadyUnprotectedPlane();
     TestPrepareRejectsUnauthorizedProtectedPlane();
+    TestPrepareUsesExternalOwnerForSecuredConnectionSession();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "interaction_stream_http_request_preparation_service_tests failed: "

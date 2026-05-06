@@ -407,6 +407,17 @@ function yesNo(value) {
   return value ? "yes" : "no";
 }
 
+function formatMilliseconds(value, fractionDigits = 0) {
+  if (value === null || value === undefined || value === "") {
+    return "n/a";
+  }
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) {
+    return "n/a";
+  }
+  return `${amount.toFixed(fractionDigits)} ms`;
+}
+
 function compactBytes(value) {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "n/a";
@@ -5296,16 +5307,16 @@ function App() {
               <div className="metric-row"><span>Health</span><strong>{host?.telemetry_health_status || "n/a"}</strong></div>
               <div className="metric-row"><span>Plane runtime</span><strong>{host?.telemetry_plane_runtime_health || "n/a"}</strong></div>
               <div className="metric-row"><span>Plane ready</span><strong>{`${host?.telemetry_plane_ready_instance_count ?? 0}/${host?.telemetry_plane_instance_count ?? 0}`}</strong></div>
-              <div className="metric-row"><span>Frame age</span><strong>{host?.telemetry_last_frame_age_ms ? `${host.telemetry_last_frame_age_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Cadence</span><strong>{host?.telemetry_adaptive_interval_ms ? `${host.telemetry_adaptive_interval_ms} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Frame age</span><strong>{formatMilliseconds(host?.telemetry_last_frame_age_ms)}</strong></div>
+              <div className="metric-row"><span>Cadence</span><strong>{formatMilliseconds(host?.telemetry_adaptive_interval_ms)}</strong></div>
               <div className="metric-row"><span>Cadence reason</span><strong>{host?.telemetry_adaptive_reason || "n/a"}</strong></div>
-              <div className="metric-row"><span>Collect</span><strong>{host?.telemetry_collector_duration_ms ? `${host.telemetry_collector_duration_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Publish</span><strong>{host?.telemetry_publish_duration_ms ? `${host.telemetry_publish_duration_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Queue delay</span><strong>{host?.telemetry_queue_delay_ms ? `${host.telemetry_queue_delay_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Controller ingest</span><strong>{host?.telemetry_controller_ingest_delay_ms ? `${host.telemetry_controller_ingest_delay_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Total observed</span><strong>{host?.telemetry_latency_total_ms ? `${host.telemetry_latency_total_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Browser receive</span><strong>{host?.telemetry_browser_receive_delay_ms ? `${host.telemetry_browser_receive_delay_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Browser parse</span><strong>{host?.telemetry_browser_parse_ms ? `${host.telemetry_browser_parse_ms.toFixed(1)} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Collect</span><strong>{formatMilliseconds(host?.telemetry_collector_duration_ms)}</strong></div>
+              <div className="metric-row"><span>Publish</span><strong>{formatMilliseconds(host?.telemetry_publish_duration_ms)}</strong></div>
+              <div className="metric-row"><span>Queue delay</span><strong>{formatMilliseconds(host?.telemetry_queue_delay_ms)}</strong></div>
+              <div className="metric-row"><span>Controller ingest</span><strong>{formatMilliseconds(host?.telemetry_controller_ingest_delay_ms)}</strong></div>
+              <div className="metric-row"><span>Total observed</span><strong>{formatMilliseconds(host?.telemetry_latency_total_ms)}</strong></div>
+              <div className="metric-row"><span>Browser receive</span><strong>{formatMilliseconds(host?.telemetry_browser_receive_delay_ms)}</strong></div>
+              <div className="metric-row"><span>Browser parse</span><strong>{formatMilliseconds(host?.telemetry_browser_parse_ms, 1)}</strong></div>
               <div className="metric-row"><span>Bus depth</span><strong>{host?.telemetry_bus_depth ?? "n/a"}</strong></div>
               <div className="metric-row"><span>Dropped frames</span><strong>{host?.telemetry_dropped_frames ?? 0}</strong></div>
               <div className="metric-row"><span>Publish errors</span><strong>{host?.telemetry_publish_errors ?? 0}</strong></div>

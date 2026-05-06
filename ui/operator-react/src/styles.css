@@ -1095,6 +1095,11 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
 }
 
+.plane-form-grid-extra-app-heading {
+  align-items: end;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
 .plane-features-grid {
   display: grid;
   gap: 12px;
@@ -1186,6 +1191,7 @@ body {
 @media (max-width: 1080px) {
   .plane-form-grid,
   .plane-form-grid-wide,
+  .plane-form-grid-extra-app-heading,
   .plane-features-grid,
   .skills-factory-selector-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -2559,6 +2565,11 @@ body {
 
   .model-library-picker-head,
   .model-library-picker-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plane-editor-modal .model-library-picker-head,
+  .plane-editor-modal .model-library-picker-row {
     grid-template-columns: minmax(0, 1fr);
   }
 

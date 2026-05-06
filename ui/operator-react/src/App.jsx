@@ -1926,6 +1926,53 @@ function nodeConnectivityStatus(host) {
   };
 }
 
+function peerLinkState(link) {
+  if (String(link?.state || "").trim()) {
+    return String(link.state).toLowerCase();
+  }
+  if (link?.tcp_reachable === true) {
+    return "direct";
+  }
+  if (link?.seen_udp === true) {
+    return "partial";
+  }
+  return "stale";
+}
+
+function buildPeerLinksFromHostRegistry(hosts) {
+  const items = [];
+  for (const host of Array.isArray(hosts) ? hosts : []) {
+    const observerNodeName = host?.node_name || host?.nodeName || host?.name || "";
+    if (!observerNodeName || !Array.isArray(host?.lan_peers)) {
+      continue;
+    }
+    for (const peer of host.lan_peers) {
+      const state = peerLinkState(peer);
+      items.push({
+        ...peer,
+        observer_node_name: peer?.observer_node_name || observerNodeName,
+        peer_node_name: peer?.peer_node_name || "",
+        same_lan: peer?.same_lan === true || state === "direct",
+        state,
+      });
+    }
+  }
+  const summary = items.reduce(
+    (current, item) => {
+      const state = peerLinkState(item);
+      return {
+        ...current,
+        total: current.total + 1,
+        direct: current.direct + (state === "direct" ? 1 : 0),
+        partial: current.partial + (state === "partial" ? 1 : 0),
+        stale: current.stale + (state === "stale" ? 1 : 0),
+      };
+    },
+    { total: 0, direct: 0, partial: 0, stale: 0 },
+  );
+  return { items, summary };
+}
+
 function App() {
   const initialPlane = new URLSearchParams(window.location.search).get("plane") || "";
   const initialPage = new URLSearchParams(window.location.search).get("page") || "dashboard";
@@ -2079,6 +2126,7 @@ function App() {
   const refreshTimerRef = useRef(null);
   const refreshSequenceRef = useRef(0);
   const liveRefreshSequenceRef = useRef(0);
+  const fullRefreshInFlightRef = useRef(false);
   const selectedPlaneRef = useRef(selectedPlane);
   const eventSourceRef = useRef(null);
   const telemetrySourceRef = useRef(null);
@@ -2483,6 +2531,7 @@ function App() {
   }
 
   async function refreshAll(planeOverride) {
+    fullRefreshInFlightRef.current = true;
     const refreshId = ++refreshSequenceRef.current;
     const requestedPlane = planeOverride ?? selectedPlaneRef.current;
     const shouldCommitFleet = () =>
@@ -2684,6 +2733,9 @@ function App() {
     } finally {
       if (shouldCommitError()) {
         setLoading(false);
+      }
+      if (refreshId === refreshSequenceRef.current) {
+        fullRefreshInFlightRef.current = false;
       }
     }
   }
@@ -3184,6 +3236,10 @@ function App() {
     }
     refreshTimerRef.current = setTimeout(() => {
       refreshTimerRef.current = null;
+      if (fullRefreshInFlightRef.current) {
+        scheduleRefresh(planeName);
+        return;
+      }
       refreshAll(planeName);
     }, REFRESH_DEBOUNCE_MS);
   }
@@ -3714,6 +3770,9 @@ function App() {
     }
     const refreshDelay = selectedPage === "dashboard" ? FLEET_REFRESH_MS : AUTO_REFRESH_MS;
     const timer = setInterval(() => {
+      if (fullRefreshInFlightRef.current) {
+        return;
+      }
       if (selectedPlane && selectedPage === "dashboard") {
         const selectedPlaneDetailLoaded =
           planeDetail?.plane_name === selectedPlane ||
@@ -4141,15 +4200,16 @@ function App() {
         dashboardBrowsingSummary?.reason || "pending"
       }`
     : "disabled";
-  const peerLinkSummary = dashboard?.peer_links?.summary || {
-    total: 0,
-    direct: 0,
-    partial: 0,
-    stale: 0,
-  };
-  const peerLinkItems = Array.isArray(dashboard?.peer_links?.items)
+  const registryPeerLinks = buildPeerLinksFromHostRegistry(hostdHosts);
+  const dashboardPeerLinkItems = Array.isArray(dashboard?.peer_links?.items)
     ? dashboard.peer_links.items
     : [];
+  const peerLinkItems =
+    dashboardPeerLinkItems.length > 0 ? dashboardPeerLinkItems : registryPeerLinks.items;
+  const peerLinkSummary =
+    dashboardPeerLinkItems.length > 0
+      ? dashboard?.peer_links?.summary || registryPeerLinks.summary
+      : registryPeerLinks.summary;
   const chatLanguageOptions = supportedChatLanguageOptions(desiredState, interactionStatus);
   const selectedPlaneApplied =
     Number(planeRecord?.generation || 0) > 0 &&
@@ -5143,6 +5203,12 @@ function App() {
     const gpu = host?.gpu_telemetry?.summary || {};
     const capacity = registry?.capacity_summary || {};
     const connectivity = nodeConnectivityStatus(host);
+    const runtimeStatus = host?.runtime_status || {};
+    const runtimeAvailable = runtimeStatus?.available === true;
+    const runtimePhase =
+      runtimeStatus?.phase ||
+      runtimeStatus?.runtime?.runtime_phase ||
+      (runtimeAvailable ? "ready" : "unavailable");
     const storageSelected = isStorageRoleSelected(host);
     const storageEligible = isStorageRoleEligible(host);
     const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];

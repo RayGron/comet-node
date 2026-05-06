@@ -4,10 +4,14 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 
+default_remote_base() {
+  printf '%s\n' "/tmp/naim-dev-sandboxes/${USER:-baal}"
+}
+
 remote_host="${NAIM_HPC1_HOST:-baal@195.168.22.186}"
 remote_port="${NAIM_HPC1_PORT:-2222}"
 sandbox_name="${NAIM_HPC1_SANDBOX_NAME:-naim-node-dev}"
-remote_base="${NAIM_HPC1_SANDBOX_BASE:-/tmp/naim-dev-sandboxes/${USER:-baal}}"
+remote_base="${NAIM_HPC1_SANDBOX_BASE:-$(default_remote_base)}"
 remote_root="${NAIM_HPC1_SANDBOX_ROOT:-${remote_base}/${sandbox_name}}"
 remote_repo="${remote_root}/repo"
 remote_build_root="${remote_root}/build-root"

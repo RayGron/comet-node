@@ -37,6 +37,23 @@ LEAK_PATTERNS = [
     ("private control-plane address", "51.68."),
 ]
 
+FORBIDDEN_SOURCE_DEFAULT_PATHS = [
+    "/mnt/" + "shared-storage/",
+]
+
+SOURCE_SCAN_EXCLUDED_DIRS = {
+    ".git",
+    ".cache",
+    ".tools",
+    "build",
+    "node_modules",
+    "var",
+}
+
+SOURCE_SCAN_EXCLUDED_PREFIXES = (
+    "build-",
+)
+
 
 def log(message):
     print(f"[knowledge-release-gate] {message}", flush=True)
@@ -456,31 +473,28 @@ def scan_artifacts(paths):
     }
 
 
-def scan_repo_for_forbidden_defaults(repo_root):
-    forbidden_path = "/mnt/" + "shared-storage/"
-    excluded_dirs = {
-        ".git",
-        ".cache",
-        ".tools",
-        "build",
-        "node_modules",
-        "var",
-    }
+def is_generated_or_untracked_artifact_path(relative_parts):
+    if SOURCE_SCAN_EXCLUDED_DIRS.intersection(relative_parts):
+        return True
+    return any(part.startswith(SOURCE_SCAN_EXCLUDED_PREFIXES) for part in relative_parts)
+
+
+def scan_source_tree_for_forbidden_defaults(repo_root):
     findings = []
     for path in repo_root.rglob("*"):
         if not path.is_file():
             continue
         relative_parts = path.relative_to(repo_root).parts
-        if excluded_dirs.intersection(relative_parts):
-            continue
-        if any(part.startswith("build-") for part in relative_parts):
+        if is_generated_or_untracked_artifact_path(relative_parts):
             continue
         try:
             content = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if forbidden_path in content:
-            findings.append(str(path.relative_to(repo_root)))
+        for forbidden_path in FORBIDDEN_SOURCE_DEFAULT_PATHS:
+            if forbidden_path in content:
+                findings.append(str(path.relative_to(repo_root)))
+                break
     expect(not findings, f"repository contains forbidden shared-storage defaults: {findings}")
 
 
@@ -512,7 +526,7 @@ def run_gate(args):
         raise RuntimeError(f"missing built Knowledge Vault release-gate binaries: {rendered}")
 
     started = time.perf_counter()
-    scan_repo_for_forbidden_defaults(repo_root)
+    scan_source_tree_for_forbidden_defaults(repo_root)
     run_binary(required_binaries["contract_tests"])
     run_binary(required_binaries["store_tests"])
     run_binary(required_binaries["service_tests"])

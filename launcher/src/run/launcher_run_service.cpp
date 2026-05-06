@@ -590,13 +590,11 @@ int LauncherRunService::RunHostdLoop(
       << "next_step=leave hostd running so it can receive assignments and upload telemetry\n";
   constexpr int kTelemetryIntervalMs = 2000;
   constexpr int kTelemetryTtlMs = 10000;
-
   constexpr std::chrono::milliseconds kApplySessionHandoffGap(1500);
-  std::chrono::steady_clock::time_point last_inventory_report_at;
+  auto next_inventory_report_at = std::chrono::steady_clock::now();
 #if defined(_WIN32)
-  std::chrono::steady_clock::time_point last_telemetry_report_at;
+  auto next_telemetry_report_at = std::chrono::steady_clock::now();
 #endif
-
   const auto self_update_marker =
       HostdSelfUpdateMarkerPath(options.state_root, options.node_name);
   std::error_code marker_error;
@@ -702,39 +700,33 @@ int LauncherRunService::RunHostdLoop(
 
   const auto run_report_if_due = [&]() {
     const auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_inventory_report_at).count() >
-        options.inventory_scan_interval_sec) {
+    if (now < next_inventory_report_at) {
       return;
     }
-
-    last_inventory_report_at = now;
-
     if (!options.controller_url.empty() && apply_session_owner_active.load()) {
+      next_inventory_report_at =
+          now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
       return;
     }
-
     const int report_code = process_runner_.RunCommand(build_report_args());
     if (report_code != 0) {
       std::cerr << "naim-node: hostd report-observed-state exit=" << report_code << "\n";
     }
-
+    next_inventory_report_at =
+        now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
   };
 
 #if defined(_WIN32)
   const auto run_telemetry_if_due = [&]() {
     const auto now = std::chrono::steady_clock::now();
-
-    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_telemetry_report_at).count() >
-        options.inventory_scan_interval_sec) {
+    if (now < next_telemetry_report_at) {
       return;
     }
-
-    last_telemetry_report_at = now;
-
     const int telemetry_code = process_runner_.RunCommand(build_telemetry_args(false));
     if (telemetry_code != 0) {
       std::cerr << "naim-node: hostd report-telemetry exit=" << telemetry_code << "\n";
     }
+    next_telemetry_report_at = now + std::chrono::milliseconds(kTelemetryIntervalMs);
   };
 #else
   std::atomic_bool telemetry_runtime_stop{false};

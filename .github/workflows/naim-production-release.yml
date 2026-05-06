@@ -18,6 +18,7 @@ env:
   NAIM_HPC1_SSH: ${{ vars.NAIM_HPC1_SSH || 'baal@195.168.22.186' }}
   NAIM_HPC1_SSH_PORT: ${{ vars.NAIM_HPC1_SSH_PORT || '2222' }}
   NAIM_HPC1_REPO_PATH: ${{ vars.NAIM_HPC1_REPO_PATH || '/opt/naim/repos/naim-node' }}
+  NAIM_HPC1_VCPKG_ROOT: ${{ vars.NAIM_HPC1_VCPKG_ROOT || '' }}
   NAIM_MAIN_SSH: ${{ vars.NAIM_MAIN_SSH || 'baal@51.68.181.52' }}
   NAIM_REGISTRY: ${{ vars.NAIM_REGISTRY || 'chainzano.com' }}
   NAIM_REGISTRY_PROJECT: ${{ vars.NAIM_REGISTRY_PROJECT || 'naim' }}
@@ -176,7 +177,7 @@ jobs:
           set -euo pipefail
           repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
+            "cd ${repo_q} && VCPKG_ROOT='${NAIM_HPC1_VCPKG_ROOT}' NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
 
   hpc1-build-turboquant:
     name: 2b. hpc1 TurboQuant build
@@ -205,7 +206,7 @@ jobs:
           set -euo pipefail
           repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build-turboquant.sh"
+            "cd ${repo_q} && VCPKG_ROOT='${NAIM_HPC1_VCPKG_ROOT}' NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build-turboquant.sh"
 
   hpc1-knowledge-vault-release-gate:
     name: 2a. hpc1 Knowledge Vault release gate

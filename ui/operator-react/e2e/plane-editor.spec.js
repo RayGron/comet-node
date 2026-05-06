@@ -24,9 +24,19 @@ const hostdHosts = [
     capacity_summary: {
       gpu_count: 4,
       storage_free_bytes: 250_000_000_000,
+      storage_root: "/naim/storage",
       storage_total_bytes: 1_388_000_000_000,
       total_memory_bytes: 269_960_683_520,
     },
+    lan_peers: [
+      {
+        peer_node_name: "storage1",
+        peer_endpoint: "http://192.168.88.252:29999",
+        tcp_reachable: true,
+        seen_udp: true,
+        rtt_ms: 1,
+      },
+    ],
   },
   {
     node_name: "storage1",
@@ -36,9 +46,19 @@ const hostdHosts = [
     capacity_summary: {
       gpu_count: 0,
       storage_free_bytes: 17_000_000_000_000,
+      storage_root: "/naim/storage",
       storage_total_bytes: 18_927_043_346_432,
       total_memory_bytes: 64_891_473_920,
     },
+    lan_peers: [
+      {
+        peer_node_name: "hpc1",
+        peer_endpoint: "http://192.168.88.13:29999",
+        tcp_reachable: true,
+        seen_udp: true,
+        rtt_ms: 1,
+      },
+    ],
   },
 ];
 
@@ -86,7 +106,7 @@ async function mockApi(page) {
         body: JSON.stringify(payload),
       });
 
-    if (path === "/api/v1/events/stream") {
+    if (path === "/api/v1/events/stream" || path === "/api/v1/live/stream") {
       return route.fulfill({
         status: 200,
         contentType: "text/event-stream",
@@ -112,11 +132,64 @@ async function mockApi(page) {
         runtime: { ready_nodes: 0 },
         rollout: { total_actions: 0 },
         alerts: { total: 0 },
-        peer_links: { total: 2, direct: 2, partial: 0, stale: 0 },
+        peer_links: {
+          items: [
+            {
+              observer_node_name: "hpc1",
+              peer_node_name: "storage1",
+              state: "direct",
+              same_lan: true,
+              peer_endpoint: "http://192.168.88.252:29999",
+            },
+            {
+              observer_node_name: "storage1",
+              peer_node_name: "hpc1",
+              state: "direct",
+              same_lan: true,
+              peer_endpoint: "http://192.168.88.13:29999",
+            },
+          ],
+          summary: { total: 2, direct: 2, partial: 0, stale: 0 },
+        },
       });
     }
     if (path === "/api/v1/host-observations") {
-      return json({ items: [] });
+      return json({
+        observations: [
+          {
+            node_name: "hpc1",
+            status: "idle",
+            heartbeat_at: "2026-05-06 07:20:00",
+            runtime_status: { available: true, runtime: { runtime_phase: "running" } },
+            cpu_telemetry: {
+              summary: {
+                total_memory_bytes: 269_960_683_520,
+                used_memory_bytes: 80_000_000_000,
+              },
+            },
+            gpu_telemetry: {
+              summary: {
+                device_count: 4,
+                total_vram_mb: 391_548,
+                used_vram_mb: 78_218,
+              },
+            },
+          },
+          {
+            node_name: "storage1",
+            status: "idle",
+            heartbeat_at: "2026-05-06 07:20:00",
+            runtime_status: { available: false, runtime: null },
+            cpu_telemetry: {
+              summary: {
+                total_memory_bytes: 64_891_473_920,
+                used_memory_bytes: 4_900_000_000,
+              },
+            },
+            gpu_telemetry: { summary: { device_count: 0 } },
+          },
+        ],
+      });
     }
     if (path === "/api/v1/hostd/hosts") {
       return json({ items: hostdHosts });
@@ -151,6 +224,13 @@ async function mockApi(page) {
     }
     if (path === "/api/v1/skills-factory") {
       return json(skillsFactoryPayload);
+    }
+    if (
+      path === "/api/v1/telemetry/snapshot" ||
+      path === "/api/v1/knowledge-vault/status" ||
+      path === "/api/v1/protocols"
+    ) {
+      return json({ items: [], nodes: [] });
     }
     return json({});
   });
@@ -210,6 +290,35 @@ const viewports = [
   { width: 768, height: 900 },
   { width: 390, height: 844 },
 ];
+
+test("dashboard renders host roles, capacity, LAN peers, and node overview", async ({ page }) => {
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await mockApi(page);
+  await page.goto("/?page=dashboard");
+
+  await expect(page.getByRole("heading", { name: "LAN peer links" })).toBeVisible();
+  await expect(page.getByText("2 direct / 0 partial / 0 stale")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Naim nodes" })).toBeVisible();
+
+  const hpcCard = page.locator(".dashboard-hosts-panel .node-card").filter({ hasText: "hpc1" }).first();
+  await expect(hpcCard.locator(".role-badges .tag", { hasText: "worker" })).toBeVisible();
+  await expect(hpcCard.getByText("GPU count")).toBeVisible();
+  await expect(hpcCard.getByText("LAN peers")).toBeVisible();
+  await expect(hpcCard.getByText("1/1 direct")).toBeVisible();
+
+  const storageCard = page.locator(".dashboard-hosts-panel .node-card").filter({ hasText: "storage1" }).first();
+  await expect(storageCard.locator(".role-badges .tag", { hasText: "storage" })).toBeVisible();
+  await expect(storageCard).toContainText(/1[5-7] TB free/);
+
+  await hpcCard.getByRole("button", { name: /open node overview/i }).click();
+  const overviewDialog = page.getByRole("dialog", { name: /node overview hpc1/i });
+  await expect(overviewDialog).toBeVisible();
+  await expect(overviewDialog.getByText("Runtime", { exact: true })).toBeVisible();
+  await expect(overviewDialog.getByText("running", { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
 
 for (const viewport of viewports) {
   test(`new plane editor remains readable at ${viewport.width}x${viewport.height}`, async ({

@@ -4302,8 +4302,7 @@ export function PlaneV2FormBuilder({
           {(Array.isArray(form.extraApps) ? form.extraApps : []).map((entry, index) => (
             <div key={`extra-app-${index}`} className="plane-form-section" style={{ marginTop: 12 }}>
               <div
-                className="plane-form-grid"
-                style={{ gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr) auto", alignItems: "end" }}
+                className="plane-form-grid plane-form-grid-extra-app-heading"
               >
                 <label className="field-label">
                   <InfoLabel info={FIELD_INFO.extraAppName}>App name</InfoLabel>

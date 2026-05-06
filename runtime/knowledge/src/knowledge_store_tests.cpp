@@ -156,6 +156,38 @@ int main() {
   Expect(daily.value("status", std::string{}) == "completed", "daily reconcile should complete");
 
   store.WriteOverlay(nlohmann::json{
+      {"plane_id", "protected-plane"},
+      {"capsule_id", "private-cap"},
+      {"protected_plane", true},
+      {"change_type", "claim_add"},
+      {"base_versions", nlohmann::json::object()},
+      {"proposed_blocks",
+       nlohmann::json::array({nlohmann::json{
+           {"knowledge_id", "knowledge.protected-leak-check"},
+           {"title", "Protected Leak Check"},
+           {"body", "Protected plane knowledge must not enter the common vault."},
+           {"scope_ids", nlohmann::json::array({"scope.default"})},
+       }})},
+  });
+  const auto protected_merge = store.TriggerReplicaMerge(nlohmann::json{
+      {"plane_id", "protected-plane"},
+      {"capsule_id", "private-cap"},
+  });
+  Expect(
+      protected_merge.value("accepted", 0) == 0,
+      "protected overlays should not merge into canonical knowledge");
+  Expect(
+      protected_merge.value("rejected", 0) == 1,
+      "protected overlays should be counted as rejected by direct merge trigger");
+  const auto protected_search = store.Search(nlohmann::json{
+      {"query", "Protected Leak Check"},
+      {"scope_id", "scope.default"},
+  });
+  Expect(
+      protected_search.dump().find("knowledge.protected-leak-check") == std::string::npos,
+      "protected overlay content should not be searchable in the common vault");
+
+  store.WriteOverlay(nlohmann::json{
       {"plane_id", "plane-test"},
       {"capsule_id", "cap-test"},
       {"change_type", "claim_add"},
@@ -207,6 +239,30 @@ int main() {
   Expect(
       !import.value("accepted_for_review", nlohmann::json::array()).empty(),
       "markdown import should create proposals");
+
+  const auto protected_store_path = TempStorePath();
+  naim::knowledge_runtime::KnowledgeStore protected_store(protected_store_path, true);
+  protected_store.Open();
+  protected_store.WriteOverlay(nlohmann::json{
+      {"plane_id", "env-protected-plane"},
+      {"capsule_id", "env-private-cap"},
+      {"change_type", "claim_add"},
+      {"base_versions", nlohmann::json::object()},
+      {"proposed_blocks",
+       nlohmann::json::array({nlohmann::json{
+           {"knowledge_id", "knowledge.env-protected"},
+           {"title", "Env Protected Claim"},
+           {"body", "Runtime protected plane data stays isolated."},
+           {"scope_ids", nlohmann::json::array({"scope.default"})},
+       }})},
+  });
+  const auto env_protected_merge = protected_store.TriggerReplicaMerge(nlohmann::json{
+      {"plane_id", "env-protected-plane"},
+      {"capsule_id", "env-private-cap"},
+  });
+  Expect(
+      env_protected_merge.value("status", std::string{}) == "skipped",
+      "protected runtime should skip replica merge into the common vault");
 
   std::cout << "ok: knowledge-store-integration\n";
   return 0;

@@ -15,6 +15,7 @@ class RocksDbJsonRepository;
 class KnowledgeStore final {
  public:
   explicit KnowledgeStore(std::filesystem::path store_path);
+  KnowledgeStore(std::filesystem::path store_path, bool protected_plane);
   ~KnowledgeStore();
 
   KnowledgeStore(const KnowledgeStore&) = delete;
@@ -67,8 +68,13 @@ class KnowledgeStore final {
   static std::string JsonText(const nlohmann::json& value);
   static std::string NormalizeTerm(const std::string& value);
   static std::string MarkdownEscape(const std::string& value);
+  bool ProtectedPlaneRequested(const nlohmann::json& payload) const;
+  nlohmann::json BuildProtectedReplicaMergeSkip(
+      const std::string& plane_id,
+      const std::string& capsule_id);
 
   std::unique_ptr<RocksDbJsonRepository> repository_;
+  bool protected_plane_ = false;
 };
 
 }  // namespace naim::knowledge_runtime

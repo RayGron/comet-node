@@ -17,7 +17,8 @@ KnowledgeServer::ApiError::ApiError(int status, std::string code, std::string me
     : std::runtime_error(std::move(message)), status_(status), code_(std::move(code)) {}
 
 KnowledgeServer::KnowledgeServer(KnowledgeRuntimeConfig config)
-    : config_(std::move(config)), store_(config_.store_path) {}
+    : config_(std::move(config)),
+      store_(config_.store_path, config_.protected_plane) {}
 
 KnowledgeServer::~KnowledgeServer() {
   RequestStop();

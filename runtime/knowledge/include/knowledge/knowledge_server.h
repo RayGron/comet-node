@@ -19,6 +19,7 @@ struct KnowledgeRuntimeConfig {
   std::filesystem::path ready_path = "/tmp/naim-ready";
   std::string listen_host = "127.0.0.1";
   int port = 18200;
+  bool protected_plane = false;
 };
 
 class KnowledgeServer final {

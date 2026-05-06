@@ -16,7 +16,10 @@ bool IsPlaneScopedKnowledgeRoute(const std::string& path) {
          suffix == "context" ||
          suffix == "query-route" ||
          suffix == "source-ingest" ||
-         suffix == "graph-neighborhood";
+         suffix == "graph-neighborhood" ||
+         suffix == "overlays" ||
+         suffix == "markdown-import" ||
+         suffix.rfind("replica-merges", 0) == 0;
 }
 
 nlohmann::json SelectedKnowledgeIds(const naim::DesiredState& desired_state) {
@@ -131,6 +134,7 @@ HttpRequest KnowledgeVaultHttpService::BuildPlaneScopedRequest(
   }
 
   body["plane_id"] = plane_name;
+  body["protected_plane"] = desired_state.protected_plane;
   const auto selected_ids = SelectedKnowledgeIds(desired_state);
   if (rewritten.path == "/api/v1/knowledge-vault/context" &&
       !selected_ids.empty() &&

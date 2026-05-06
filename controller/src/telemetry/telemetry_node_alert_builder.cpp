@@ -16,6 +16,16 @@ std::uint64_t TelemetryNodeAlertBuilder::IngestWarningBudgetMs(
       adaptive_interval_ms * 2 + thresholds.ingest_warning_ms);
 }
 
+std::uint64_t TelemetryNodeAlertBuilder::QueueWarningBudgetMs(
+    const naim::HostTelemetryFrame& frame,
+    const TelemetryAlertThresholds& thresholds) const {
+  const std::uint64_t adaptive_interval_ms =
+      frame.adaptive_interval_ms > 0
+          ? static_cast<std::uint64_t>(frame.adaptive_interval_ms)
+          : static_cast<std::uint64_t>(std::max(0, frame.interval_ms));
+  return std::max(thresholds.queue_warning_ms, adaptive_interval_ms / 2);
+}
+
 bool TelemetryNodeAlertBuilder::HasActivePublishError(
     const naim::HostTelemetryFrame& frame) const {
   return frame.publish_error_count > 0 && !frame.last_publish_error.empty();
@@ -57,13 +67,16 @@ nlohmann::json TelemetryNodeAlertBuilder::Build(
         {"warning_budget_ms", ingest_warning_budget_ms},
     });
   }
-  if (frame.publisher_queue_delay_ms >= thresholds.queue_warning_ms) {
+  const auto queue_warning_budget_ms = QueueWarningBudgetMs(frame, thresholds);
+  if (frame.publisher_queue_delay_ms >= queue_warning_budget_ms) {
     alerts.push_back(nlohmann::json{
         {"code", "telemetry.publisher.queue_delay"},
         {"severity", "warning"},
         {"node_name", frame.node_name},
         {"plane_name", matcher_.PlaneKeyForFrame(frame)},
         {"delay_ms", frame.publisher_queue_delay_ms},
+        {"expected_interval_ms", frame.adaptive_interval_ms},
+        {"warning_budget_ms", queue_warning_budget_ms},
     });
   }
   if (HasActivePublishError(frame)) {

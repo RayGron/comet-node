@@ -1212,6 +1212,7 @@ void DesiredStateV2Renderer::RenderVoiceModuleInstance() {
       {"NAIM_NODE_NAME", voice.node_name},
       {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
       {"NAIM_VOICE_MODULE_PORT", std::to_string(kVoiceModuleContainerPort)},
+      {"NAIM_VOICE_MODULE_RUNTIME_STATUS_PATH", "/naim/private/voice-module-runtime-status.json"},
       {"NAIM_VOICE_LISTENER_WAKE_PHRASE", config.wake_phrase},
       {"VOICE_LISTENER_WAKE_PHRASE", config.wake_phrase},
       {"VOICE_ASR_LANGUAGE", config.language},

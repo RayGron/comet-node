@@ -1,5 +1,7 @@
 #include "auth/auth_http_service.h"
 
+#include <algorithm>
+#include <cctype>
 #include <stdexcept>
 #include <utility>
 
@@ -33,6 +35,154 @@ bool StartsWithPathPrefix(const std::string& path, const std::string& prefix) {
   return path.rfind(prefix, 0) == 0;
 }
 
+std::optional<std::string> FindHeaderString(
+    const HttpRequest& request,
+    const std::string& key) {
+  std::string lowered;
+  lowered.reserve(key.size());
+  for (unsigned char ch : key) {
+    lowered.push_back(static_cast<char>(std::tolower(ch)));
+  }
+  const auto it = request.headers.find(lowered);
+  if (it == request.headers.end()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+std::string LowercaseCopy(const std::string& value) {
+  std::string lowered;
+  lowered.reserve(value.size());
+  for (unsigned char ch : value) {
+    lowered.push_back(static_cast<char>(std::tolower(ch)));
+  }
+  return lowered;
+}
+
+std::string TrimCopy(const std::string& value) {
+  const auto begin = std::find_if_not(
+      value.begin(),
+      value.end(),
+      [](unsigned char ch) { return std::isspace(ch) != 0; });
+  const auto end = std::find_if_not(
+                       value.rbegin(),
+                       value.rend(),
+                       [](unsigned char ch) { return std::isspace(ch) != 0; })
+                       .base();
+  if (begin >= end) {
+    return "";
+  }
+  return std::string(begin, end);
+}
+
+std::string FirstForwardedValue(const std::string& value) {
+  const auto comma = value.find(',');
+  return comma == std::string::npos ? value : value.substr(0, comma);
+}
+
+std::string RequestScheme(const HttpRequest& request) {
+  if (const auto forwarded = FindHeaderString(request, "x-forwarded-proto");
+      forwarded.has_value()) {
+    return LowercaseCopy(TrimCopy(FirstForwardedValue(*forwarded)));
+  }
+  if (const auto forwarded = FindHeaderString(request, "x-forwarded-ssl");
+      forwarded.has_value() && LowercaseCopy(*forwarded) == "on") {
+    return "https";
+  }
+  if (const auto forwarded = FindHeaderString(request, "x-forwarded-port");
+      forwarded.has_value() && *forwarded == "443") {
+    return "https";
+  }
+  return "http";
+}
+
+std::string HostWithoutPort(const std::string& host) {
+  if (host.empty()) {
+    return host;
+  }
+  if (host.front() == '[') {
+    const auto close = host.find(']');
+    return close == std::string::npos ? host : host.substr(1, close - 1);
+  }
+  const auto colon = host.find(':');
+  return colon == std::string::npos ? host : host.substr(0, colon);
+}
+
+bool IsLocalHostName(const std::string& host) {
+  const std::string lowered = LowercaseCopy(HostWithoutPort(host));
+  return lowered.empty() || lowered == "localhost" || lowered == "127.0.0.1" ||
+         lowered == "::1";
+}
+
+bool IsSecuredRequestTransportAllowed(const HttpRequest& request) {
+  if (RequestScheme(request) == "https") {
+    return true;
+  }
+  auto host = FindHeaderString(request, "x-forwarded-host");
+  if (!host.has_value()) {
+    host = FindHeaderString(request, "host");
+  }
+  return IsLocalHostName(host.value_or(""));
+}
+
+std::string RequestRemoteAddress(const HttpRequest& request) {
+  if (const auto forwarded = FindHeaderString(request, "x-forwarded-for");
+      forwarded.has_value()) {
+    return FirstForwardedValue(*forwarded);
+  }
+  if (const auto real_ip = FindHeaderString(request, "x-real-ip"); real_ip.has_value()) {
+    return *real_ip;
+  }
+  return "";
+}
+
+std::string BuildSecuredUserSearchText(
+    const naim::SecuredConnectionUserRecord& user) {
+  return user.id + " " + user.name + " " + user.public_key + " " +
+         user.fingerprint + " " + user.last_authorized_at + " " +
+         user.created_at + " " + user.updated_at;
+}
+
+json BuildSecuredConnectionUserPayload(
+    const naim::SecuredConnectionUserRecord& user) {
+  return json{
+      {"id", user.id},
+      {"name", user.name},
+      {"public_key", user.public_key},
+      {"fingerprint", user.fingerprint},
+      {"last_authorized_at",
+       user.last_authorized_at.empty() ? json(nullptr) : json(user.last_authorized_at)},
+      {"created_at", user.created_at},
+      {"updated_at", user.updated_at},
+      {"revoked_at", user.revoked_at.empty() ? json(nullptr) : json(user.revoked_at)},
+  };
+}
+
+json BuildSecuredConnectionAuthLogPayload(
+    const naim::SecuredConnectionAuthLogRecord& log) {
+  json payload = json::parse(log.payload_json.empty() ? "{}" : log.payload_json, nullptr, false);
+  if (payload.is_discarded()) {
+    payload = json::object();
+  }
+  return json{
+      {"id", log.id},
+      {"plane_name", log.plane_name},
+      {"user_id", log.user_id},
+      {"user_name", log.user_name},
+      {"fingerprint", log.fingerprint},
+      {"event_type", log.event_type},
+      {"outcome", log.outcome},
+      {"remote_addr", log.remote_addr},
+      {"message", log.message},
+      {"created_at", log.created_at},
+      {"payload", std::move(payload)},
+  };
+}
+
+bool ContainsString(const std::vector<std::string>& items, const std::string& value) {
+  return std::find(items.begin(), items.end(), value) != items.end();
+}
+
 constexpr int InviteLifetimeSeconds() {
   return 60 * 60;
 }
@@ -52,6 +202,18 @@ AuthHttpService::AuthHttpService(AuthHttpSupport support) : support_(std::move(s
 std::optional<HttpResponse> AuthHttpService::HandleRequest(
     const std::string& db_path,
     const HttpRequest& request) const {
+  if (request.path == "/api/v1/user-storage") {
+    return HandleUserStorage(db_path, request);
+  }
+  if (request.path == "/api/v1/user-storage/auth-log") {
+    return HandleUserStorageAuthLog(db_path, request);
+  }
+  if (StartsWithPathPrefix(request.path, "/api/v1/user-storage/")) {
+    return HandleUserStorageItem(
+        db_path,
+        request,
+        request.path.substr(std::string("/api/v1/user-storage/").size()));
+  }
   if (!StartsWithPathPrefix(request.path, "/api/v1/auth/")) {
     return std::nullopt;
   }
@@ -827,6 +989,173 @@ HttpResponse AuthHttpService::HandleSshKeyDelete(
   }
 }
 
+HttpResponse AuthHttpService::HandleUserStorage(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  try {
+    naim::ControllerStore store(db_path);
+    store.Initialize();
+    if (!support_.require_controller_admin_user(store, request).has_value()) {
+      return support_.build_json_response(
+          401,
+          json{{"status", "unauthorized"}, {"message", "admin authentication required"}},
+          {});
+    }
+    if (request.method == "GET") {
+      std::optional<std::string> search;
+      if (const auto it = request.query_params.find("search");
+          it != request.query_params.end() && !it->second.empty()) {
+        search = it->second;
+      }
+      const bool include_revoked =
+          request.query_params.find("include_revoked") != request.query_params.end() &&
+          request.query_params.at("include_revoked") == "true";
+      json items = json::array();
+      for (const auto& user : store.LoadSecuredConnectionUsers(search, include_revoked)) {
+        items.push_back(BuildSecuredConnectionUserPayload(user));
+      }
+      return support_.build_json_response(200, json{{"items", std::move(items)}}, {});
+    }
+    if (request.method != "POST") {
+      return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    }
+    const json body = ParseJsonBody(request);
+    naim::SecuredConnectionUserRecord user;
+    user.id = "scu_" + support_.sanitize_token_for_path(naim::RandomTokenBase64(18));
+    user.name = support_.trim(body.value("name", std::string{}));
+    user.public_key = support_.trim(body.value("public_key", std::string{}));
+    if (user.name.empty() || user.public_key.empty()) {
+      return support_.build_json_response(
+          400,
+          json{{"status", "bad_request"},
+               {"message", "name and public_key are required"}},
+          {});
+    }
+    user.fingerprint = support_.compute_ssh_public_key_fingerprint(user.public_key);
+    user.search_text = BuildSecuredUserSearchText(user);
+    store.UpsertSecuredConnectionUser(user);
+    const auto saved = store.LoadActiveSecuredConnectionUser(user.id);
+    return support_.build_json_response(
+        201,
+        json{{"item", BuildSecuredConnectionUserPayload(saved.value_or(user))}},
+        {});
+  } catch (const std::invalid_argument& error) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}},
+        {});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse AuthHttpService::HandleUserStorageItem(
+    const std::string& db_path,
+    const HttpRequest& request,
+    const std::string& user_id) const {
+  try {
+    naim::ControllerStore store(db_path);
+    store.Initialize();
+    if (!support_.require_controller_admin_user(store, request).has_value()) {
+      return support_.build_json_response(
+          401,
+          json{{"status", "unauthorized"}, {"message", "admin authentication required"}},
+          {});
+    }
+    const auto current = store.LoadActiveSecuredConnectionUser(user_id);
+    if (!current.has_value()) {
+      return support_.build_json_response(
+          404, json{{"status", "not_found"}, {"message", "user not found"}}, {});
+    }
+    if (request.method == "DELETE") {
+      store.RevokeSecuredConnectionUser(user_id, support_.utc_now_sql_timestamp());
+      return support_.build_json_response(200, json{{"status", "revoked"}}, {});
+    }
+    if (request.method != "PATCH") {
+      return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    }
+    const json body = ParseJsonBody(request);
+    naim::SecuredConnectionUserRecord next = *current;
+    if (body.contains("name")) {
+      next.name = support_.trim(body.value("name", std::string{}));
+    }
+    if (body.contains("public_key")) {
+      next.public_key = support_.trim(body.value("public_key", std::string{}));
+      next.fingerprint = support_.compute_ssh_public_key_fingerprint(next.public_key);
+    }
+    if (next.name.empty() || next.public_key.empty()) {
+      return support_.build_json_response(
+          400,
+          json{{"status", "bad_request"},
+               {"message", "name and public_key are required"}},
+          {});
+    }
+    next.search_text = BuildSecuredUserSearchText(next);
+    store.UpsertSecuredConnectionUser(next);
+    const auto saved = store.LoadActiveSecuredConnectionUser(user_id);
+    return support_.build_json_response(
+        200,
+        json{{"item", BuildSecuredConnectionUserPayload(saved.value_or(next))}},
+        {});
+  } catch (const std::invalid_argument& error) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}},
+        {});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse AuthHttpService::HandleUserStorageAuthLog(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "GET") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    naim::ControllerStore store(db_path);
+    store.Initialize();
+    if (!support_.require_controller_admin_user(store, request).has_value()) {
+      return support_.build_json_response(
+          401,
+          json{{"status", "unauthorized"}, {"message", "admin authentication required"}},
+          {});
+    }
+    std::optional<std::string> plane_name;
+    if (const auto it = request.query_params.find("plane_name");
+        it != request.query_params.end() && !it->second.empty()) {
+      plane_name = it->second;
+    }
+    std::optional<std::string> user_id;
+    if (const auto it = request.query_params.find("user_id");
+        it != request.query_params.end() && !it->second.empty()) {
+      user_id = it->second;
+    }
+    int limit = 100;
+    if (const auto it = request.query_params.find("limit");
+        it != request.query_params.end() && !it->second.empty()) {
+      limit = std::stoi(it->second);
+    }
+    json items = json::array();
+    for (const auto& log : store.LoadSecuredConnectionAuthLog(plane_name, user_id, limit)) {
+      items.push_back(BuildSecuredConnectionAuthLogPayload(log));
+    }
+    return support_.build_json_response(200, json{{"items", std::move(items)}}, {});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
+        {});
+  }
+}
+
 HttpResponse AuthHttpService::HandleSshChallenge(
     const std::string& db_path,
     const HttpRequest& request) const {
@@ -835,7 +1164,8 @@ HttpResponse AuthHttpService::HandleSshChallenge(
   }
   try {
     const json body = ParseJsonBody(request);
-    const std::string username = support_.trim(body.value("username", std::string{}));
+    const std::string username = support_.trim(
+        body.value("username", body.value("name", std::string{})));
     const std::string plane_name = support_.trim(body.value("plane_name", std::string{}));
     const std::string fingerprint = support_.trim(body.value("fingerprint", std::string{}));
     if (username.empty() || plane_name.empty() || fingerprint.empty()) {
@@ -854,6 +1184,109 @@ HttpResponse AuthHttpService::HandleSshChallenge(
           404,
           json{{"status", "not_found"},
                {"message", "protected plane not found"}},
+          {});
+    }
+    const bool secured_enabled =
+        desired_state->secured_connection.has_value() &&
+        desired_state->secured_connection->enabled;
+    if (secured_enabled) {
+      if (!IsSecuredRequestTransportAllowed(request)) {
+        store.InsertSecuredConnectionAuthLog({
+            0,
+            plane_name,
+            "",
+            username,
+            fingerprint,
+            "challenge",
+            "rejected",
+            RequestRemoteAddress(request),
+            "HTTPS/TLS is required for secured connection authentication",
+            "",
+            "{}",
+        });
+        return support_.build_json_response(
+            403,
+            json{{"status", "forbidden"},
+                 {"message", "secured connection authentication requires HTTPS/TLS"}},
+            {});
+      }
+      const auto secured_user =
+          store.LoadActiveSecuredConnectionUserByNameAndFingerprint(username, fingerprint);
+      if (!secured_user.has_value()) {
+        store.InsertSecuredConnectionAuthLog({
+            0,
+            plane_name,
+            "",
+            username,
+            fingerprint,
+            "challenge",
+            "rejected",
+            RequestRemoteAddress(request),
+            "secured connection user or fingerprint not found",
+            "",
+            "{}",
+        });
+        return support_.build_json_response(
+            404,
+            json{{"status", "not_found"},
+                 {"message", "secured connection user or fingerprint not found"}},
+            {});
+      }
+      if (!ContainsString(desired_state->secured_connection->user_ids, secured_user->id)) {
+        store.InsertSecuredConnectionAuthLog({
+            0,
+            plane_name,
+            secured_user->id,
+            secured_user->name,
+            fingerprint,
+            "challenge",
+            "rejected",
+            RequestRemoteAddress(request),
+            "user is not allowed for secured plane",
+            "",
+            "{}",
+        });
+        return support_.build_json_response(
+            403,
+            json{{"status", "forbidden"},
+                 {"message", "user is not allowed for secured plane"}},
+            {});
+      }
+      PendingSshChallenge challenge;
+      challenge.challenge_id = naim::RandomTokenBase64(24);
+      challenge.secured_connection = true;
+      challenge.secured_user_id = secured_user->id;
+      challenge.username = secured_user->name;
+      challenge.plane_name = plane_name;
+      challenge.fingerprint = fingerprint;
+      challenge.challenge_token = naim::RandomTokenBase64(24);
+      challenge.expires_at =
+          support_.sql_timestamp_after_seconds(SshChallengeLifetimeSeconds());
+      challenge.message = support_.build_ssh_challenge_message(
+          challenge.username,
+          challenge.plane_name,
+          challenge.challenge_token,
+          challenge.expires_at);
+      support_.save_pending_ssh_challenge(challenge);
+      store.InsertSecuredConnectionAuthLog({
+          0,
+          plane_name,
+          secured_user->id,
+          secured_user->name,
+          fingerprint,
+          "challenge",
+          "accepted",
+          RequestRemoteAddress(request),
+          "",
+          "",
+          "{}",
+      });
+      return support_.build_json_response(
+          200,
+          json{{"challenge_id", challenge.challenge_id},
+               {"challenge_token", challenge.challenge_token},
+               {"expires_at", challenge.expires_at},
+               {"message", challenge.message}},
           {});
     }
     const auto user = store.LoadUserByUsername(username);
@@ -935,6 +1368,118 @@ HttpResponse AuthHttpService::HandleSshVerify(
     }
     naim::ControllerStore store(db_path);
     store.Initialize();
+    if (challenge->secured_connection) {
+      if (!IsSecuredRequestTransportAllowed(request)) {
+        store.InsertSecuredConnectionAuthLog({
+            0,
+            challenge->plane_name,
+            challenge->secured_user_id,
+            challenge->username,
+            challenge->fingerprint,
+            "verify",
+            "rejected",
+            RequestRemoteAddress(request),
+            "HTTPS/TLS is required for secured connection authentication",
+            "",
+            "{}",
+        });
+        return support_.build_json_response(
+            403,
+            json{{"status", "forbidden"},
+                 {"message", "secured connection authentication requires HTTPS/TLS"}},
+            {});
+      }
+      const auto secured_user =
+          store.LoadActiveSecuredConnectionUser(challenge->secured_user_id);
+      if (!secured_user.has_value()) {
+        store.InsertSecuredConnectionAuthLog({
+            0,
+            challenge->plane_name,
+            challenge->secured_user_id,
+            challenge->username,
+            challenge->fingerprint,
+            "verify",
+            "rejected",
+            RequestRemoteAddress(request),
+            "secured connection user not found",
+            "",
+            "{}",
+        });
+        return support_.build_json_response(
+            404,
+            json{{"status", "not_found"},
+                 {"message", "secured connection user not found"}},
+            {});
+      }
+      if (!support_.verify_ssh_detached_signature(
+              challenge->username,
+              secured_user->public_key,
+              challenge->message,
+              signature)) {
+        store.InsertSecuredConnectionAuthLog({
+            0,
+            challenge->plane_name,
+            secured_user->id,
+            secured_user->name,
+            challenge->fingerprint,
+            "verify",
+            "rejected",
+            RequestRemoteAddress(request),
+            "SSH signature verification failed",
+            "",
+            "{}",
+        });
+        return support_.build_json_response(
+            403,
+            json{{"status", "forbidden"},
+                 {"message", "SSH signature verification failed"}},
+            {});
+      }
+      const std::string now = support_.utc_now_sql_timestamp();
+      store.TouchSecuredConnectionUser(secured_user->id, now);
+      const std::string session_token = naim::RandomTokenBase64(32);
+      store.InsertSecuredConnectionSession({
+          session_token,
+          secured_user->id,
+          challenge->plane_name,
+          support_.sql_timestamp_after_seconds(SshSessionLifetimeSeconds()),
+          "",
+          "",
+          now,
+      });
+      store.InsertSecuredConnectionAuthLog({
+          0,
+          challenge->plane_name,
+          secured_user->id,
+          secured_user->name,
+          challenge->fingerprint,
+          "verify",
+          "accepted",
+          RequestRemoteAddress(request),
+          "",
+          "",
+          "{}",
+      });
+      support_.erase_pending_ssh_challenge(challenge_id);
+      json payload{
+          {"plane_name", challenge->plane_name},
+          {"expires_at",
+           support_.sql_timestamp_after_seconds(SshSessionLifetimeSeconds())},
+          {"session_kind", "secured_ssh"},
+      };
+      if (issue_cookie) {
+        payload["issued_cookie"] = true;
+      }
+      if (include_token) {
+        payload["token"] = session_token;
+      }
+      std::map<std::string, std::string> headers;
+      if (issue_cookie) {
+        headers["Set-Cookie"] =
+            support_.session_cookie_header(session_token, request);
+      }
+      return support_.build_json_response(200, payload, headers);
+    }
     const auto ssh_key = store.LoadActiveUserSshKeyById(challenge->ssh_key_id);
     if (!ssh_key.has_value()) {
       return support_.build_json_response(

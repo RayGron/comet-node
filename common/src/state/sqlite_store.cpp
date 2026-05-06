@@ -205,6 +205,49 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS secured_connection_users (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    public_key TEXT NOT NULL,
+    fingerprint TEXT NOT NULL UNIQUE,
+    search_text TEXT NOT NULL DEFAULT '',
+    last_authorized_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revoked_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS secured_connection_sessions (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    plane_name TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revoked_at TEXT NOT NULL DEFAULT '',
+    last_used_at TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (user_id) REFERENCES secured_connection_users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_secured_connection_sessions_plane
+    ON secured_connection_sessions(plane_name, user_id);
+
+CREATE TABLE IF NOT EXISTS secured_connection_auth_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plane_name TEXT NOT NULL DEFAULT '',
+    user_id TEXT NOT NULL DEFAULT '',
+    user_name TEXT NOT NULL DEFAULT '',
+    fingerprint TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    remote_addr TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_secured_connection_auth_log_plane_created
+    ON secured_connection_auth_log(plane_name, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS model_library_download_jobs (
     id TEXT PRIMARY KEY,
     job_kind TEXT NOT NULL DEFAULT 'download',
@@ -1041,6 +1084,77 @@ bool ControllerStore::TouchAuthSession(
     const std::string& token,
     const std::string& last_used_at) {
   return AuthRepository(AsSqlite(db_)).TouchAuthSession(token, last_used_at);
+}
+
+void ControllerStore::UpsertSecuredConnectionUser(
+    const SecuredConnectionUserRecord& user) {
+  AuthRepository(AsSqlite(db_)).UpsertSecuredConnectionUser(user);
+}
+
+std::optional<SecuredConnectionUserRecord>
+ControllerStore::LoadActiveSecuredConnectionUser(const std::string& user_id) const {
+  return AuthRepository(AsSqlite(db_)).LoadActiveSecuredConnectionUser(user_id);
+}
+
+std::optional<SecuredConnectionUserRecord>
+ControllerStore::LoadActiveSecuredConnectionUserByNameAndFingerprint(
+    const std::string& name,
+    const std::string& fingerprint) const {
+  return AuthRepository(AsSqlite(db_))
+      .LoadActiveSecuredConnectionUserByNameAndFingerprint(name, fingerprint);
+}
+
+std::vector<SecuredConnectionUserRecord> ControllerStore::LoadSecuredConnectionUsers(
+    const std::optional<std::string>& search,
+    bool include_revoked) const {
+  return AuthRepository(AsSqlite(db_))
+      .LoadSecuredConnectionUsers(search, include_revoked);
+}
+
+bool ControllerStore::RevokeSecuredConnectionUser(
+    const std::string& user_id,
+    const std::string& revoked_at) {
+  return AuthRepository(AsSqlite(db_)).RevokeSecuredConnectionUser(user_id, revoked_at);
+}
+
+void ControllerStore::TouchSecuredConnectionUser(
+    const std::string& user_id,
+    const std::string& last_authorized_at) {
+  AuthRepository(AsSqlite(db_)).TouchSecuredConnectionUser(user_id, last_authorized_at);
+}
+
+void ControllerStore::InsertSecuredConnectionSession(
+    const SecuredConnectionSessionRecord& session) {
+  AuthRepository(AsSqlite(db_)).InsertSecuredConnectionSession(session);
+}
+
+std::optional<SecuredConnectionSessionRecord>
+ControllerStore::LoadActiveSecuredConnectionSession(
+    const std::string& token,
+    const std::string& plane_name) const {
+  return AuthRepository(AsSqlite(db_))
+      .LoadActiveSecuredConnectionSession(token, plane_name);
+}
+
+bool ControllerStore::TouchSecuredConnectionSession(
+    const std::string& token,
+    const std::string& last_used_at) {
+  return AuthRepository(AsSqlite(db_))
+      .TouchSecuredConnectionSession(token, last_used_at);
+}
+
+void ControllerStore::InsertSecuredConnectionAuthLog(
+    const SecuredConnectionAuthLogRecord& log) {
+  AuthRepository(AsSqlite(db_)).InsertSecuredConnectionAuthLog(log);
+}
+
+std::vector<SecuredConnectionAuthLogRecord>
+ControllerStore::LoadSecuredConnectionAuthLog(
+    const std::optional<std::string>& plane_name,
+    const std::optional<std::string>& user_id,
+    int limit) const {
+  return AuthRepository(AsSqlite(db_))
+      .LoadSecuredConnectionAuthLog(plane_name, user_id, limit);
 }
 
 void ControllerStore::UpsertModelLibraryDownloadJob(

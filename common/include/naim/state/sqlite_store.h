@@ -294,6 +294,42 @@ struct AuthSessionRecord {
   std::string last_used_at;
 };
 
+struct SecuredConnectionUserRecord {
+  std::string id;
+  std::string name;
+  std::string public_key;
+  std::string fingerprint;
+  std::string search_text;
+  std::string last_authorized_at;
+  std::string created_at;
+  std::string updated_at;
+  std::string revoked_at;
+};
+
+struct SecuredConnectionSessionRecord {
+  std::string token;
+  std::string user_id;
+  std::string plane_name;
+  std::string expires_at;
+  std::string created_at;
+  std::string revoked_at;
+  std::string last_used_at;
+};
+
+struct SecuredConnectionAuthLogRecord {
+  int id = 0;
+  std::string plane_name;
+  std::string user_id;
+  std::string user_name;
+  std::string fingerprint;
+  std::string event_type;
+  std::string outcome;
+  std::string remote_addr;
+  std::string message;
+  std::string created_at;
+  std::string payload_json = "{}";
+};
+
 struct ModelLibraryDownloadJobRecord {
   std::string id;
   std::string job_kind = "download";
@@ -506,6 +542,33 @@ class ControllerStore {
   bool TouchAuthSession(
       const std::string& token,
       const std::string& last_used_at);
+  void UpsertSecuredConnectionUser(const SecuredConnectionUserRecord& user);
+  std::optional<SecuredConnectionUserRecord> LoadActiveSecuredConnectionUser(
+      const std::string& user_id) const;
+  std::optional<SecuredConnectionUserRecord> LoadActiveSecuredConnectionUserByNameAndFingerprint(
+      const std::string& name,
+      const std::string& fingerprint) const;
+  std::vector<SecuredConnectionUserRecord> LoadSecuredConnectionUsers(
+      const std::optional<std::string>& search = std::nullopt,
+      bool include_revoked = false) const;
+  bool RevokeSecuredConnectionUser(
+      const std::string& user_id,
+      const std::string& revoked_at);
+  void TouchSecuredConnectionUser(
+      const std::string& user_id,
+      const std::string& last_authorized_at);
+  void InsertSecuredConnectionSession(const SecuredConnectionSessionRecord& session);
+  std::optional<SecuredConnectionSessionRecord> LoadActiveSecuredConnectionSession(
+      const std::string& token,
+      const std::string& plane_name) const;
+  bool TouchSecuredConnectionSession(
+      const std::string& token,
+      const std::string& last_used_at);
+  void InsertSecuredConnectionAuthLog(const SecuredConnectionAuthLogRecord& log);
+  std::vector<SecuredConnectionAuthLogRecord> LoadSecuredConnectionAuthLog(
+      const std::optional<std::string>& plane_name = std::nullopt,
+      const std::optional<std::string>& user_id = std::nullopt,
+      int limit = 100) const;
   void UpsertModelLibraryDownloadJob(const ModelLibraryDownloadJobRecord& job);
   std::optional<ModelLibraryDownloadJobRecord> LoadModelLibraryDownloadJob(
       const std::string& job_id) const;

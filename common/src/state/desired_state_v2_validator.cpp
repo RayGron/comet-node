@@ -479,6 +479,40 @@ void DesiredStateV2Validator::ValidateFeatures() const {
           "desired-state v2 features.context_compression.memory_priority supports balanced only");
     }
   }
+  if (features.contains("secured_connection")) {
+    if (!features.at("secured_connection").is_object()) {
+      throw std::runtime_error(
+          "desired-state v2 features.secured_connection must be an object");
+    }
+    const auto& secured_connection = features.at("secured_connection");
+    if (secured_connection.contains("enabled") &&
+        !secured_connection.at("enabled").is_boolean()) {
+      throw std::runtime_error(
+          "desired-state v2 features.secured_connection.enabled must be a boolean");
+    }
+    if (secured_connection.contains("user_ids") &&
+        !secured_connection.at("user_ids").is_array()) {
+      throw std::runtime_error(
+          "desired-state v2 features.secured_connection.user_ids must be an array");
+    }
+    std::set<std::string> user_ids;
+    if (secured_connection.contains("user_ids")) {
+      for (const auto& item : secured_connection.at("user_ids")) {
+        if (!item.is_string() || item.get<std::string>().empty()) {
+          throw std::runtime_error(
+              "desired-state v2 features.secured_connection.user_ids entries must be non-empty strings");
+        }
+        if (!user_ids.insert(item.get<std::string>()).second) {
+          throw std::runtime_error(
+              "desired-state v2 features.secured_connection.user_ids entries must be unique");
+        }
+      }
+    }
+    if (secured_connection.value("enabled", false) && user_ids.empty()) {
+      throw std::runtime_error(
+          "desired-state v2 features.secured_connection requires at least one user_id when enabled");
+    }
+  }
 }
 
 void DesiredStateV2Validator::ValidateRuntime() const {

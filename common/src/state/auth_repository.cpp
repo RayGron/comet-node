@@ -447,6 +447,212 @@ bool AuthRepository::TouchAuthSession(
   return sqlite3_changes(db_) > 0;
 }
 
+void AuthRepository::UpsertSecuredConnectionUser(
+    const SecuredConnectionUserRecord& user) {
+  Statement statement(
+      db_,
+      "INSERT INTO secured_connection_users("
+      "id, name, public_key, fingerprint, search_text, last_authorized_at, updated_at, revoked_at"
+      ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP, ?7) "
+      "ON CONFLICT(id) DO UPDATE SET "
+      "name = excluded.name, public_key = excluded.public_key, "
+      "fingerprint = excluded.fingerprint, search_text = excluded.search_text, "
+      "updated_at = CURRENT_TIMESTAMP, revoked_at = excluded.revoked_at;");
+  statement.BindText(1, user.id);
+  statement.BindText(2, user.name);
+  statement.BindText(3, user.public_key);
+  statement.BindText(4, user.fingerprint);
+  statement.BindText(5, user.search_text);
+  statement.BindText(6, user.last_authorized_at);
+  statement.BindText(7, user.revoked_at);
+  statement.StepDone();
+}
+
+std::optional<SecuredConnectionUserRecord>
+AuthRepository::LoadActiveSecuredConnectionUser(const std::string& user_id) const {
+  Statement statement(
+      db_,
+      "SELECT id, name, public_key, fingerprint, search_text, last_authorized_at, "
+      "created_at, updated_at, revoked_at "
+      "FROM secured_connection_users WHERE id = ?1 AND revoked_at = '';");
+  statement.BindText(1, user_id);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return ReadSecuredConnectionUser(statement.raw());
+}
+
+std::optional<SecuredConnectionUserRecord>
+AuthRepository::LoadActiveSecuredConnectionUserByNameAndFingerprint(
+    const std::string& name,
+    const std::string& fingerprint) const {
+  Statement statement(
+      db_,
+      "SELECT id, name, public_key, fingerprint, search_text, last_authorized_at, "
+      "created_at, updated_at, revoked_at "
+      "FROM secured_connection_users "
+      "WHERE name = ?1 AND fingerprint = ?2 AND revoked_at = '';");
+  statement.BindText(1, name);
+  statement.BindText(2, fingerprint);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return ReadSecuredConnectionUser(statement.raw());
+}
+
+std::vector<SecuredConnectionUserRecord> AuthRepository::LoadSecuredConnectionUsers(
+    const std::optional<std::string>& search,
+    bool include_revoked) const {
+  std::string sql =
+      "SELECT id, name, public_key, fingerprint, search_text, last_authorized_at, "
+      "created_at, updated_at, revoked_at "
+      "FROM secured_connection_users WHERE 1 = 1";
+  if (!include_revoked) {
+    sql += " AND revoked_at = ''";
+  }
+  if (search.has_value() && !search->empty()) {
+    sql +=
+        " AND lower(id || ' ' || name || ' ' || public_key || ' ' || fingerprint || "
+        "' ' || search_text || ' ' || last_authorized_at || ' ' || created_at || "
+        "' ' || updated_at) LIKE lower(?1)";
+  }
+  sql += " ORDER BY name ASC, created_at ASC, id ASC;";
+  Statement statement(db_, sql);
+  if (search.has_value() && !search->empty()) {
+    statement.BindText(1, "%" + *search + "%");
+  }
+  std::vector<SecuredConnectionUserRecord> users;
+  while (statement.StepRow()) {
+    users.push_back(ReadSecuredConnectionUser(statement.raw()));
+  }
+  return users;
+}
+
+bool AuthRepository::RevokeSecuredConnectionUser(
+    const std::string& user_id,
+    const std::string& revoked_at) {
+  Statement statement(
+      db_,
+      "UPDATE secured_connection_users "
+      "SET revoked_at = ?2, updated_at = CURRENT_TIMESTAMP "
+      "WHERE id = ?1 AND revoked_at = '';");
+  statement.BindText(1, user_id);
+  statement.BindText(2, revoked_at);
+  statement.StepDone();
+  return sqlite3_changes(db_) > 0;
+}
+
+void AuthRepository::TouchSecuredConnectionUser(
+    const std::string& user_id,
+    const std::string& last_authorized_at) {
+  Statement statement(
+      db_,
+      "UPDATE secured_connection_users "
+      "SET last_authorized_at = ?2, updated_at = CURRENT_TIMESTAMP "
+      "WHERE id = ?1;");
+  statement.BindText(1, user_id);
+  statement.BindText(2, last_authorized_at);
+  statement.StepDone();
+}
+
+void AuthRepository::InsertSecuredConnectionSession(
+    const SecuredConnectionSessionRecord& session) {
+  Statement statement(
+      db_,
+      "INSERT INTO secured_connection_sessions("
+      "token, user_id, plane_name, expires_at, last_used_at"
+      ") VALUES (?1, ?2, ?3, ?4, ?5);");
+  statement.BindText(1, session.token);
+  statement.BindText(2, session.user_id);
+  statement.BindText(3, session.plane_name);
+  statement.BindText(4, session.expires_at);
+  statement.BindText(5, session.last_used_at);
+  statement.StepDone();
+}
+
+std::optional<SecuredConnectionSessionRecord>
+AuthRepository::LoadActiveSecuredConnectionSession(
+    const std::string& token,
+    const std::string& plane_name) const {
+  Statement statement(
+      db_,
+      "SELECT token, user_id, plane_name, expires_at, created_at, revoked_at, last_used_at "
+      "FROM secured_connection_sessions "
+      "WHERE token = ?1 AND plane_name = ?2 AND revoked_at = '' "
+      "AND expires_at >= CURRENT_TIMESTAMP;");
+  statement.BindText(1, token);
+  statement.BindText(2, plane_name);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return ReadSecuredConnectionSession(statement.raw());
+}
+
+bool AuthRepository::TouchSecuredConnectionSession(
+    const std::string& token,
+    const std::string& last_used_at) {
+  Statement statement(
+      db_,
+      "UPDATE secured_connection_sessions SET last_used_at = ?2 WHERE token = ?1;");
+  statement.BindText(1, token);
+  statement.BindText(2, last_used_at);
+  statement.StepDone();
+  return sqlite3_changes(db_) > 0;
+}
+
+void AuthRepository::InsertSecuredConnectionAuthLog(
+    const SecuredConnectionAuthLogRecord& log) {
+  Statement statement(
+      db_,
+      "INSERT INTO secured_connection_auth_log("
+      "plane_name, user_id, user_name, fingerprint, event_type, outcome, "
+      "remote_addr, message, payload_json"
+      ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);");
+  statement.BindText(1, log.plane_name);
+  statement.BindText(2, log.user_id);
+  statement.BindText(3, log.user_name);
+  statement.BindText(4, log.fingerprint);
+  statement.BindText(5, log.event_type);
+  statement.BindText(6, log.outcome);
+  statement.BindText(7, log.remote_addr);
+  statement.BindText(8, log.message);
+  statement.BindText(9, log.payload_json.empty() ? std::string("{}") : log.payload_json);
+  statement.StepDone();
+}
+
+std::vector<SecuredConnectionAuthLogRecord>
+AuthRepository::LoadSecuredConnectionAuthLog(
+    const std::optional<std::string>& plane_name,
+    const std::optional<std::string>& user_id,
+    int limit) const {
+  std::string sql =
+      "SELECT id, plane_name, user_id, user_name, fingerprint, event_type, outcome, "
+      "remote_addr, message, created_at, payload_json "
+      "FROM secured_connection_auth_log WHERE 1 = 1";
+  int next_index = 1;
+  if (plane_name.has_value() && !plane_name->empty()) {
+    sql += " AND plane_name = ?" + std::to_string(next_index++);
+  }
+  if (user_id.has_value() && !user_id->empty()) {
+    sql += " AND user_id = ?" + std::to_string(next_index++);
+  }
+  sql += " ORDER BY created_at DESC, id DESC LIMIT ?" + std::to_string(next_index) + ";";
+  Statement statement(db_, sql);
+  next_index = 1;
+  if (plane_name.has_value() && !plane_name->empty()) {
+    statement.BindText(next_index++, *plane_name);
+  }
+  if (user_id.has_value() && !user_id->empty()) {
+    statement.BindText(next_index++, *user_id);
+  }
+  statement.BindInt(next_index, limit <= 0 ? 100 : limit);
+  std::vector<SecuredConnectionAuthLogRecord> logs;
+  while (statement.StepRow()) {
+    logs.push_back(ReadSecuredConnectionAuthLog(statement.raw()));
+  }
+  return logs;
+}
+
 UserRecord AuthRepository::ReadUser(sqlite3_stmt* statement) {
   return UserRecord{
       sqlite3_column_int(statement, 0),
@@ -511,6 +717,51 @@ AuthSessionRecord AuthRepository::ReadAuthSession(sqlite3_stmt* statement) {
       ToColumnText(statement, 5),
       ToColumnText(statement, 6),
       ToColumnText(statement, 7),
+  };
+}
+
+SecuredConnectionUserRecord AuthRepository::ReadSecuredConnectionUser(
+    sqlite3_stmt* statement) {
+  return SecuredConnectionUserRecord{
+      ToColumnText(statement, 0),
+      ToColumnText(statement, 1),
+      ToColumnText(statement, 2),
+      ToColumnText(statement, 3),
+      ToColumnText(statement, 4),
+      ToColumnText(statement, 5),
+      ToColumnText(statement, 6),
+      ToColumnText(statement, 7),
+      ToColumnText(statement, 8),
+  };
+}
+
+SecuredConnectionSessionRecord AuthRepository::ReadSecuredConnectionSession(
+    sqlite3_stmt* statement) {
+  return SecuredConnectionSessionRecord{
+      ToColumnText(statement, 0),
+      ToColumnText(statement, 1),
+      ToColumnText(statement, 2),
+      ToColumnText(statement, 3),
+      ToColumnText(statement, 4),
+      ToColumnText(statement, 5),
+      ToColumnText(statement, 6),
+  };
+}
+
+SecuredConnectionAuthLogRecord AuthRepository::ReadSecuredConnectionAuthLog(
+    sqlite3_stmt* statement) {
+  return SecuredConnectionAuthLogRecord{
+      sqlite3_column_int(statement, 0),
+      ToColumnText(statement, 1),
+      ToColumnText(statement, 2),
+      ToColumnText(statement, 3),
+      ToColumnText(statement, 4),
+      ToColumnText(statement, 5),
+      ToColumnText(statement, 6),
+      ToColumnText(statement, 7),
+      ToColumnText(statement, 8),
+      ToColumnText(statement, 9),
+      ToColumnText(statement, 10),
   };
 }
 

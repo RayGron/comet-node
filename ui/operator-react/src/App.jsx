@@ -168,6 +168,10 @@ function skillsFactoryPath(suffix = "") {
   return suffix ? `/api/v1/skills-factory/${suffix}` : "/api/v1/skills-factory";
 }
 
+function userStoragePath(suffix = "") {
+  return suffix ? `/api/v1/user-storage/${suffix}` : "/api/v1/user-storage";
+}
+
 function protocolsPath(suffix = "") {
   return suffix ? `/api/v1/protocols/${suffix}` : "/api/v1/protocols";
 }
@@ -1209,6 +1213,7 @@ export function PlaneEditorDialog({
   peerLinks,
   skillsFactoryItems,
   skillsFactoryGroups = [],
+  userStorageItems = [],
   onResetLtCypherDeployment,
 }) {
   if (!dialog.open) {
@@ -1295,6 +1300,7 @@ export function PlaneEditorDialog({
               peerLinks={peerLinks || null}
               skillsFactoryItems={skillsFactoryItems || []}
               skillsFactoryGroups={skillsFactoryGroups || []}
+              userStorageItems={userStorageItems || []}
               showValidation={showValidation}
               onResetLtCypherDeployment={onResetLtCypherDeployment}
             />
@@ -2077,10 +2083,15 @@ function App() {
   });
   const [adminInvites, setAdminInvites] = useState([]);
   const [sshKeys, setSshKeys] = useState([]);
+  const [userStorage, setUserStorage] = useState({ items: [], authLog: [], search: "" });
   const [accessBusy, setAccessBusy] = useState("");
   const [accessError, setAccessError] = useState("");
   const [sshKeyForm, setSshKeyForm] = useState({
     label: "",
+    publicKey: "",
+  });
+  const [userStorageForm, setUserStorageForm] = useState({
+    name: "",
     publicKey: "",
   });
   const [planeDetail, setPlaneDetail] = useState(null);
@@ -2253,6 +2264,7 @@ function App() {
     setModelsTab("library");
     setSkillsFactory({
       items: [],
+      groups: [],
       busy: false,
       error: "",
       mode: "create",
@@ -2262,6 +2274,7 @@ function App() {
       selectedGroupPath: "",
       expandedGroupPaths: [""],
     });
+    setUserStorage({ items: [], authLog: [], search: "" });
     setChatMessages([]);
     setChatError("");
     setApiHealthy(false);
@@ -2332,6 +2345,19 @@ function App() {
       ]);
       setSshKeys(Array.isArray(sshKeysPayload.items) ? sshKeysPayload.items : []);
       setAdminInvites(Array.isArray(invitesPayload.items) ? invitesPayload.items : []);
+      if (authState.user?.role === "admin") {
+        const [userStoragePayload, userStorageLogPayload] = await Promise.all([
+          fetchJson(userStoragePath()),
+          fetchJson(userStoragePath("auth-log?limit=25")),
+        ]);
+        setUserStorage((current) => ({
+          ...current,
+          items: Array.isArray(userStoragePayload.items) ? userStoragePayload.items : [],
+          authLog: Array.isArray(userStorageLogPayload.items) ? userStorageLogPayload.items : [],
+        }));
+      } else {
+        setUserStorage((current) => ({ ...current, items: [], authLog: [] }));
+      }
       setAccessError("");
     } catch (error) {
       if (error?.status === 401) {
@@ -3050,6 +3076,50 @@ function App() {
     setAccessBusy(`delete-ssh-key:${keyId}`);
     try {
       await fetchJson(`/api/v1/auth/ssh-keys/${keyId}`, { method: "DELETE" });
+      await refreshAccessData();
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setAccessError(error.message || String(error));
+    } finally {
+      setAccessBusy("");
+    }
+  }
+
+  async function handleAddUserStorageUser(event) {
+    event.preventDefault();
+    setAccessBusy("create-user-storage-user");
+    setAccessError("");
+    try {
+      await fetchJson(userStoragePath(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: userStorageForm.name.trim(),
+          public_key: userStorageForm.publicKey.trim(),
+        }),
+      });
+      setUserStorageForm({ name: "", publicKey: "" });
+      await refreshAccessData();
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setAccessError(error.message || String(error));
+    } finally {
+      setAccessBusy("");
+    }
+  }
+
+  async function handleDeleteUserStorageUser(userId) {
+    setAccessBusy(`delete-user-storage-user:${userId}`);
+    try {
+      await fetchJson(userStoragePath(userId), { method: "DELETE" });
       await refreshAccessData();
     } catch (error) {
       if (error?.status === 401) {
@@ -7701,6 +7771,25 @@ function App() {
   }
 
   function renderAccessPage() {
+    const userStorageNeedle = String(userStorage.search || "").trim().toLowerCase();
+    const filteredUserStorageItems = (Array.isArray(userStorage.items) ? userStorage.items : [])
+      .filter((item) => {
+        if (!userStorageNeedle) {
+          return true;
+        }
+        return [
+          item?.id,
+          item?.name,
+          item?.public_key,
+          item?.fingerprint,
+          item?.last_authorized_at,
+          item?.created_at,
+          item?.updated_at,
+        ]
+          .map((value) => String(value || "").toLowerCase())
+          .join(" ")
+          .includes(userStorageNeedle);
+      });
     return (
       <section className="panel page-panel">
         <div className="panel-header">
@@ -7793,6 +7882,104 @@ function App() {
                     </article>
                   ))
                 )}
+              </div>
+            </section>
+          ) : null}
+
+          {authState.user?.role === "admin" ? (
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>User Storage</h3>
+                <span className="subpanel-meta">SSH identities allowed by Secured Connection</span>
+              </div>
+              <form className="list-card access-form-card" onSubmit={handleAddUserStorageUser}>
+                <label className="field-label" htmlFor="user-storage-name">Name</label>
+                <input
+                  id="user-storage-name"
+                  className="text-input"
+                  type="text"
+                  value={userStorageForm.name}
+                  onChange={(event) =>
+                    setUserStorageForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                  placeholder="trading-terminal"
+                />
+                <label className="field-label" htmlFor="user-storage-public">Public key</label>
+                <textarea
+                  id="user-storage-public"
+                  className="editor-textarea"
+                  value={userStorageForm.publicKey}
+                  onChange={(event) =>
+                    setUserStorageForm((current) => ({ ...current, publicKey: event.target.value }))
+                  }
+                  placeholder="ssh-ed25519 AAAA..."
+                />
+                <div className="toolbar">
+                  <button
+                    className="ghost-button"
+                    type="submit"
+                    disabled={
+                      accessBusy !== "" ||
+                      !userStorageForm.name.trim() ||
+                      !userStorageForm.publicKey.trim()
+                    }
+                  >
+                    Add user
+                  </button>
+                </div>
+              </form>
+              <label className="field-label">
+                <span className="field-label-title">Filter users</span>
+                <input
+                  className="text-input"
+                  value={userStorage.search}
+                  onChange={(event) =>
+                    setUserStorage((current) => ({ ...current, search: event.target.value }))
+                  }
+                  placeholder="Search name, key, fingerprint, or last auth"
+                />
+              </label>
+              <div className="list-column">
+                {filteredUserStorageItems.length === 0 ? (
+                  <EmptyState title="No User Storage users" detail="Add a public SSH key to allow selection in Secured Connection." />
+                ) : (
+                  filteredUserStorageItems.map((item) => (
+                    <article className="list-card" key={item.id}>
+                      <div className="card-row">
+                        <strong>{item.name || "User Storage user"}</strong>
+                        <span className="tag">{item.fingerprint}</span>
+                      </div>
+                      <div className="list-detail">
+                        <div>{item.public_key}</div>
+                        <div>last auth {formatTimestamp(item.last_authorized_at)}</div>
+                      </div>
+                      <div className="toolbar">
+                        <button
+                          className="ghost-button compact-button danger-button"
+                          type="button"
+                          disabled={accessBusy !== ""}
+                          onClick={() => handleDeleteUserStorageUser(item.id)}
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+              <div className="list-column">
+                {(Array.isArray(userStorage.authLog) ? userStorage.authLog : []).slice(0, 5).map((entry) => (
+                  <article className="list-card" key={entry.id}>
+                    <div className="card-row">
+                      <strong>{entry.event_type} / {entry.outcome}</strong>
+                      <span className="tag">{entry.plane_name || "no-plane"}</span>
+                    </div>
+                    <div className="list-detail">
+                      <div>{entry.user_name || entry.user_id || "unknown-user"}</div>
+                      <div>{formatTimestamp(entry.created_at)} {entry.message ? `- ${entry.message}` : ""}</div>
+                    </div>
+                  </article>
+                ))}
               </div>
             </section>
           ) : null}
@@ -8582,6 +8769,7 @@ function App() {
         peerLinks={dashboard?.peer_links || null}
         skillsFactoryItems={skillsFactory.items || []}
         skillsFactoryGroups={skillsFactory.groups || []}
+        userStorageItems={userStorage.items || []}
         onResetLtCypherDeployment={resetLtCypherDeployment}
       />
       <SkillsDialog

@@ -71,12 +71,43 @@ class AuthRepository final {
   bool RevokeAuthSession(const std::string& token, const std::string& revoked_at);
   bool TouchAuthSession(const std::string& token, const std::string& last_used_at);
 
+  void UpsertSecuredConnectionUser(const SecuredConnectionUserRecord& user);
+  std::optional<SecuredConnectionUserRecord> LoadActiveSecuredConnectionUser(
+      const std::string& user_id) const;
+  std::optional<SecuredConnectionUserRecord> LoadActiveSecuredConnectionUserByNameAndFingerprint(
+      const std::string& name,
+      const std::string& fingerprint) const;
+  std::vector<SecuredConnectionUserRecord> LoadSecuredConnectionUsers(
+      const std::optional<std::string>& search,
+      bool include_revoked) const;
+  bool RevokeSecuredConnectionUser(
+      const std::string& user_id,
+      const std::string& revoked_at);
+  void TouchSecuredConnectionUser(
+      const std::string& user_id,
+      const std::string& last_authorized_at);
+  void InsertSecuredConnectionSession(const SecuredConnectionSessionRecord& session);
+  std::optional<SecuredConnectionSessionRecord> LoadActiveSecuredConnectionSession(
+      const std::string& token,
+      const std::string& plane_name) const;
+  bool TouchSecuredConnectionSession(
+      const std::string& token,
+      const std::string& last_used_at);
+  void InsertSecuredConnectionAuthLog(const SecuredConnectionAuthLogRecord& log);
+  std::vector<SecuredConnectionAuthLogRecord> LoadSecuredConnectionAuthLog(
+      const std::optional<std::string>& plane_name,
+      const std::optional<std::string>& user_id,
+      int limit) const;
+
  private:
   static UserRecord ReadUser(sqlite3_stmt* statement);
   static WebAuthnCredentialRecord ReadWebAuthnCredential(sqlite3_stmt* statement);
   static RegistrationInviteRecord ReadRegistrationInvite(sqlite3_stmt* statement);
   static UserSshKeyRecord ReadUserSshKey(sqlite3_stmt* statement);
   static AuthSessionRecord ReadAuthSession(sqlite3_stmt* statement);
+  static SecuredConnectionUserRecord ReadSecuredConnectionUser(sqlite3_stmt* statement);
+  static SecuredConnectionSessionRecord ReadSecuredConnectionSession(sqlite3_stmt* statement);
+  static SecuredConnectionAuthLogRecord ReadSecuredConnectionAuthLog(sqlite3_stmt* statement);
 
   sqlite3* db_;
 };

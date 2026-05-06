@@ -6,6 +6,7 @@
 #include "interaction/interaction_conversation_service.h"
 #include "interaction/interaction_request_contract_support.h"
 #include "interaction/interaction_stream_http_error_response_builder.h"
+#include "naim/security/crypto_utils.h"
 
 namespace naim::controller {
 
@@ -69,10 +70,18 @@ InteractionStreamHttpRequestPreparationService::Prepare(
       };
     }
     if (authenticated.has_value()) {
-      principal.owner_kind = "user";
-      principal.owner_user_id = authenticated->first.id;
       principal.auth_session_kind = authenticated->second.session_kind;
       principal.authenticated = true;
+      if (authenticated->second.session_kind == "secured_ssh" ||
+          authenticated->first.role == "secured_connection") {
+        principal.owner_kind =
+            "secured_connection:" +
+            naim::ComputeSha256Hex(authenticated->second.token).substr(0, 24);
+        principal.owner_user_id = std::nullopt;
+      } else {
+        principal.owner_kind = "user";
+        principal.owner_user_id = authenticated->first.id;
+      }
     }
 
     if (const auto validation_error = InteractionConversationService().PrepareRequest(

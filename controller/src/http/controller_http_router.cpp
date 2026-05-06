@@ -8,6 +8,7 @@
 #include "interaction/interaction_request_contract_support.h"
 #include "interaction/interaction_request_identity_support.h"
 #include "interaction/interaction_service.h"
+#include "naim/security/crypto_utils.h"
 #include "naim/state/sqlite_store.h"
 
 using nlohmann::json;
@@ -22,6 +23,26 @@ std::string LowercaseCopy(const std::string& value) {
     lowered.push_back(static_cast<char>(std::tolower(ch)));
   }
   return lowered;
+}
+
+void ApplyAuthenticatedInteractionPrincipal(
+    const std::optional<std::pair<naim::UserRecord, naim::AuthSessionRecord>>& authenticated,
+    InteractionConversationPrincipal* principal) {
+  if (!authenticated.has_value() || principal == nullptr) {
+    return;
+  }
+  principal->auth_session_kind = authenticated->second.session_kind;
+  principal->authenticated = true;
+  if (authenticated->second.session_kind == "secured_ssh" ||
+      authenticated->first.role == "secured_connection") {
+    principal->owner_kind =
+        "secured_connection:" +
+        naim::ComputeSha256Hex(authenticated->second.token).substr(0, 24);
+    principal->owner_user_id = std::nullopt;
+    return;
+  }
+  principal->owner_kind = "user";
+  principal->owner_user_id = authenticated->first.id;
 }
 
 std::optional<int> FindQueryInt(
@@ -558,12 +579,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
             validation_error->details);
       }
       InteractionConversationPrincipal principal;
-      if (authenticated.has_value()) {
-        principal.owner_kind = "user";
-        principal.owner_user_id = authenticated->first.id;
-        principal.auth_session_kind = authenticated->second.session_kind;
-        principal.authenticated = true;
-      }
+      ApplyAuthenticatedInteractionPrincipal(authenticated, &principal);
       if (const auto validation_error = InteractionConversationService().PrepareRequest(
               db_path_, resolution, principal, &request_context)) {
         return build_plane_error(

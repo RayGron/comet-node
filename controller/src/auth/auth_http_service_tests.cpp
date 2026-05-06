@@ -335,6 +335,18 @@ void TestUserStorageAdminApiAndSecuredChallengeGuards() {
   Expect(
       accepted_response->status_code == 200,
       "secured challenge should accept HTTPS and selected User Storage user");
+
+  HttpRequest fingerprint_only_challenge = forbidden_challenge;
+  fingerprint_only_challenge.body = json{
+      {"plane_name", "secured-plane"},
+      {"fingerprint", fingerprint},
+  }.dump();
+  const auto fingerprint_only_response =
+      service.HandleRequest(db_path.string(), fingerprint_only_challenge);
+  Expect(fingerprint_only_response.has_value(), "fingerprint-only challenge should respond");
+  Expect(
+      fingerprint_only_response->status_code == 200,
+      "secured challenge should accept fingerprint without username");
   Expect(
       store.LoadSecuredConnectionAuthLog("secured-plane", secured_user_id, 10).size() >= 2,
       "secured challenge attempts should be audit logged");

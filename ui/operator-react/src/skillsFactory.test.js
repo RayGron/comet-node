@@ -573,7 +573,7 @@ describe("planeV2Form SkillsFactory mapping", () => {
         derived_role: "worker",
         capacity_summary: {
           gpu_count: 4,
-          storage_root: "/mnt/shared-storage/naim/storage",
+          storage_root: "/var/lib/naim/storage",
         },
       },
       {

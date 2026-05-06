@@ -26,7 +26,7 @@ env:
   NAIM_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
   NAIM_HPC1_SSH: ${{ vars.NAIM_HPC1_SSH || 'baal@195.168.22.186' }}
   NAIM_HPC1_SSH_PORT: ${{ vars.NAIM_HPC1_SSH_PORT || '2222' }}
-  NAIM_HPC1_REPO_PATH: ${{ vars.NAIM_HPC1_REPO_PATH || '/mnt/shared-storage/naim/repos/naim-node' }}
+  NAIM_HPC1_REPO_PATH: ${{ vars.NAIM_HPC1_REPO_PATH || '/opt/naim/repos/naim-node' }}
   NAIM_HPC1_PR_REPO_ROOT: ${{ vars.NAIM_HPC1_PR_REPO_ROOT || '/tmp/naim-pr-gate/naim-node' }}
   NAIM_BUILD_TYPE: ${{ vars.NAIM_BUILD_TYPE || 'Release' }}
   NAIM_CUDA_ARCHITECTURES: ${{ vars.NAIM_CUDA_ARCHITECTURES || '120a-real' }}

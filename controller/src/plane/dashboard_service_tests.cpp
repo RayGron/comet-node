@@ -567,6 +567,62 @@ void TestPeerLinksIncludedWithoutDesiredPlane() {
   std::cout << "ok: peer-links-included-without-desired-plane" << '\n';
 }
 
+void TestDashboardMovesUnregisteredPeerLinksToDiagnostics() {
+  const auto db_path = MakeTempDbPath("peer-links-unregistered-diagnostics");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  const naim::controller::ControllerRuntimeSupportService runtime_support_service;
+  const std::string now = runtime_support_service.UtcNowSqlTimestamp();
+  SeedHostRecord(store, "hpc1", "registered", "connected", now, now);
+  SeedHostRecord(store, "storage1", "registered", "connected", now, now);
+
+  naim::HostPeerLinkRecord hpc_to_storage;
+  hpc_to_storage.observer_node_name = "hpc1";
+  hpc_to_storage.peer_node_name = "storage1";
+  hpc_to_storage.peer_endpoint = "http://192.168.88.252:29999";
+  hpc_to_storage.seen_udp = true;
+  hpc_to_storage.tcp_reachable = true;
+  hpc_to_storage.last_seen_at = now;
+  hpc_to_storage.last_probe_at = now;
+  store.UpsertHostPeerLink(hpc_to_storage);
+
+  naim::HostPeerLinkRecord storage_to_hpc = hpc_to_storage;
+  storage_to_hpc.observer_node_name = "storage1";
+  storage_to_hpc.peer_node_name = "hpc1";
+  storage_to_hpc.peer_endpoint = "http://192.168.88.13:29999";
+  store.UpsertHostPeerLink(storage_to_hpc);
+
+  naim::HostPeerLinkRecord hpc_to_local;
+  hpc_to_local.observer_node_name = "hpc1";
+  hpc_to_local.peer_node_name = "local-hostd";
+  hpc_to_local.peer_endpoint = "http://192.168.88.13:29999";
+  hpc_to_local.seen_udp = true;
+  hpc_to_local.tcp_reachable = true;
+  hpc_to_local.last_seen_at = now;
+  hpc_to_local.last_probe_at = now;
+  store.UpsertHostPeerLink(hpc_to_local);
+
+  ScopedEnvVar admin_upstream("NAIM_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
+  ScopedEnvVar internal_upstream("NAIM_CONTROLLER_INTERNAL_UPSTREAM", std::nullopt);
+  ScopedEnvVar skills_factory_upstream("NAIM_SKILLS_FACTORY_UPSTREAM", std::nullopt);
+  ScopedEnvVar web_ui_root_env("NAIM_WEB_UI_ROOT", std::nullopt);
+  ScopedEnvVar hostd_node("NAIM_HOSTD_NODE_NAME", std::string("local-hostd"));
+
+  const auto payload = MakeDashboardService().BuildPayload(db_path, 300, std::nullopt);
+  const auto peer_links = payload.at("peer_links");
+  Expect(
+      peer_links.at("summary").at("total").get<int>() == 2,
+      "registered peer graph should include only registered hosts");
+  Expect(
+      peer_links.at("summary").at("unregistered").get<int>() == 1,
+      "unregistered peer link should be counted as diagnostics");
+  Expect(
+      peer_links.at("unregistered_items").at(0).at("peer_node_name").get<std::string>() ==
+          "local-hostd",
+      "local-hostd should be moved to diagnostics when it is not registered");
+  std::cout << "ok: peer-links-unregistered-diagnostics" << '\n';
+}
+
 void TestDashboardPrunesExpiredPeerLinks() {
   const auto db_path = MakeTempDbPath("dashboard-prunes-expired-peer-links");
   naim::ControllerStore store(db_path);
@@ -939,6 +995,7 @@ int main() {
     TestWebUiMissingStateCritical();
     TestSkillsFactoryProbeFailureDoesNotBreakPayload();
     TestPeerLinksIncludedWithoutDesiredPlane();
+    TestDashboardMovesUnregisteredPeerLinksToDiagnostics();
     TestDashboardPrunesExpiredPeerLinks();
     TestRuntimePayloadIncludesKvCacheBytes();
     TestPlaneScopedNodesIgnoreForeignRuntimeStatus();

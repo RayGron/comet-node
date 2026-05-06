@@ -66,6 +66,7 @@ import {
 } from "./telemetryHostObservations.js";
 import {
   buildTelemetryBrowserLatency,
+  latestTelemetryFramesByNode,
   maxTelemetryReceiveDelayMs,
   parseTelemetryEventPayload,
   telemetryFramesFromSnapshot,
@@ -165,6 +166,10 @@ function hostdHostsPath(nodeName = "") {
 
 function skillsFactoryPath(suffix = "") {
   return suffix ? `/api/v1/skills-factory/${suffix}` : "/api/v1/skills-factory";
+}
+
+function userStoragePath(suffix = "") {
+  return suffix ? `/api/v1/user-storage/${suffix}` : "/api/v1/user-storage";
 }
 
 function protocolsPath(suffix = "") {
@@ -404,6 +409,17 @@ function yesNo(value) {
     return "n/a";
   }
   return value ? "yes" : "no";
+}
+
+function formatMilliseconds(value, fractionDigits = 0) {
+  if (value === null || value === undefined || value === "") {
+    return "n/a";
+  }
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) {
+    return "n/a";
+  }
+  return `${amount.toFixed(fractionDigits)} ms`;
 }
 
 function compactBytes(value) {
@@ -1197,6 +1213,7 @@ export function PlaneEditorDialog({
   peerLinks,
   skillsFactoryItems,
   skillsFactoryGroups = [],
+  userStorageItems = [],
   onResetLtCypherDeployment,
 }) {
   if (!dialog.open) {
@@ -1283,6 +1300,7 @@ export function PlaneEditorDialog({
               peerLinks={peerLinks || null}
               skillsFactoryItems={skillsFactoryItems || []}
               skillsFactoryGroups={skillsFactoryGroups || []}
+              userStorageItems={userStorageItems || []}
               showValidation={showValidation}
               onResetLtCypherDeployment={onResetLtCypherDeployment}
             />
@@ -1384,19 +1402,17 @@ function MetricSparklineButton({ label, history, onOpen }) {
       title={`Open ${label} chart`}
       onClick={onOpen}
     >
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={series}>
-          <YAxis type="number" domain={domain} hide />
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke="rgba(255, 213, 94, 0.96)"
-            fill="rgba(120, 190, 255, 0.18)"
-            strokeWidth={1.8}
-            isAnimationActive={false}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
+      <AreaChart width={76} height={24} data={series} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>
+        <YAxis type="number" domain={domain} hide />
+        <Area
+          type="monotone"
+          dataKey="value"
+          stroke="rgba(255, 213, 94, 0.96)"
+          fill="rgba(120, 190, 255, 0.18)"
+          strokeWidth={1.8}
+          isAnimationActive={false}
+        />
+      </AreaChart>
     </button>
   );
 }
@@ -1617,7 +1633,7 @@ function TelemetryChartDialog({ chart, onClose }) {
         </div>
         <p className="editor-copy">{chart.meta || "Live metric history from controller polling."}</p>
         <div className="telemetry-chart-shell">
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
             <LineChart data={series}>
               <CartesianGrid stroke="rgba(120, 190, 255, 0.12)" vertical={false} />
               <XAxis
@@ -1927,6 +1943,117 @@ function nodeConnectivityStatus(host) {
   };
 }
 
+function peerLinkState(link) {
+  if (String(link?.state || "").trim()) {
+    return String(link.state).toLowerCase();
+  }
+  if (link?.tcp_reachable === true) {
+    return "direct";
+  }
+  if (link?.seen_udp === true) {
+    return "partial";
+  }
+  return "stale";
+}
+
+function hostRegistryNodeName(host) {
+  return String(host?.node_name || host?.nodeName || host?.name || "").trim();
+}
+
+function registeredHostNodeNames(hosts) {
+  return new Set(
+    (Array.isArray(hosts) ? hosts : [])
+      .map((host) => hostRegistryNodeName(host))
+      .filter(Boolean),
+  );
+}
+
+function summarizePeerLinks(items) {
+  return (Array.isArray(items) ? items : []).reduce(
+    (current, item) => {
+      const state = peerLinkState(item);
+      return {
+        ...current,
+        total: current.total + 1,
+        direct: current.direct + (state === "direct" ? 1 : 0),
+        partial: current.partial + (state === "partial" ? 1 : 0),
+        stale: current.stale + (state === "stale" ? 1 : 0),
+      };
+    },
+    { total: 0, direct: 0, partial: 0, stale: 0 },
+  );
+}
+
+function splitPeerLinksByRegisteredHosts(items, hosts) {
+  const registeredNames = registeredHostNodeNames(hosts);
+  if (registeredNames.size === 0) {
+    return {
+      registered: Array.isArray(items) ? items : [],
+      unregistered: [],
+    };
+  }
+  return (Array.isArray(items) ? items : []).reduce(
+    (current, item) => {
+      const observerNodeName = String(item?.observer_node_name || "").trim();
+      const peerNodeName = String(item?.peer_node_name || "").trim();
+      const registered =
+        registeredNames.has(observerNodeName) && registeredNames.has(peerNodeName);
+      current[registered ? "registered" : "unregistered"].push(item);
+      return current;
+    },
+    { registered: [], unregistered: [] },
+  );
+}
+
+function registeredLanPeers(registry, hosts) {
+  const peers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
+  const registeredNames = registeredHostNodeNames(hosts);
+  if (registeredNames.size === 0) {
+    return peers;
+  }
+  return peers.filter((peer) => registeredNames.has(String(peer?.peer_node_name || "").trim()));
+}
+
+function uniquePeerLinks(items) {
+  const seen = new Set();
+  const result = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const key = [
+      item?.observer_node_name || "",
+      item?.peer_node_name || "",
+      item?.peer_endpoint || "",
+    ].join("\u0000");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
+function buildPeerLinksFromHostRegistry(hosts) {
+  const items = [];
+  for (const host of Array.isArray(hosts) ? hosts : []) {
+    const observerNodeName = hostRegistryNodeName(host);
+    if (!observerNodeName || !Array.isArray(host?.lan_peers)) {
+      continue;
+    }
+    for (const peer of host.lan_peers) {
+      const state = peerLinkState(peer);
+      items.push({
+        ...peer,
+        observer_node_name: peer?.observer_node_name || observerNodeName,
+        peer_node_name: peer?.peer_node_name || "",
+        same_lan: peer?.same_lan === true || state === "direct",
+        state,
+      });
+    }
+  }
+  const summary = summarizePeerLinks(items);
+  return { items, summary };
+}
+
 function App() {
   const initialPlane = new URLSearchParams(window.location.search).get("plane") || "";
   const initialPage = new URLSearchParams(window.location.search).get("page") || "dashboard";
@@ -1936,7 +2063,16 @@ function App() {
   const [planes, setPlanes] = useState([]);
   const [selectedPlane, setSelectedPlane] = useState(initialPlane);
   const [selectedPage, setSelectedPage] = useState(
-    ["dashboard", "planes", "models", "knowledge-vault", "protocols", "skills-factory", "access"].includes(initialPage)
+    [
+      "dashboard",
+      "planes",
+      "models",
+      "knowledge-vault",
+      "protocols",
+      "skills-factory",
+      "user-storage",
+      "access",
+    ].includes(initialPage)
       ? initialPage
       : "dashboard",
   );
@@ -1956,10 +2092,15 @@ function App() {
   });
   const [adminInvites, setAdminInvites] = useState([]);
   const [sshKeys, setSshKeys] = useState([]);
+  const [userStorage, setUserStorage] = useState({ items: [], authLog: [], search: "" });
   const [accessBusy, setAccessBusy] = useState("");
   const [accessError, setAccessError] = useState("");
   const [sshKeyForm, setSshKeyForm] = useState({
     label: "",
+    publicKey: "",
+  });
+  const [userStorageForm, setUserStorageForm] = useState({
+    name: "",
     publicKey: "",
   });
   const [planeDetail, setPlaneDetail] = useState(null);
@@ -2080,6 +2221,7 @@ function App() {
   const refreshTimerRef = useRef(null);
   const refreshSequenceRef = useRef(0);
   const liveRefreshSequenceRef = useRef(0);
+  const fullRefreshInFlightRef = useRef(false);
   const selectedPlaneRef = useRef(selectedPlane);
   const eventSourceRef = useRef(null);
   const telemetrySourceRef = useRef(null);
@@ -2131,6 +2273,7 @@ function App() {
     setModelsTab("library");
     setSkillsFactory({
       items: [],
+      groups: [],
       busy: false,
       error: "",
       mode: "create",
@@ -2140,6 +2283,7 @@ function App() {
       selectedGroupPath: "",
       expandedGroupPaths: [""],
     });
+    setUserStorage({ items: [], authLog: [], search: "" });
     setChatMessages([]);
     setChatError("");
     setApiHealthy(false);
@@ -2210,6 +2354,19 @@ function App() {
       ]);
       setSshKeys(Array.isArray(sshKeysPayload.items) ? sshKeysPayload.items : []);
       setAdminInvites(Array.isArray(invitesPayload.items) ? invitesPayload.items : []);
+      if (authState.user?.role === "admin") {
+        const [userStoragePayload, userStorageLogPayload] = await Promise.all([
+          fetchJson(userStoragePath()),
+          fetchJson(userStoragePath("auth-log?limit=25")),
+        ]);
+        setUserStorage((current) => ({
+          ...current,
+          items: Array.isArray(userStoragePayload.items) ? userStoragePayload.items : [],
+          authLog: Array.isArray(userStorageLogPayload.items) ? userStorageLogPayload.items : [],
+        }));
+      } else {
+        setUserStorage((current) => ({ ...current, items: [], authLog: [] }));
+      }
       setAccessError("");
     } catch (error) {
       if (error?.status === 401) {
@@ -2484,6 +2641,7 @@ function App() {
   }
 
   async function refreshAll(planeOverride) {
+    fullRefreshInFlightRef.current = true;
     const refreshId = ++refreshSequenceRef.current;
     const requestedPlane = planeOverride ?? selectedPlaneRef.current;
     const shouldCommitFleet = () =>
@@ -2669,11 +2827,25 @@ function App() {
       if (!shouldCommitError()) {
         return;
       }
+      if (error?.status === 404 && requestedPlane && selectedPlaneRef.current === requestedPlane) {
+        selectedPlaneRef.current = "";
+        startTransition(() => {
+          setSelectedPlane("");
+          setPlaneDetail(null);
+          setHostObservations(null);
+        });
+        setApiError("");
+        setApiHealthy(true);
+        return;
+      }
       setApiHealthy(false);
       setApiError(error.message || String(error));
     } finally {
       if (shouldCommitError()) {
         setLoading(false);
+      }
+      if (refreshId === refreshSequenceRef.current) {
+        fullRefreshInFlightRef.current = false;
       }
     }
   }
@@ -2913,6 +3085,50 @@ function App() {
     setAccessBusy(`delete-ssh-key:${keyId}`);
     try {
       await fetchJson(`/api/v1/auth/ssh-keys/${keyId}`, { method: "DELETE" });
+      await refreshAccessData();
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setAccessError(error.message || String(error));
+    } finally {
+      setAccessBusy("");
+    }
+  }
+
+  async function handleAddUserStorageUser(event) {
+    event.preventDefault();
+    setAccessBusy("create-user-storage-user");
+    setAccessError("");
+    try {
+      await fetchJson(userStoragePath(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: userStorageForm.name.trim(),
+          public_key: userStorageForm.publicKey.trim(),
+        }),
+      });
+      setUserStorageForm({ name: "", publicKey: "" });
+      await refreshAccessData();
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setAccessError(error.message || String(error));
+    } finally {
+      setAccessBusy("");
+    }
+  }
+
+  async function handleDeleteUserStorageUser(userId) {
+    setAccessBusy(`delete-user-storage-user:${userId}`);
+    try {
+      await fetchJson(userStoragePath(userId), { method: "DELETE" });
       await refreshAccessData();
     } catch (error) {
       if (error?.status === 401) {
@@ -3174,6 +3390,10 @@ function App() {
     }
     refreshTimerRef.current = setTimeout(() => {
       refreshTimerRef.current = null;
+      if (fullRefreshInFlightRef.current) {
+        scheduleRefresh(planeName);
+        return;
+      }
       refreshAll(planeName);
     }, REFRESH_DEBOUNCE_MS);
   }
@@ -3198,6 +3418,14 @@ function App() {
         planeName,
         startedAt: new Date().toISOString(),
       });
+      if (action === "delete") {
+        selectedPlaneRef.current = "";
+        setSelectedPlane("");
+        setPlaneDetail(null);
+        setHostObservations(null);
+        await refreshAll("");
+        return;
+      }
       await refreshAll(planeName);
     } catch (error) {
       setApiError(error.message || String(error));
@@ -3696,14 +3924,24 @@ function App() {
     }
     const refreshDelay = selectedPage === "dashboard" ? FLEET_REFRESH_MS : AUTO_REFRESH_MS;
     const timer = setInterval(() => {
+      if (fullRefreshInFlightRef.current) {
+        return;
+      }
       if (selectedPlane && selectedPage === "dashboard") {
-        refreshSelectedPlaneLive(selectedPlane);
+        const selectedPlaneDetailLoaded =
+          planeDetail?.plane_name === selectedPlane ||
+          (planeDetail?.planes || []).some((item) => item?.name === selectedPlane);
+        if (selectedPlaneDetailLoaded) {
+          refreshSelectedPlaneLive(selectedPlane);
+        } else {
+          refreshAll(selectedPlane);
+        }
         return;
       }
       refreshAll(selectedPlane);
     }, refreshDelay);
     return () => clearInterval(timer);
-  }, [authState.authenticated, selectedPlane, selectedPage]);
+  }, [authState.authenticated, selectedPlane, selectedPage, planeDetail]);
 
   useEffect(() => {
     globalHostObservationsRef.current = globalHostObservations;
@@ -3827,7 +4065,7 @@ function App() {
         );
       }
       const nextGlobalLatency = buildTelemetryBrowserLatency({
-        frames: validFrames,
+        frames: globalResult.acceptedFrames,
         receivedAtMs,
         parseMs,
         reduceMs,
@@ -3885,10 +4123,7 @@ function App() {
     const source = new EventSource(
       queryPath("/api/v1/live/stream", {
         limit: EVENT_LIMIT,
-        plane: selectedPlane || undefined,
-        since_sequence: selectedPlane
-          ? planeTelemetryStoreRef.current?.latestSequence || undefined
-          : globalTelemetryStoreRef.current?.latestSequence || undefined,
+        since_sequence: globalTelemetryStoreRef.current?.latestSequence || undefined,
       }),
     );
     telemetrySourceRef.current = source;
@@ -3938,7 +4173,7 @@ function App() {
         telemetrySourceRef.current = null;
       }
     };
-  }, [authState.authenticated, selectedPlane]);
+  }, [authState.authenticated]);
 
   useEffect(() => {
     if (!authState.authenticated || telemetryHealthy) {
@@ -3971,7 +4206,9 @@ function App() {
           }
           const nextGlobalLatency = {
             receivedAtMs: Date.now(),
-            receiveDelayMs: maxTelemetryReceiveDelayMs(frames),
+            receiveDelayMs: maxTelemetryReceiveDelayMs(
+              latestTelemetryFramesByNode(globalResult.acceptedFrames),
+            ),
             parseMs: 0,
             reduceMs: 0,
             applyMs: 0,
@@ -4069,8 +4306,14 @@ function App() {
 
   const desiredState = planeDetail?.desired_state || null;
   const desiredStateV2 = planeDetail?.desired_state_v2 || null;
+  const matchesSelectedPlane = (item) =>
+    item?.name === selectedPlane || item?.plane_name === selectedPlane;
   const planeRecord =
-    planeDetail?.planes?.find((item) => item.name === selectedPlane) || null;
+    planeDetail?.planes?.find(matchesSelectedPlane) ||
+    dashboard?.planes?.find(matchesSelectedPlane) ||
+    planes.find(matchesSelectedPlane) ||
+    (selectedPlane ? { name: selectedPlane, plane_name: selectedPlane } : null) ||
+    null;
   const planeMode =
     dashboard?.plane?.plane_mode ||
     desiredState?.plane_mode ||
@@ -4111,17 +4354,46 @@ function App() {
         dashboardBrowsingSummary?.reason || "pending"
       }`
     : "disabled";
-  const peerLinkSummary = dashboard?.peer_links?.summary || {
-    total: 0,
-    direct: 0,
-    partial: 0,
-    stale: 0,
-  };
-  const peerLinkItems = Array.isArray(dashboard?.peer_links?.items)
+  const registryPeerLinks = buildPeerLinksFromHostRegistry(hostdHosts);
+  const dashboardPeerLinkItems = Array.isArray(dashboard?.peer_links?.items)
     ? dashboard.peer_links.items
     : [];
+  const dashboardPeerLinkDiagnostics = Array.isArray(dashboard?.peer_links?.unregistered_items)
+    ? dashboard.peer_links.unregistered_items
+    : [];
+  const rawPeerLinkItems =
+    dashboardPeerLinkItems.length > 0 ? dashboardPeerLinkItems : registryPeerLinks.items;
+  const splitPeerLinkItems = splitPeerLinksByRegisteredHosts(rawPeerLinkItems, hostdHosts);
+  const peerLinkItems = splitPeerLinkItems.registered;
+  const registryPeerDiagnostics = (Array.isArray(hostdHosts) ? hostdHosts : []).flatMap((host) =>
+    (Array.isArray(host?.unregistered_lan_peers) ? host.unregistered_lan_peers : []).map((peer) => ({
+      ...peer,
+      observer_node_name: peer?.observer_node_name || hostRegistryNodeName(host),
+      peer_node_name: peer?.peer_node_name || "",
+      state: peerLinkState(peer),
+    })),
+  );
+  const peerLinkDiagnostics = uniquePeerLinks([
+    ...dashboardPeerLinkDiagnostics,
+    ...splitPeerLinkItems.unregistered,
+    ...registryPeerDiagnostics,
+  ]);
+  const peerLinkSummary = summarizePeerLinks(peerLinkItems);
+  const peerLinkDiagnosticsSummary = {
+    ...summarizePeerLinks(peerLinkDiagnostics),
+    unregistered:
+      Number(dashboard?.peer_links?.summary?.unregistered || 0) || peerLinkDiagnostics.length,
+  };
   const chatLanguageOptions = supportedChatLanguageOptions(desiredState, interactionStatus);
-  const interactionReady = interactionStatus?.ready === true;
+  const selectedPlaneApplied =
+    Number(planeRecord?.generation || 0) > 0 &&
+    Number(planeRecord?.applied_generation || 0) === Number(planeRecord?.generation || 0);
+  const interactionReady =
+    interactionStatus?.ready === true ||
+    (interactionStatus === null &&
+      llmPlane &&
+      planeRecord?.state === "running" &&
+      selectedPlaneApplied);
   const nodeItems = dashboard?.nodes || [];
   const observationItems = hostObservationItemsFromPayload(hostObservations);
   const globalObservationItems = hostObservationItemsFromPayload(globalHostObservations);
@@ -5060,7 +5332,7 @@ function App() {
           const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
           const totalMemoryBytes = Number(cpu.total_memory_bytes || storageCapacity.total_memory_bytes || 0);
           const gpuDeviceCount = Number(gpu.device_count || storageCapacity.gpu_count || 0);
-          const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
+          const lanPeers = registeredLanPeers(registry, hostdHosts);
           const directLanPeers = lanPeers.filter((peer) => peer?.tcp_reachable === true);
           const storageTotalBytes = Number(storageCapacity.storage_total_bytes || 0);
           const storageFreeBytes = Number(storageCapacity.storage_free_bytes || 0);
@@ -5105,9 +5377,18 @@ function App() {
     const gpu = host?.gpu_telemetry?.summary || {};
     const capacity = registry?.capacity_summary || {};
     const connectivity = nodeConnectivityStatus(host);
+    const runtimeStatus = host?.runtime_status || {};
+    const runtimeAvailable = runtimeStatus?.available === true;
+    const runtimePhase =
+      runtimeStatus?.phase ||
+      runtimeStatus?.runtime?.runtime_phase ||
+      (runtimeAvailable ? "ready" : "unavailable");
     const storageSelected = isStorageRoleSelected(host);
     const storageEligible = isStorageRoleEligible(host);
-    const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
+    const lanPeers = registeredLanPeers(registry, hostdHosts);
+    const unregisteredLanPeers = Array.isArray(registry?.unregistered_lan_peers)
+      ? registry.unregistered_lan_peers
+      : [];
     const gpuDeviceCount = Number(gpu.device_count || capacity.gpu_count || 0);
     const totalMemoryBytes = Number(cpu.total_memory_bytes || capacity.total_memory_bytes || 0);
     const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
@@ -5192,16 +5473,16 @@ function App() {
               <div className="metric-row"><span>Health</span><strong>{host?.telemetry_health_status || "n/a"}</strong></div>
               <div className="metric-row"><span>Plane runtime</span><strong>{host?.telemetry_plane_runtime_health || "n/a"}</strong></div>
               <div className="metric-row"><span>Plane ready</span><strong>{`${host?.telemetry_plane_ready_instance_count ?? 0}/${host?.telemetry_plane_instance_count ?? 0}`}</strong></div>
-              <div className="metric-row"><span>Frame age</span><strong>{host?.telemetry_last_frame_age_ms ? `${host.telemetry_last_frame_age_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Cadence</span><strong>{host?.telemetry_adaptive_interval_ms ? `${host.telemetry_adaptive_interval_ms} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Frame age</span><strong>{formatMilliseconds(host?.telemetry_last_frame_age_ms)}</strong></div>
+              <div className="metric-row"><span>Cadence</span><strong>{formatMilliseconds(host?.telemetry_adaptive_interval_ms)}</strong></div>
               <div className="metric-row"><span>Cadence reason</span><strong>{host?.telemetry_adaptive_reason || "n/a"}</strong></div>
-              <div className="metric-row"><span>Collect</span><strong>{host?.telemetry_collector_duration_ms ? `${host.telemetry_collector_duration_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Publish</span><strong>{host?.telemetry_publish_duration_ms ? `${host.telemetry_publish_duration_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Queue delay</span><strong>{host?.telemetry_queue_delay_ms ? `${host.telemetry_queue_delay_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Controller ingest</span><strong>{host?.telemetry_controller_ingest_delay_ms ? `${host.telemetry_controller_ingest_delay_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Total observed</span><strong>{host?.telemetry_latency_total_ms ? `${host.telemetry_latency_total_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Browser receive</span><strong>{host?.telemetry_browser_receive_delay_ms ? `${host.telemetry_browser_receive_delay_ms} ms` : "n/a"}</strong></div>
-              <div className="metric-row"><span>Browser parse</span><strong>{host?.telemetry_browser_parse_ms ? `${host.telemetry_browser_parse_ms.toFixed(1)} ms` : "n/a"}</strong></div>
+              <div className="metric-row"><span>Collect</span><strong>{formatMilliseconds(host?.telemetry_collector_duration_ms)}</strong></div>
+              <div className="metric-row"><span>Publish</span><strong>{formatMilliseconds(host?.telemetry_publish_duration_ms)}</strong></div>
+              <div className="metric-row"><span>Queue delay</span><strong>{formatMilliseconds(host?.telemetry_queue_delay_ms)}</strong></div>
+              <div className="metric-row"><span>Controller ingest</span><strong>{formatMilliseconds(host?.telemetry_controller_ingest_delay_ms)}</strong></div>
+              <div className="metric-row"><span>Total observed</span><strong>{formatMilliseconds(host?.telemetry_latency_total_ms)}</strong></div>
+              <div className="metric-row"><span>Browser receive</span><strong>{formatMilliseconds(host?.telemetry_browser_receive_delay_ms)}</strong></div>
+              <div className="metric-row"><span>Browser parse</span><strong>{formatMilliseconds(host?.telemetry_browser_parse_ms, 1)}</strong></div>
               <div className="metric-row"><span>Bus depth</span><strong>{host?.telemetry_bus_depth ?? "n/a"}</strong></div>
               <div className="metric-row"><span>Dropped frames</span><strong>{host?.telemetry_dropped_frames ?? 0}</strong></div>
               <div className="metric-row"><span>Publish errors</span><strong>{host?.telemetry_publish_errors ?? 0}</strong></div>
@@ -5217,6 +5498,25 @@ function App() {
               <div className="metric-grid">
                 {lanPeers.map((peer) => (
                   <div className="metric-row" key={`${host?.node_name}:${peer?.peer_node_name}`}>
+                    <span>{peer?.peer_node_name || "peer"}</span>
+                    <strong>
+                      {peer?.tcp_reachable ? "direct" : peer?.seen_udp ? "partial" : "stale"}
+                      {peer?.peer_endpoint ? ` / ${peer.peer_endpoint}` : ""}
+                    </strong>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {unregisteredLanPeers.length > 0 ? (
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>LAN diagnostics</h3>
+                <span className="subpanel-meta">{`${unregisteredLanPeers.length} unregistered`}</span>
+              </div>
+              <div className="metric-grid">
+                {unregisteredLanPeers.map((peer) => (
+                  <div className="metric-row" key={`${host?.node_name}:diagnostic:${peer?.peer_node_name}`}>
                     <span>{peer?.peer_node_name || "peer"}</span>
                     <strong>
                       {peer?.tcp_reachable ? "direct" : peer?.seen_udp ? "partial" : "stale"}
@@ -5597,7 +5897,7 @@ function App() {
   }
 
   function renderDashboardPlaneDetailModal() {
-    if (!selectedPlane || !planeRecord || !dashboard) {
+    if (!selectedPlane || !planeRecord) {
       return null;
     }
 
@@ -5720,7 +6020,7 @@ function App() {
                 <SummaryCard
                   label="Ready nodes"
                   value={readyNodes}
-                  meta={`${dashboard.plane?.node_count ?? 0} total / ${notReadyNodes} not ready`}
+                  meta={`${dashboard?.plane?.node_count ?? 0} total / ${notReadyNodes} not ready`}
                   history={planeReadyNodesHistory}
                     onOpenTrend={() =>
                       openTelemetryChart(
@@ -5759,8 +6059,8 @@ function App() {
                 />
                 <SummaryCard
                   label="Rollout actions"
-                  value={dashboard.rollout?.total_actions ?? 0}
-                  meta={`${dashboard.rollout?.loop_status ?? "n/a"} / ${dashboard.rollout?.loop_reason ?? "n/a"}`}
+                  value={dashboard?.rollout?.total_actions ?? 0}
+                  meta={`${dashboard?.rollout?.loop_status ?? "n/a"} / ${dashboard?.rollout?.loop_reason ?? "n/a"}`}
                   history={planeRolloutHistory}
                     onOpenTrend={() =>
                       openTelemetryChart(
@@ -7479,6 +7779,168 @@ function App() {
     );
   }
 
+  function renderUserStoragePage() {
+    const userStorageNeedle = String(userStorage.search || "").trim().toLowerCase();
+    const filteredUserStorageItems = (Array.isArray(userStorage.items) ? userStorage.items : [])
+      .filter((item) => {
+        if (!userStorageNeedle) {
+          return true;
+        }
+        return [
+          item?.id,
+          item?.name,
+          item?.public_key,
+          item?.fingerprint,
+          item?.last_authorized_at,
+          item?.created_at,
+          item?.updated_at,
+        ]
+          .map((value) => String(value || "").toLowerCase())
+          .join(" ")
+          .includes(userStorageNeedle);
+      });
+
+    return (
+      <section className="panel page-panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-label">User Storage</div>
+            <h2>SSH identities</h2>
+          </div>
+          <div className="toolbar">
+            <button
+              className="ghost-button"
+              type="button"
+              disabled={accessBusy !== ""}
+              onClick={() => refreshAccessData()}
+            >
+              Refresh users
+            </button>
+          </div>
+        </div>
+        {accessError ? <div className="error-banner">{accessError}</div> : null}
+        {authState.user?.role === "admin" ? (
+          <div className="panel-grid">
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>Add identity</h3>
+                <span className="subpanel-meta">SSH identities allowed by Secured Connection</span>
+              </div>
+              <form className="list-card access-form-card" onSubmit={handleAddUserStorageUser}>
+                <label className="field-label" htmlFor="user-storage-name">Name</label>
+                <input
+                  id="user-storage-name"
+                  className="text-input"
+                  type="text"
+                  value={userStorageForm.name}
+                  onChange={(event) =>
+                    setUserStorageForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                  placeholder="trading-terminal"
+                />
+                <label className="field-label" htmlFor="user-storage-public">Public key</label>
+                <textarea
+                  id="user-storage-public"
+                  className="editor-textarea"
+                  value={userStorageForm.publicKey}
+                  onChange={(event) =>
+                    setUserStorageForm((current) => ({ ...current, publicKey: event.target.value }))
+                  }
+                  placeholder="ssh-ed25519 AAAA..."
+                />
+                <div className="toolbar">
+                  <button
+                    className="ghost-button"
+                    type="submit"
+                    disabled={
+                      accessBusy !== "" ||
+                      !userStorageForm.name.trim() ||
+                      !userStorageForm.publicKey.trim()
+                    }
+                  >
+                    Add user
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>Directory</h3>
+                <span className="subpanel-meta">{filteredUserStorageItems.length} matching identities</span>
+              </div>
+              <label className="field-label">
+                <span className="field-label-title">Filter users</span>
+                <input
+                  className="text-input"
+                  value={userStorage.search}
+                  onChange={(event) =>
+                    setUserStorage((current) => ({ ...current, search: event.target.value }))
+                  }
+                  placeholder="Search name, key, fingerprint, or last auth"
+                />
+              </label>
+              <div className="list-column">
+                {filteredUserStorageItems.length === 0 ? (
+                  <EmptyState title="No User Storage users" detail="Add a public SSH key to allow selection in Secured Connection." />
+                ) : (
+                  filteredUserStorageItems.map((item) => (
+                    <article className="list-card" key={item.id}>
+                      <div className="card-row">
+                        <strong>{item.name || "User Storage user"}</strong>
+                        <span className="tag">{item.fingerprint}</span>
+                      </div>
+                      <div className="list-detail">
+                        <div>{item.public_key}</div>
+                        <div>last auth {formatTimestamp(item.last_authorized_at)}</div>
+                      </div>
+                      <div className="toolbar">
+                        <button
+                          className="ghost-button compact-button danger-button"
+                          type="button"
+                          disabled={accessBusy !== ""}
+                          onClick={() => handleDeleteUserStorageUser(item.id)}
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>Authorization log</h3>
+                <span className="subpanel-meta">Recent secured connection attempts</span>
+              </div>
+              <div className="list-column">
+                {(Array.isArray(userStorage.authLog) ? userStorage.authLog : []).slice(0, 10).map((entry) => (
+                  <article className="list-card" key={entry.id}>
+                    <div className="card-row">
+                      <strong>{entry.event_type} / {entry.outcome}</strong>
+                      <span className="tag">{entry.plane_name || "no-plane"}</span>
+                    </div>
+                    <div className="list-detail">
+                      <div>{entry.user_name || entry.user_id || "unknown-user"}</div>
+                      <div>{formatTimestamp(entry.created_at)} {entry.message ? `- ${entry.message}` : ""}</div>
+                    </div>
+                  </article>
+                ))}
+                {(Array.isArray(userStorage.authLog) ? userStorage.authLog : []).length === 0 ? (
+                  <EmptyState title="No auth log entries" detail="Secured Connection authorization events will appear here." />
+                ) : null}
+              </div>
+            </section>
+          </div>
+        ) : (
+          <EmptyState title="Admin access required" detail="User Storage is available to controller admins only." />
+        )}
+      </section>
+    );
+  }
+
   function renderAccessPage() {
     return (
       <section className="panel page-panel">
@@ -8023,6 +8485,19 @@ function App() {
                 <span>{authState.user?.role || "user"}</span>
               </span>
             </button>
+            <button
+              className={`side-menu-item ${selectedPage === "user-storage" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setSelectedPage("user-storage")}
+            >
+              <div className="side-menu-copy">
+                <span className="side-menu-title">User Storage</span>
+                <span className="side-menu-meta">Secured Connection identities</span>
+              </div>
+              <span className="tag">
+                <span>{Array.isArray(userStorage.items) ? userStorage.items.length : 0} users</span>
+              </span>
+            </button>
           </div>
         </aside>
 
@@ -8036,6 +8511,8 @@ function App() {
           renderProtocolsPage()
         ) : selectedPage === "skills-factory" ? (
           renderSkillsFactoryPage()
+        ) : selectedPage === "user-storage" ? (
+          renderUserStoragePage()
         ) : selectedPage === "access" ? (
           renderAccessPage()
         ) : (
@@ -8250,6 +8727,39 @@ function App() {
                 )}
               </section>
 
+              {peerLinkDiagnostics.length > 0 ? (
+                <section className="subpanel dashboard-services-panel">
+                  <div className="subpanel-header">
+                    <h3>LAN diagnostics</h3>
+                    <span className="subpanel-meta">
+                      {`${peerLinkDiagnosticsSummary.unregistered || 0} unregistered`}
+                    </span>
+                  </div>
+                  <div className="plane-list">
+                    {peerLinkDiagnostics.slice(0, 8).map((link) => (
+                      <article
+                        className="node-card"
+                        key={`diagnostic:${link?.observer_node_name}:${link?.peer_node_name}`}
+                      >
+                        <div className="card-row">
+                          <strong>{link?.observer_node_name || "node"} to {link?.peer_node_name || "peer"}</strong>
+                          <div className="pill is-warning">
+                            {statusDot("is-warning")}
+                            <span>{link?.diagnostic_reason || "unregistered"}</span>
+                          </div>
+                        </div>
+                        <div className="metric-grid">
+                          <div className="metric-row"><span>Endpoint</span><strong>{link?.peer_endpoint || "n/a"}</strong></div>
+                          <div className="metric-row"><span>Remote</span><strong>{link?.remote_address || "n/a"}</strong></div>
+                          <div className="metric-row"><span>Interface</span><strong>{link?.local_interface || "n/a"}</strong></div>
+                          <div className="metric-row"><span>State</span><strong>{link?.state || peerLinkState(link)}</strong></div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
               <section className="subpanel dashboard-hosts-panel">
                 <div className="subpanel-header">
                   <h3>Naim nodes</h3>
@@ -8328,6 +8838,7 @@ function App() {
         peerLinks={dashboard?.peer_links || null}
         skillsFactoryItems={skillsFactory.items || []}
         skillsFactoryGroups={skillsFactory.groups || []}
+        userStorageItems={userStorage.items || []}
         onResetLtCypherDeployment={resetLtCypherDeployment}
       />
       <SkillsDialog

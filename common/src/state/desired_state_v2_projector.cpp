@@ -76,7 +76,8 @@ void DesiredStateV2Projector::CollectInstancesAndDisks() {
 void DesiredStateV2Projector::ProjectIdentity() {
   value_["plane_name"] = state_.plane_name;
   value_["plane_mode"] = ToString(state_.plane_mode);
-  if (state_.protected_plane) {
+  if (state_.protected_plane ||
+      (state_.secured_connection.has_value() && state_.secured_connection->enabled)) {
     value_["protected"] = true;
   }
 }
@@ -113,7 +114,7 @@ void DesiredStateV2Projector::ProjectPlacement() {
 
 void DesiredStateV2Projector::ProjectFeatures() {
   if (!state_.turboquant.has_value() && !state_.context_compression.has_value() &&
-      !state_.voice_listener.has_value()) {
+      !state_.voice_listener.has_value() && !state_.secured_connection.has_value()) {
     return;
   }
   nlohmann::json features = nlohmann::json::object();
@@ -172,6 +173,12 @@ void DesiredStateV2Projector::ProjectFeatures() {
       voice_json["image"] = voice_module_instance_->image;
     }
     features["voice_listener"] = std::move(voice_json);
+  }
+  if (state_.secured_connection.has_value()) {
+    features["secured_connection"] = {
+        {"enabled", state_.secured_connection->enabled},
+        {"user_ids", state_.secured_connection->user_ids},
+    };
   }
   value_["features"] = std::move(features);
 }

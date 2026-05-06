@@ -61,6 +61,27 @@ std::string EnvString(const char* name, const std::string& fallback) {
   return raw == nullptr || *raw == '\0' ? fallback : std::string(raw);
 }
 
+std::string TrimCopy(std::string value) {
+  const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
+    return std::isspace(ch) != 0;
+  });
+  const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) {
+    return std::isspace(ch) != 0;
+  }).base();
+  if (first >= last) {
+    return {};
+  }
+  return std::string(first, last);
+}
+
+std::string NormalizeControllerUrl(std::string value) {
+  value = TrimCopy(std::move(value));
+  while (value.size() > 1 && value.back() == '/') {
+    value.pop_back();
+  }
+  return value;
+}
+
 bool IsPrivateIpv4(const std::string& address) {
   std::istringstream input(address);
   std::string octet_text;
@@ -147,6 +168,18 @@ bool SendAll(int fd, const char* data, std::size_t size) {
     sent += static_cast<std::size_t>(count);
   }
   return true;
+}
+
+void ApplyHttpClientTimeouts(int fd) {
+#if !defined(_WIN32)
+  timeval timeout{};
+  timeout.tv_sec = 30;
+  timeout.tv_usec = 0;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#else
+  (void)fd;
+#endif
 }
 
 class LauncherHostdBackendSupport final : public naim::hostd::IHttpHostdBackendSupport {
@@ -347,13 +380,59 @@ std::string HostdPeerService::BuildAdvertisedEndpoint() const {
   return "http://" + BestLanAddress() + ":" + std::to_string(peer_port_);
 }
 
+std::string HostdPeerService::PeerClusterId() const {
+  const std::string fingerprint = TrimCopy(options_.controller_fingerprint);
+  if (!fingerprint.empty()) {
+    return "fingerprint:" + fingerprint;
+  }
+  const std::string controller_url = NormalizeControllerUrl(options_.controller_url);
+  if (!controller_url.empty()) {
+    return "controller:" + controller_url;
+  }
+  return {};
+}
+
 std::string HostdPeerService::BuildBeaconPayload() const {
-  return json{
+  json payload{
       {"service", "naim-peer-v1"},
       {"node_name", options_.node_name},
       {"peer_endpoint", BuildAdvertisedEndpoint()},
       {"sent_at", CurrentTimestamp()},
-  }.dump();
+  };
+  const std::string cluster_id = PeerClusterId();
+  if (!cluster_id.empty()) {
+    payload["cluster_id"] = cluster_id;
+  }
+  const std::string controller_url = NormalizeControllerUrl(options_.controller_url);
+  if (!controller_url.empty()) {
+    payload["controller_url"] = controller_url;
+  }
+  const std::string controller_fingerprint = TrimCopy(options_.controller_fingerprint);
+  if (!controller_fingerprint.empty()) {
+    payload["controller_fingerprint"] = controller_fingerprint;
+  }
+  return payload.dump();
+}
+
+bool HostdPeerService::BeaconMatchesCluster(const json& payload) const {
+  const std::string local_cluster_id = PeerClusterId();
+  if (local_cluster_id.empty()) {
+    return true;
+  }
+  const std::string remote_cluster_id = payload.value("cluster_id", std::string{});
+  if (!remote_cluster_id.empty()) {
+    return remote_cluster_id == local_cluster_id;
+  }
+  const std::string local_fingerprint = TrimCopy(options_.controller_fingerprint);
+  if (!local_fingerprint.empty()) {
+    return payload.value("controller_fingerprint", std::string{}) == local_fingerprint;
+  }
+  const std::string local_controller_url = NormalizeControllerUrl(options_.controller_url);
+  if (!local_controller_url.empty()) {
+    return NormalizeControllerUrl(payload.value("controller_url", std::string{})) ==
+           local_controller_url;
+  }
+  return true;
 }
 
 void HostdPeerService::BeaconLoop() {
@@ -432,11 +511,17 @@ void HostdPeerService::ListenLoop() {
     if (peer_node_name.empty() || peer_node_name == options_.node_name) {
       continue;
     }
+    if (!BeaconMatchesCluster(parsed)) {
+      continue;
+    }
     char remote_text[INET_ADDRSTRLEN] = {};
     inet_ntop(AF_INET, &remote.sin_addr, remote_text, sizeof(remote_text));
     PeerRecord peer;
     peer.peer_node_name = peer_node_name;
     peer.peer_endpoint = parsed.value("peer_endpoint", std::string{});
+    peer.cluster_id = parsed.value("cluster_id", std::string{});
+    peer.controller_url = parsed.value("controller_url", std::string{});
+    peer.controller_fingerprint = parsed.value("controller_fingerprint", std::string{});
     peer.remote_address = remote_text;
     peer.local_interface = LocalInterfaceAddresses().empty()
                                 ? std::string{}
@@ -515,6 +600,9 @@ void HostdPeerService::WritePeerState() {
     peers.push_back(json{
         {"peer_node_name", peer.peer_node_name},
         {"peer_endpoint", peer.peer_endpoint},
+        {"cluster_id", peer.cluster_id},
+        {"controller_url", peer.controller_url},
+        {"controller_fingerprint", peer.controller_fingerprint},
         {"local_interface", peer.local_interface},
         {"remote_address", peer.remote_address},
         {"seen_udp", peer.seen_udp},
@@ -561,6 +649,7 @@ void HostdPeerService::HttpLoop() {
     if (client < 0) {
       continue;
     }
+    ApplyHttpClientTimeouts(client);
     std::thread([this, client]() { HandleHttpClient(client); }).detach();
   }
   close(fd);
@@ -612,17 +701,19 @@ void HostdPeerService::HandleHttpClient(int client_fd) const {
               << " node=" << options_.node_name
               << " message=" << error.what() << std::endl;
   }
-  std::ostringstream response;
-  response << "HTTP/1.1 " << status_code << " " << HttpReason(status_code) << "\r\n";
-  response << "Content-Type: " << content_type << "\r\n";
+  std::ostringstream response_headers_text;
+  response_headers_text << "HTTP/1.1 " << status_code << " " << HttpReason(status_code) << "\r\n";
+  response_headers_text << "Content-Type: " << content_type << "\r\n";
   for (const auto& [key, value] : response_headers) {
-    response << key << ": " << value << "\r\n";
+    response_headers_text << key << ": " << value << "\r\n";
   }
-  response << "Content-Length: " << response_body.size() << "\r\n";
-  response << "Connection: close\r\n\r\n";
-  response << response_body;
-  const std::string text = response.str();
-  SendAll(client_fd, text.data(), text.size());
+  response_headers_text << "Content-Length: " << response_body.size() << "\r\n";
+  response_headers_text << "Connection: close\r\n\r\n";
+  const std::string headers = response_headers_text.str();
+  SendAll(client_fd, headers.data(), headers.size());
+  if (!response_body.empty()) {
+    SendAll(client_fd, response_body.data(), response_body.size());
+  }
   close(client_fd);
 }
 

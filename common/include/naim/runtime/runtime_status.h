@@ -19,6 +19,7 @@ struct RuntimeProcessStatus {
   int runtime_pid = 0;
   int engine_pid = 0;
   bool ready = false;
+  std::string plane_name;
 };
 
 struct GpuProcessTelemetry {
@@ -97,6 +98,9 @@ struct NetworkInterfaceTelemetry {
 struct PeerDiscoveryTelemetry {
   std::string peer_node_name;
   std::string peer_endpoint;
+  std::string cluster_id;
+  std::string controller_url;
+  std::string controller_fingerprint;
   std::string local_interface;
   std::string remote_address;
   bool seen_udp = false;

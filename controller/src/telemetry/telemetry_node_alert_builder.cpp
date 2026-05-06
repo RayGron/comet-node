@@ -13,7 +13,7 @@ std::uint64_t TelemetryNodeAlertBuilder::IngestWarningBudgetMs(
           : static_cast<std::uint64_t>(std::max(0, frame.interval_ms));
   return std::max(
       thresholds.ingest_warning_ms,
-      adaptive_interval_ms + thresholds.ingest_warning_ms);
+      adaptive_interval_ms * 2 + thresholds.ingest_warning_ms);
 }
 
 bool TelemetryNodeAlertBuilder::HasActivePublishError(

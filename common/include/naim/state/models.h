@@ -360,6 +360,11 @@ struct VoiceListenerFeatureSpec {
   std::optional<std::string> image;
 };
 
+struct SecuredConnectionFeatureSpec {
+  bool enabled = false;
+  std::vector<std::string> user_ids;
+};
+
 using WebGatewayPolicySettings = BrowsingPolicySettings;
 using WebGatewaySettings = BrowsingSettings;
 
@@ -386,6 +391,7 @@ struct DesiredState {
   std::optional<TurboQuantFeatureSpec> turboquant;
   std::optional<ContextCompressionFeatureSpec> context_compression;
   std::optional<VoiceListenerFeatureSpec> voice_listener;
+  std::optional<SecuredConnectionFeatureSpec> secured_connection;
   std::optional<ExternalAppHostConfig> app_host;
   InferenceRuntimeSettings inference;
   WorkerGroupSpec worker_group;

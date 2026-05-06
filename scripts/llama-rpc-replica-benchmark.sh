@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/build/local-debug}"
-MODEL_PATH="${MODEL_PATH:-/mnt/shared-storage/models/gguf/Qwen/Qwen3.5-9B/Qwen3.5-9B-Q4_K_M.gguf}"
+MODEL_PATH="${MODEL_PATH:-}"
 SERVED_MODEL="${SERVED_MODEL:-qwen3.5-9b-q4km-rpc}"
 THREADS="${THREADS:-8}"
 CTX_SIZE="${CTX_SIZE:-8192}"
@@ -24,13 +24,19 @@ SCALED_CONCURRENCY="${SCALED_CONCURRENCY:-$((12 * REPLICA_COUNT))}"
 SCALED_REQUESTS_PER_WORKER="${SCALED_REQUESTS_PER_WORKER:-3}"
 SCALED_MAX_TOKENS="${SCALED_MAX_TOKENS:-128}"
 
-if [[ -w "/mnt/shared-storage/backups/${USER:-$(id -un)}" ]]; then
-  BENCH_ROOT_DEFAULT="/mnt/shared-storage/backups/${USER:-$(id -un)}/tmp/llama-rpc-replicas"
-elif [[ -w "/mnt/shared-storage/backups/baal" ]]; then
-  BENCH_ROOT_DEFAULT="/mnt/shared-storage/backups/baal/tmp/llama-rpc-replicas"
-else
-  BENCH_ROOT_DEFAULT="/tmp/llama-rpc-replicas"
-fi
+default_bench_root() {
+  if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
+    printf '%s\n' "${XDG_CACHE_HOME}/naim/tmp/llama-rpc-replicas"
+    return
+  fi
+  if [[ -n "${HOME:-}" ]]; then
+    printf '%s\n' "${HOME}/.cache/naim/tmp/llama-rpc-replicas"
+    return
+  fi
+  printf '%s\n' "/tmp/naim/llama-rpc-replicas"
+}
+
+BENCH_ROOT_DEFAULT="$(default_bench_root)"
 BENCH_ROOT="${BENCH_ROOT:-$BENCH_ROOT_DEFAULT}"
 
 RPC_SERVER_BIN="${NAIM_RPC_SERVER_BIN:-$BUILD_DIR/bin/rpc-server}"
@@ -39,6 +45,11 @@ WORKER_BIN="$BUILD_DIR/naim-workerd"
 INFER_BIN="$BUILD_DIR/naim-inferctl"
 BENCH_BIN="$ROOT_DIR/scripts/benchmark-openai-multi-base.sh"
 DEVTOOL_BIN="$ROOT_DIR/scripts/naim-devtool.sh"
+
+if [[ -z "$MODEL_PATH" ]]; then
+  echo "MODEL_PATH must point to a GGUF model artifact" >&2
+  exit 2
+fi
 
 cleanup() {
   set +e

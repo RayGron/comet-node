@@ -19,6 +19,8 @@ struct PendingSshChallenge {
   std::string challenge_id;
   int user_id = 0;
   int ssh_key_id = 0;
+  std::string secured_user_id;
+  bool secured_connection = false;
   std::string username;
   std::string plane_name;
   std::string fingerprint;

@@ -205,14 +205,19 @@ wait_for_container_http_contains() {
 
 check_telemetry_health() {
   local phase="$1"
+  local attempts="${2:-1}"
+  local interval_sec="${3:-5}"
   local output_path
+  local check_output
+  local last_error=""
   output_path="$(mktemp)"
-  docker run --rm \
-    -v "${main_root}/state:/naim/state" \
-    "${controller_image}" \
-    show-telemetry-health \
-      --db /naim/state/controller.sqlite > "${output_path}"
-  python3 - "${output_path}" "${phase}" <<'PY'
+  for attempt in $(seq 1 "${attempts}"); do
+    docker run --rm \
+      -v "${main_root}/state:/naim/state" \
+      "${controller_image}" \
+      show-telemetry-health \
+        --db /naim/state/controller.sqlite > "${output_path}"
+    if check_output="$(python3 - "${output_path}" "${phase}" <<'PY'
 import json
 import sys
 
@@ -237,13 +242,27 @@ print("telemetry health", phase, json.dumps({
     },
 }, sort_keys=True))
 PY
+    )"; then
+      printf '%s\n' "${check_output}"
+      rm -f "${output_path}"
+      return 0
+    fi
+    last_error="${check_output}"
+    if [[ "${attempt}" -lt "${attempts}" ]]; then
+      sleep "${interval_sec}"
+    fi
+  done
   rm -f "${output_path}"
+  printf '%s\n' "${last_error}" >&2
+  return 1
 }
 
 docker compose -f "${compose_path}" pull naim-controller >/dev/null
 docker compose -f "${compose_path}" up -d --remove-orphans naim-controller >/dev/null
 wait_for_http "http://127.0.0.1:${controller_port}/health" 90
-check_telemetry_health "controller-update"
+if ! check_telemetry_health "controller-update" 6 5; then
+  echo "::warning::telemetry health did not recover before hostd rollout; continuing so managed hostd can self-update"
+fi
 
 docker compose -f "${compose_path}" pull naim-skills-factory naim-web-ui >/dev/null
 docker compose -f "${compose_path}" up -d --remove-orphans naim-skills-factory naim-web-ui >/dev/null
@@ -388,7 +407,7 @@ raise SystemExit(
     + json.dumps(last, sort_keys=True)
 )
 PY
-check_telemetry_health "managed-rollout"
+check_telemetry_health "managed-rollout" 12 5
 
 plane_refresh_root="$(mktemp -d)"
 plane_refresh_plan="${plane_refresh_root}/planes.tsv"
@@ -551,7 +570,11 @@ while time.time() < deadline:
             "where plane_name = ? and status in ('pending','claimed')",
             (plane_name,),
         ).fetchone()["count"]
-        if latest_assignment is not None and latest_assignment["status"] == "failed":
+        if (
+            plane_state == "running"
+            and latest_assignment is not None
+            and latest_assignment["status"] == "failed"
+        ):
             failed += 1
         planes[plane_name] = None if plane is None else {
             "generation": plane["generation"],
@@ -573,10 +596,14 @@ while time.time() < deadline:
         if plane is None:
             ready = False
             break
-        if plane["generation"] != plane["applied_generation"]:
-            ready = False
-            break
-        if plane_state == "running" and plane["state"] != "running":
+        if plane_state == "running":
+            if plane["generation"] != plane["applied_generation"]:
+                ready = False
+                break
+            if plane["state"] != "running":
+                ready = False
+                break
+        elif plane["state"] != plane_state:
             ready = False
             break
     last = {

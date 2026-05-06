@@ -137,7 +137,7 @@ HttpResponse SendPlaneWebGatewayRequest(
   assignment.node_name = target.node_name;
   assignment.plane_name = proxy_plane_name;
   assignment.desired_generation = 0;
-  assignment.max_attempts = 1;
+  assignment.max_attempts = 3;
   assignment.assignment_type = "runtime-http-proxy";
   assignment.desired_state_json =
       json{
@@ -251,9 +251,12 @@ nlohmann::json PlaneBrowsingService::BuildStatusPayload(
   const auto* browsing_instance = FindBrowsingInstance(desired_state);
   const auto target = ResolveTarget(desired_state);
   const bool running_plane = plane_state.has_value() && *plane_state == "running";
+  const bool should_probe_runtime =
+      enabled && running_plane && target.has_value() && !target->route_via_hostd_proxy;
   const bool ready =
       enabled && running_plane && target.has_value() &&
-      ProbeWebGatewayTargetOk(db_path, desired_state.plane_name, *target);
+      (target->route_via_hostd_proxy ||
+       ProbeWebGatewayTargetOk(db_path, desired_state.plane_name, *target));
 
   std::string reason = "ready";
   if (!enabled) {
@@ -282,6 +285,10 @@ nlohmann::json PlaneBrowsingService::BuildStatusPayload(
            : nlohmann::json(nullptr)},
       {"webgateway_route_mode",
        target.has_value() ? nlohmann::json(target->route_mode) : nlohmann::json(nullptr)},
+      {"webgateway_status_source",
+       target.has_value() && target->route_via_hostd_proxy
+           ? nlohmann::json("node-aware-target")
+           : nlohmann::json("runtime-probe")},
       {"browser_session_enabled",
        desired_state.browsing.has_value() && desired_state.browsing->policy.has_value()
            ? nlohmann::json(desired_state.browsing->policy->browser_session_enabled)
@@ -296,7 +303,7 @@ nlohmann::json PlaneBrowsingService::BuildStatusPayload(
            : nlohmann::json(false)},
   };
 
-  if (ready) {
+  if (ready && should_probe_runtime) {
     try {
       const auto response = SendPlaneWebGatewayRequest(
           db_path,

@@ -226,6 +226,16 @@ void TestHostRegistryPrunesExpiredLanPeers() {
   active_link.last_probe_at = now;
   store.UpsertHostPeerLink(active_link);
 
+  naim::HostPeerLinkRecord unregistered_link;
+  unregistered_link.observer_node_name = "hpc1";
+  unregistered_link.peer_node_name = "local-hostd";
+  unregistered_link.peer_endpoint = "http://192.168.88.13:29999";
+  unregistered_link.seen_udp = true;
+  unregistered_link.tcp_reachable = true;
+  unregistered_link.last_seen_at = now;
+  unregistered_link.last_probe_at = now;
+  store.UpsertHostPeerLink(unregistered_link);
+
   naim::HostPeerLinkRecord expired_link;
   expired_link.observer_node_name = "hpc1";
   expired_link.peer_node_name = "sandbox-old";
@@ -243,6 +253,15 @@ void TestHostRegistryPrunesExpiredLanPeers() {
   Expect(
       lan_peers.at(0).at("peer_node_name").get<std::string>() == "storage1",
       "host registry should keep the fresh storage peer");
+  const auto& unregistered_lan_peers =
+      payload.at("items").at(0).at("unregistered_lan_peers");
+  Expect(
+      unregistered_lan_peers.size() == 1,
+      "host registry should move unregistered LAN peers to diagnostics");
+  Expect(
+      unregistered_lan_peers.at(0).at("peer_node_name").get<std::string>() ==
+          "local-hostd",
+      "host registry should keep local-hostd out of the registered LAN peer graph");
   Expect(
       store.LoadHostPeerLinks(
                std::optional<std::string>("hpc1"),

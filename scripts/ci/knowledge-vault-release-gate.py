@@ -31,11 +31,28 @@ LEAK_PATTERNS = [
     ("PEM private key", "-----BEGIN PRIVATE KEY-----"),
     ("private home path", "/home/"),
     ("private WSL path", "/mnt/e/"),
-    ("private shared-storage path", "/mnt/shared-storage/"),
+    ("private shared-storage path", "/mnt/" + "shared-storage/"),
     ("private SSH inventory user", "baal@"),
     ("private production address", "195.168."),
     ("private control-plane address", "51.68."),
 ]
+
+FORBIDDEN_SOURCE_DEFAULT_PATHS = [
+    "/mnt/" + "shared-storage/",
+]
+
+SOURCE_SCAN_EXCLUDED_DIRS = {
+    ".git",
+    ".cache",
+    ".tools",
+    "build",
+    "node_modules",
+    "var",
+}
+
+SOURCE_SCAN_EXCLUDED_PREFIXES = (
+    "build-",
+)
 
 
 def log(message):
@@ -456,8 +473,34 @@ def scan_artifacts(paths):
     }
 
 
+def is_generated_or_untracked_artifact_path(relative_parts):
+    if SOURCE_SCAN_EXCLUDED_DIRS.intersection(relative_parts):
+        return True
+    return any(part.startswith(SOURCE_SCAN_EXCLUDED_PREFIXES) for part in relative_parts)
+
+
+def scan_source_tree_for_forbidden_defaults(repo_root):
+    findings = []
+    for path in repo_root.rglob("*"):
+        if not path.is_file():
+            continue
+        relative_parts = path.relative_to(repo_root).parts
+        if is_generated_or_untracked_artifact_path(relative_parts):
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for forbidden_path in FORBIDDEN_SOURCE_DEFAULT_PATHS:
+            if forbidden_path in content:
+                findings.append(str(path.relative_to(repo_root)))
+                break
+    expect(not findings, f"repository contains forbidden shared-storage defaults: {findings}")
+
+
 def run_gate(args):
     build_dir = Path(args.build_dir).resolve()
+    repo_root = Path(__file__).resolve().parents[2]
     work_root = Path(args.work_root).resolve() if args.work_root else Path(tempfile.mkdtemp(prefix="naim-kv-gate-"))
     artifact_dir = Path(args.artifact_dir).resolve() if args.artifact_dir else work_root / "artifacts"
     benchmark_output = (
@@ -483,6 +526,7 @@ def run_gate(args):
         raise RuntimeError(f"missing built Knowledge Vault release-gate binaries: {rendered}")
 
     started = time.perf_counter()
+    scan_source_tree_for_forbidden_defaults(repo_root)
     run_binary(required_binaries["contract_tests"])
     run_binary(required_binaries["store_tests"])
     run_binary(required_binaries["service_tests"])

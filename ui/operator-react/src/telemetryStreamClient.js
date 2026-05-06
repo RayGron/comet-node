@@ -18,6 +18,20 @@ export function maxTelemetryReceiveDelayMs(frames) {
   );
 }
 
+export function latestTelemetryFramesByNode(frames) {
+  const byNode = new Map();
+  for (const frame of frames || []) {
+    if (!frame?.node_name) {
+      continue;
+    }
+    const previous = byNode.get(frame.node_name);
+    if (Number(frame?.sequence || 0) >= Number(previous?.sequence || 0)) {
+      byNode.set(frame.node_name, frame);
+    }
+  }
+  return [...byNode.values()];
+}
+
 export function buildTelemetryBrowserLatency({
   frames,
   receivedAtMs,
@@ -26,9 +40,10 @@ export function buildTelemetryBrowserLatency({
   applyStartedAt,
   acceptedFrames,
 }) {
+  const latestFrames = latestTelemetryFramesByNode(frames);
   return {
     receivedAtMs,
-    receiveDelayMs: maxTelemetryReceiveDelayMs(frames),
+    receiveDelayMs: maxTelemetryReceiveDelayMs(latestFrames),
     parseMs,
     reduceMs,
     applyMs: performance.now() - applyStartedAt,

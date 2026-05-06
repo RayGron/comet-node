@@ -137,6 +137,58 @@ int main() {
     }
 
     {
+      const json secured_connection_enabled{
+          {"version", 2},
+          {"plane_name", "secured-connection-enabled"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-secured"},
+           }},
+          {"features",
+           {{"secured_connection",
+             {{"enabled", true}, {"user_ids", json::array({"scu-alpha"})}}}}},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(secured_connection_enabled, "secured-connection-enabled");
+      Expect(state.protected_plane, "secured-connection-enabled: should imply protected plane");
+      Expect(
+          state.secured_connection.has_value() &&
+              state.secured_connection->user_ids == std::vector<std::string>{"scu-alpha"},
+          "secured-connection-enabled: user ids mismatch");
+      std::cout << "ok: secured-connection-enabled" << '\n';
+    }
+
+    {
+      json invalid_secured_connection{
+          {"version", 2},
+          {"plane_name", "secured-connection-empty"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-secured"},
+           }},
+          {"features",
+           {{"secured_connection", {{"enabled", true}, {"user_ids", json::array()}}}}},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      ExpectInvalid(invalid_secured_connection, "secured-connection-empty");
+      invalid_secured_connection["features"]["secured_connection"]["user_ids"] =
+          json::array({"scu-alpha", "scu-alpha"});
+      ExpectInvalid(invalid_secured_connection, "secured-connection-duplicate-user");
+    }
+
+    {
       ExpectInvalid(
           json{
               {"version", 2},
@@ -1909,7 +1961,7 @@ int main() {
                       {{{"name", "whisper"},
                         {"source",
                          {{"type", "library"},
-                          {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"}}},
+                          {"path", "/models/whisper/ggml-base.bin"}}},
                         {"mount_path", "/models/whisper/ggml-base.bin"},
                         {"env", "WHISPER_MODEL_PATH"},
                         {"required", true}}})}}})},
@@ -1921,7 +1973,7 @@ int main() {
       Expect(voice.environment.at("WHISPER_MODEL_PATH") == "/models/whisper/ggml-base.bin",
              "app-model-plane: model env should point to container mount path");
       Expect(voice.app_model_mounts.front().source_path ==
-                 "/mnt/shared-storage/models/whisper/ggml-base.bin",
+                 "/models/whisper/ggml-base.bin",
              "app-model-plane: source path should be retained");
       const auto compose_plans = naim::BuildNodeComposePlans(state);
       const auto& service = *std::find_if(
@@ -1974,9 +2026,9 @@ int main() {
                {{"name", "whisper"},
                 {"source",
                  {{"type", "library"},
-                  {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"},
+                  {"path", "/models/whisper/ggml-base.bin"},
                   {"node", "storage1"},
-                  {"paths", json::array({"/mnt/shared-storage/models/whisper/ggml-base.bin"})}}},
+                  {"paths", json::array({"/models/whisper/ggml-base.bin"})}}},
                 {"mount_path", "/models/whisper/ggml-base.bin"},
                 {"env", "WHISPER_MODEL_PATH"},
                 {"required", true}}}}}}}
@@ -2037,7 +2089,7 @@ int main() {
                {{"name", "whisper"},
                 {"source",
                  {{"type", "library"},
-                  {"path", "/mnt/shared-storage/models/whisper/ggml-base.bin"}}},
+                  {"path", "/models/whisper/ggml-base.bin"}}},
                 {"mount_path", "/models/whisper/ggml-base.bin"},
                 {"env", "WHISPER_MODEL_PATH"},
                 {"required", true}}}}}}},

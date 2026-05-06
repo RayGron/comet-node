@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 
 #include <nlohmann/json.hpp>
@@ -25,6 +26,7 @@ json ToJson(const RuntimeProcessStatus& status) {
       {"runtime_pid", status.runtime_pid},
       {"engine_pid", status.engine_pid},
       {"ready", status.ready},
+      {"plane_name", status.plane_name},
   };
 }
 
@@ -41,6 +43,7 @@ RuntimeProcessStatus RuntimeProcessStatusFromJson(const json& value) {
   status.runtime_pid = value.value("runtime_pid", 0);
   status.engine_pid = value.value("engine_pid", 0);
   status.ready = value.value("ready", false);
+  status.plane_name = value.value("plane_name", std::string{});
   return status;
 }
 
@@ -255,6 +258,9 @@ json ToJson(const PeerDiscoveryTelemetry& peer) {
   return json{
       {"peer_node_name", peer.peer_node_name},
       {"peer_endpoint", peer.peer_endpoint},
+      {"cluster_id", peer.cluster_id},
+      {"controller_url", peer.controller_url},
+      {"controller_fingerprint", peer.controller_fingerprint},
       {"local_interface", peer.local_interface},
       {"remote_address", peer.remote_address},
       {"seen_udp", peer.seen_udp},
@@ -269,6 +275,9 @@ PeerDiscoveryTelemetry PeerDiscoveryTelemetryFromJson(const json& value) {
   PeerDiscoveryTelemetry peer;
   peer.peer_node_name = value.value("peer_node_name", std::string{});
   peer.peer_endpoint = value.value("peer_endpoint", std::string{});
+  peer.cluster_id = value.value("cluster_id", std::string{});
+  peer.controller_url = value.value("controller_url", std::string{});
+  peer.controller_fingerprint = value.value("controller_fingerprint", std::string{});
   peer.local_interface = value.value("local_interface", std::string{});
   peer.remote_address = value.value("remote_address", std::string{});
   peer.seen_udp = value.value("seen_udp", false);
@@ -756,8 +765,20 @@ std::optional<RuntimeStatus> RuntimeStatusFileStore::Load(const std::string& pat
     throw std::runtime_error("failed to open runtime status file: " + path);
   }
 
-  json value;
-  input >> value;
+  std::string text(
+      (std::istreambuf_iterator<char>(input)),
+      std::istreambuf_iterator<char>());
+  if (!input.good() && !input.eof()) {
+    throw std::runtime_error("failed to read runtime status file: " + path);
+  }
+  const auto first_non_space = text.find_first_not_of(" \t\r\n");
+  if (first_non_space == std::string::npos) {
+    return std::nullopt;
+  }
+  const json value = json::parse(text, nullptr, false);
+  if (value.is_discarded()) {
+    return std::nullopt;
+  }
   return RuntimeStatusFromJson(value);
 }
 

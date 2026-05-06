@@ -332,6 +332,13 @@ HttpResponse PlaneHttpService::HandlePlanePath(
         const auto plane = store.LoadPlane(plane_name);
         const std::optional<std::string> plane_state =
             plane.has_value() ? std::optional<std::string>(plane->state) : std::nullopt;
+        const bool plane_runtime_ready =
+            plane.has_value() && plane->state == "running" &&
+            plane->generation <= plane->applied_generation;
+        std::optional<std::string> webgateway_plane_state = plane_state;
+        if (plane.has_value() && plane->state == "running" && !plane_runtime_ready) {
+          webgateway_plane_state = "starting";
+        }
         const naim::controller::PlaneBrowsingService browsing_service;
         if (path_suffix.empty() || path_suffix == "/" || path_suffix == "/status") {
           if (request.method != "GET") {
@@ -340,7 +347,18 @@ HttpResponse PlaneHttpService::HandlePlanePath(
           }
           return support_.build_json_response(
               200,
-              browsing_service.BuildStatusPayload(db_path, *desired_state, plane_state),
+              browsing_service.BuildStatusPayload(db_path, *desired_state, webgateway_plane_state),
+              {});
+        }
+        if (!plane_runtime_ready) {
+          return support_.build_json_response(
+              409,
+              json{{"status", "error"},
+                   {"message", "webgateway plane runtime is not ready"},
+                   {"error",
+                    {{"code", "webgateway_plane_not_ready"},
+                     {"message", "webgateway plane runtime is not ready"}}},
+                   {"path", request.path}},
               {});
         }
 

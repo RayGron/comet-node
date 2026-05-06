@@ -198,7 +198,9 @@ void TestBackpressureProjection() {
         "backpressure frame should update");
   }
   const auto snapshot = store.BuildSnapshot(std::string("plane-backpressure"), 600);
-  Expect(snapshot.at("telemetry_overloaded").get<bool>(), "snapshot should expose overload");
+  Expect(
+      !snapshot.at("telemetry_overloaded").get<bool>(),
+      "retention pruning alone should not expose active overload");
   Expect(
       snapshot.at("dropped_frames_total").get<std::uint64_t>() >= 20,
       "snapshot should count dropped frames");
@@ -236,6 +238,76 @@ void TestPlaneAggregatesAndDownsampling() {
       "aggregate should sum local runtime instances");
   Expect(!snapshot.at("downsampled_history").empty(), "downsampled history should be populated");
   std::cout << "ok: telemetry-live-store-plane-aggregates-downsampling\n";
+}
+
+void TestMultiPlaneNodeTelemetryIsPlaneScoped() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  store.ResetForTests();
+  auto frame = MakeFrame("node-multi-plane", "", CurrentMillis());
+  frame.ttl_ms = 60000;
+  frame.instance_runtime = {
+      naim::RuntimeProcessStatus{
+          "worker-maglev-service",
+          "worker",
+          "node-multi-plane",
+          "/models/qwen",
+          "0",
+          "running",
+          "",
+          "",
+          0,
+          0,
+          true,
+          "maglev-service",
+      },
+      naim::RuntimeProcessStatus{
+          "worker-lt-cypher-ai",
+          "worker",
+          "node-multi-plane",
+          "/models/qwen",
+          "1",
+          "running",
+          "",
+          "",
+          0,
+          0,
+          false,
+          "lt-cypher-ai",
+      },
+  };
+  frame.plane_instance_count = frame.instance_runtime.size();
+  frame.plane_ready_instance_count = 1;
+  frame.plane_not_ready_instance_count = 1;
+  Expect(store.Upsert(frame), "multi-plane node frame should update");
+
+  const auto maglev = store.BuildSnapshot(std::string("maglev-service"), 0);
+  Expect(maglev.at("nodes").size() == 1, "maglev snapshot should match aggregate node frame");
+  Expect(
+      maglev.at("nodes").at(0).at("plane_name").get<std::string>() == "maglev-service",
+      "maglev node frame should be scoped to selected plane");
+  Expect(
+      maglev.at("nodes").at(0).at("instance_runtime").size() == 1,
+      "maglev node frame should include only maglev runtime");
+  Expect(
+      maglev.at("planes").at(0).at("plane_name").get<std::string>() == "maglev-service",
+      "maglev aggregate should be keyed by runtime plane");
+  Expect(
+      maglev.at("planes").at(0).at("runtime").at("instance_count").get<std::uint64_t>() == 1,
+      "maglev aggregate should count only maglev instances");
+  Expect(
+      maglev.at("planes").at(0).at("runtime").at("ready_instance_count").get<std::uint64_t>() == 1,
+      "maglev aggregate should count only maglev ready instances");
+
+  const auto cypher = store.BuildSnapshot(std::string("lt-cypher-ai"), 0);
+  Expect(cypher.at("nodes").size() == 1, "lt-cypher snapshot should match aggregate node frame");
+  Expect(
+      cypher.at("planes").at(0).at("runtime").at("instance_count").get<std::uint64_t>() == 1,
+      "lt-cypher aggregate should count only lt-cypher instances");
+  Expect(
+      cypher.at("planes").at(0).at("runtime").at("ready_instance_count").get<std::uint64_t>() == 0,
+      "lt-cypher aggregate should preserve not-ready status");
+  store.ResetForTests();
+  std::cout << "ok: telemetry-live-store-multi-plane-node-scoping\n";
 }
 
 void TestSqlitePersistenceReplayAndHealth() {
@@ -323,6 +395,7 @@ void TestRecoveredTelemetryCountersDoNotDegradeHealth() {
     auto frame = MakeFrame("node-recovered", "plane-recovered", now - 5000 + index);
     frame.adaptive_interval_ms = 10000;
     frame.adaptive_reason = "idle-no-plane";
+    frame.telemetry_dropped_frames = 12;
     frame.publish_error_count = 2;
     frame.last_publish_error.clear();
     Expect(store.Upsert(frame), "recovered counter frame should update");
@@ -339,8 +412,21 @@ void TestRecoveredTelemetryCountersDoNotDegradeHealth() {
 
   const auto snapshot = store.BuildSnapshot(std::string("plane-recovered"), 0);
   Expect(
+      snapshot.at("telemetry_health").at("status").get<std::string>() == "ok",
+      "snapshot health should not degrade on recovered counters or retention pruning");
+  Expect(
+      !snapshot.at("telemetry_overloaded").get<bool>(),
+      "snapshot overload should report active backpressure, not historical retention pruning");
+  Expect(
       snapshot.at("nodes").at(0).at("telemetry_health").at("status").get<std::string>() == "ok",
-      "node health should not degrade on recovered publish counters");
+      "node health should not degrade on historical publisher counters");
+  Expect(
+      snapshot.at("nodes").at(0).at("telemetry_health_status").get<std::string>() == "ok",
+      "frame health should not degrade on historical publisher counters");
+  Expect(
+      snapshot.at("nodes").at(0).at("telemetry_health").at("publisher_dropped_frames_total")
+          .get<std::uint64_t>() == 12,
+      "node health should still expose historical publisher drops");
   std::filesystem::remove(db_path);
   store.ResetForTests();
   std::cout << "ok: telemetry-live-store-recovered-counters-health\n";
@@ -401,6 +487,7 @@ void TestGpuUnavailableStorageNodeDoesNotDegradeHealth() {
       0,
       0,
       false,
+      "plane-gpu-runtime",
   });
   Expect(store.Upsert(gpu_runtime_frame), "gpu-bound runtime frame should update");
   const auto gpu_runtime_health = store.BuildHealth(std::string("plane-gpu-runtime"));
@@ -416,6 +503,22 @@ void TestGpuUnavailableStorageNodeDoesNotDegradeHealth() {
 void TestStreamMetricsAndOpenMetrics() {
   auto& store = naim::controller::TelemetryLiveStore::Instance();
   store.ResetForTests();
+  const auto replay_db_path =
+      (std::filesystem::temp_directory_path() / "naim-telemetry-replay-health-test.sqlite").string();
+  store.ConfigurePersistence(replay_db_path);
+  Expect(store.Upsert(MakeFrame("node-replay", "plane-replay", CurrentMillis())), "replay frame");
+  store.RecordStreamReplayRequired("live");
+  const auto replay_health = store.BuildHealth(std::string("plane-replay"));
+  Expect(
+      replay_health.at("status").get<std::string>() == "ok",
+      "stream replay alone should not degrade telemetry health");
+  const auto replay_snapshot = store.BuildSnapshot(std::string("plane-replay"), 0);
+  Expect(
+      replay_snapshot.at("telemetry_health").at("status").get<std::string>() == "ok",
+      "info-only stream replay should not degrade snapshot health");
+  std::filesystem::remove(replay_db_path);
+  store.ResetForTests();
+
   Expect(store.Upsert(MakeFrame("node-metrics", "plane-metrics", CurrentMillis())), "metrics frame");
   store.RecordStreamOpened("live");
   store.RecordStreamOpened("live");
@@ -448,6 +551,7 @@ int main() {
     TestCoherenceFieldsAndStaleProjection();
     TestBackpressureProjection();
     TestPlaneAggregatesAndDownsampling();
+    TestMultiPlaneNodeTelemetryIsPlaneScoped();
     TestSqlitePersistenceReplayAndHealth();
     TestConfigurableRetentionAndMetrics();
     TestRecoveredTelemetryCountersDoNotDegradeHealth();

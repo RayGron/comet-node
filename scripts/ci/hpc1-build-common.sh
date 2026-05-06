@@ -59,11 +59,19 @@ naim_ci_prepare_shared_vcpkg_cache() {
   done
 }
 
+naim_ci_default_compiler_cache_root() {
+  printf '%s\n' "${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}"
+}
+
 naim_ci_prepare_compiler_cache() {
   local repo_root="$1"
-  local cache_dir="${NAIM_CCACHE_DIR:-/mnt/shared-storage/naim/cache/ccache/naim-node}"
+  local default_cache_root=""
+  local cache_dir=""
   local cache_dir_explicit="0"
   local fallback_cache_dir="/tmp/naim-ccache/naim-node"
+
+  default_cache_root="$(naim_ci_default_compiler_cache_root)"
+  cache_dir="${NAIM_CCACHE_DIR:-${default_cache_root}/naim/ccache/naim-node}"
 
   if [[ -n "${NAIM_CCACHE_DIR:-}" ]]; then
     cache_dir_explicit="1"

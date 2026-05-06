@@ -43,22 +43,64 @@ struct NodeDemandSummary {
 
 constexpr int kPeerLinkFreshSeconds = 120;
 
-json BuildPeerLinksPayload(const std::vector<naim::HostPeerLinkRecord>& links) {
+bool IsRegisteredPeerLink(
+    const naim::HostPeerLinkRecord& link,
+    const std::set<std::string>& registered_node_names) {
+  if (registered_node_names.empty()) {
+    return true;
+  }
+  return registered_node_names.count(link.observer_node_name) > 0 &&
+         registered_node_names.count(link.peer_node_name) > 0;
+}
+
+json BuildPeerLinkItem(
+    const naim::HostPeerLinkRecord& link,
+    const std::map<std::pair<std::string, std::string>, naim::HostPeerLinkRecord>&
+        by_direction) {
+  const auto reverse_it =
+      by_direction.find({link.peer_node_name, link.observer_node_name});
+  const bool direct = reverse_it != by_direction.end() &&
+                      link.tcp_reachable &&
+                      reverse_it->second.tcp_reachable;
+  const std::string state = direct ? "direct" : (link.seen_udp ? "partial" : "stale");
+  return json{
+      {"observer_node_name", link.observer_node_name},
+      {"peer_node_name", link.peer_node_name},
+      {"peer_endpoint", link.peer_endpoint.empty() ? json(nullptr) : json(link.peer_endpoint)},
+      {"local_interface",
+       link.local_interface.empty() ? json(nullptr) : json(link.local_interface)},
+      {"remote_address",
+       link.remote_address.empty() ? json(nullptr) : json(link.remote_address)},
+      {"seen_udp", link.seen_udp},
+      {"tcp_reachable", link.tcp_reachable},
+      {"same_lan", direct},
+      {"state", state},
+      {"rtt_ms", link.rtt_ms > 0 ? json(link.rtt_ms) : json(nullptr)},
+      {"last_seen_at", link.last_seen_at.empty() ? json(nullptr) : json(link.last_seen_at)},
+      {"last_probe_at", link.last_probe_at.empty() ? json(nullptr) : json(link.last_probe_at)},
+  };
+}
+
+json BuildPeerLinksPayload(
+    const std::vector<naim::HostPeerLinkRecord>& links,
+    const std::set<std::string>& registered_node_names) {
   std::map<std::pair<std::string, std::string>, naim::HostPeerLinkRecord> by_direction;
   for (const auto& link : links) {
     by_direction[{link.observer_node_name, link.peer_node_name}] = link;
   }
   json items = json::array();
+  json unregistered_items = json::array();
   int direct_count = 0;
   int partial_count = 0;
   int stale_count = 0;
   for (const auto& link : links) {
-    const auto reverse_it =
-        by_direction.find({link.peer_node_name, link.observer_node_name});
-    const bool direct = reverse_it != by_direction.end() &&
-                        link.tcp_reachable &&
-                        reverse_it->second.tcp_reachable;
-    const std::string state = direct ? "direct" : (link.seen_udp ? "partial" : "stale");
+    json item = BuildPeerLinkItem(link, by_direction);
+    const std::string state = item.value("state", std::string{});
+    if (!IsRegisteredPeerLink(link, registered_node_names)) {
+      item["diagnostic_reason"] = "unregistered_node";
+      unregistered_items.push_back(std::move(item));
+      continue;
+    }
     if (state == "direct") {
       ++direct_count;
     } else if (state == "partial") {
@@ -66,30 +108,18 @@ json BuildPeerLinksPayload(const std::vector<naim::HostPeerLinkRecord>& links) {
     } else {
       ++stale_count;
     }
-    items.push_back(json{
-        {"observer_node_name", link.observer_node_name},
-        {"peer_node_name", link.peer_node_name},
-        {"peer_endpoint", link.peer_endpoint.empty() ? json(nullptr) : json(link.peer_endpoint)},
-        {"local_interface",
-         link.local_interface.empty() ? json(nullptr) : json(link.local_interface)},
-        {"remote_address",
-         link.remote_address.empty() ? json(nullptr) : json(link.remote_address)},
-        {"seen_udp", link.seen_udp},
-        {"tcp_reachable", link.tcp_reachable},
-        {"same_lan", direct},
-        {"state", state},
-        {"rtt_ms", link.rtt_ms > 0 ? json(link.rtt_ms) : json(nullptr)},
-        {"last_seen_at", link.last_seen_at.empty() ? json(nullptr) : json(link.last_seen_at)},
-        {"last_probe_at", link.last_probe_at.empty() ? json(nullptr) : json(link.last_probe_at)},
-    });
+    items.push_back(std::move(item));
   }
+  const auto unregistered_count = unregistered_items.size();
   return json{
       {"items", std::move(items)},
+      {"unregistered_items", std::move(unregistered_items)},
       {"summary",
-       json{{"total", links.size()},
+       json{{"total", direct_count + partial_count + stale_count},
             {"direct", direct_count},
             {"partial", partial_count},
-            {"stale", stale_count}}},
+            {"stale", stale_count},
+            {"unregistered", unregistered_count}}},
   };
 }
 
@@ -715,7 +745,13 @@ nlohmann::json DashboardService::BuildPayload(
   payload["self_services"] = BuildSelfServicesPayload(store, stale_after_seconds);
   store.DeleteStaleHostPeerLinks(
       ControllerTimeSupport::SqlTimestampAfterSeconds(-kPeerLinkFreshSeconds));
-  payload["peer_links"] = BuildPeerLinksPayload(store.LoadHostPeerLinks());
+  std::set<std::string> registered_node_names;
+  for (const auto& host : store.LoadRegisteredHosts(std::nullopt)) {
+    registered_node_names.insert(host.node_name);
+  }
+  payload["peer_links"] = BuildPeerLinksPayload(
+      store.LoadHostPeerLinks(),
+      registered_node_names);
   if (!view.desired_state.has_value()) {
     payload["plane"] = nullptr;
     payload["planes"] = json::array();
@@ -790,6 +826,12 @@ nlohmann::json DashboardService::BuildPayload(
 
   const std::optional<std::string> selected_plane_state =
       ResolveSelectedPlaneState(view.planes, plane_name);
+  std::optional<std::string> webgateway_plane_state = selected_plane_state;
+  if (dashboard_plane_record.has_value() &&
+      dashboard_plane_record->state == "running" &&
+      dashboard_plane_record->generation > effective_plane_applied_generation) {
+    webgateway_plane_state = "starting";
+  }
   const auto dashboard_nodes =
       BuildDashboardNodes(plane_name, *view.desired_state, view.desired_states);
   const auto nodes_payload = BuildNodesPayload(
@@ -823,7 +865,7 @@ nlohmann::json DashboardService::BuildPayload(
   payload["webgateway"] = PlaneBrowsingService().BuildStatusPayload(
       db_path,
       *view.desired_state,
-      selected_plane_state);
+      webgateway_plane_state);
 
   const auto latest_assignments_by_node =
       BuildLatestPlaneAssignmentsByNode(

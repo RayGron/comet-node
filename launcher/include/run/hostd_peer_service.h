@@ -10,6 +10,8 @@
 #include <thread>
 #include <vector>
 
+#include <nlohmann/json_fwd.hpp>
+
 #include "config/launcher_options.h"
 
 namespace naim::hostd {
@@ -34,6 +36,9 @@ class HostdPeerService final {
   struct PeerRecord {
     std::string peer_node_name;
     std::string peer_endpoint;
+    std::string cluster_id;
+    std::string controller_url;
+    std::string controller_fingerprint;
     std::string local_interface;
     std::string remote_address;
     bool seen_udp = false;
@@ -61,6 +66,8 @@ class HostdPeerService final {
   void WritePeerState();
   bool ProbePeerHealth(const std::string& endpoint, int* rtt_ms) const;
   std::string BuildBeaconPayload() const;
+  std::string PeerClusterId() const;
+  bool BeaconMatchesCluster(const nlohmann::json& payload) const;
   std::string BuildAdvertisedEndpoint() const;
   std::string BestLanAddress() const;
   std::vector<std::pair<std::string, std::string>> LocalInterfaceAddresses() const;

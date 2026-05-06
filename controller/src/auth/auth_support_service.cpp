@@ -506,7 +506,33 @@ AuthSupportService::AuthenticateProtectedPlaneRequest(
   const auto ssh_session =
       store.LoadActiveAuthSession(*token, std::optional<std::string>("ssh"), plane_name);
   if (!ssh_session.has_value()) {
-    return std::nullopt;
+    const auto secured_session =
+        store.LoadActiveSecuredConnectionSession(*token, plane_name);
+    if (!secured_session.has_value()) {
+      return std::nullopt;
+    }
+    const auto secured_user =
+        store.LoadActiveSecuredConnectionUser(secured_session->user_id);
+    if (!secured_user.has_value()) {
+      return std::nullopt;
+    }
+    store.TouchSecuredConnectionSession(
+        secured_session->token,
+        UtcNowSqlTimestamp());
+    naim::UserRecord user;
+    user.id = 0;
+    user.username = secured_user->name;
+    user.role = "secured_connection";
+    naim::AuthSessionRecord session;
+    session.token = secured_session->token;
+    session.user_id = 0;
+    session.session_kind = "secured_ssh";
+    session.plane_name = secured_session->plane_name;
+    session.expires_at = secured_session->expires_at;
+    session.created_at = secured_session->created_at;
+    session.revoked_at = secured_session->revoked_at;
+    session.last_used_at = secured_session->last_used_at;
+    return std::make_pair(user, session);
   }
   const auto user = store.LoadUserById(ssh_session->user_id);
   if (!user.has_value()) {

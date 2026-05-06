@@ -125,6 +125,80 @@ except urllib.error.HTTPError as error:
 PY
 }
 
+docker_push_with_retry() {
+  local ref="$1"
+  local attempt=1
+  local max_attempts="${NAIM_REGISTRY_PUSH_ATTEMPTS:-5}"
+  local delay_sec="${NAIM_REGISTRY_PUSH_RETRY_DELAY_SEC:-5}"
+
+  while (( attempt <= max_attempts )); do
+    if docker push "${ref}"; then
+      return 0
+    fi
+    if (( attempt == max_attempts )); then
+      echo "error: docker push failed after ${max_attempts} attempts: ${ref}" >&2
+      return 1
+    fi
+    echo "warning: docker push failed on attempt ${attempt}/${max_attempts}; retrying in ${delay_sec}s: ${ref}" >&2
+    sleep "${delay_sec}"
+    delay_sec=$(( delay_sec * 2 ))
+    attempt=$(( attempt + 1 ))
+  done
+}
+
+build_runtime_images() {
+  if [[ "${skip_web_ui}" == "yes" ]]; then
+    "${repo_root}/scripts/build-runtime-images.sh" --skip-web-ui "$@"
+  else
+    "${repo_root}/scripts/build-runtime-images.sh" "$@"
+  fi
+}
+
+push_release_image() {
+  local image="$1"
+  local ref=""
+  local latest_ref=""
+  local repo_digest=""
+
+  ref="$(image_ref "${image}")"
+  echo "pushing ${ref}"
+  docker_push_with_retry "${ref}"
+  repo_digest="$(docker image inspect \
+    --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+    "${ref}" | grep -F "${registry}/${project}/${image}@" | head -n1 || true)"
+  if [[ -z "${repo_digest}" ]]; then
+    repo_digest="${ref}"
+  fi
+  json_entries+=("$(printf '    \"%s\": \"%s\"' "${image}" "${repo_digest}")")
+
+  latest_ref="$(latest_image_ref "${image}")"
+  echo "moving ${latest_ref} to ${ref}"
+  delete_remote_latest_tag "${image}"
+  docker tag "${ref}" "${latest_ref}"
+  docker_push_with_retry "${latest_ref}"
+}
+
+write_manifest() {
+  local suffix=""
+
+  {
+    printf '{\n'
+    printf '  "registry": "%s",\n' "${registry}"
+    printf '  "project": "%s",\n' "${project}"
+    printf '  "tag": "%s",\n' "${tag}"
+    printf '  "images": {\n'
+    for index in "${!json_entries[@]}"; do
+      suffix=","
+      if [[ "${index}" -eq $((${#json_entries[@]} - 1)) ]]; then
+        suffix=""
+      fi
+      printf '%s%s\n' "${json_entries[index]}" "${suffix}"
+    done
+    printf '  }\n'
+    printf '}\n'
+  } > "${manifest_path}"
+}
+
 base_ref="$(image_ref base-runtime)"
 infer_ref="$(image_ref infer-runtime)"
 worker_ref="$(image_ref worker-runtime)"
@@ -151,11 +225,7 @@ build_args=(
   "${voice_module_ref}"
 )
 
-if [[ "${skip_web_ui}" == "yes" ]]; then
-  "${repo_root}/scripts/build-runtime-images.sh" --skip-web-ui "${build_args[@]}"
-else
-  "${repo_root}/scripts/build-runtime-images.sh" "${build_args[@]}"
-fi
+build_runtime_images "${build_args[@]}"
 
 declare -a image_names=(
   base-runtime
@@ -175,38 +245,9 @@ fi
 
 json_entries=()
 for image in "${image_names[@]}"; do
-  ref="$(image_ref "${image}")"
-  echo "pushing ${ref}"
-  docker push "${ref}"
-  repo_digest="$(docker image inspect \
-    --format '{{range .RepoDigests}}{{println .}}{{end}}' \
-    "${ref}" | grep -F "${registry}/${project}/${image}@" | head -n1 || true)"
-  if [[ -z "${repo_digest}" ]]; then
-    repo_digest="${ref}"
-  fi
-  json_entries+=("$(printf '    \"%s\": \"%s\"' "${image}" "${repo_digest}")")
-  latest_ref="$(latest_image_ref "${image}")"
-  echo "moving ${latest_ref} to ${ref}"
-  delete_remote_latest_tag "${image}"
-  docker tag "${ref}" "${latest_ref}"
-  docker push "${latest_ref}"
+  push_release_image "${image}"
 done
 
-{
-  printf '{\n'
-  printf '  "registry": "%s",\n' "${registry}"
-  printf '  "project": "%s",\n' "${project}"
-  printf '  "tag": "%s",\n' "${tag}"
-  printf '  "images": {\n'
-  for index in "${!json_entries[@]}"; do
-    suffix=","
-    if [[ "${index}" -eq $((${#json_entries[@]} - 1)) ]]; then
-      suffix=""
-    fi
-    printf '%s%s\n' "${json_entries[index]}" "${suffix}"
-  done
-  printf '  }\n'
-  printf '}\n'
-} > "${manifest_path}"
+write_manifest
 
 echo "release manifest written: ${manifest_path}"

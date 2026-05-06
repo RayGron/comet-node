@@ -590,6 +590,7 @@ int LauncherRunService::RunHostdLoop(
       << "next_step=leave hostd running so it can receive assignments and upload telemetry\n";
   constexpr int kTelemetryIntervalMs = 2000;
   constexpr int kTelemetryTtlMs = 10000;
+  constexpr std::chrono::milliseconds kApplySessionHandoffGap(1500);
   auto next_inventory_report_at = std::chrono::steady_clock::now();
 #if defined(_WIN32)
   auto next_telemetry_report_at = std::chrono::steady_clock::now();
@@ -660,6 +661,8 @@ int LauncherRunService::RunHostdLoop(
     return args;
   };
 
+  std::atomic_bool apply_session_owner_active{false};
+
 #if defined(_WIN32)
   const auto build_telemetry_args = [&](const bool watch) {
     std::vector<std::string> args = {
@@ -700,6 +703,11 @@ int LauncherRunService::RunHostdLoop(
     if (now < next_inventory_report_at) {
       return;
     }
+    if (!options.controller_url.empty() && apply_session_owner_active.load()) {
+      next_inventory_report_at =
+          now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
+      return;
+    }
     const int report_code = process_runner_.RunCommand(build_report_args());
     if (report_code != 0) {
       std::cerr << "naim-node: hostd report-observed-state exit=" << report_code << "\n";
@@ -722,6 +730,7 @@ int LauncherRunService::RunHostdLoop(
   };
 #else
   std::atomic_bool telemetry_runtime_stop{false};
+  std::atomic_bool telemetry_request_active{false};
   LauncherTelemetryBus telemetry_bus;
   LauncherTelemetryRuntimeMetrics telemetry_metrics;
   std::thread telemetry_collector_thread;
@@ -822,8 +831,16 @@ int LauncherRunService::RunHostdLoop(
               options.node_name,
               options.storage_root);
           while (!telemetry_runtime_stop.load()) {
+            if (!options.controller_url.empty() && apply_session_owner_active.load()) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(250));
+              continue;
+            }
             auto item = telemetry_bus.WaitPop(telemetry_runtime_stop);
             if (!item.has_value()) {
+              continue;
+            }
+            if (!options.controller_url.empty() && apply_session_owner_active.load()) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(250));
               continue;
             }
             item->frame.publisher_queue_delay_ms =
@@ -835,12 +852,16 @@ int LauncherRunService::RunHostdLoop(
                 telemetry_metrics.last_publish_duration_ms.load();
             item->frame.last_publish_error = LoadLastPublishError(telemetry_metrics);
             const auto publish_started_at = std::chrono::steady_clock::now();
+            telemetry_request_active.store(true);
             backend->UpsertHostTelemetry(item->frame);
+            telemetry_request_active.store(false);
             telemetry_metrics.last_publish_duration_ms.store(
                 DurationMillis(publish_started_at, std::chrono::steady_clock::now()));
             StoreLastPublishError(&telemetry_metrics, "");
           }
+          telemetry_request_active.store(false);
         } catch (const std::exception& error) {
+          telemetry_request_active.store(false);
           if (!telemetry_runtime_stop.load()) {
             telemetry_metrics.publish_error_count.fetch_add(1);
             StoreLastPublishError(&telemetry_metrics, error.what());
@@ -866,6 +887,7 @@ int LauncherRunService::RunHostdLoop(
 
 #if !defined(_WIN32)
   pid_t apply_pid = -1;
+  auto next_apply_spawn_at = std::chrono::steady_clock::now();
   const auto reap_apply_if_finished = [&]() -> bool {
     if (apply_pid <= 0) {
       return false;
@@ -878,6 +900,8 @@ int LauncherRunService::RunHostdLoop(
       std::cerr << "naim-node: hostd apply-next-assignment exit=" << *apply_code << "\n";
     }
     apply_pid = -1;
+    apply_session_owner_active.store(false);
+    next_apply_spawn_at = std::chrono::steady_clock::now() + kApplySessionHandoffGap;
     if (std::filesystem::exists(self_update_marker)) {
       std::filesystem::remove(self_update_marker, marker_error);
       std::cout << "hostd_self_update_scheduled=waiting_for_container_recreate\n";
@@ -903,8 +927,20 @@ int LauncherRunService::RunHostdLoop(
     if (reap_apply_if_finished()) {
       return wait_for_self_update_recreate();
     }
-    if (apply_pid <= 0) {
+    if (apply_pid <= 0 && std::chrono::steady_clock::now() >= next_apply_spawn_at) {
+      apply_session_owner_active.store(true);
+      const auto wait_until =
+          std::chrono::steady_clock::now() + kApplySessionHandoffGap;
+      while (telemetry_request_active.load() &&
+             std::chrono::steady_clock::now() < wait_until &&
+             !signal_manager.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+      }
       apply_pid = static_cast<pid_t>(process_runner_.SpawnCommand(build_apply_args()));
+      if (apply_pid <= 0) {
+        apply_session_owner_active.store(false);
+        next_apply_spawn_at = std::chrono::steady_clock::now() + kApplySessionHandoffGap;
+      }
     }
 #endif
 
@@ -931,6 +967,7 @@ int LauncherRunService::RunHostdLoop(
 #if !defined(_WIN32)
   if (apply_pid > 0) {
     StopChildProcess(apply_pid);
+    apply_session_owner_active.store(false);
   }
   stop_telemetry_runtime();
 #endif

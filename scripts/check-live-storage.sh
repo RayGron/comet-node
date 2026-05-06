@@ -37,6 +37,17 @@ run_hostd_apply_as_root() {
   run_as_root "${command}" || { sleep 1; run_as_root "${command}"; }
 }
 
+plane_shared_disk_path() {
+  local plane_name="$1"
+  printf '%s/tmp/naim/disks/planes/%s/shared\n' "${runtime_root}" "${plane_name}"
+}
+
+worker_private_disk_path() {
+  local node_name="$1"
+  local instance_name="$2"
+  printf '%s/nodes/%s/tmp/naim/disks/instances/%s/private\n' "${runtime_root}" "${node_name}" "${instance_name}"
+}
+
 command -v docker >/dev/null 2>&1 || { echo "live-storage: docker is required" >&2; exit 1; }
 command -v mountpoint >/dev/null 2>&1 || { echo "live-storage: mountpoint is required" >&2; exit 1; }
 
@@ -89,9 +100,9 @@ echo "[live-storage] hostd apply on node-a and node-b as root"
 run_hostd_apply_as_root "'${build_dir}/naim-hostd' apply-next-assignment --db '${db_path}' --node node-a --runtime-root '${runtime_root}' --state-root '${state_root}' --compose-mode skip >/dev/null"
 run_hostd_apply_as_root "'${build_dir}/naim-hostd' apply-next-assignment --db '${db_path}' --node node-b --runtime-root '${runtime_root}' --state-root '${state_root}' --compose-mode skip >/dev/null"
 
-shared_a="${runtime_root}/mnt/shared-storage/naim/disks/planes/storage-v2/shared"
-private_worker_a="${runtime_root}/nodes/node-a/mnt/shared-storage/naim/disks/instances/worker-storage-v2-a/private"
-private_worker_b="${runtime_root}/nodes/node-b/mnt/shared-storage/naim/disks/instances/worker-storage-v2-b/private"
+shared_a="$(plane_shared_disk_path storage-v2)"
+private_worker_a="$(worker_private_disk_path node-a worker-storage-v2-a)"
+private_worker_b="$(worker_private_disk_path node-b worker-storage-v2-b)"
 
 echo "[live-storage] verify mounted runtime state"
 "${build_dir}/naim-controller" show-disk-state --db "${db_path}" | grep -F "disk=plane-storage-v2-shared kind=plane-shared node=node-a" | grep -F "realized_state=mounted" >/dev/null
@@ -134,7 +145,7 @@ naim_live_write_compute_state "${renamed_state_path}" storage-v2-renamed 1
 naim_live_apply_v2_state "${build_dir}" "${db_path}" "${artifacts_root}" "${renamed_state_path}"
 run_hostd_apply_as_root "'${build_dir}/naim-hostd' apply-next-assignment --db '${db_path}' --node node-a --runtime-root '${runtime_root}' --state-root '${state_root}' --compose-mode skip >/dev/null"
 "${build_dir}/naim-controller" show-disk-state --db "${db_path}" | grep -F "disk=plane-storage-v2-renamed-shared" | grep -F "realized_state=mounted" >/dev/null
-shared_renamed="${runtime_root}/mnt/shared-storage/naim/disks/planes/storage-v2-renamed/shared"
+shared_renamed="$(plane_shared_disk_path storage-v2-renamed)"
 if run_as_root "mountpoint -q '${shared_a}'"; then
   echo "live-storage: expected old shared mount to be removed" >&2
   exit 1

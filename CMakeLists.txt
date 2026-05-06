@@ -371,6 +371,14 @@ target_link_libraries(naim-model-adapter-tests PRIVATE naim-common)
 naim_enable_strict_warnings(naim-model-adapter-tests)
 
 add_executable(
+  naim-runtime-status-tests
+  common/src/runtime/runtime_status_tests.cpp
+)
+target_include_directories(naim-runtime-status-tests PRIVATE common/include)
+target_link_libraries(naim-runtime-status-tests PRIVATE naim-common)
+naim_enable_strict_warnings(naim-runtime-status-tests)
+
+add_executable(
   naim-state-v2-tests
   common/src/state/desired_state_v2_validator_tests.cpp
 )
@@ -385,6 +393,14 @@ add_executable(
 target_include_directories(naim-state-v2-projector-tests PRIVATE common/include)
 target_link_libraries(naim-state-v2-projector-tests PRIVATE naim-common)
 naim_enable_strict_warnings(naim-state-v2-projector-tests)
+
+add_executable(
+  naim-assignment-repository-tests
+  common/src/state/assignment_repository_tests.cpp
+)
+target_include_directories(naim-assignment-repository-tests PRIVATE common/include)
+target_link_libraries(naim-assignment-repository-tests PRIVATE naim-common)
+naim_enable_strict_warnings(naim-assignment-repository-tests)
 
 add_executable(
   naim-compose-renderer-tests
@@ -1122,6 +1138,18 @@ target_include_directories(
   naim-hostd-install-layout-support-tests PRIVATE common/include hostd/include)
 target_link_libraries(naim-hostd-install-layout-support-tests PRIVATE naim-common)
 naim_enable_strict_warnings(naim-hostd-install-layout-support-tests)
+
+add_executable(
+  naim-hostd-runtime-http-proxy-tests
+  hostd/src/app/hostd_runtime_http_proxy.cpp
+  hostd/src/app/hostd_runtime_http_proxy_tests.cpp
+)
+target_include_directories(
+  naim-hostd-runtime-http-proxy-tests PRIVATE common/include hostd/include)
+target_link_libraries(naim-hostd-runtime-http-proxy-tests PRIVATE naim-common)
+target_compile_definitions(
+  naim-hostd-runtime-http-proxy-tests PRIVATE NAIM_HOSTD_RUNTIME_HTTP_PROXY_TESTING)
+naim_enable_strict_warnings(naim-hostd-runtime-http-proxy-tests)
 
 add_executable(
   naim-hostd-post-deploy-support-tests

@@ -151,6 +151,15 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
             rendered.context_compression->memory_priority,
         name + ": context_compression.memory_priority mismatch");
   }
+  if (rendered.secured_connection.has_value()) {
+    Expect(rerendered.secured_connection.has_value(),
+           name + ": secured_connection missing after rerender");
+    Expect(rerendered.secured_connection->enabled == rendered.secured_connection->enabled,
+           name + ": secured_connection.enabled mismatch");
+    Expect(rerendered.secured_connection->user_ids == rendered.secured_connection->user_ids,
+           name + ": secured_connection.user_ids mismatch");
+    Expect(rerendered.protected_plane, name + ": secured_connection should imply protected");
+  }
   if (source.contains("features") && source.at("features").contains("turboquant")) {
     Expect(projected.contains("features"), name + ": features block missing after projection");
     Expect(projected.at("features").contains("turboquant"),
@@ -176,6 +185,15 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
     Expect(projected.at("features").at("context_compression") ==
                source.at("features").at("context_compression"),
            name + ": context_compression projection mismatch");
+  }
+  if (source.contains("features") && source.at("features").contains("secured_connection")) {
+    Expect(projected.contains("features"), name + ": features block missing after projection");
+    Expect(projected.at("features").contains("secured_connection"),
+           name + ": secured_connection block missing after projection");
+    Expect(projected.at("features").at("secured_connection") ==
+               source.at("features").at("secured_connection"),
+           name + ": secured_connection projection mismatch");
+    Expect(projected.value("protected", false), name + ": secured_connection must project protected=true");
   }
   if (source.contains("skills")) {
     Expect(projected.contains("skills"), name + ": skills block missing after projection");
@@ -375,7 +393,9 @@ int main() {
                 {"target", "dialog_and_knowledge"},
                 {"memory_priority", "balanced"}}},
               {"turboquant",
-               {{"enabled", true}, {"cache_type_k", "turbo4"}, {"cache_type_v", "turbo4"}}}}},
+               {{"enabled", true}, {"cache_type_k", "turbo4"}, {"cache_type_v", "turbo4"}}},
+              {"secured_connection",
+               {{"enabled", true}, {"user_ids", json::array({"scu-alpha", "scu-beta"})}}}}},
             {"runtime",
              {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
             {"infer", {{"replicas", 1}}},

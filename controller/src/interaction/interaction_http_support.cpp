@@ -1,6 +1,10 @@
 #include "interaction/interaction_http_support.h"
 
 #include <chrono>
+#include <algorithm>
+#include <cctype>
+#include <limits>
+#include <stdexcept>
 #include <thread>
 
 #include "app/controller_composition_support.h"
@@ -14,6 +18,103 @@ namespace {
 
 bool IsLoopbackHost(const std::string& host) {
   return host == "127.0.0.1" || host == "localhost" || host == "::1";
+}
+
+std::string TrimAscii(std::string value) {
+  const auto begin = std::find_if(
+      value.begin(),
+      value.end(),
+      [](unsigned char ch) { return std::isspace(ch) == 0; });
+  const auto end = std::find_if(
+      value.rbegin(),
+      value.rend(),
+      [](unsigned char ch) { return std::isspace(ch) == 0; }).base();
+  if (begin >= end) {
+    return {};
+  }
+  return std::string(begin, end);
+}
+
+std::string LowercaseAscii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
+}
+
+bool HeaderValueContainsChunkedTransfer(const std::string& value) {
+  return LowercaseAscii(value).find("chunked") != std::string::npos;
+}
+
+std::map<std::string, std::string>::iterator FindHeaderCaseInsensitive(
+    std::map<std::string, std::string>& headers,
+    const std::string& key) {
+  const std::string lowered_key = LowercaseAscii(key);
+  return std::find_if(
+      headers.begin(),
+      headers.end(),
+      [&](const auto& item) {
+        return LowercaseAscii(item.first) == lowered_key;
+      });
+}
+
+void EraseHeaderCaseInsensitive(
+    std::map<std::string, std::string>& headers,
+    const std::string& key) {
+  const auto it = FindHeaderCaseInsensitive(headers, key);
+  if (it != headers.end()) {
+    headers.erase(it);
+  }
+}
+
+std::string DecodeCompleteChunkedBody(const std::string& encoded) {
+  std::string decoded;
+  std::size_t offset = 0;
+  while (true) {
+    const std::size_t line_end = encoded.find("\r\n", offset);
+    if (line_end == std::string::npos) {
+      throw std::runtime_error("incomplete HTTP chunk size");
+    }
+    std::string chunk_size_text = encoded.substr(offset, line_end - offset);
+    const std::size_t extensions = chunk_size_text.find(';');
+    if (extensions != std::string::npos) {
+      chunk_size_text = chunk_size_text.substr(0, extensions);
+    }
+    chunk_size_text = TrimAscii(chunk_size_text);
+    if (chunk_size_text.empty()) {
+      throw std::runtime_error("empty HTTP chunk size");
+    }
+
+    std::size_t parsed = 0;
+    std::size_t chunk_size = 0;
+    try {
+      const unsigned long long value = std::stoull(chunk_size_text, &parsed, 16);
+      if (parsed != chunk_size_text.size() ||
+          value > std::numeric_limits<std::size_t>::max()) {
+        throw std::runtime_error("invalid");
+      }
+      chunk_size = static_cast<std::size_t>(value);
+    } catch (const std::exception&) {
+      throw std::runtime_error(
+          "invalid HTTP chunk size '" + chunk_size_text + "'");
+    }
+
+    const std::size_t chunk_begin = line_end + 2;
+    if (chunk_size == 0) {
+      if (encoded.size() < chunk_begin + 2) {
+        throw std::runtime_error("incomplete final HTTP chunk");
+      }
+      return decoded;
+    }
+    if (encoded.size() < chunk_begin + chunk_size + 2) {
+      throw std::runtime_error("incomplete HTTP chunk body");
+    }
+    if (encoded.compare(chunk_begin + chunk_size, 2, "\r\n") != 0) {
+      throw std::runtime_error("invalid HTTP chunk terminator");
+    }
+    decoded.append(encoded, chunk_begin, chunk_size);
+    offset = chunk_begin + chunk_size + 2;
+  }
 }
 
 json BuildHeaderArray(
@@ -59,6 +160,14 @@ HttpResponse ParseProxyResponsePayload(const json& progress) {
   }
   if (!response.content_type.empty()) {
     response.headers["Content-Type"] = response.content_type;
+  }
+  const auto transfer_encoding =
+      FindHeaderCaseInsensitive(response.headers, "transfer-encoding");
+  if (transfer_encoding != response.headers.end() &&
+      HeaderValueContainsChunkedTransfer(transfer_encoding->second)) {
+    response.body = DecodeCompleteChunkedBody(response.body);
+    EraseHeaderCaseInsensitive(response.headers, "transfer-encoding");
+    EraseHeaderCaseInsensitive(response.headers, "content-length");
   }
   return response;
 }
@@ -243,7 +352,7 @@ HttpResponse InteractionHttpSupport::SendHostdRuntimeProxyRequest(
   assignment.node_name = node_name;
   assignment.plane_name = proxy_plane_name;
   assignment.desired_generation = 0;
-  assignment.max_attempts = 1;
+  assignment.max_attempts = 3;
   assignment.assignment_type = "runtime-http-proxy";
   assignment.desired_state_json =
       json{

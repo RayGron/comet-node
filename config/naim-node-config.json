@@ -1,6 +1,6 @@
 {
   "paths": {
-    "storage_root": "/mnt/shared-storage/naim",
-    "model_cache_root": "/mnt/shared-storage/models"
+    "storage_root": "/var/lib/naim/storage",
+    "model_cache_root": "/var/lib/naim/models"
   }
 }

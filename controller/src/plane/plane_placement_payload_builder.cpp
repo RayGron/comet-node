@@ -71,7 +71,9 @@ nlohmann::json PlanePlacementPayloadBuilder::Build() const {
                                        ? instance->name
                                        : app_name_it->second;
       const auto primary_it = instance->environment.find("NAIM_APP_PRIMARY");
-      const bool primary = primary_it != instance->environment.end() && primary_it->second == "true";
+      const bool primary =
+          (app_instances.size() == 1 && primary_it == instance->environment.end()) ||
+          (primary_it != instance->environment.end() && primary_it->second == "true");
       service_targets.push_back(nlohmann::json{
           {"service", primary ? nlohmann::json("app")
                               : nlohmann::json("app:" + app_name)},

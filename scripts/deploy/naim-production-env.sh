@@ -41,7 +41,7 @@ naim_deploy_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 : "${NAIM_WORKER_NAME:=hpc1}"
 : "${NAIM_WORKER_ROOT:=/opt/naim/hostd}"
-: "${NAIM_WORKER_SHARED_ROOT:=/mnt/shared-storage/naim}"
+: "${NAIM_WORKER_SHARED_ROOT:=/var/lib/naim}"
 : "${NAIM_WORKER_CONTROLLER_URL:=http://51.68.181.52:18080}"
 : "${NAIM_WORKER_POLL_INTERVAL_SEC:=2}"
 : "${NAIM_WORKER_INVENTORY_SCAN_INTERVAL_SEC:=30}"

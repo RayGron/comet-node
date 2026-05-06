@@ -8,6 +8,18 @@
 
 namespace naim::controller {
 
+namespace {
+
+int SocketSendFlags() {
+#if defined(MSG_NOSIGNAL)
+  return MSG_NOSIGNAL;
+#else
+  return 0;
+#endif
+}
+
+}  // namespace
+
 std::string ControllerNetworkManager::LowercaseCopy(const std::string& value) {
   std::string lowered;
   lowered.reserve(value.size());
@@ -40,7 +52,7 @@ bool ControllerNetworkManager::SendAll(
   const char* data = payload.c_str();
   std::size_t remaining = payload.size();
   while (remaining > 0) {
-    const ssize_t written = send(fd, data, remaining, 0);
+    const ssize_t written = send(fd, data, remaining, SocketSendFlags());
     if (written <= 0) {
       return false;
     }

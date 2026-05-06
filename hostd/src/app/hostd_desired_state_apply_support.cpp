@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -21,6 +22,7 @@
 #include "naim/planning/planner.h"
 
 #include <netdb.h>
+#include <sodium.h>
 
 namespace naim::hostd {
 
@@ -30,6 +32,8 @@ constexpr std::uintmax_t kAppModelChunkBytes = 4ULL * 1024ULL * 1024ULL;
 constexpr std::uintmax_t kAppModelPeerChunkBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr int kAppModelPollAttempts = 600;
 constexpr std::chrono::milliseconds kAppModelPollInterval(500);
+constexpr int kPeerHttpTimeoutSeconds = 30;
+constexpr int kPeerHttpAttempts = 3;
 
 struct PeerHttpResponse {
   int status_code = 0;
@@ -37,11 +41,17 @@ struct PeerHttpResponse {
   std::string body;
 };
 
+struct PeerChunkStreamResult {
+  std::uintmax_t bytes_written = 0;
+};
+
 struct PeerEndpoint {
   std::string raw;
   std::string host;
   int port = 29999;
 };
+
+std::string Lowercase(std::string value);
 
 PeerEndpoint ParsePeerEndpoint(std::string endpoint) {
   PeerEndpoint parsed;
@@ -66,6 +76,265 @@ PeerEndpoint ParsePeerEndpoint(std::string endpoint) {
   return parsed;
 }
 
+void ApplyPeerSocketTimeouts(naim::platform::SocketHandle fd) {
+  const int receive_buffer_bytes = 16 * 1024 * 1024;
+  const int send_buffer_bytes = 1024 * 1024;
+  setsockopt(
+      fd,
+      SOL_SOCKET,
+      SO_RCVBUF,
+      reinterpret_cast<const char*>(&receive_buffer_bytes),
+      sizeof(receive_buffer_bytes));
+  setsockopt(
+      fd,
+      SOL_SOCKET,
+      SO_SNDBUF,
+      reinterpret_cast<const char*>(&send_buffer_bytes),
+      sizeof(send_buffer_bytes));
+#if defined(_WIN32)
+  const DWORD timeout_ms = kPeerHttpTimeoutSeconds * 1000;
+  setsockopt(
+      fd,
+      SOL_SOCKET,
+      SO_RCVTIMEO,
+      reinterpret_cast<const char*>(&timeout_ms),
+      sizeof(timeout_ms));
+  setsockopt(
+      fd,
+      SOL_SOCKET,
+      SO_SNDTIMEO,
+      reinterpret_cast<const char*>(&timeout_ms),
+      sizeof(timeout_ms));
+#else
+  timeval timeout{};
+  timeout.tv_sec = kPeerHttpTimeoutSeconds;
+  timeout.tv_usec = 0;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+}
+
+std::string Sha256DigestHex(const std::array<unsigned char, crypto_hash_sha256_BYTES>& digest) {
+  std::ostringstream out;
+  out << std::hex << std::setfill('0');
+  for (unsigned char byte : digest) {
+    out << std::setw(2) << static_cast<int>(byte);
+  }
+  return out.str();
+}
+
+std::map<std::string, std::string> ParsePeerHeaders(const std::string& headers) {
+  std::map<std::string, std::string> parsed;
+  std::istringstream header_lines(headers);
+  std::string header_line;
+  bool first_header = true;
+  while (std::getline(header_lines, header_line)) {
+    if (!header_line.empty() && header_line.back() == '\r') {
+      header_line.pop_back();
+    }
+    if (first_header) {
+      first_header = false;
+      continue;
+    }
+    const std::size_t colon = header_line.find(':');
+    if (colon == std::string::npos) {
+      continue;
+    }
+    std::string key = header_line.substr(0, colon);
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char ch) {
+      return static_cast<char>(std::tolower(ch));
+    });
+    std::string value = header_line.substr(colon + 1);
+    while (!value.empty() && value.front() == ' ') {
+      value.erase(value.begin());
+    }
+    parsed[key] = value;
+  }
+  return parsed;
+}
+
+std::optional<std::uintmax_t> ParseContentLength(
+    const std::map<std::string, std::string>& headers) {
+  const auto it = headers.find("content-length");
+  if (it == headers.end()) {
+    return std::nullopt;
+  }
+  try {
+    return static_cast<std::uintmax_t>(std::stoull(it->second));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+naim::platform::SocketHandle ConnectPeerSocket(const PeerEndpoint& target) {
+  naim::platform::EnsureSocketsInitialized();
+  addrinfo hints{};
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* results = nullptr;
+  const std::string port_text = std::to_string(target.port);
+  const int lookup = getaddrinfo(target.host.c_str(), port_text.c_str(), &hints, &results);
+  if (lookup != 0) {
+    throw std::runtime_error("failed to resolve peer endpoint: " + target.raw);
+  }
+  naim::platform::SocketHandle fd = naim::platform::kInvalidSocket;
+  for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
+    fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
+    if (!naim::platform::IsSocketValid(fd)) {
+      continue;
+    }
+    ApplyPeerSocketTimeouts(fd);
+    if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
+      break;
+    }
+    naim::platform::CloseSocket(fd);
+    fd = naim::platform::kInvalidSocket;
+  }
+  freeaddrinfo(results);
+  if (!naim::platform::IsSocketValid(fd)) {
+    throw std::runtime_error("failed to connect to peer endpoint: " + target.raw);
+  }
+  return fd;
+}
+
+void SendPeerRequestBytes(naim::platform::SocketHandle fd, const std::string& request_text) {
+  const char* data = request_text.data();
+  std::size_t remaining = request_text.size();
+  while (remaining > 0) {
+    const ssize_t written = send(fd, data, remaining, 0);
+    if (written <= 0) {
+      throw std::runtime_error(
+          "failed to write peer request: " + naim::platform::LastSocketErrorMessage());
+    }
+    data += written;
+    remaining -= static_cast<std::size_t>(written);
+  }
+}
+
+std::string BuildPeerPostRequest(
+    const PeerEndpoint& target,
+    const std::string& path,
+    const std::string& body,
+    const std::string& content_type) {
+  std::ostringstream request;
+  request << "POST " << path << " HTTP/1.1\r\n";
+  request << "Host: " << target.host << ":" << target.port << "\r\n";
+  request << "Connection: close\r\n";
+  request << "Content-Type: " << content_type << "\r\n";
+  request << "Content-Length: " << body.size() << "\r\n\r\n";
+  request << body;
+  return request.str();
+}
+
+PeerChunkStreamResult StreamPeerChunkToOutput(
+    const std::string& endpoint,
+    const nlohmann::json& payload,
+    std::ostream& output) {
+  naim::InitializeCrypto();
+  const PeerEndpoint target = ParsePeerEndpoint(endpoint);
+  naim::platform::SocketHandle fd = ConnectPeerSocket(target);
+  try {
+    SendPeerRequestBytes(
+        fd,
+        BuildPeerPostRequest(
+            target,
+            "/peer/v1/files/chunk",
+            payload.dump(),
+            "application/json"));
+
+    std::array<char, 1024 * 1024> buffer{};
+    std::string response_prefix;
+    std::size_t headers_end = std::string::npos;
+    while (headers_end == std::string::npos) {
+      const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
+      if (read_count < 0) {
+        throw std::runtime_error(
+            "failed to read peer response: " + naim::platform::LastSocketErrorMessage());
+      }
+      if (read_count == 0) {
+        throw std::runtime_error("peer chunk response ended before headers");
+      }
+      response_prefix.append(buffer.data(), static_cast<std::size_t>(read_count));
+      headers_end = response_prefix.find("\r\n\r\n");
+    }
+
+    const std::string header_text = response_prefix.substr(0, headers_end);
+    std::istringstream status(header_text.substr(0, header_text.find("\r\n")));
+    std::string version;
+    int status_code = 0;
+    status >> version >> status_code;
+    const std::map<std::string, std::string> headers = ParsePeerHeaders(header_text);
+    const std::string initial_body = response_prefix.substr(headers_end + 4);
+    if (status_code >= 400) {
+      std::string detail = initial_body.substr(0, 512);
+      naim::platform::CloseSocket(fd);
+      throw std::runtime_error(
+          "peer request failed with status " + std::to_string(status_code) +
+          (detail.empty() ? std::string{} : ": " + detail));
+    }
+
+    crypto_hash_sha256_state context;
+    crypto_hash_sha256_init(&context);
+    std::uintmax_t bytes_written = 0;
+    const std::optional<std::uintmax_t> content_length = ParseContentLength(headers);
+
+    auto consume_body = [&](const char* data, std::size_t size) {
+      if (size == 0) {
+        return;
+      }
+      crypto_hash_sha256_update(
+          &context,
+          reinterpret_cast<const unsigned char*>(data),
+          static_cast<unsigned long long>(size));
+      output.write(data, static_cast<std::streamsize>(size));
+      if (!output.good()) {
+        throw std::runtime_error("failed to write peer chunk to output");
+      }
+      bytes_written += size;
+    };
+
+    if (!initial_body.empty()) {
+      const std::size_t allowed =
+          content_length ? static_cast<std::size_t>(
+                               std::min<std::uintmax_t>(*content_length, initial_body.size()))
+                         : initial_body.size();
+      consume_body(initial_body.data(), allowed);
+    }
+    while (!content_length || bytes_written < *content_length) {
+      const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
+      if (read_count < 0) {
+        throw std::runtime_error(
+            "failed to read peer response: " + naim::platform::LastSocketErrorMessage());
+      }
+      if (read_count == 0) {
+        break;
+      }
+      std::size_t body_size = static_cast<std::size_t>(read_count);
+      if (content_length && bytes_written + body_size > *content_length) {
+        body_size = static_cast<std::size_t>(*content_length - bytes_written);
+      }
+      consume_body(buffer.data(), body_size);
+    }
+    if (content_length && bytes_written != *content_length) {
+      throw std::runtime_error("peer chunk response ended before content-length was satisfied");
+    }
+
+    const auto chunk_sha256_it = headers.find("x-naim-chunk-sha256");
+    if (chunk_sha256_it != headers.end()) {
+      std::array<unsigned char, crypto_hash_sha256_BYTES> digest{};
+      crypto_hash_sha256_final(&context, digest.data());
+      if (Lowercase(Sha256DigestHex(digest)) != Lowercase(chunk_sha256_it->second)) {
+        throw std::runtime_error("direct app model transfer chunk checksum mismatch");
+      }
+    }
+    naim::platform::CloseSocket(fd);
+    return PeerChunkStreamResult{bytes_written};
+  } catch (...) {
+    naim::platform::CloseSocket(fd);
+    throw;
+  }
+}
+
 PeerHttpResponse SendPeerHttpRawRequest(
     const std::string& endpoint,
     const std::string& path,
@@ -88,6 +357,7 @@ PeerHttpResponse SendPeerHttpRawRequest(
     if (!naim::platform::IsSocketValid(fd)) {
       continue;
     }
+    ApplyPeerSocketTimeouts(fd);
     if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
       break;
     }
@@ -111,24 +381,63 @@ PeerHttpResponse SendPeerHttpRawRequest(
   while (remaining > 0) {
     const ssize_t written = send(fd, data, remaining, 0);
     if (written <= 0) {
+      const std::string error = naim::platform::LastSocketErrorMessage();
       naim::platform::CloseSocket(fd);
-      throw std::runtime_error("failed to write peer request");
+      throw std::runtime_error("failed to write peer request: " + error);
     }
     data += written;
     remaining -= static_cast<std::size_t>(written);
   }
   std::string response_text;
-  std::array<char, 8192> buffer{};
+  std::array<char, 1024 * 1024> buffer{};
+  bool reserved_body = false;
   while (true) {
     const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
     if (read_count < 0) {
+      const std::string error = naim::platform::LastSocketErrorMessage();
       naim::platform::CloseSocket(fd);
-      throw std::runtime_error("failed to read peer response");
+      throw std::runtime_error("failed to read peer response: " + error);
     }
     if (read_count == 0) {
       break;
     }
     response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
+    if (!reserved_body) {
+      const std::size_t headers_end = response_text.find("\r\n\r\n");
+      if (headers_end != std::string::npos) {
+        const std::string headers = response_text.substr(0, headers_end);
+        std::istringstream header_lines(headers);
+        std::string header_line;
+        while (std::getline(header_lines, header_line)) {
+          if (!header_line.empty() && header_line.back() == '\r') {
+            header_line.pop_back();
+          }
+          const std::size_t colon = header_line.find(':');
+          if (colon == std::string::npos) {
+            continue;
+          }
+          std::string key = header_line.substr(0, colon);
+          std::transform(key.begin(), key.end(), key.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+          });
+          if (key != "content-length") {
+            continue;
+          }
+          std::string value = header_line.substr(colon + 1);
+          while (!value.empty() && value.front() == ' ') {
+            value.erase(value.begin());
+          }
+          try {
+            const std::size_t content_length =
+                static_cast<std::size_t>(std::stoull(value));
+            response_text.reserve(headers_end + 4 + content_length);
+          } catch (const std::exception&) {
+          }
+          break;
+        }
+        reserved_body = true;
+      }
+    }
   }
   naim::platform::CloseSocket(fd);
   const std::size_t headers_end = response_text.find("\r\n\r\n");
@@ -177,6 +486,28 @@ PeerHttpResponse SendPeerHttpRequest(
     const std::string& path,
     const nlohmann::json& payload) {
   return SendPeerHttpRawRequest(endpoint, path, payload.dump(), "application/json");
+}
+
+PeerHttpResponse SendPeerHttpRequestWithRetries(
+    const std::string& endpoint,
+    const std::string& path,
+    const nlohmann::json& payload,
+    const std::string& operation) {
+  std::string last_error;
+  for (int attempt = 1; attempt <= kPeerHttpAttempts; ++attempt) {
+    try {
+      return SendPeerHttpRequest(endpoint, path, payload);
+    } catch (const std::exception& error) {
+      last_error = error.what();
+      if (attempt == kPeerHttpAttempts) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(250 * attempt));
+    }
+  }
+  throw std::runtime_error(
+      operation + " failed after " + std::to_string(kPeerHttpAttempts) +
+      " attempts: " + last_error);
 }
 
 std::optional<std::uintmax_t> JsonUintmax(
@@ -237,14 +568,15 @@ bool TryMaterializeAppModelMountDirectly(
       "app-model-direct",
       "Checking direct app model transfer from storage node " + mount.source_node_name + ".",
       20);
-  const PeerHttpResponse manifest_response = SendPeerHttpRequest(
+  const PeerHttpResponse manifest_response = SendPeerHttpRequestWithRetries(
       peer_endpoint,
       "/peer/v1/files/manifest",
       nlohmann::json{
           {"ticket_id", ticket_id},
           {"source_paths", source_paths},
           {"defer_sha256", true},
-      });
+      },
+      "direct app model manifest request");
   const nlohmann::json manifest = nlohmann::json::parse(manifest_response.body, nullptr, false);
   if (manifest.is_discarded() || manifest.value("phase", std::string{}) != "manifest-ready" ||
       !manifest.contains("files") || !manifest.at("files").is_array()) {
@@ -277,28 +609,22 @@ bool TryMaterializeAppModelMountDirectly(
 
   std::uintmax_t offset = 0;
   while (offset < *expected_size) {
-    const PeerHttpResponse chunk = SendPeerHttpRequest(
+    const PeerChunkStreamResult chunk = StreamPeerChunkToOutput(
         peer_endpoint,
-        "/peer/v1/files/chunk",
         nlohmann::json{
             {"ticket_id", ticket_id},
             {"source_path", files.front().value("source_path", source_paths.front())},
             {"offset", offset},
             {"max_bytes", kAppModelPeerChunkBytes},
-        });
-    if (chunk.body.empty() && offset < *expected_size) {
+        },
+        output);
+    if (chunk.bytes_written == 0 && offset < *expected_size) {
       throw std::runtime_error("direct app model transfer returned an empty non-final chunk");
     }
-    const auto chunk_sha256_it = chunk.headers.find("x-naim-chunk-sha256");
-    if (chunk_sha256_it != chunk.headers.end() &&
-        Lowercase(naim::ComputeSha256Hex(chunk.body)) != Lowercase(chunk_sha256_it->second)) {
-      throw std::runtime_error("direct app model transfer chunk checksum mismatch");
-    }
-    output.write(chunk.body.data(), static_cast<std::streamsize>(chunk.body.size()));
     if (!output.good()) {
       throw std::runtime_error("failed to write app model direct target: " + temp_path);
     }
-    offset += chunk.body.size();
+    offset += chunk.bytes_written;
     const int percent =
         *expected_size > 0
             ? 20 + static_cast<int>(
@@ -724,6 +1050,20 @@ void HostdDesiredStateApplySupport::ApplyDesiredNodeState(
         node_name,
         backend,
         maybe_publish_progress);
+    if (desired_node_state.instances.empty()) {
+      maybe_publish_progress(
+          "stopping-runtime",
+          "Stopping runtime",
+          "Ensuring stale compose runtime is stopped on the node.",
+          92,
+          plane_name,
+          node_name);
+      apply_plan_support_.StopAndRemoveComposeArtifactIfPresent(
+          artifacts_root,
+          plane_name,
+          node_name,
+          compose_mode);
+    }
     if (HostdDesiredStateApplyPlanSupport::IsDesiredNodeStateEmpty(desired_node_state)) {
       local_state_repository_.RemoveLocalAppliedPlaneState(
           state_root,
@@ -780,6 +1120,20 @@ void HostdDesiredStateApplySupport::ApplyDesiredNodeState(
       compose_mode,
       backend,
       maybe_publish_progress);
+  if (desired_node_state.instances.empty()) {
+    maybe_publish_progress(
+        "stopping-runtime",
+        "Stopping runtime",
+        "Ensuring stale compose runtime is stopped on the node.",
+        92,
+        plane_name,
+        node_name);
+    apply_plan_support_.StopAndRemoveComposeArtifactIfPresent(
+        artifacts_root,
+        plane_name,
+        node_name,
+        compose_mode);
+  }
   disk_runtime_support_.PersistDiskRuntimeStateForRemovedDisks(
       backend,
       current_local_state,

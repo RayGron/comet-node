@@ -126,6 +126,9 @@ void ControllerHttpServer::InstallSignalHandlers(
   g_controller_http_server_stop_requested = stop_requested;
   ::signal(SIGINT, ControllerHttpServerSignalHandler);
   ::signal(SIGTERM, ControllerHttpServerSignalHandler);
+#if !defined(_WIN32)
+  ::signal(SIGPIPE, SIG_IGN);
+#endif
 }
 
 std::string ControllerHttpServer::BuildSseEventName(

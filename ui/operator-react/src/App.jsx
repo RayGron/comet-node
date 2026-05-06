@@ -1950,10 +1950,86 @@ function peerLinkState(link) {
   return "stale";
 }
 
+function hostRegistryNodeName(host) {
+  return String(host?.node_name || host?.nodeName || host?.name || "").trim();
+}
+
+function registeredHostNodeNames(hosts) {
+  return new Set(
+    (Array.isArray(hosts) ? hosts : [])
+      .map((host) => hostRegistryNodeName(host))
+      .filter(Boolean),
+  );
+}
+
+function summarizePeerLinks(items) {
+  return (Array.isArray(items) ? items : []).reduce(
+    (current, item) => {
+      const state = peerLinkState(item);
+      return {
+        ...current,
+        total: current.total + 1,
+        direct: current.direct + (state === "direct" ? 1 : 0),
+        partial: current.partial + (state === "partial" ? 1 : 0),
+        stale: current.stale + (state === "stale" ? 1 : 0),
+      };
+    },
+    { total: 0, direct: 0, partial: 0, stale: 0 },
+  );
+}
+
+function splitPeerLinksByRegisteredHosts(items, hosts) {
+  const registeredNames = registeredHostNodeNames(hosts);
+  if (registeredNames.size === 0) {
+    return {
+      registered: Array.isArray(items) ? items : [],
+      unregistered: [],
+    };
+  }
+  return (Array.isArray(items) ? items : []).reduce(
+    (current, item) => {
+      const observerNodeName = String(item?.observer_node_name || "").trim();
+      const peerNodeName = String(item?.peer_node_name || "").trim();
+      const registered =
+        registeredNames.has(observerNodeName) && registeredNames.has(peerNodeName);
+      current[registered ? "registered" : "unregistered"].push(item);
+      return current;
+    },
+    { registered: [], unregistered: [] },
+  );
+}
+
+function registeredLanPeers(registry, hosts) {
+  const peers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
+  const registeredNames = registeredHostNodeNames(hosts);
+  if (registeredNames.size === 0) {
+    return peers;
+  }
+  return peers.filter((peer) => registeredNames.has(String(peer?.peer_node_name || "").trim()));
+}
+
+function uniquePeerLinks(items) {
+  const seen = new Set();
+  const result = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const key = [
+      item?.observer_node_name || "",
+      item?.peer_node_name || "",
+      item?.peer_endpoint || "",
+    ].join("\u0000");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
 function buildPeerLinksFromHostRegistry(hosts) {
   const items = [];
   for (const host of Array.isArray(hosts) ? hosts : []) {
-    const observerNodeName = host?.node_name || host?.nodeName || host?.name || "";
+    const observerNodeName = hostRegistryNodeName(host);
     if (!observerNodeName || !Array.isArray(host?.lan_peers)) {
       continue;
     }
@@ -1968,19 +2044,7 @@ function buildPeerLinksFromHostRegistry(hosts) {
       });
     }
   }
-  const summary = items.reduce(
-    (current, item) => {
-      const state = peerLinkState(item);
-      return {
-        ...current,
-        total: current.total + 1,
-        direct: current.direct + (state === "direct" ? 1 : 0),
-        partial: current.partial + (state === "partial" ? 1 : 0),
-        stale: current.stale + (state === "stale" ? 1 : 0),
-      };
-    },
-    { total: 0, direct: 0, partial: 0, stale: 0 },
-  );
+  const summary = summarizePeerLinks(items);
   return { items, summary };
 }
 
@@ -4215,12 +4279,32 @@ function App() {
   const dashboardPeerLinkItems = Array.isArray(dashboard?.peer_links?.items)
     ? dashboard.peer_links.items
     : [];
-  const peerLinkItems =
+  const dashboardPeerLinkDiagnostics = Array.isArray(dashboard?.peer_links?.unregistered_items)
+    ? dashboard.peer_links.unregistered_items
+    : [];
+  const rawPeerLinkItems =
     dashboardPeerLinkItems.length > 0 ? dashboardPeerLinkItems : registryPeerLinks.items;
-  const peerLinkSummary =
-    dashboardPeerLinkItems.length > 0
-      ? dashboard?.peer_links?.summary || registryPeerLinks.summary
-      : registryPeerLinks.summary;
+  const splitPeerLinkItems = splitPeerLinksByRegisteredHosts(rawPeerLinkItems, hostdHosts);
+  const peerLinkItems = splitPeerLinkItems.registered;
+  const registryPeerDiagnostics = (Array.isArray(hostdHosts) ? hostdHosts : []).flatMap((host) =>
+    (Array.isArray(host?.unregistered_lan_peers) ? host.unregistered_lan_peers : []).map((peer) => ({
+      ...peer,
+      observer_node_name: peer?.observer_node_name || hostRegistryNodeName(host),
+      peer_node_name: peer?.peer_node_name || "",
+      state: peerLinkState(peer),
+    })),
+  );
+  const peerLinkDiagnostics = uniquePeerLinks([
+    ...dashboardPeerLinkDiagnostics,
+    ...splitPeerLinkItems.unregistered,
+    ...registryPeerDiagnostics,
+  ]);
+  const peerLinkSummary = summarizePeerLinks(peerLinkItems);
+  const peerLinkDiagnosticsSummary = {
+    ...summarizePeerLinks(peerLinkDiagnostics),
+    unregistered:
+      Number(dashboard?.peer_links?.summary?.unregistered || 0) || peerLinkDiagnostics.length,
+  };
   const chatLanguageOptions = supportedChatLanguageOptions(desiredState, interactionStatus);
   const selectedPlaneApplied =
     Number(planeRecord?.generation || 0) > 0 &&
@@ -5169,7 +5253,7 @@ function App() {
           const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
           const totalMemoryBytes = Number(cpu.total_memory_bytes || storageCapacity.total_memory_bytes || 0);
           const gpuDeviceCount = Number(gpu.device_count || storageCapacity.gpu_count || 0);
-          const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
+          const lanPeers = registeredLanPeers(registry, hostdHosts);
           const directLanPeers = lanPeers.filter((peer) => peer?.tcp_reachable === true);
           const storageTotalBytes = Number(storageCapacity.storage_total_bytes || 0);
           const storageFreeBytes = Number(storageCapacity.storage_free_bytes || 0);
@@ -5222,7 +5306,10 @@ function App() {
       (runtimeAvailable ? "ready" : "unavailable");
     const storageSelected = isStorageRoleSelected(host);
     const storageEligible = isStorageRoleEligible(host);
-    const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
+    const lanPeers = registeredLanPeers(registry, hostdHosts);
+    const unregisteredLanPeers = Array.isArray(registry?.unregistered_lan_peers)
+      ? registry.unregistered_lan_peers
+      : [];
     const gpuDeviceCount = Number(gpu.device_count || capacity.gpu_count || 0);
     const totalMemoryBytes = Number(cpu.total_memory_bytes || capacity.total_memory_bytes || 0);
     const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
@@ -5332,6 +5419,25 @@ function App() {
               <div className="metric-grid">
                 {lanPeers.map((peer) => (
                   <div className="metric-row" key={`${host?.node_name}:${peer?.peer_node_name}`}>
+                    <span>{peer?.peer_node_name || "peer"}</span>
+                    <strong>
+                      {peer?.tcp_reachable ? "direct" : peer?.seen_udp ? "partial" : "stale"}
+                      {peer?.peer_endpoint ? ` / ${peer.peer_endpoint}` : ""}
+                    </strong>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {unregisteredLanPeers.length > 0 ? (
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>LAN diagnostics</h3>
+                <span className="subpanel-meta">{`${unregisteredLanPeers.length} unregistered`}</span>
+              </div>
+              <div className="metric-grid">
+                {unregisteredLanPeers.map((peer) => (
+                  <div className="metric-row" key={`${host?.node_name}:diagnostic:${peer?.peer_node_name}`}>
                     <span>{peer?.peer_node_name || "peer"}</span>
                     <strong>
                       {peer?.tcp_reachable ? "direct" : peer?.seen_udp ? "partial" : "stale"}
@@ -8364,6 +8470,39 @@ function App() {
                   </div>
                 )}
               </section>
+
+              {peerLinkDiagnostics.length > 0 ? (
+                <section className="subpanel dashboard-services-panel">
+                  <div className="subpanel-header">
+                    <h3>LAN diagnostics</h3>
+                    <span className="subpanel-meta">
+                      {`${peerLinkDiagnosticsSummary.unregistered || 0} unregistered`}
+                    </span>
+                  </div>
+                  <div className="plane-list">
+                    {peerLinkDiagnostics.slice(0, 8).map((link) => (
+                      <article
+                        className="node-card"
+                        key={`diagnostic:${link?.observer_node_name}:${link?.peer_node_name}`}
+                      >
+                        <div className="card-row">
+                          <strong>{link?.observer_node_name || "node"} to {link?.peer_node_name || "peer"}</strong>
+                          <div className="pill is-warning">
+                            {statusDot("is-warning")}
+                            <span>{link?.diagnostic_reason || "unregistered"}</span>
+                          </div>
+                        </div>
+                        <div className="metric-grid">
+                          <div className="metric-row"><span>Endpoint</span><strong>{link?.peer_endpoint || "n/a"}</strong></div>
+                          <div className="metric-row"><span>Remote</span><strong>{link?.remote_address || "n/a"}</strong></div>
+                          <div className="metric-row"><span>Interface</span><strong>{link?.local_interface || "n/a"}</strong></div>
+                          <div className="metric-row"><span>State</span><strong>{link?.state || peerLinkState(link)}</strong></div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
 
               <section className="subpanel dashboard-hosts-panel">
                 <div className="subpanel-header">

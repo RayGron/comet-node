@@ -197,6 +197,11 @@ json HostRegistryService::BuildPayload(
   store.DeleteStaleHostPeerLinks(
       ControllerTimeSupport::SqlTimestampAfterSeconds(-kPeerLinkFreshSeconds));
   const auto all_peer_links = store.LoadHostPeerLinks();
+  const auto all_registered_hosts = store.LoadRegisteredHosts(std::nullopt);
+  std::set<std::string> registered_node_names;
+  for (const auto& registered_host : all_registered_hosts) {
+    registered_node_names.insert(registered_host.node_name);
+  }
   std::map<std::string, std::vector<naim::HostPeerLinkRecord>> peer_links_by_node;
   for (const auto& link : all_peer_links) {
     peer_links_by_node[link.observer_node_name].push_back(link);
@@ -229,10 +234,11 @@ json HostRegistryService::BuildPayload(
       planes.push_back(plane_name_value);
     }
     json lan_peers = json::array();
+    json unregistered_lan_peers = json::array();
     if (const auto peer_it = peer_links_by_node.find(host.node_name);
         peer_it != peer_links_by_node.end()) {
       for (const auto& link : peer_it->second) {
-        lan_peers.push_back(json{
+        json peer_payload{
             {"peer_node_name", link.peer_node_name},
             {"peer_endpoint", link.peer_endpoint.empty() ? json(nullptr) : json(link.peer_endpoint)},
             {"local_interface",
@@ -244,7 +250,14 @@ json HostRegistryService::BuildPayload(
             {"rtt_ms", link.rtt_ms > 0 ? json(link.rtt_ms) : json(nullptr)},
             {"last_seen_at", link.last_seen_at.empty() ? json(nullptr) : json(link.last_seen_at)},
             {"last_probe_at", link.last_probe_at.empty() ? json(nullptr) : json(link.last_probe_at)},
-        });
+        };
+        if (registered_node_names.empty() ||
+            registered_node_names.count(link.peer_node_name) > 0) {
+          lan_peers.push_back(std::move(peer_payload));
+        } else {
+          peer_payload["diagnostic_reason"] = "unregistered_node";
+          unregistered_lan_peers.push_back(std::move(peer_payload));
+        }
       }
     }
     items.push_back(json{
@@ -297,9 +310,10 @@ json HostRegistryService::BuildPayload(
              {"total_memory_bytes", inventory.total_memory_bytes > 0
                                         ? json(inventory.total_memory_bytes)
                                         : json(nullptr)},
-         }},
+        }},
         {"plane_participation", planes},
         {"lan_peers", std::move(lan_peers)},
+        {"unregistered_lan_peers", std::move(unregistered_lan_peers)},
         {"updated_at", host.updated_at},
     });
   }

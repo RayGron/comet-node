@@ -98,6 +98,9 @@ struct NetworkInterfaceTelemetry {
 struct PeerDiscoveryTelemetry {
   std::string peer_node_name;
   std::string peer_endpoint;
+  std::string cluster_id;
+  std::string controller_url;
+  std::string controller_fingerprint;
   std::string local_interface;
   std::string remote_address;
   bool seen_udp = false;

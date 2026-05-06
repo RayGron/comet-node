@@ -125,6 +125,27 @@ except urllib.error.HTTPError as error:
 PY
 }
 
+docker_push_with_retry() {
+  local ref="$1"
+  local attempt=1
+  local max_attempts="${NAIM_REGISTRY_PUSH_ATTEMPTS:-5}"
+  local delay_sec="${NAIM_REGISTRY_PUSH_RETRY_DELAY_SEC:-5}"
+
+  while (( attempt <= max_attempts )); do
+    if docker push "${ref}"; then
+      return 0
+    fi
+    if (( attempt == max_attempts )); then
+      echo "error: docker push failed after ${max_attempts} attempts: ${ref}" >&2
+      return 1
+    fi
+    echo "warning: docker push failed on attempt ${attempt}/${max_attempts}; retrying in ${delay_sec}s: ${ref}" >&2
+    sleep "${delay_sec}"
+    delay_sec=$(( delay_sec * 2 ))
+    attempt=$(( attempt + 1 ))
+  done
+}
+
 base_ref="$(image_ref base-runtime)"
 infer_ref="$(image_ref infer-runtime)"
 worker_ref="$(image_ref worker-runtime)"
@@ -177,7 +198,7 @@ json_entries=()
 for image in "${image_names[@]}"; do
   ref="$(image_ref "${image}")"
   echo "pushing ${ref}"
-  docker push "${ref}"
+  docker_push_with_retry "${ref}"
   repo_digest="$(docker image inspect \
     --format '{{range .RepoDigests}}{{println .}}{{end}}' \
     "${ref}" | grep -F "${registry}/${project}/${image}@" | head -n1 || true)"
@@ -189,7 +210,7 @@ for image in "${image_names[@]}"; do
   echo "moving ${latest_ref} to ${ref}"
   delete_remote_latest_tag "${image}"
   docker tag "${ref}" "${latest_ref}"
-  docker push "${latest_ref}"
+  docker_push_with_retry "${latest_ref}"
 done
 
 {

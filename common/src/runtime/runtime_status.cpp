@@ -258,6 +258,9 @@ json ToJson(const PeerDiscoveryTelemetry& peer) {
   return json{
       {"peer_node_name", peer.peer_node_name},
       {"peer_endpoint", peer.peer_endpoint},
+      {"cluster_id", peer.cluster_id},
+      {"controller_url", peer.controller_url},
+      {"controller_fingerprint", peer.controller_fingerprint},
       {"local_interface", peer.local_interface},
       {"remote_address", peer.remote_address},
       {"seen_udp", peer.seen_udp},
@@ -272,6 +275,9 @@ PeerDiscoveryTelemetry PeerDiscoveryTelemetryFromJson(const json& value) {
   PeerDiscoveryTelemetry peer;
   peer.peer_node_name = value.value("peer_node_name", std::string{});
   peer.peer_endpoint = value.value("peer_endpoint", std::string{});
+  peer.cluster_id = value.value("cluster_id", std::string{});
+  peer.controller_url = value.value("controller_url", std::string{});
+  peer.controller_fingerprint = value.value("controller_fingerprint", std::string{});
   peer.local_interface = value.value("local_interface", std::string{});
   peer.remote_address = value.value("remote_address", std::string{});
   peer.seen_udp = value.value("seen_udp", false);

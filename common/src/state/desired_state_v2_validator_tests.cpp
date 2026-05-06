@@ -2041,6 +2041,9 @@ int main() {
              "voice-listener-plane: voice module should mount plane shared disk");
       Expect(voice.environment.at("NAIM_VOICE_LISTENER_WAKE_PHRASE") == "Hey Jex",
              "voice-listener-plane: wake phrase env mismatch");
+      Expect(voice.environment.at("NAIM_VOICE_MODULE_RUNTIME_STATUS_PATH") ==
+                 "/naim/private/voice-module-runtime-status.json",
+             "voice-listener-plane: voice module runtime status path mismatch");
       Expect(voice.app_model_mounts.size() == 1,
              "voice-listener-plane: voice module should mount whisper model");
       const auto app = FindInstance(state, "app-voice-listener-plane");

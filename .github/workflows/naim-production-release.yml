@@ -36,18 +36,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Install SSH key
-        shell: bash
-        run: |
-          set -euo pipefail
-          install -m 0700 -d "${HOME}/.ssh"
-          key_path="${HOME}/.ssh/naim_ci_deploy"
-          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
-          chmod 0600 "${key_path}"
-          {
-            echo "NAIM_CI_SSH_KEY=${key_path}"
-            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
-          } >> "${GITHUB_ENV}"
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
       - name: Pull commit on hpc1
         shell: bash
         run: |
@@ -159,25 +151,18 @@ jobs:
       - hpc1-pull
       - detect-release-scope
     steps:
-      - name: Install SSH key
-        shell: bash
-        run: |
-          set -euo pipefail
-          install -m 0700 -d "${HOME}/.ssh"
-          key_path="${HOME}/.ssh/naim_ci_deploy"
-          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
-          chmod 0600 "${key_path}"
-          {
-            echo "NAIM_CI_SSH_KEY=${key_path}"
-            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
-          } >> "${GITHUB_ENV}"
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
       - name: Build on hpc1
         shell: bash
         run: |
           set -euo pipefail
           repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
+          vcpkg_root_q="$(printf '%q' "${NAIM_HPC1_VCPKG_ROOT}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && VCPKG_ROOT='${NAIM_HPC1_VCPKG_ROOT}' NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
+            "cd ${repo_q} && VCPKG_ROOT=${vcpkg_root_q} NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
 
   hpc1-build-turboquant:
     name: 2b. hpc1 TurboQuant build
@@ -188,25 +173,18 @@ jobs:
       - detect-release-scope
     if: needs.detect-release-scope.outputs.turboquant_required == 'true'
     steps:
-      - name: Install SSH key
-        shell: bash
-        run: |
-          set -euo pipefail
-          install -m 0700 -d "${HOME}/.ssh"
-          key_path="${HOME}/.ssh/naim_ci_deploy"
-          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
-          chmod 0600 "${key_path}"
-          {
-            echo "NAIM_CI_SSH_KEY=${key_path}"
-            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
-          } >> "${GITHUB_ENV}"
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
       - name: Build TurboQuant runtime on hpc1
         shell: bash
         run: |
           set -euo pipefail
           repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
+          vcpkg_root_q="$(printf '%q' "${NAIM_HPC1_VCPKG_ROOT}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && VCPKG_ROOT='${NAIM_HPC1_VCPKG_ROOT}' NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build-turboquant.sh"
+            "cd ${repo_q} && VCPKG_ROOT=${vcpkg_root_q} NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build-turboquant.sh"
 
   hpc1-knowledge-vault-release-gate:
     name: 2a. hpc1 Knowledge Vault release gate
@@ -214,18 +192,10 @@ jobs:
     timeout-minutes: 30
     needs: hpc1-build
     steps:
-      - name: Install SSH key
-        shell: bash
-        run: |
-          set -euo pipefail
-          install -m 0700 -d "${HOME}/.ssh"
-          key_path="${HOME}/.ssh/naim_ci_deploy"
-          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
-          chmod 0600 "${key_path}"
-          {
-            echo "NAIM_CI_SSH_KEY=${key_path}"
-            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
-          } >> "${GITHUB_ENV}"
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
       - name: Run Knowledge Vault release gate on hpc1
         shell: bash
         run: |
@@ -248,18 +218,10 @@ jobs:
       needs.hpc1-knowledge-vault-release-gate.result == 'success' &&
       (needs.hpc1-build-turboquant.result == 'success' || needs.hpc1-build-turboquant.result == 'skipped')
     steps:
-      - name: Install SSH key
-        shell: bash
-        run: |
-          set -euo pipefail
-          install -m 0700 -d "${HOME}/.ssh"
-          key_path="${HOME}/.ssh/naim_ci_deploy"
-          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
-          chmod 0600 "${key_path}"
-          {
-            echo "NAIM_CI_SSH_KEY=${key_path}"
-            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
-          } >> "${GITHUB_ENV}"
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
       - name: Build and push images from hpc1
         shell: bash
         env:

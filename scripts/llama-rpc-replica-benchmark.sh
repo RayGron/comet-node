@@ -24,13 +24,19 @@ SCALED_CONCURRENCY="${SCALED_CONCURRENCY:-$((12 * REPLICA_COUNT))}"
 SCALED_REQUESTS_PER_WORKER="${SCALED_REQUESTS_PER_WORKER:-3}"
 SCALED_MAX_TOKENS="${SCALED_MAX_TOKENS:-128}"
 
-if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
-  BENCH_ROOT_DEFAULT="${XDG_CACHE_HOME}/naim/tmp/llama-rpc-replicas"
-elif [[ -n "${HOME:-}" ]]; then
-  BENCH_ROOT_DEFAULT="${HOME}/.cache/naim/tmp/llama-rpc-replicas"
-else
-  BENCH_ROOT_DEFAULT="/tmp/naim/llama-rpc-replicas"
-fi
+default_bench_root() {
+  if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
+    printf '%s\n' "${XDG_CACHE_HOME}/naim/tmp/llama-rpc-replicas"
+    return
+  fi
+  if [[ -n "${HOME:-}" ]]; then
+    printf '%s\n' "${HOME}/.cache/naim/tmp/llama-rpc-replicas"
+    return
+  fi
+  printf '%s\n' "/tmp/naim/llama-rpc-replicas"
+}
+
+BENCH_ROOT_DEFAULT="$(default_bench_root)"
 BENCH_ROOT="${BENCH_ROOT:-$BENCH_ROOT_DEFAULT}"
 
 RPC_SERVER_BIN="${NAIM_RPC_SERVER_BIN:-$BUILD_DIR/bin/rpc-server}"

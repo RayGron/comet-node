@@ -208,6 +208,50 @@ int main() {
   });
   Expect(!context.value("context", nlohmann::json::array()).empty(), "context should return bundle");
 
+  const std::string source_block_id = ingest.value("source_block_id", std::string{});
+  const auto linked = store.WriteBlock(nlohmann::json{
+      {"block_id", "delete-linked-block"},
+      {"knowledge_id", "knowledge.delete-linked"},
+      {"title", "Delete Linked Block"},
+      {"body", "A linked block used to verify relation cleanup."},
+      {"scope_ids", nlohmann::json::array({"scope.default"})},
+  });
+  (void)linked;
+  const auto relation = store.WriteRelation(nlohmann::json{
+      {"relation_id", "rel-delete-test"},
+      {"from_block_id", source_block_id},
+      {"to_block_id", "delete-linked-block"},
+      {"type", "related"},
+  });
+  Expect(relation.at("relation").value("relation_id", std::string{}) == "rel-delete-test", "relation should be written");
+  Expect(
+      !store.Neighbors(source_block_id).value("neighbors", nlohmann::json::array()).empty(),
+      "relation should be visible before delete");
+  const auto relation_delete = store.DeleteRelation("rel-delete-test", nlohmann::json{{"reason", "test relation cleanup"}});
+  Expect(relation_delete.value("status", std::string{}) == "deleted", "relation delete should succeed");
+  Expect(
+      store.Neighbors(source_block_id).value("neighbors", nlohmann::json::array()).empty(),
+      "relation should be hidden after delete");
+
+  const auto source_delete = store.DeleteSource(source_block_id, nlohmann::json{{"reason", "test source cleanup"}});
+  Expect(source_delete.value("status", std::string{}) == "deleted", "source delete should succeed by block id");
+  const auto deleted_search = store.Search(nlohmann::json{
+      {"query", "scheduled merge"},
+      {"scope_id", "scope.default"},
+  });
+  Expect(
+      deleted_search.dump().find(source_block_id) == std::string::npos,
+      "deleted source block should not be searchable");
+  const auto deleted_graph = store.GraphNeighborhood(nlohmann::json{{"center_id", source_block_id}});
+  Expect(
+      deleted_graph.value("nodes", nlohmann::json::array()).empty(),
+      "deleted source block should not appear in graph");
+  const auto cleanup_plan = store.Cleanup(nlohmann::json{{"apply", false}});
+  Expect(cleanup_plan.value("status", std::string{}) == "planned", "cleanup dry-run should plan");
+  const auto cleanup = store.Cleanup(nlohmann::json{{"apply", true}});
+  Expect(cleanup.value("status", std::string{}) == "completed", "cleanup should complete");
+  Expect(store.ReadBlock(source_block_id).contains("error"), "cleanup should physically purge deleted block");
+
   const auto repair = store.RunRepair(nlohmann::json{{"apply", true}, {"full_rebuild", true}});
   Expect(repair.contains("report_id"), "repair should persist a report");
 

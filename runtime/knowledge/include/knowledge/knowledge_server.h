@@ -51,6 +51,7 @@ class KnowledgeServer final {
   HttpResponse HandleGet(const HttpRequest& request);
   HttpResponse HandlePost(const HttpRequest& request);
   HttpResponse HandlePut(const HttpRequest& request);
+  HttpResponse HandleDelete(const HttpRequest& request);
   std::vector<std::string> SplitPath(const std::string& path) const;
   static nlohmann::json ParseJsonBody(const HttpRequest& request);
   HttpResponse BuildJsonResponse(int status_code, const nlohmann::json& payload) const;

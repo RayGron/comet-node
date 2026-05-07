@@ -147,6 +147,9 @@ HttpResponse KnowledgeServer::HandleRequest(const HttpRequest& request) {
   if (request.method == "PUT") {
     return HandlePut(request);
   }
+  if (request.method == "DELETE") {
+    return HandleDelete(request);
+  }
   throw ApiError(405, "method_not_allowed", "method not allowed");
 }
 
@@ -248,6 +251,9 @@ HttpResponse KnowledgeServer::HandlePost(const HttpRequest& request) {
   if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "repair") {
     return BuildJsonResponse(200, store_.RunRepair(ParseJsonBody(request)));
   }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "cleanup") {
+    return BuildJsonResponse(200, store_.Cleanup(ParseJsonBody(request)));
+  }
   if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "markdown-export") {
     return BuildJsonResponse(200, store_.MarkdownExport(ParseJsonBody(request)));
   }
@@ -270,6 +276,32 @@ HttpResponse KnowledgeServer::HandlePut(const HttpRequest& request) {
   }
   if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "reviews") {
     const auto result = store_.DecideReviewItem(parts[2], ParseJsonBody(request));
+    if (result.contains("error")) {
+      throw ApiError(404, result.value("error", "not_found"), result.value("message", "not found"));
+    }
+    return BuildJsonResponse(200, result);
+  }
+  throw ApiError(404, "not_found", "route not found");
+}
+
+HttpResponse KnowledgeServer::HandleDelete(const HttpRequest& request) {
+  const auto parts = SplitPath(request.path);
+  if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "blocks") {
+    const auto result = store_.DeleteBlock(parts[2], ParseJsonBody(request));
+    if (result.contains("error")) {
+      throw ApiError(404, result.value("error", "not_found"), result.value("message", "not found"));
+    }
+    return BuildJsonResponse(200, result);
+  }
+  if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "relations") {
+    const auto result = store_.DeleteRelation(parts[2], ParseJsonBody(request));
+    if (result.contains("error")) {
+      throw ApiError(404, result.value("error", "not_found"), result.value("message", "not found"));
+    }
+    return BuildJsonResponse(200, result);
+  }
+  if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "sources") {
+    const auto result = store_.DeleteSource(parts[2], ParseJsonBody(request));
     if (result.contains("error")) {
       throw ApiError(404, result.value("error", "not_found"), result.value("message", "not found"));
     }

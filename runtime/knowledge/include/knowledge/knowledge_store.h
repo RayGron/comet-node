@@ -28,6 +28,10 @@ class KnowledgeStore final {
   nlohmann::json ResolveHead(const std::string& knowledge_id) const;
   nlohmann::json UpdateHead(const std::string& knowledge_id, const nlohmann::json& payload);
   nlohmann::json WriteRelation(const nlohmann::json& payload);
+  nlohmann::json DeleteBlock(const std::string& block_id, const nlohmann::json& payload);
+  nlohmann::json DeleteRelation(const std::string& relation_id, const nlohmann::json& payload);
+  nlohmann::json DeleteSource(const std::string& source_ref, const nlohmann::json& payload);
+  nlohmann::json Cleanup(const nlohmann::json& payload);
   nlohmann::json Neighbors(const std::string& block_id) const;
   nlohmann::json Search(const nlohmann::json& payload) const;
   nlohmann::json Context(const nlohmann::json& payload) const;

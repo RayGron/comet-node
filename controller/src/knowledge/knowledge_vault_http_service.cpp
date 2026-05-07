@@ -16,9 +16,13 @@ bool IsPlaneScopedKnowledgeRoute(const std::string& path) {
          suffix == "context" ||
          suffix == "query-route" ||
          suffix == "source-ingest" ||
+         suffix == "cleanup" ||
          suffix == "graph-neighborhood" ||
          suffix == "overlays" ||
          suffix == "markdown-import" ||
+         suffix.rfind("blocks/", 0) == 0 ||
+         suffix.rfind("relations/", 0) == 0 ||
+         suffix.rfind("sources/", 0) == 0 ||
          suffix.rfind("replica-merges", 0) == 0;
 }
 
@@ -77,6 +81,8 @@ std::optional<HttpResponse> KnowledgeVaultHttpService::HandleRequest(
         suffix.rfind("/replica-merges", 0) == 0 ||
         suffix.rfind("/reviews", 0) == 0 ||
         suffix.rfind("/repair", 0) == 0 ||
+        suffix.rfind("/cleanup", 0) == 0 ||
+        suffix.rfind("/sources", 0) == 0 ||
         suffix.rfind("/jobs", 0) == 0 ||
         suffix.rfind("/markdown-export", 0) == 0 ||
         suffix.rfind("/markdown-import", 0) == 0 ||
@@ -121,7 +127,8 @@ HttpRequest KnowledgeVaultHttpService::BuildPlaneScopedRequest(
   const std::string suffix = remainder.substr(separator);
   rewritten.path = "/api/v1" + suffix;
 
-  if (request.method != "POST" || !IsPlaneScopedKnowledgeRoute(rewritten.path)) {
+  const bool scoped_method = request.method == "POST" || request.method == "DELETE";
+  if (!scoped_method || !IsPlaneScopedKnowledgeRoute(rewritten.path)) {
     return rewritten;
   }
 

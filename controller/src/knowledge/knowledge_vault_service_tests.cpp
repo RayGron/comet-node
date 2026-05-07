@@ -273,6 +273,34 @@ void TestPlaneScopedMutationRequestsCarryProtectedPlane() {
       "protected plane replica merge should carry protected_plane flag");
 }
 
+void TestPlaneScopedDeleteRequestsCarryProtectedPlane() {
+  HttpRequest delete_request;
+  delete_request.method = "DELETE";
+  delete_request.path = "/api/v1/planes/knowledge-plane/knowledge-vault/blocks/blk-test";
+  delete_request.headers["Content-Type"] = "application/json";
+  delete_request.body = R"({"reason":"operator cleanup"})";
+
+  const auto rewritten =
+      naim::controller::KnowledgeVaultHttpService::BuildPlaneScopedRequest(
+          delete_request,
+          BuildProtectedKnowledgePlaneState(),
+          "knowledge-plane");
+  const auto body = nlohmann::json::parse(rewritten.body);
+
+  Expect(
+      rewritten.path == "/api/v1/knowledge-vault/blocks/blk-test",
+      "plane delete path should rewrite to canonical knowledge route");
+  Expect(
+      body.value("plane_id", std::string{}) == "knowledge-plane",
+      "plane delete should include plane id");
+  Expect(
+      body.value("protected_plane", false),
+      "protected plane delete should carry protected_plane flag");
+  Expect(
+      body.value("reason", std::string{}) == "operator cleanup",
+      "delete reason should be preserved");
+}
+
 }  // namespace
 
 int main() {
@@ -283,5 +311,6 @@ int main() {
   TestPlaneScopedGraphRequestDefaultsToSelectedKnowledge();
   TestPlaneScopedSearchRequestKeepsExplicitBody();
   TestPlaneScopedMutationRequestsCarryProtectedPlane();
+  TestPlaneScopedDeleteRequestsCarryProtectedPlane();
   return 0;
 }

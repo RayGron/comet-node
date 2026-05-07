@@ -25,6 +25,17 @@ bool StringSetContains(const std::set<std::string>& values, const std::string& v
   return values.empty() || values.find(value) != values.end();
 }
 
+bool IsDeletedRecord(const nlohmann::json& value) {
+  return value.value("deleted", false) ||
+         value.value("status", std::string{}) == "deleted" ||
+         value.value("tombstone", false);
+}
+
+bool KeyEndsWith(const std::string& key, const std::string& suffix) {
+  return key.size() >= suffix.size() &&
+         key.compare(key.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 std::string BlockSearchText(const nlohmann::json& block) {
   return KnowledgeTextProcessor::Lowercase(
       block.value("title", std::string{}) + "\n" +
@@ -155,11 +166,22 @@ nlohmann::json KnowledgeStore::ReadBlock(const std::string& block_id) const {
   if (!block.has_value()) {
     return nlohmann::json{{"error", "not_found"}, {"message", "block not found"}};
   }
+  if (IsDeletedRecord(*block)) {
+    return nlohmann::json{{"status", "deleted"}, {"block", *block}};
+  }
   return nlohmann::json{{"block", *block}};
 }
 
 nlohmann::json KnowledgeStore::ResolveHead(const std::string& knowledge_id) const {
   const auto head = repository_->GetJson("heads:" + knowledge_id);
+  if (head.has_value()) {
+    const std::string block_id = head->value("head_block_id", std::string{});
+    const auto block = block_id.empty() ? std::optional<nlohmann::json>{}
+                                        : repository_->GetJson("blocks:" + block_id);
+    if (!block.has_value() || IsDeletedRecord(*block)) {
+      return nlohmann::json{{"head", nullptr}};
+    }
+  }
   return nlohmann::json{{"head", head.has_value() ? *head : nlohmann::json(nullptr)}};
 }
 
@@ -171,7 +193,8 @@ nlohmann::json KnowledgeStore::UpdateHead(
     throw std::runtime_error("head_block_id is required");
   }
   const auto block_payload = ReadBlock(head_block_id);
-  if (block_payload.contains("error")) {
+  if (block_payload.contains("error") ||
+      block_payload.value("status", std::string{}) == "deleted") {
     throw std::runtime_error("head block does not exist");
   }
   const auto block = block_payload.at("block");
@@ -224,16 +247,304 @@ nlohmann::json KnowledgeStore::WriteRelation(const nlohmann::json& payload) {
   return nlohmann::json{{"relation", relation_json}, {"event_sequence", sequence}};
 }
 
+nlohmann::json KnowledgeStore::DeleteRelation(
+    const std::string& relation_id,
+    const nlohmann::json& payload) {
+  if (relation_id.empty()) {
+    throw std::runtime_error("relation_id is required");
+  }
+
+  nlohmann::json deleted = nlohmann::json::array();
+  rocksdb::WriteBatch batch;
+  for (const auto& [key, relation] : repository_->ScanJson("edges_out:")) {
+    if (relation.value("relation_id", std::string{}) != relation_id) {
+      continue;
+    }
+    batch.Delete(key);
+    const std::string from = relation.value("from_block_id", std::string{});
+    const std::string to = relation.value("to_block_id", std::string{});
+    const std::string type = relation.value("type", std::string{});
+    batch.Delete("edges_in:" + to + ":" + type + ":" + from + ":" + relation_id);
+    auto tombstone = relation;
+    tombstone["deleted"] = true;
+    tombstone["deleted_at"] = UtcNow();
+    tombstone["deleted_by"] = payload.value("deleted_by", std::string("naim-knowledged"));
+    tombstone["delete_reason"] = payload.value("reason", std::string{});
+    batch.Put("tombstones:relations:" + relation_id, tombstone.dump());
+    deleted.push_back(tombstone);
+  }
+
+  if (deleted.empty()) {
+    return nlohmann::json{{"error", "not_found"}, {"message", "relation not found"}};
+  }
+
+  repository_->Write(batch, "delete knowledge relation");
+  const int sequence = AppendEvent(
+      "relation.deleted",
+      {},
+      {},
+      nlohmann::json{{"relation_id", relation_id}, {"reason", payload.value("reason", std::string{})}});
+  return nlohmann::json{
+      {"status", "deleted"},
+      {"relation_id", relation_id},
+      {"relations", deleted},
+      {"event_sequence", sequence},
+  };
+}
+
+nlohmann::json KnowledgeStore::DeleteBlock(
+    const std::string& block_id,
+    const nlohmann::json& payload) {
+  const auto current = repository_->GetJson("blocks:" + block_id);
+  if (!current.has_value()) {
+    return nlohmann::json{{"error", "not_found"}, {"message", "block not found"}};
+  }
+
+  auto block = *current;
+  const std::string knowledge_id = block.value("knowledge_id", std::string{});
+  block["deleted"] = true;
+  block["status"] = "deleted";
+  block["deleted_at"] = UtcNow();
+  block["deleted_by"] = payload.value("deleted_by", std::string("naim-knowledged"));
+  block["delete_reason"] = payload.value("reason", std::string{});
+
+  rocksdb::WriteBatch batch;
+  batch.Put("blocks:" + block_id, block.dump());
+  batch.Put("tombstones:blocks:" + block_id, block.dump());
+  for (const auto& [key, value] : repository_->ScanRaw("terms:")) {
+    if (KeyEndsWith(key, ":" + block_id)) {
+      batch.Delete(key);
+    }
+  }
+  for (const auto& [key, value] : repository_->ScanRaw("acl:")) {
+    if (KeyEndsWith(key, ":" + block_id)) {
+      batch.Delete(key);
+    }
+  }
+  for (const auto& [key, relation] : repository_->ScanJson("edges_out:")) {
+    const std::string from = relation.value("from_block_id", std::string{});
+    const std::string to = relation.value("to_block_id", std::string{});
+    if (from != block_id && to != block_id) {
+      continue;
+    }
+    const std::string type = relation.value("type", std::string{});
+    const std::string relation_id = relation.value("relation_id", std::string{});
+    batch.Delete(key);
+    batch.Delete("edges_in:" + to + ":" + type + ":" + from + ":" + relation_id);
+    auto tombstone = relation;
+    tombstone["deleted"] = true;
+    tombstone["deleted_at"] = block["deleted_at"];
+    tombstone["deleted_by"] = block["deleted_by"];
+    tombstone["delete_reason"] = "endpoint block deleted";
+    batch.Put("tombstones:relations:" + relation_id, tombstone.dump());
+  }
+  for (const auto& [key, head] : repository_->ScanJson("heads:")) {
+    if (head.value("head_block_id", std::string{}) == block_id ||
+        head.value("knowledge_id", std::string{}) == knowledge_id) {
+      batch.Delete(key);
+    }
+  }
+  repository_->Write(batch, "delete knowledge block");
+  const int sequence = AppendEvent(
+      "block.deleted",
+      knowledge_id.empty() ? std::vector<std::string>{} : std::vector<std::string>{knowledge_id},
+      {block_id},
+      nlohmann::json{{"block_id", block_id}, {"knowledge_id", knowledge_id}, {"reason", payload.value("reason", std::string{})}});
+  return nlohmann::json{
+      {"status", "deleted"},
+      {"block_id", block_id},
+      {"knowledge_id", knowledge_id},
+      {"event_sequence", sequence},
+  };
+}
+
+nlohmann::json KnowledgeStore::DeleteSource(
+    const std::string& source_ref,
+    const nlohmann::json& payload) {
+  if (source_ref.empty()) {
+    throw std::runtime_error("source id is required");
+  }
+
+  std::optional<std::string> source_key;
+  std::optional<nlohmann::json> source_record;
+  for (const auto& [key, value] : repository_->ScanJson("sources:")) {
+    if (key == "sources:" + source_ref ||
+        value.value("source_key", std::string{}) == source_ref ||
+        value.value("block_id", std::string{}) == source_ref ||
+        value.value("source_ref", std::string{}) == source_ref) {
+      source_key = value.value("source_key", key.substr(std::string("sources:").size()));
+      source_record = value;
+      break;
+    }
+  }
+  if (!source_key.has_value() || !source_record.has_value()) {
+    return nlohmann::json{{"error", "not_found"}, {"message", "source not found"}};
+  }
+
+  const std::string block_id = source_record->value("block_id", std::string{});
+  auto block_result = block_id.empty()
+                          ? nlohmann::json{{"status", "not_applicable"}}
+                          : DeleteBlock(block_id, payload);
+
+  rocksdb::WriteBatch batch;
+  batch.Delete("sources:" + *source_key);
+  for (const auto& [key, value] : repository_->ScanRaw("source_hash:")) {
+    if (key.find(":" + *source_key) != std::string::npos) {
+      batch.Delete(key);
+    }
+  }
+  for (const auto& [key, chunk] : repository_->ScanJson("source_chunks:")) {
+    if (chunk.value("source_key", std::string{}) == *source_key ||
+        chunk.value("block_id", std::string{}) == block_id) {
+      batch.Delete(key);
+    }
+  }
+  for (const auto& [key, claim] : repository_->ScanJson("source_claims:")) {
+    if (claim.value("source_key", std::string{}) == *source_key ||
+        claim.value("block_id", std::string{}) == block_id) {
+      batch.Delete(key);
+    }
+  }
+  auto tombstone = *source_record;
+  tombstone["deleted"] = true;
+  tombstone["deleted_at"] = UtcNow();
+  tombstone["deleted_by"] = payload.value("deleted_by", std::string("naim-knowledged"));
+  tombstone["delete_reason"] = payload.value("reason", std::string{});
+  batch.Put("tombstones:sources:" + *source_key, tombstone.dump());
+  repository_->Write(batch, "delete knowledge source");
+  const int sequence = AppendEvent(
+      "source.deleted",
+      {},
+      block_id.empty() ? std::vector<std::string>{} : std::vector<std::string>{block_id},
+      nlohmann::json{{"source_key", *source_key}, {"block_id", block_id}, {"reason", payload.value("reason", std::string{})}});
+  return nlohmann::json{
+      {"status", "deleted"},
+      {"source_key", *source_key},
+      {"source_block_id", block_id},
+      {"block_delete", block_result},
+      {"event_sequence", sequence},
+  };
+}
+
+nlohmann::json KnowledgeStore::Cleanup(const nlohmann::json& payload) {
+  const bool apply = payload.value("apply", true);
+  int purged_blocks = 0;
+  int purged_relations = 0;
+  int purged_sources = 0;
+  int purged_index_keys = 0;
+  rocksdb::WriteBatch batch;
+
+  for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
+    if (!IsDeletedRecord(block)) {
+      continue;
+    }
+    const std::string block_id = block.value("block_id", key.substr(std::string("blocks:").size()));
+    if (apply) {
+      batch.Delete(key);
+    }
+    ++purged_blocks;
+    for (const auto& [index_key, value] : repository_->ScanRaw("terms:")) {
+      if (KeyEndsWith(index_key, ":" + block_id)) {
+        if (apply) {
+          batch.Delete(index_key);
+        }
+        ++purged_index_keys;
+      }
+    }
+    for (const auto& [acl_key, value] : repository_->ScanRaw("acl:")) {
+      if (KeyEndsWith(acl_key, ":" + block_id)) {
+        if (apply) {
+          batch.Delete(acl_key);
+        }
+        ++purged_index_keys;
+      }
+    }
+    for (const auto& [head_key, head] : repository_->ScanJson("heads:")) {
+      if (head.value("head_block_id", std::string{}) == block_id) {
+        if (apply) {
+          batch.Delete(head_key);
+        }
+        ++purged_index_keys;
+      }
+    }
+  }
+
+  for (const auto& [key, source] : repository_->ScanJson("tombstones:sources:")) {
+    const std::string source_key = source.value("source_key", key.substr(std::string("tombstones:sources:").size()));
+    if (apply) {
+      batch.Delete("sources:" + source_key);
+    }
+    ++purged_sources;
+    for (const auto& [hash_key, value] : repository_->ScanRaw("source_hash:")) {
+      if (hash_key.find(":" + source_key) != std::string::npos) {
+        if (apply) {
+          batch.Delete(hash_key);
+        }
+        ++purged_index_keys;
+      }
+    }
+  }
+
+  for (const auto& [key, relation] : repository_->ScanJson("tombstones:relations:")) {
+    const std::string relation_id = relation.value("relation_id", key.substr(std::string("tombstones:relations:").size()));
+    const std::string from = relation.value("from_block_id", std::string{});
+    const std::string to = relation.value("to_block_id", std::string{});
+    const std::string type = relation.value("type", std::string{});
+    if (apply) {
+      batch.Delete("edges_out:" + from + ":" + type + ":" + to + ":" + relation_id);
+      batch.Delete("edges_in:" + to + ":" + type + ":" + from + ":" + relation_id);
+    }
+    ++purged_relations;
+  }
+
+  if (apply) {
+    repository_->Write(batch, "cleanup knowledge vault tombstones");
+  }
+  const int sequence = AppendEvent(
+      "cleanup.completed",
+      {},
+      {},
+      nlohmann::json{
+          {"apply", apply},
+          {"purged_blocks", purged_blocks},
+          {"purged_relations", purged_relations},
+          {"purged_sources", purged_sources},
+          {"purged_index_keys", purged_index_keys},
+      });
+  return nlohmann::json{
+      {"status", apply ? "completed" : "planned"},
+      {"purged_blocks", purged_blocks},
+      {"purged_relations", purged_relations},
+      {"purged_sources", purged_sources},
+      {"purged_index_keys", purged_index_keys},
+      {"event_sequence", sequence},
+  };
+}
+
 nlohmann::json KnowledgeStore::Neighbors(const std::string& block_id) const {
   nlohmann::json items = nlohmann::json::array();
   std::set<std::string> seen;
   for (const auto& [key, value] : repository_->ScanJson("edges_out:" + block_id + ":")) {
+    if (IsDeletedRecord(value)) {
+      continue;
+    }
+    const auto to = repository_->GetJson("blocks:" + value.value("to_block_id", std::string{}));
+    if (!to.has_value() || IsDeletedRecord(*to)) {
+      continue;
+    }
     const std::string relation_id = value.value("relation_id", key);
     if (seen.insert(relation_id).second) {
       items.push_back(value);
     }
   }
   for (const auto& [key, value] : repository_->ScanJson("edges_in:" + block_id + ":")) {
+    if (IsDeletedRecord(value)) {
+      continue;
+    }
+    const auto from = repository_->GetJson("blocks:" + value.value("from_block_id", std::string{}));
+    if (!from.has_value() || IsDeletedRecord(*from)) {
+      continue;
+    }
     const std::string relation_id = value.value("relation_id", key);
     if (seen.insert(relation_id).second) {
       items.push_back(value);
@@ -267,6 +578,9 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
   const auto query_terms = QueryTerms(query);
   std::vector<std::pair<int, nlohmann::json>> scored_results;
   for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
+    if (IsDeletedRecord(block)) {
+      continue;
+    }
     const std::string knowledge_id = block.value("knowledge_id", std::string{});
     if (!StringSetContains(selected_filter, knowledge_id)) {
       continue;
@@ -283,7 +597,7 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
       const std::string neighbor_id =
           from == block.value("block_id", std::string{}) ? to : from;
       const auto neighbor = repository_->GetJson("blocks:" + neighbor_id);
-      if (neighbor.has_value()) {
+      if (neighbor.has_value() && !IsDeletedRecord(*neighbor)) {
         score += TokenSearchScore(lowered_query, query_terms, BlockSearchText(*neighbor), 3);
       }
     }
@@ -1058,6 +1372,9 @@ nlohmann::json KnowledgeStore::RunRepair(const nlohmann::json& payload) {
     }
   }
   for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
+    if (IsDeletedRecord(block)) {
+      continue;
+    }
     const std::string block_id = block.value("block_id", std::string{});
     if (block_id.empty()) {
       continue;
@@ -1158,10 +1475,16 @@ nlohmann::json KnowledgeStore::MarkdownExport(const nlohmann::json& payload) con
   nlohmann::json warnings = nlohmann::json::array();
   std::map<std::string, std::string> titles;
   for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
+    if (IsDeletedRecord(block)) {
+      continue;
+    }
     titles[block.value("block_id", std::string{})] =
         block.value("title", block.value("knowledge_id", std::string{}));
   }
   for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
+    if (IsDeletedRecord(block)) {
+      continue;
+    }
     const auto scope_ids = block.value("scope_ids", nlohmann::json::array());
     if (!ScopeAllowed(scope_ids, requested_scopes)) {
       warnings.push_back(nlohmann::json{
@@ -1351,6 +1674,9 @@ nlohmann::json KnowledgeStore::GraphNeighborhood(const nlohmann::json& payload) 
       }
     }
     for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
+      if (IsDeletedRecord(block)) {
+        continue;
+      }
       if (block.value("knowledge_id", std::string{}) == knowledge_id) {
         const std::string block_id = block.value("block_id", std::string{});
         if (!block_id.empty()) {
@@ -1371,7 +1697,7 @@ nlohmann::json KnowledgeStore::GraphNeighborhood(const nlohmann::json& payload) 
         continue;
       }
       const auto block = ReadBlock(block_id);
-      if (!block.contains("error")) {
+      if (!block.contains("error") && block.value("status", std::string{}) != "deleted") {
         nodes.push_back(block.value("block", nlohmann::json::object()));
       }
       const auto neighbors = Neighbors(block_id).value("neighbors", nlohmann::json::array());

@@ -1,6 +1,7 @@
 #include "http/controller_http_router.h"
 
 #include <cctype>
+#include <string_view>
 
 #include "infra/controller_action.h"
 #include "http/controller_http_server_support.h"
@@ -127,10 +128,21 @@ int InteractionErrorStatusCode(const InteractionValidationError& error) {
 }  // namespace
 
 bool ControllerHttpRouter::IsKnowledgeVaultRequest(const std::string& path) {
-  return path == "/api/v1/knowledge-vault/status" ||
-         ControllerHttpServerSupport::StartsWithPath(
-             path,
-             "/api/v1/knowledge-vault/");
+  if (path == "/api/v1/knowledge-vault/status" ||
+      ControllerHttpServerSupport::StartsWithPath(path, "/api/v1/knowledge-vault/")) {
+    return true;
+  }
+  constexpr std::string_view kPlanePrefix = "/api/v1/planes/";
+  constexpr std::string_view kPlaneKnowledgeSegment = "/knowledge-vault";
+  if (!ControllerHttpServerSupport::StartsWithPath(path, std::string(kPlanePrefix))) {
+    return false;
+  }
+  const auto segment = path.find(std::string(kPlaneKnowledgeSegment), kPlanePrefix.size());
+  if (segment == std::string::npos) {
+    return false;
+  }
+  const auto end = segment + kPlaneKnowledgeSegment.size();
+  return end == path.size() || path[end] == '/';
 }
 
 ControllerHttpRouter::ControllerHttpRouter(

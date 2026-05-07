@@ -339,6 +339,7 @@ install_args=(
   --with-hostd
   --listen-port "${listen_port}"
   --node "${node_name}"
+  --storage-root "${storage_root}"
 )
 if [[ "${with_web_ui}" == "yes" ]]; then
   install_args+=(--with-web-ui)

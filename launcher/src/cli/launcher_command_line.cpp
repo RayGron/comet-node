@@ -46,9 +46,9 @@ void LauncherCommandLine::PrintUsage(std::ostream& out) const {
       << "  naim-node version\n"
       << "  naim-node doctor [controller|hostd]\n"
       << "  naim-node run controller [--db <path>] [--artifacts-root <path>] [--listen-host <host>] [--listen-port <port>] [--internal-listen-host <host>] [--skills-factory-listen-port <port>] [--with-hostd] [--with-web-ui] [--hostd-compose-mode exec|skip]\n"
-      << "  naim-node run hostd [--node <name>] [--db <path>] [--controller <url>] [--controller-fingerprint <sha256>] [--runtime-root <path>] [--state-root <path>] [--compose-mode exec|skip]\n"
-      << "  naim-node install controller [--with-hostd] [--with-web-ui] [--listen-host <host>] [--listen-port <port>] [--internal-listen-host <host>] [--config <path>] [--state-root <path>] [--log-root <path>] [--systemd-dir <path>] [--skip-systemctl]\n"
-      << "  naim-node install hostd [--node <name>] [--controller <url>] [--controller-fingerprint <sha256>] [--onboarding-key <key>] [--transport out|in|hybrid] [--listen <addr>] [--config <path>] [--state-root <path>] [--log-root <path>] [--systemd-dir <path>] [--skip-systemctl]\n"
+      << "  naim-node run hostd [--node <name>] [--db <path>] [--controller <url>] [--controller-fingerprint <sha256>] [--storage-root <path>] [--runtime-root <path>] [--state-root <path>] [--compose-mode exec|skip]\n"
+      << "  naim-node install controller [--with-hostd] [--with-web-ui] [--listen-host <host>] [--listen-port <port>] [--internal-listen-host <host>] [--storage-root <path>] [--config <path>] [--state-root <path>] [--log-root <path>] [--systemd-dir <path>] [--skip-systemctl]\n"
+      << "  naim-node install hostd [--node <name>] [--controller <url>] [--controller-fingerprint <sha256>] [--onboarding-key <key>] [--transport out|in|hybrid] [--listen <addr>] [--storage-root <path>] [--config <path>] [--state-root <path>] [--log-root <path>] [--systemd-dir <path>] [--skip-systemctl]\n"
       << "  naim-node service status|start|stop|restart|uninstall|verify <controller|hostd|controller-hostd> [--systemd-dir <path>] [--skip-systemctl]\n"
       << "  naim-node connect-hostd --db <path> --node <name> --public-key <base64-or-file> [--address <hostd-url>] [--transport out|in|hybrid] [--controller-fingerprint <sha256>]\n";
 }

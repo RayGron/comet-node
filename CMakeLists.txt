@@ -1087,6 +1087,17 @@ target_link_libraries(naim-hostd-local-state-tests PRIVATE naim-common)
 naim_enable_strict_warnings(naim-hostd-local-state-tests)
 
 add_executable(
+  naim-generated-config-loader-tests
+  launcher/src/config/generated_config_loader.cpp
+  launcher/src/config/install_layout.cpp
+  launcher/src/config/generated_config_loader_tests.cpp
+)
+target_include_directories(
+  naim-generated-config-loader-tests PRIVATE common/include launcher/include)
+target_link_libraries(naim-generated-config-loader-tests PRIVATE naim-common)
+naim_enable_strict_warnings(naim-generated-config-loader-tests)
+
+add_executable(
   naim-hostd-command-support-tests
   hostd/src/app/hostd_command_support.cpp
   hostd/src/app/hostd_command_support_tests.cpp

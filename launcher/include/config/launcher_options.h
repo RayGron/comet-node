@@ -31,6 +31,7 @@ struct HostdInstallOptions {
   std::string transport_mode = "out";
   std::string execution_mode = "mixed";
   std::string listen_address;
+  std::string storage_root = "/var/lib/naim/storage";
   std::string compose_mode = "exec";
   int inventory_scan_interval_sec = 3600;
 };
@@ -52,6 +53,7 @@ struct ControllerRunOptions {
   std::string node_name = "local-hostd";
   fs::path runtime_root;
   fs::path state_root;
+  std::string storage_root;
   int hostd_poll_interval_sec = 2;
 };
 

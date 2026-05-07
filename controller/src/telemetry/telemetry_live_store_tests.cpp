@@ -346,6 +346,66 @@ void TestSqlitePersistenceReplayAndHealth() {
   std::cout << "ok: telemetry-live-store-sqlite-persistence-health\n";
 }
 
+void TestFastFramePreservesSlowDiskTelemetry() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  store.ResetForTests();
+  const auto now = CurrentMillis();
+  auto slow = MakeFrame("node-disk-sticky", "plane-disk-sticky", now);
+  slow.ttl_ms = 60000;
+  slow.lane = "full";
+  slow.disk.source = "hostd";
+  slow.disk.collected_at = slow.collected_at;
+  slow.disk.items.push_back(naim::DiskTelemetryRecord{
+      "storage-root",
+      "",
+      "node-disk-sticky",
+      "/srv/naim-storage",
+      "",
+      "",
+      "present",
+      "ok",
+      "",
+      200,
+      80,
+      120,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      false,
+      false,
+      false,
+      false,
+      {},
+  });
+  Expect(store.Upsert(slow), "slow disk frame should update");
+
+  auto fast = MakeFrame("node-disk-sticky", "plane-disk-sticky", now + 1);
+  fast.ttl_ms = 60000;
+  fast.lane = "fast";
+  fast.disk.items.clear();
+  Expect(store.Upsert(fast), "fast frame should update");
+
+  const auto snapshot = store.BuildSnapshot(std::string("plane-disk-sticky"), 0);
+  const auto disk_items = snapshot.at("nodes").at(0).at("disk").at("items");
+  Expect(disk_items.size() == 1, "fast frame should preserve latest slow disk item");
+  Expect(
+      disk_items.at(0).at("disk_name").get<std::string>() == "storage-root",
+      "preserved disk item should remain storage-root");
+  Expect(
+      disk_items.at(0).at("total_bytes").get<std::uint64_t>() == 200,
+      "preserved disk item should keep capacity");
+
+  store.ResetForTests();
+  std::cout << "ok: telemetry-live-store-fast-frame-preserves-disk\n";
+}
+
 void TestConfigurableRetentionAndMetrics() {
   auto& store = naim::controller::TelemetryLiveStore::Instance();
   store.ResetForTests();
@@ -606,6 +666,7 @@ int main() {
     TestPlaneAggregatesAndDownsampling();
     TestMultiPlaneNodeTelemetryIsPlaneScoped();
     TestSqlitePersistenceReplayAndHealth();
+    TestFastFramePreservesSlowDiskTelemetry();
     TestConfigurableRetentionAndMetrics();
     TestRecoveredTelemetryCountersDoNotDegradeHealth();
     TestQueueDelayBudgetTracksAdaptiveCadence();

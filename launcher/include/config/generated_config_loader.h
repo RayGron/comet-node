@@ -29,6 +29,7 @@ struct GeneratedHostdConfig {
   std::optional<std::string> transport_mode;
   std::optional<std::string> execution_mode;
   std::optional<std::string> listen_address;
+  std::optional<fs::path> storage_root;
   std::optional<fs::path> runtime_root;
   std::optional<fs::path> state_root;
   std::optional<std::string> compose_mode;

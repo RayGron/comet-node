@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -7,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include "app/hostd_reporting_support.h"
+#include "naim/runtime/runtime_status.h"
 
 namespace {
 
@@ -228,6 +230,28 @@ int main() {
       Expect(
           !observation.disk_telemetry_json.empty(),
           "observation should include disk telemetry payload");
+      const auto disk_snapshot =
+          naim::DeserializeDiskTelemetryJson(observation.disk_telemetry_json);
+      const auto storage_it = std::find_if(
+          disk_snapshot.items.begin(),
+          disk_snapshot.items.end(),
+          [](const naim::DiskTelemetryRecord& record) {
+            return record.disk_name == "storage-root";
+          });
+      Expect(
+          storage_it != disk_snapshot.items.end(),
+          "observation should include storage-root telemetry");
+      Expect(
+          storage_it->mount_point == temp_root.string(),
+          "storage-root telemetry should use configured storage root");
+      Expect(
+          storage_it->total_bytes > 0,
+          "storage-root telemetry should collect capacity for an existing non-mountpoint path");
+      const auto cpu_snapshot =
+          naim::DeserializeCpuTelemetryJson(observation.cpu_telemetry_json);
+      Expect(
+          cpu_snapshot.total_memory_bytes > 0,
+          "observation should include total memory bytes");
 
       fs::remove_all(temp_root, cleanup_error);
     }

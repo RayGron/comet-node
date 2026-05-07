@@ -18,7 +18,7 @@ HostdCliCommonRequest HostdCliRequestResolutionSupport::ResolveCommonRequest(
   HostdCliCommonRequest request;
   const auto state_request = ResolveNodeStateRequest(command_line, node_name);
   request.node_name = state_request.node_name;
-  request.storage_root = node_config.storage_root;
+  request.storage_root = command_line.storage_root().value_or(node_config.storage_root);
   request.runtime_root = command_line.runtime_root();
   request.state_root = state_request.state_root;
   return request;

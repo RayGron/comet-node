@@ -23,6 +23,7 @@ class HostdCommandLine {
   std::optional<std::string> db() const;
   std::optional<std::string> controller() const;
   std::optional<std::string> artifacts_root() const;
+  std::optional<std::string> storage_root() const;
   std::optional<std::string> runtime_root() const;
   std::optional<std::string> compose_mode_raw() const;
   std::optional<std::string> state_root() const;

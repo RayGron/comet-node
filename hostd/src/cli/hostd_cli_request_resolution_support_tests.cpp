@@ -142,6 +142,29 @@ int main() {
       std::cout << "ok: hostd-cli-request-resolution-assignment\n";
     }
 
+    {
+      char command[] = "report-observed-state";
+      char node_flag[] = "--node";
+      char node_value[] = "delta";
+      char storage_flag[] = "--storage-root";
+      char storage_value[] = "/tmp/naim-storage-override";
+      char* argv[] = {
+          command,
+          command,
+          node_flag,
+          node_value,
+          storage_flag,
+          storage_value,
+      };
+      const naim::hostd::HostdCommandLine command_line(6, argv);
+      const auto request =
+          support.ResolveAssignmentRequest(command_line, node_config, "delta");
+      Expect(
+          request.common.storage_root == "/tmp/naim-storage-override",
+          "explicit storage root should override node config");
+      std::cout << "ok: hostd-cli-request-resolution-storage-root-override\n";
+    }
+
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';

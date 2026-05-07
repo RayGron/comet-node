@@ -117,6 +117,8 @@ GeneratedConfig GeneratedConfigLoader::Load(const fs::path& path) const {
         config.hostd.execution_mode = UnquoteTomlValue(raw_value);
       } else if (key == "listen_address") {
         config.hostd.listen_address = UnquoteTomlValue(raw_value);
+      } else if (key == "storage_root") {
+        config.hostd.storage_root = fs::path(UnquoteTomlValue(raw_value));
       } else if (key == "runtime_root") {
         config.hostd.runtime_root = fs::path(UnquoteTomlValue(raw_value));
       } else if (key == "state_root") {

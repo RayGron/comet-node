@@ -27,6 +27,9 @@ bool TelemetryFrameRingBuffer::Upsert(
     buffer.history.push_back(std::move(frame));
     nodes.push_back(std::move(buffer));
   } else {
+    if (frame.disk.items.empty() && !it->latest.disk.items.empty()) {
+      frame.disk = it->latest.disk;
+    }
     it->latest = frame;
     it->history.push_back(std::move(frame));
   }

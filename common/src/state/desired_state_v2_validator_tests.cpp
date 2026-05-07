@@ -375,6 +375,24 @@ int main() {
                {"default_response_language", "es"},
                {"follow_user_language", true},
                {"supported_response_languages", json::array({"es", "en"})},
+               {"completion_policy",
+                {
+                    {"response_mode", "normal"},
+                    {"max_tokens", 2048},
+                    {"max_continuations", 0},
+                    {"max_total_completion_tokens", 2048},
+                    {"max_elapsed_time_ms", 90000},
+                }},
+               {"long_completion_policy",
+                {
+                    {"response_mode", "very_long"},
+                    {"max_tokens", 2048},
+                    {"max_continuations", 6},
+                    {"max_total_completion_tokens", 12288},
+                    {"max_elapsed_time_ms", 180000},
+                    {"semantic_goal",
+                     "complete the requested artifact fully before emitting [[TASK_COMPLETE]]"},
+                }},
            }},
           {"runtime",
            {
@@ -397,6 +415,14 @@ int main() {
       Expect(loaded->interaction.has_value(), "state-file-v2-thinking: interaction missing");
       Expect(loaded->interaction->thinking_enabled,
              "state-file-v2-thinking: thinking_enabled should survive apply-state-file path");
+      Expect(loaded->interaction->completion_policy.has_value(),
+             "state-file-v2-thinking: completion_policy should survive v2 render");
+      Expect(loaded->interaction->completion_policy->max_tokens == 2048,
+             "state-file-v2-thinking: completion_policy max_tokens should survive v2 render");
+      Expect(loaded->interaction->long_completion_policy.has_value(),
+             "state-file-v2-thinking: long_completion_policy should survive v2 render");
+      Expect(loaded->interaction->long_completion_policy->max_total_completion_tokens == 12288,
+             "state-file-v2-thinking: long_completion_policy budget should survive v2 render");
       std::cout << "ok: state-file-v2-thinking" << '\n';
     }
 

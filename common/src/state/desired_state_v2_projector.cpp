@@ -9,6 +9,7 @@
 
 #include "naim/state/desired_state_placement_resolver.h"
 #include "naim/state/desired_state_v2_projector_support.h"
+#include "naim/state/state_json_settings_codecs.h"
 #include "naim/state/worker_group_topology.h"
 
 namespace naim {
@@ -299,29 +300,8 @@ void DesiredStateV2Projector::ProjectInteraction() {
     return;
   }
 
-  const auto& interaction = *state_.interaction;
-  nlohmann::json interaction_json = nlohmann::json::object();
-  if (interaction.image.has_value() && !interaction.image->empty()) {
-    interaction_json["image"] = *interaction.image;
-  }
-  if (interaction.system_prompt.has_value() && !interaction.system_prompt->empty()) {
-    interaction_json["system_prompt"] = *interaction.system_prompt;
-  }
-  interaction_json["thinking_enabled"] = interaction.thinking_enabled;
-  if (interaction.default_temperature.has_value()) {
-    interaction_json["default_temperature"] = *interaction.default_temperature;
-  }
-  if (interaction.default_top_p.has_value()) {
-    interaction_json["default_top_p"] = *interaction.default_top_p;
-  }
-  if (!interaction.default_response_language.empty()) {
-    interaction_json["default_response_language"] = interaction.default_response_language;
-  }
-  interaction_json["follow_user_language"] = interaction.follow_user_language;
-  if (!interaction.supported_response_languages.empty()) {
-    interaction_json["supported_response_languages"] =
-        interaction.supported_response_languages;
-  }
+  nlohmann::json interaction_json =
+      StateJsonSettingsCodecs::ToJson(*state_.interaction);
   if (!interaction_json.empty()) {
     value_["interaction"] = std::move(interaction_json);
   }

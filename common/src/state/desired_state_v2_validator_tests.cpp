@@ -423,6 +423,15 @@ int main() {
              "state-file-v2-thinking: long_completion_policy should survive v2 render");
       Expect(loaded->interaction->long_completion_policy->max_total_completion_tokens == 12288,
              "state-file-v2-thinking: long_completion_policy budget should survive v2 render");
+      const auto projected = json::parse(naim::SerializeDesiredStateV2Json(*loaded));
+      Expect(projected.at("interaction").at("completion_policy").at("max_tokens").get<int>() ==
+                 2048,
+             "state-file-v2-thinking: completion_policy should survive v2 projection");
+      Expect(projected.at("interaction")
+                 .at("long_completion_policy")
+                 .at("max_total_completion_tokens")
+                 .get<int>() == 12288,
+             "state-file-v2-thinking: long_completion_policy should survive v2 projection");
       std::cout << "ok: state-file-v2-thinking" << '\n';
     }
 

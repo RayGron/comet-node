@@ -13,6 +13,7 @@
 
 #include "naim/runtime/infer_runtime_config.h"
 #include "naim/state/desired_state_v2_validator.h"
+#include "naim/state/state_json_settings_codecs.h"
 #include "naim/state/worker_group_topology.h"
 
 namespace naim {
@@ -510,37 +511,21 @@ void DesiredStateV2Renderer::RenderInteraction() {
     return;
   }
 
-  InteractionSettings interaction;
   const auto& interaction_json = value_.at("interaction");
-  if (interaction_json.contains("image") && interaction_json.at("image").is_string()) {
-    interaction.image = interaction_json.at("image").get<std::string>();
+  InteractionSettings interaction =
+      StateJsonSettingsCodecs::InteractionSettingsFromJson(interaction_json);
+  if (interaction.default_response_language.empty()) {
+    interaction.default_response_language = "en";
   }
-  if (interaction_json.contains("system_prompt") && interaction_json.at("system_prompt").is_string()) {
-    interaction.system_prompt = interaction_json.at("system_prompt").get<std::string>();
-  }
-  interaction.thinking_enabled =
-      interaction_json.value("thinking_enabled", interaction.thinking_enabled);
-  if (interaction_json.contains("default_temperature") &&
-      !interaction_json.at("default_temperature").is_null()) {
-    interaction.default_temperature =
-        interaction_json.at("default_temperature").get<double>();
-  }
-  if (interaction_json.contains("default_top_p") &&
-      !interaction_json.at("default_top_p").is_null()) {
-    interaction.default_top_p = interaction_json.at("default_top_p").get<double>();
-  }
-  interaction.default_response_language =
-      interaction_json.value("default_response_language", std::string("en"));
-  interaction.follow_user_language = interaction_json.value("follow_user_language", true);
-  if (interaction_json.contains("supported_response_languages") &&
-      interaction_json.at("supported_response_languages").is_array()) {
-    interaction.supported_response_languages =
-        interaction_json.at("supported_response_languages").get<std::vector<std::string>>();
-  } else {
+  if (interaction.supported_response_languages.empty()) {
     interaction.supported_response_languages = {"en", "es", "pt", "zh"};
   }
-  interaction.completion_policy = DefaultCompletionPolicy();
-  interaction.long_completion_policy = DefaultLongCompletionPolicy();
+  if (!interaction.completion_policy.has_value()) {
+    interaction.completion_policy = DefaultCompletionPolicy();
+  }
+  if (!interaction.long_completion_policy.has_value()) {
+    interaction.long_completion_policy = DefaultLongCompletionPolicy();
+  }
   state_.interaction = std::move(interaction);
 }
 

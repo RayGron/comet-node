@@ -15,6 +15,8 @@
 namespace naim::controller {
 namespace {
 
+constexpr int kHostdRuntimeProxyTimeoutMs = 120000;
+
 bool IsSelectedStorageNode(const ModelLibraryNodeSummary& summary) {
   return summary.registration_state == "registered" &&
          summary.session_state == "connected" &&
@@ -526,7 +528,7 @@ HttpResponse KnowledgeVaultService::SendHostdRuntimeProxy(
   const auto started_at = std::chrono::steady_clock::now();
   while (std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now() - started_at)
-             .count() < 30000) {
+             .count() < kHostdRuntimeProxyTimeoutMs) {
     const auto current = store.LoadHostAssignment(assignment_id);
     if (!current.has_value()) {
       return BuildJsonResponse(

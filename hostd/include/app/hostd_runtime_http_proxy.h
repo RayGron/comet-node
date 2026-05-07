@@ -41,6 +41,9 @@ class HostdRuntimeHttpProxy final {
   static bool IsAllowedRuntimeProxyPath(
       const std::string& method,
       const std::string& path);
+#ifdef NAIM_HOSTD_RUNTIME_HTTP_PROXY_TESTING
+ public:
+#endif
   static bool IsAllowedProxyPath(
       HostdRuntimeProxyPolicy policy,
       const std::string& method,

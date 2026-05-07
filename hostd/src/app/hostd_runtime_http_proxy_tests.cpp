@@ -48,10 +48,32 @@ void TestChunkedRuntimeResponseIsDecoded() {
       "decoded proxy response should not retain transfer-encoding");
 }
 
+void TestKnowledgeVaultPolicyAllowsDeleteRoutes() {
+  Expect(
+      naim::hostd::HostdRuntimeHttpProxy::IsAllowedProxyPath(
+          naim::hostd::HostdRuntimeProxyPolicy::KnowledgeVault,
+          "DELETE",
+          "/v1/blocks/kv-delete-test"),
+      "knowledge vault proxy should allow block delete routes");
+  Expect(
+      naim::hostd::HostdRuntimeHttpProxy::IsAllowedProxyPath(
+          naim::hostd::HostdRuntimeProxyPolicy::KnowledgeVault,
+          "DELETE",
+          "/v1/relations/rel-delete-test"),
+      "knowledge vault proxy should allow relation delete routes");
+  Expect(
+      naim::hostd::HostdRuntimeHttpProxy::IsAllowedProxyPath(
+          naim::hostd::HostdRuntimeProxyPolicy::KnowledgeVault,
+          "DELETE",
+          "/v1/sources/source-delete-test"),
+      "knowledge vault proxy should allow source delete routes");
+}
+
 }  // namespace
 
 int main() {
   TestChunkedRuntimeResponseIsDecoded();
+  TestKnowledgeVaultPolicyAllowsDeleteRoutes();
   std::cout << "hostd runtime HTTP proxy tests passed\n";
   return 0;
 }

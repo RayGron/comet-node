@@ -200,7 +200,8 @@ bool HostdRuntimeHttpProxy::IsAllowedProxyPath(
     if (method == "GET" && route == "/health") {
       return true;
     }
-    if ((method == "GET" || method == "POST" || method == "PUT") &&
+    if ((method == "GET" || method == "POST" || method == "PUT" ||
+         method == "DELETE") &&
         route.rfind("/v1/", 0) == 0) {
       return true;
     }

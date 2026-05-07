@@ -705,7 +705,7 @@ int LauncherRunService::RunHostdLoop(
     }
     if (!options.controller_url.empty() && apply_session_owner_active.load()) {
       next_inventory_report_at =
-          now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
+          now + std::chrono::seconds(2);
       return;
     }
     const int report_code = process_runner_.RunCommand(build_report_args());

@@ -16,7 +16,14 @@ bool IsPlaneScopedKnowledgeRoute(const std::string& path) {
          suffix == "context" ||
          suffix == "query-route" ||
          suffix == "source-ingest" ||
-         suffix == "graph-neighborhood";
+         suffix == "cleanup" ||
+         suffix == "graph-neighborhood" ||
+         suffix == "overlays" ||
+         suffix == "markdown-import" ||
+         suffix.rfind("blocks/", 0) == 0 ||
+         suffix.rfind("relations/", 0) == 0 ||
+         suffix.rfind("sources/", 0) == 0 ||
+         suffix.rfind("replica-merges", 0) == 0;
 }
 
 nlohmann::json SelectedKnowledgeIds(const naim::DesiredState& desired_state) {
@@ -74,6 +81,8 @@ std::optional<HttpResponse> KnowledgeVaultHttpService::HandleRequest(
         suffix.rfind("/replica-merges", 0) == 0 ||
         suffix.rfind("/reviews", 0) == 0 ||
         suffix.rfind("/repair", 0) == 0 ||
+        suffix.rfind("/cleanup", 0) == 0 ||
+        suffix.rfind("/sources", 0) == 0 ||
         suffix.rfind("/jobs", 0) == 0 ||
         suffix.rfind("/markdown-export", 0) == 0 ||
         suffix.rfind("/markdown-import", 0) == 0 ||
@@ -118,7 +127,8 @@ HttpRequest KnowledgeVaultHttpService::BuildPlaneScopedRequest(
   const std::string suffix = remainder.substr(separator);
   rewritten.path = "/api/v1" + suffix;
 
-  if (request.method != "POST" || !IsPlaneScopedKnowledgeRoute(rewritten.path)) {
+  const bool scoped_method = request.method == "POST" || request.method == "DELETE";
+  if (!scoped_method || !IsPlaneScopedKnowledgeRoute(rewritten.path)) {
     return rewritten;
   }
 
@@ -131,6 +141,7 @@ HttpRequest KnowledgeVaultHttpService::BuildPlaneScopedRequest(
   }
 
   body["plane_id"] = plane_name;
+  body["protected_plane"] = desired_state.protected_plane;
   const auto selected_ids = SelectedKnowledgeIds(desired_state);
   if (rewritten.path == "/api/v1/knowledge-vault/context" &&
       !selected_ids.empty() &&

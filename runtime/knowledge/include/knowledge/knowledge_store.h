@@ -15,6 +15,7 @@ class RocksDbJsonRepository;
 class KnowledgeStore final {
  public:
   explicit KnowledgeStore(std::filesystem::path store_path);
+  KnowledgeStore(std::filesystem::path store_path, bool protected_plane);
   ~KnowledgeStore();
 
   KnowledgeStore(const KnowledgeStore&) = delete;
@@ -27,6 +28,10 @@ class KnowledgeStore final {
   nlohmann::json ResolveHead(const std::string& knowledge_id) const;
   nlohmann::json UpdateHead(const std::string& knowledge_id, const nlohmann::json& payload);
   nlohmann::json WriteRelation(const nlohmann::json& payload);
+  nlohmann::json DeleteBlock(const std::string& block_id, const nlohmann::json& payload);
+  nlohmann::json DeleteRelation(const std::string& relation_id, const nlohmann::json& payload);
+  nlohmann::json DeleteSource(const std::string& source_ref, const nlohmann::json& payload);
+  nlohmann::json Cleanup(const nlohmann::json& payload);
   nlohmann::json Neighbors(const std::string& block_id) const;
   nlohmann::json Search(const nlohmann::json& payload) const;
   nlohmann::json Context(const nlohmann::json& payload) const;
@@ -67,8 +72,13 @@ class KnowledgeStore final {
   static std::string JsonText(const nlohmann::json& value);
   static std::string NormalizeTerm(const std::string& value);
   static std::string MarkdownEscape(const std::string& value);
+  bool ProtectedPlaneRequested(const nlohmann::json& payload) const;
+  nlohmann::json BuildProtectedReplicaMergeSkip(
+      const std::string& plane_id,
+      const std::string& capsule_id);
 
   std::unique_ptr<RocksDbJsonRepository> repository_;
+  bool protected_plane_ = false;
 };
 
 }  // namespace naim::knowledge_runtime

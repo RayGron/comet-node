@@ -15,10 +15,10 @@ void HostdCommandLine::PrintUsage(std::ostream& out) const {
       << "  naim-hostd show-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>] [--config <path>]\n"
       << "  naim-hostd show-local-state --node <node-name> [--state-root <path>]\n"
       << "  naim-hostd show-runtime-status --node <node-name> [--state-root <path>]\n"
-      << "  naim-hostd report-observed-state --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--state-root <path>]\n"
-      << "  naim-hostd report-telemetry --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--state-root <path>] [--watch diagnostic] [--interval-ms <ms>] [--ttl-ms <ms>]\n"
-      << "  naim-hostd apply-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n"
-      << "  naim-hostd apply-next-assignment --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n";
+      << "  naim-hostd report-observed-state --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--storage-root <path>] [--state-root <path>]\n"
+      << "  naim-hostd report-telemetry --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--storage-root <path>] [--state-root <path>] [--watch diagnostic] [--interval-ms <ms>] [--ttl-ms <ms>]\n"
+      << "  naim-hostd apply-state-ops --node <node-name> [--db <path>] [--artifacts-root <path>] [--storage-root <path>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n"
+      << "  naim-hostd apply-next-assignment --node <node-name> [--db <path> | --controller <url>] [--host-private-key <path>] [--controller-fingerprint <sha256>] [--onboarding-key <token>] [--storage-root <path>] [--runtime-root <path>] [--state-root <path>] [--compose-mode skip|exec] [--config <path>]\n";
 }
 
 bool HostdCommandLine::HasCommand() const {
@@ -43,6 +43,10 @@ std::optional<std::string> HostdCommandLine::controller() const {
 
 std::optional<std::string> HostdCommandLine::artifacts_root() const {
   return FindOptionValue("--artifacts-root");
+}
+
+std::optional<std::string> HostdCommandLine::storage_root() const {
+  return FindOptionValue("--storage-root");
 }
 
 std::optional<std::string> HostdCommandLine::runtime_root() const {

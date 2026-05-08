@@ -10,6 +10,8 @@
 #include <stdexcept>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "naim/core/platform_compat.h"
 #include "naim/security/crypto_utils.h"
 #include "naim/state/sqlite_store.h"
@@ -101,6 +103,8 @@ void LauncherInstallService::InstallController(
   options.node_name = command_line.FindFlagValue("--node").value_or(options.node_name);
   options.with_hostd = command_line.HasFlag("--with-hostd");
   options.with_web_ui = command_line.HasFlag("--with-web-ui");
+  const std::string storage_root =
+      command_line.FindFlagValue("--storage-root").value_or(HostdInstallOptions{}.storage_root);
   const bool skip_systemctl = command_line.HasFlag("--skip-systemctl");
 
   const auto keys_root = options.layout.state_root / "keys";
@@ -129,6 +133,7 @@ void LauncherInstallService::InstallController(
         "out",
         "mixed",
         "",
+        storage_root,
         options.compose_mode,
     };
   }
@@ -148,6 +153,7 @@ void LauncherInstallService::InstallController(
       host.execution_mode = "mixed";
       host.registration_state = "registered";
       host.session_state = "disconnected";
+      host.capabilities_json = nlohmann::json{{"storage_root", storage_root}}.dump();
       host.status_message = "prepared by naim-node install controller";
       store.UpsertRegisteredHost(host);
     }
@@ -181,6 +187,7 @@ void LauncherInstallService::InstallController(
                 "out",
                 "mixed",
                 "",
+                storage_root,
                 options.compose_mode,
             },
             options.layout.config_path));
@@ -224,6 +231,8 @@ void LauncherInstallService::InstallHostd(
   options.execution_mode =
       command_line.FindFlagValue("--execution-mode").value_or(options.execution_mode);
   options.listen_address = command_line.FindFlagValue("--listen").value_or("");
+  options.storage_root =
+      command_line.FindFlagValue("--storage-root").value_or(options.storage_root);
   options.compose_mode =
       command_line.FindFlagValue("--compose-mode").value_or(options.compose_mode);
   const bool skip_systemctl = command_line.HasFlag("--skip-systemctl");
@@ -382,6 +391,7 @@ std::string LauncherInstallService::RenderConfigToml(
     out << "transport_mode = \"" << hostd->transport_mode << "\"\n";
     out << "execution_mode = \"" << hostd->execution_mode << "\"\n";
     out << "listen_address = \"" << hostd->listen_address << "\"\n";
+    out << "storage_root = \"" << hostd->storage_root << "\"\n";
     out << "runtime_root = \"" << (hostd->layout.state_root / "runtime").string() << "\"\n";
     out << "state_root = \"" << (hostd->layout.state_root / "hostd-state").string() << "\"\n";
     out << "compose_mode = \"" << hostd->compose_mode << "\"\n";
@@ -456,6 +466,7 @@ std::string LauncherInstallService::RenderHostdUnit(
   out << "ExecStart=" << options.binary_path.string()
       << " run hostd"
       << " --node " << options.node_name
+      << " --storage-root " << options.storage_root
       << " --runtime-root " << (options.layout.state_root / "runtime").string()
       << " --state-root " << (options.layout.state_root / "hostd-state").string()
       << " --compose-mode " << options.compose_mode;

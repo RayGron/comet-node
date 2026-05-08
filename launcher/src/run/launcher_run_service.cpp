@@ -403,6 +403,11 @@ int LauncherRunService::RunController(
           .value_or(loaded_config && loaded_config->hostd.state_root.has_value()
                         ? loaded_config->hostd.state_root->string()
                         : install_layout_resolver_.DefaultHostdStateRoot().string());
+  options.storage_root =
+      command_line.FindFlagValue("--storage-root")
+          .value_or(loaded_config && loaded_config->hostd.storage_root.has_value()
+                        ? loaded_config->hostd.storage_root->string()
+                        : HostdInstallOptions{}.storage_root);
 
   const bool config_local_hostd_enabled =
       loaded_config && loaded_config->controller.local_hostd_enabled.value_or(false);
@@ -451,6 +456,7 @@ int LauncherRunService::RunController(
       install_args.insert(
           install_args.end(), {"--compose-mode", options.hostd_compose_mode});
       install_args.insert(install_args.end(), {"--node", options.node_name});
+      install_args.insert(install_args.end(), {"--storage-root", options.storage_root});
       if (options.with_hostd) {
         install_args.push_back("--with-hostd");
       }
@@ -516,7 +522,10 @@ int LauncherRunService::RunHostd(
                         ? loaded_config->hostd.state_root->string()
                         : install_layout_resolver_.DefaultHostdStateRoot().string());
   options.storage_root =
-      LoadStorageRootFromNodeConfig(command_line.FindFlagValue("--config"));
+      command_line.FindFlagValue("--storage-root")
+          .value_or(loaded_config && loaded_config->hostd.storage_root.has_value()
+                        ? loaded_config->hostd.storage_root->string()
+                        : LoadStorageRootFromNodeConfig(std::nullopt));
   options.host_private_key_path =
       command_line.FindFlagValue("--host-private-key")
           .value_or(loaded_config && loaded_config->hostd.host_private_key.has_value()
@@ -560,6 +569,7 @@ int LauncherRunService::RunHostd(
           install_args.end(), {"--controller-fingerprint", options.controller_fingerprint});
     }
     install_args.insert(install_args.end(), {"--node", options.node_name});
+    install_args.insert(install_args.end(), {"--storage-root", options.storage_root});
     install_args.insert(install_args.end(), {"--compose-mode", options.compose_mode});
     install_service_.InstallHostd(self_path, LauncherCommandLine(std::move(install_args)));
     std::cout << "service_mode=systemd\n";
@@ -591,6 +601,8 @@ int LauncherRunService::RunHostdLoop(
   constexpr int kTelemetryIntervalMs = 2000;
   constexpr int kTelemetryTtlMs = 10000;
   constexpr std::chrono::milliseconds kApplySessionHandoffGap(1500);
+  constexpr std::chrono::seconds kInventoryRetryWhenApplyActive(5);
+  constexpr std::chrono::seconds kInventoryRetryAfterFailure(10);
   auto next_inventory_report_at = std::chrono::steady_clock::now();
 #if defined(_WIN32)
   auto next_telemetry_report_at = std::chrono::steady_clock::now();
@@ -611,6 +623,8 @@ int LauncherRunService::RunHostdLoop(
         "apply-next-assignment",
         "--node",
         options.node_name,
+        "--storage-root",
+        options.storage_root,
         "--runtime-root",
         options.runtime_root.string(),
         "--state-root",
@@ -641,6 +655,8 @@ int LauncherRunService::RunHostdLoop(
         "report-observed-state",
         "--node",
         options.node_name,
+        "--storage-root",
+        options.storage_root,
         "--state-root",
         options.state_root.string(),
     };
@@ -670,6 +686,8 @@ int LauncherRunService::RunHostdLoop(
         "report-telemetry",
         "--node",
         options.node_name,
+        "--storage-root",
+        options.storage_root,
         "--state-root",
         options.state_root.string(),
         "--interval-ms",
@@ -704,13 +722,14 @@ int LauncherRunService::RunHostdLoop(
       return;
     }
     if (!options.controller_url.empty() && apply_session_owner_active.load()) {
-      next_inventory_report_at =
-          now + std::chrono::seconds(2);
+      next_inventory_report_at = now + kInventoryRetryWhenApplyActive;
       return;
     }
     const int report_code = process_runner_.RunCommand(build_report_args());
     if (report_code != 0) {
       std::cerr << "naim-node: hostd report-observed-state exit=" << report_code << "\n";
+      next_inventory_report_at = now + kInventoryRetryAfterFailure;
+      return;
     }
     next_inventory_report_at =
         now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
@@ -928,6 +947,7 @@ int LauncherRunService::RunHostdLoop(
       return wait_for_self_update_recreate();
     }
     if (apply_pid <= 0 && std::chrono::steady_clock::now() >= next_apply_spawn_at) {
+      run_report_if_due();
       apply_session_owner_active.store(true);
       const auto wait_until =
           std::chrono::steady_clock::now() + kApplySessionHandoffGap;
@@ -1107,12 +1127,14 @@ int LauncherRunService::RunControllerSupervisor(
     host.execution_mode = "mixed";
     host.registration_state = "registered";
     host.session_state = "disconnected";
+    host.capabilities_json = nlohmann::json{{"storage_root", options.storage_root}}.dump();
     host.status_message = "auto-registered local hostd by naim-node run controller";
     store.UpsertRegisteredHost(host);
 
     hostd_pid = static_cast<pid_t>(process_runner_.SpawnCommand({
         self_path.string(), "run", "hostd", "--controller", local_controller_url,
         "--controller-fingerprint", controller_fingerprint, "--node", options.node_name,
+        "--storage-root", options.storage_root,
         "--runtime-root", options.runtime_root.string(), "--state-root",
         options.state_root.string(), "--host-private-key",
         (options.state_root.parent_path() / "keys" / "hostd.key.b64").string(),

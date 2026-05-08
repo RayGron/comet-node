@@ -156,6 +156,38 @@ int main() {
   Expect(daily.value("status", std::string{}) == "completed", "daily reconcile should complete");
 
   store.WriteOverlay(nlohmann::json{
+      {"plane_id", "protected-plane"},
+      {"capsule_id", "private-cap"},
+      {"protected_plane", true},
+      {"change_type", "claim_add"},
+      {"base_versions", nlohmann::json::object()},
+      {"proposed_blocks",
+       nlohmann::json::array({nlohmann::json{
+           {"knowledge_id", "knowledge.protected-leak-check"},
+           {"title", "Protected Leak Check"},
+           {"body", "Protected plane knowledge must not enter the common vault."},
+           {"scope_ids", nlohmann::json::array({"scope.default"})},
+       }})},
+  });
+  const auto protected_merge = store.TriggerReplicaMerge(nlohmann::json{
+      {"plane_id", "protected-plane"},
+      {"capsule_id", "private-cap"},
+  });
+  Expect(
+      protected_merge.value("accepted", 0) == 0,
+      "protected overlays should not merge into canonical knowledge");
+  Expect(
+      protected_merge.value("rejected", 0) == 1,
+      "protected overlays should be counted as rejected by direct merge trigger");
+  const auto protected_search = store.Search(nlohmann::json{
+      {"query", "Protected Leak Check"},
+      {"scope_id", "scope.default"},
+  });
+  Expect(
+      protected_search.dump().find("knowledge.protected-leak-check") == std::string::npos,
+      "protected overlay content should not be searchable in the common vault");
+
+  store.WriteOverlay(nlohmann::json{
       {"plane_id", "plane-test"},
       {"capsule_id", "cap-test"},
       {"change_type", "claim_add"},
@@ -175,6 +207,50 @@ int main() {
       {"capsule_id", "cap-test"},
   });
   Expect(!context.value("context", nlohmann::json::array()).empty(), "context should return bundle");
+
+  const std::string source_block_id = ingest.value("source_block_id", std::string{});
+  const auto linked = store.WriteBlock(nlohmann::json{
+      {"block_id", "delete-linked-block"},
+      {"knowledge_id", "knowledge.delete-linked"},
+      {"title", "Delete Linked Block"},
+      {"body", "A linked block used to verify relation cleanup."},
+      {"scope_ids", nlohmann::json::array({"scope.default"})},
+  });
+  (void)linked;
+  const auto relation = store.WriteRelation(nlohmann::json{
+      {"relation_id", "rel-delete-test"},
+      {"from_block_id", source_block_id},
+      {"to_block_id", "delete-linked-block"},
+      {"type", "related"},
+  });
+  Expect(relation.at("relation").value("relation_id", std::string{}) == "rel-delete-test", "relation should be written");
+  Expect(
+      !store.Neighbors(source_block_id).value("neighbors", nlohmann::json::array()).empty(),
+      "relation should be visible before delete");
+  const auto relation_delete = store.DeleteRelation("rel-delete-test", nlohmann::json{{"reason", "test relation cleanup"}});
+  Expect(relation_delete.value("status", std::string{}) == "deleted", "relation delete should succeed");
+  Expect(
+      store.Neighbors(source_block_id).value("neighbors", nlohmann::json::array()).empty(),
+      "relation should be hidden after delete");
+
+  const auto source_delete = store.DeleteSource(source_block_id, nlohmann::json{{"reason", "test source cleanup"}});
+  Expect(source_delete.value("status", std::string{}) == "deleted", "source delete should succeed by block id");
+  const auto deleted_search = store.Search(nlohmann::json{
+      {"query", "scheduled merge"},
+      {"scope_id", "scope.default"},
+  });
+  Expect(
+      deleted_search.dump().find(source_block_id) == std::string::npos,
+      "deleted source block should not be searchable");
+  const auto deleted_graph = store.GraphNeighborhood(nlohmann::json{{"center_id", source_block_id}});
+  Expect(
+      deleted_graph.value("nodes", nlohmann::json::array()).empty(),
+      "deleted source block should not appear in graph");
+  const auto cleanup_plan = store.Cleanup(nlohmann::json{{"apply", false}});
+  Expect(cleanup_plan.value("status", std::string{}) == "planned", "cleanup dry-run should plan");
+  const auto cleanup = store.Cleanup(nlohmann::json{{"apply", true}});
+  Expect(cleanup.value("status", std::string{}) == "completed", "cleanup should complete");
+  Expect(store.ReadBlock(source_block_id).contains("error"), "cleanup should physically purge deleted block");
 
   const auto repair = store.RunRepair(nlohmann::json{{"apply", true}, {"full_rebuild", true}});
   Expect(repair.contains("report_id"), "repair should persist a report");
@@ -207,6 +283,30 @@ int main() {
   Expect(
       !import.value("accepted_for_review", nlohmann::json::array()).empty(),
       "markdown import should create proposals");
+
+  const auto protected_store_path = TempStorePath();
+  naim::knowledge_runtime::KnowledgeStore protected_store(protected_store_path, true);
+  protected_store.Open();
+  protected_store.WriteOverlay(nlohmann::json{
+      {"plane_id", "env-protected-plane"},
+      {"capsule_id", "env-private-cap"},
+      {"change_type", "claim_add"},
+      {"base_versions", nlohmann::json::object()},
+      {"proposed_blocks",
+       nlohmann::json::array({nlohmann::json{
+           {"knowledge_id", "knowledge.env-protected"},
+           {"title", "Env Protected Claim"},
+           {"body", "Runtime protected plane data stays isolated."},
+           {"scope_ids", nlohmann::json::array({"scope.default"})},
+       }})},
+  });
+  const auto env_protected_merge = protected_store.TriggerReplicaMerge(nlohmann::json{
+      {"plane_id", "env-protected-plane"},
+      {"capsule_id", "env-private-cap"},
+  });
+  Expect(
+      env_protected_merge.value("status", std::string{}) == "skipped",
+      "protected runtime should skip replica merge into the common vault");
 
   std::cout << "ok: knowledge-store-integration\n";
   return 0;

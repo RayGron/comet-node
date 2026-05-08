@@ -1168,12 +1168,12 @@ HttpResponse AuthHttpService::HandleSshChallenge(
         body.value("username", body.value("name", std::string{})));
     const std::string plane_name = support_.trim(body.value("plane_name", std::string{}));
     const std::string fingerprint = support_.trim(body.value("fingerprint", std::string{}));
-    if (username.empty() || plane_name.empty() || fingerprint.empty()) {
+    if (plane_name.empty() || fingerprint.empty()) {
       return support_.build_json_response(
           400,
           json{{"status", "bad_request"},
                {"message",
-                "username, plane_name, and fingerprint are required"}},
+                "plane_name and fingerprint are required"}},
           {});
     }
     naim::ControllerStore store(db_path);
@@ -1211,7 +1211,7 @@ HttpResponse AuthHttpService::HandleSshChallenge(
             {});
       }
       const auto secured_user =
-          store.LoadActiveSecuredConnectionUserByNameAndFingerprint(username, fingerprint);
+          store.LoadActiveSecuredConnectionUserByFingerprint(fingerprint);
       if (!secured_user.has_value()) {
         store.InsertSecuredConnectionAuthLog({
             0,

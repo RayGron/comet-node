@@ -15,6 +15,9 @@ KnowledgeRuntimeConfig KnowledgeRuntimeConfigLoader::LoadFromEnvironment() const
   config.ready_path = GetEnvOr("NAIM_READY_FILE", "/tmp/naim-ready");
   config.listen_host = GetEnvOr("NAIM_KNOWLEDGE_LISTEN_HOST", "127.0.0.1");
   config.port = GetEnvIntOr("NAIM_KNOWLEDGE_PORT", 18200);
+  const std::string protected_plane = GetEnvOr("NAIM_PLANE_PROTECTED", "0");
+  config.protected_plane =
+      protected_plane == "1" || protected_plane == "true" || protected_plane == "yes";
   return config;
 }
 

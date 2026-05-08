@@ -346,6 +346,66 @@ void TestSqlitePersistenceReplayAndHealth() {
   std::cout << "ok: telemetry-live-store-sqlite-persistence-health\n";
 }
 
+void TestFastFramePreservesSlowDiskTelemetry() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  store.ResetForTests();
+  const auto now = CurrentMillis();
+  auto slow = MakeFrame("node-disk-sticky", "plane-disk-sticky", now);
+  slow.ttl_ms = 60000;
+  slow.lane = "full";
+  slow.disk.source = "hostd";
+  slow.disk.collected_at = slow.collected_at;
+  slow.disk.items.push_back(naim::DiskTelemetryRecord{
+      "storage-root",
+      "",
+      "node-disk-sticky",
+      "/srv/naim-storage",
+      "",
+      "",
+      "present",
+      "ok",
+      "",
+      200,
+      80,
+      120,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      false,
+      false,
+      false,
+      false,
+      {},
+  });
+  Expect(store.Upsert(slow), "slow disk frame should update");
+
+  auto fast = MakeFrame("node-disk-sticky", "plane-disk-sticky", now + 1);
+  fast.ttl_ms = 60000;
+  fast.lane = "fast";
+  fast.disk.items.clear();
+  Expect(store.Upsert(fast), "fast frame should update");
+
+  const auto snapshot = store.BuildSnapshot(std::string("plane-disk-sticky"), 0);
+  const auto disk_items = snapshot.at("nodes").at(0).at("disk").at("items");
+  Expect(disk_items.size() == 1, "fast frame should preserve latest slow disk item");
+  Expect(
+      disk_items.at(0).at("disk_name").get<std::string>() == "storage-root",
+      "preserved disk item should remain storage-root");
+  Expect(
+      disk_items.at(0).at("total_bytes").get<std::uint64_t>() == 200,
+      "preserved disk item should keep capacity");
+
+  store.ResetForTests();
+  std::cout << "ok: telemetry-live-store-fast-frame-preserves-disk\n";
+}
+
 void TestConfigurableRetentionAndMetrics() {
   auto& store = naim::controller::TelemetryLiveStore::Instance();
   store.ResetForTests();
@@ -430,6 +490,59 @@ void TestRecoveredTelemetryCountersDoNotDegradeHealth() {
   std::filesystem::remove(db_path);
   store.ResetForTests();
   std::cout << "ok: telemetry-live-store-recovered-counters-health\n";
+}
+
+void TestQueueDelayBudgetTracksAdaptiveCadence() {
+  auto& store = naim::controller::TelemetryLiveStore::Instance();
+  store.ResetForTests();
+  naim::controller::TelemetryLiveStore::RetentionConfig retention;
+  naim::controller::TelemetryLiveStore::AlertThresholds thresholds;
+  thresholds.queue_warning_ms = 1000;
+  store.ConfigureOperationalPolicy(retention, thresholds);
+
+  auto stable_frame = MakeFrame("node-queue-budget", "plane-queue-budget", CurrentMillis());
+  stable_frame.ttl_ms = 60000;
+  stable_frame.adaptive_interval_ms = 5000;
+  stable_frame.publisher_queue_delay_ms = 1500;
+  stable_frame.plane_ready_instance_count = stable_frame.plane_instance_count;
+  stable_frame.plane_not_ready_instance_count = 0;
+  stable_frame.plane_runtime_health = "ready";
+  Expect(store.Upsert(stable_frame), "stable queue-delay frame should update");
+  auto health = store.BuildHealth(std::string("plane-queue-budget"));
+  auto has_queue_delay_alert = [](const nlohmann::json& alerts) {
+    for (const auto& alert : alerts) {
+      if (alert.value("code", std::string{}) == "telemetry.publisher.queue_delay") {
+        return true;
+      }
+    }
+    return false;
+  };
+  Expect(
+      !has_queue_delay_alert(health.at("alerts")),
+      "queue delay below adaptive budget should not produce queue alert");
+
+  auto delayed_frame = stable_frame;
+  delayed_frame.sequence += 1;
+  delayed_frame.monotonic_ms += 1;
+  delayed_frame.monotonic_timestamp_ms += 1;
+  delayed_frame.publisher_queue_delay_ms = 3000;
+  Expect(store.Upsert(delayed_frame), "delayed queue frame should update");
+  health = store.BuildHealth(std::string("plane-queue-budget"));
+  Expect(
+      has_queue_delay_alert(health.at("alerts")),
+      "queue delay above adaptive budget should still produce an alert");
+  nlohmann::json queue_alert = nlohmann::json::object();
+  for (const auto& alert : health.at("alerts")) {
+    if (alert.value("code", std::string{}) == "telemetry.publisher.queue_delay") {
+      queue_alert = alert;
+      break;
+    }
+  }
+  Expect(
+      queue_alert.value("warning_budget_ms", 0) == 2500,
+      "queue delay alert should expose adaptive warning budget");
+  store.ResetForTests();
+  std::cout << "ok: telemetry-live-store-queue-delay-adaptive-budget\n";
 }
 
 void TestGpuUnavailableStorageNodeDoesNotDegradeHealth() {
@@ -553,8 +666,10 @@ int main() {
     TestPlaneAggregatesAndDownsampling();
     TestMultiPlaneNodeTelemetryIsPlaneScoped();
     TestSqlitePersistenceReplayAndHealth();
+    TestFastFramePreservesSlowDiskTelemetry();
     TestConfigurableRetentionAndMetrics();
     TestRecoveredTelemetryCountersDoNotDegradeHealth();
+    TestQueueDelayBudgetTracksAdaptiveCadence();
     TestGpuUnavailableStorageNodeDoesNotDegradeHealth();
     TestStreamMetricsAndOpenMetrics();
     return 0;

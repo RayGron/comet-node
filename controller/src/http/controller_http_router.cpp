@@ -1,6 +1,7 @@
 #include "http/controller_http_router.h"
 
 #include <cctype>
+#include <string_view>
 
 #include "infra/controller_action.h"
 #include "http/controller_http_server_support.h"
@@ -8,6 +9,7 @@
 #include "interaction/interaction_request_contract_support.h"
 #include "interaction/interaction_request_identity_support.h"
 #include "interaction/interaction_service.h"
+#include "naim/security/crypto_utils.h"
 #include "naim/state/sqlite_store.h"
 
 using nlohmann::json;
@@ -22,6 +24,26 @@ std::string LowercaseCopy(const std::string& value) {
     lowered.push_back(static_cast<char>(std::tolower(ch)));
   }
   return lowered;
+}
+
+void ApplyAuthenticatedInteractionPrincipal(
+    const std::optional<std::pair<naim::UserRecord, naim::AuthSessionRecord>>& authenticated,
+    InteractionConversationPrincipal* principal) {
+  if (!authenticated.has_value() || principal == nullptr) {
+    return;
+  }
+  principal->auth_session_kind = authenticated->second.session_kind;
+  principal->authenticated = true;
+  if (authenticated->second.session_kind == "secured_ssh" ||
+      authenticated->first.role == "secured_connection") {
+    principal->owner_kind =
+        "secured_connection:" +
+        naim::ComputeSha256Hex(authenticated->second.token).substr(0, 24);
+    principal->owner_user_id = std::nullopt;
+    return;
+  }
+  principal->owner_kind = "user";
+  principal->owner_user_id = authenticated->first.id;
 }
 
 std::optional<int> FindQueryInt(
@@ -106,10 +128,21 @@ int InteractionErrorStatusCode(const InteractionValidationError& error) {
 }  // namespace
 
 bool ControllerHttpRouter::IsKnowledgeVaultRequest(const std::string& path) {
-  return path == "/api/v1/knowledge-vault/status" ||
-         ControllerHttpServerSupport::StartsWithPath(
-             path,
-             "/api/v1/knowledge-vault/");
+  if (path == "/api/v1/knowledge-vault/status" ||
+      ControllerHttpServerSupport::StartsWithPath(path, "/api/v1/knowledge-vault/")) {
+    return true;
+  }
+  constexpr std::string_view kPlanePrefix = "/api/v1/planes/";
+  constexpr std::string_view kPlaneKnowledgeSegment = "/knowledge-vault";
+  if (!ControllerHttpServerSupport::StartsWithPath(path, std::string(kPlanePrefix))) {
+    return false;
+  }
+  const auto segment = path.find(std::string(kPlaneKnowledgeSegment), kPlanePrefix.size());
+  if (segment == std::string::npos) {
+    return false;
+  }
+  const auto end = segment + kPlaneKnowledgeSegment.size();
+  return end == path.size() || path[end] == '/';
 }
 
 ControllerHttpRouter::ControllerHttpRouter(
@@ -558,12 +591,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
             validation_error->details);
       }
       InteractionConversationPrincipal principal;
-      if (authenticated.has_value()) {
-        principal.owner_kind = "user";
-        principal.owner_user_id = authenticated->first.id;
-        principal.auth_session_kind = authenticated->second.session_kind;
-        principal.authenticated = true;
-      }
+      ApplyAuthenticatedInteractionPrincipal(authenticated, &principal);
       if (const auto validation_error = InteractionConversationService().PrepareRequest(
               db_path_, resolution, principal, &request_context)) {
         return build_plane_error(

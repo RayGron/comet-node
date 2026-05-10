@@ -1,9 +1,12 @@
 #include <chrono>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unistd.h>
 
 #include <nlohmann/json.hpp>
@@ -48,6 +51,134 @@ class TempDir final {
 
  private:
   std::filesystem::path path_;
+};
+
+class SsePathCaptureServer final {
+ public:
+  SsePathCaptureServer() {
+    naim::platform::EnsureSocketsInitialized();
+    listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (!naim::platform::IsSocketValid(listen_fd_)) {
+      throw std::runtime_error("failed to create SSE capture server socket");
+    }
+
+    int yes = 1;
+#if defined(_WIN32)
+    setsockopt(
+        listen_fd_,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        reinterpret_cast<const char*>(&yes),
+        sizeof(yes));
+#else
+    setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+#endif
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(0);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to bind SSE capture server: " + error);
+    }
+    if (listen(listen_fd_, 1) != 0) {
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to listen SSE capture server: " + error);
+    }
+
+    sockaddr_in bound_addr{};
+    socklen_t bound_size = sizeof(bound_addr);
+    if (getsockname(
+            listen_fd_,
+            reinterpret_cast<sockaddr*>(&bound_addr),
+            &bound_size) != 0) {
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to inspect SSE capture server: " + error);
+    }
+    port_ = ntohs(bound_addr.sin_port);
+    thread_ = std::thread([this]() { Serve(); });
+  }
+
+  ~SsePathCaptureServer() {
+    stop_requested_.store(true);
+    if (port_ > 0) {
+      const auto wake_fd = socket(AF_INET, SOCK_STREAM, 0);
+      if (naim::platform::IsSocketValid(wake_fd)) {
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(static_cast<uint16_t>(port_));
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        (void)connect(wake_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        naim::platform::CloseSocket(wake_fd);
+      }
+    }
+    if (naim::platform::IsSocketValid(listen_fd_)) {
+      naim::platform::CloseSocket(listen_fd_);
+    }
+    Wait();
+  }
+
+  int port() const { return port_; }
+  void Wait() {
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+  std::string request_line() const { return request_line_; }
+
+ private:
+  void Serve() {
+    sockaddr_in client_addr{};
+    socklen_t client_size = sizeof(client_addr);
+    const auto client_fd =
+        accept(listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_size);
+    if (!naim::platform::IsSocketValid(client_fd)) {
+      return;
+    }
+    if (stop_requested_.load()) {
+      naim::platform::CloseSocket(client_fd);
+      return;
+    }
+
+    char buffer[4096];
+    const auto read_count = recv(client_fd, buffer, sizeof(buffer), 0);
+    const std::string request =
+        read_count > 0 ? std::string(buffer, static_cast<std::size_t>(read_count)) : "";
+    const std::size_t line_end = request.find("\r\n");
+    request_line_ = request.substr(0, line_end == std::string::npos ? request.size() : line_end);
+
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    std::ostringstream response;
+    response << "HTTP/1.1 200 OK\r\n";
+    response << "Content-Type: text/event-stream\r\n";
+    response << "Content-Length: " << body.size() << "\r\n";
+    response << "Connection: close\r\n\r\n";
+    response << body;
+    const std::string serialized = response.str();
+    const char* data = serialized.c_str();
+    std::size_t remaining = serialized.size();
+    while (remaining > 0) {
+      const auto written = send(client_fd, data, remaining, 0);
+      if (written <= 0) {
+        break;
+      }
+      data += written;
+      remaining -= static_cast<std::size_t>(written);
+    }
+    naim::platform::CloseSocket(client_fd);
+  }
+
+  naim::platform::SocketHandle listen_fd_ = naim::platform::kInvalidSocket;
+  int port_ = 0;
+  std::atomic<bool> stop_requested_{false};
+  std::thread thread_;
+  std::string request_line_;
 };
 
 naim::DesiredState BuildDesiredState() {
@@ -206,6 +337,22 @@ void TestPlaneOwnedBrowsingDisabledDoesNotUseController() {
          "disabled webgateway context should mark disabled mode");
 }
 
+void TestStreamRequestRespectsTargetBasePath() {
+  SsePathCaptureServer server;
+  const auto target = ParseControllerEndpointTarget(
+      "http://127.0.0.1:" + std::to_string(server.port()) + "/v1");
+  auto upstream = OpenInteractionStreamRequest(
+      target,
+      "interaction-runtime-test",
+      R"({"messages":[],"stream":true})",
+      "/chat/completions");
+  upstream.close();
+  server.Wait();
+  Expect(
+      server.request_line() == "POST /v1/chat/completions HTTP/1.1",
+      "stream upstream path should not duplicate /v1 base path");
+}
+
 }  // namespace
 
 int main() {
@@ -216,6 +363,7 @@ int main() {
     TestPlaneNetworkSkillsTargetUsesContainerPort();
     TestPlaneNetworkWebGatewayTargetUsesPlaneDns();
     TestPlaneOwnedBrowsingDisabledDoesNotUseController();
+    TestStreamRequestRespectsTargetBasePath();
     std::cout << "ok: interaction-runtime-server-fast-path-tests\n";
     return 0;
   } catch (const std::exception& error) {

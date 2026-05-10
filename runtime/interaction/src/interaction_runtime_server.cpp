@@ -616,7 +616,8 @@ void InteractionRuntimeServer::ExecuteStream(
   auto upstream = OpenInteractionStreamRequest(
       UpstreamTarget(),
       "interaction-runtime",
-      upstream_body);
+      upstream_body,
+      "/chat/completions");
   auto response_headers = BuildCompressionHeaders(execution.request_context);
   response_headers["x-naim-local-raw-execution"] =
       execution.local_raw_execution ? "true" : "false";

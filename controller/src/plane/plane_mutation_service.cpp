@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include "naim/state/desired_state_v2_renderer.h"
+#include "naim/state/sqlite_store.h"
 #include "naim/state/state_json.h"
 #include "skills/plane_skills_target_resolver.h"
 
@@ -16,6 +17,12 @@ void SyncSkillsRuntimeAfterDesiredStateApply(
     const std::string& db_path,
     const naim::DesiredState& desired_state) {
   if (!desired_state.skills.has_value() || !desired_state.skills->enabled) {
+    return;
+  }
+  ControllerStore store(db_path);
+  store.Initialize();
+  const auto plane = store.LoadPlane(desired_state.plane_name);
+  if (!plane.has_value() || plane->applied_generation <= 0 || plane->state != "running") {
     return;
   }
   const auto target = PlaneSkillsTargetResolver::ResolvePlaneLocalTarget(desired_state);

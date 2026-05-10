@@ -169,6 +169,14 @@ int main() {
           !maglev_item.at("internal").get<bool>(),
           "Maglev workflow skill should be user-visible");
       Expect(
+          maglev_item.at("content").get<std::string>().find("/skill-add requires") !=
+              std::string::npos,
+          "Maglev workflow skill should document file-path skill import");
+      Expect(
+          maglev_item.at("content").get<std::string>().find("pasted-JSON prompt flow") !=
+              std::string::npos,
+          "Maglev workflow skill should guard against pasted JSON prompt guidance");
+      Expect(
           store.LoadSkillsFactorySkill("maglev-client-knowledge-vault-local-first")
               .has_value(),
           "Maglev Knowledge Vault skill record should be seeded");

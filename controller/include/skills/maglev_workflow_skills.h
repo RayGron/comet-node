@@ -29,7 +29,10 @@ MaglevWorkflowSkillDefinitions() {
           "dialog commands such as /auth, /skills, /skill-add, /skill-delete, "
           "/skill-use, /skill-clear, /client-sync, /kv, and /remember. Explain the "
           "shortest local-first path and avoid sending the user to controller UI or "
-          "plane internals unless they ask for administration or recovery steps.",
+          "plane internals unless they ask for administration or recovery steps. "
+          "For skill import, /skill-add requires a relative or absolute path to a "
+          "skill JSON file; do not describe a pasted-JSON prompt flow unless the "
+          "client explicitly implements one.",
           {
               "maglev workflow",
               "maglev client",
@@ -89,8 +92,9 @@ MaglevWorkflowSkillDefinitions() {
           "normal work. Use /skills to inspect local skills, /skill-add <path> to "
           "import a skill JSON file, /skill-delete <name-or-id> to remove one, "
           "/skill-use to pin a skill for the dialog, and /skill-clear to return to "
-          "automatic skill resolution. Treat the controller SkillsFactory as the "
-          "canonical bootstrap and sync source, not as the request-time selector.",
+          "automatic skill resolution. /skill-add accepts a relative or absolute "
+          "file path, not pasted JSON content. Treat the controller SkillsFactory "
+          "as the canonical bootstrap and sync source, not as the request-time selector.",
           {
               "maglev skills",
               "local skills",

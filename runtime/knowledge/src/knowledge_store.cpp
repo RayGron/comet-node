@@ -52,6 +52,10 @@ std::string RelationSearchText(const nlohmann::json& relation) {
       relation.value("to_block_id", std::string{}));
 }
 
+std::string JsonPayloadHash(const nlohmann::json& payload) {
+  return "sha256:" + naim::ComputeSha256Hex(payload.dump());
+}
+
 std::vector<std::string> QueryTerms(const std::string& query) {
   static const std::set<std::string> kIgnoredTerms = {
       "a", "an", "and", "are", "for", "in", "is", "of", "on", "or", "the",
@@ -1825,6 +1829,118 @@ nlohmann::json KnowledgeStore::QueryRoute(const nlohmann::json& payload) const {
       {"redacted", redacted},
       {"warnings", warnings},
       {"partial", !warnings.empty()},
+  };
+}
+
+nlohmann::json KnowledgeStore::ClientSyncExport(const nlohmann::json& payload) const {
+  std::vector<std::string> requested_scopes;
+  if (payload.contains("scope_ids") && payload.at("scope_ids").is_array()) {
+    requested_scopes = JsonStringArray(payload.at("scope_ids"));
+  }
+  const bool include_blocks = payload.value("include_blocks", true);
+  const bool include_relations = payload.value("include_relations", true);
+
+  nlohmann::json blocks = nlohmann::json::array();
+  if (include_blocks) {
+    for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
+      (void)key;
+      if (!ScopeAllowed(block.value("scope_ids", nlohmann::json::array()), requested_scopes)) {
+        continue;
+      }
+      nlohmann::json item = block;
+      item["_sync_hash"] = JsonPayloadHash(block);
+      blocks.push_back(item);
+    }
+  }
+
+  nlohmann::json relations = nlohmann::json::array();
+  std::set<std::string> seen_relations;
+  if (include_relations) {
+    for (const auto& [key, relation] : repository_->ScanJson("edges_out:")) {
+      const std::string relation_id = relation.value("relation_id", key);
+      if (!seen_relations.insert(relation_id).second) {
+        continue;
+      }
+      nlohmann::json item = relation;
+      item["_sync_hash"] = JsonPayloadHash(relation);
+      relations.push_back(item);
+    }
+  }
+
+  return nlohmann::json{
+      {"status", "ok"},
+      {"revision", nlohmann::json{{"latest_event_sequence", LatestEventSequence()}}},
+      {"blocks", blocks},
+      {"relations", relations},
+  };
+}
+
+nlohmann::json KnowledgeStore::ClientSyncPush(const nlohmann::json& payload) {
+  nlohmann::json accepted = nlohmann::json::array();
+  nlohmann::json conflicts = nlohmann::json::array();
+  for (const auto& write : payload.value("writes", nlohmann::json::array())) {
+    if (!write.is_object()) {
+      continue;
+    }
+    const std::string outbox_id = write.value("outbox_id", std::string{});
+    const std::string entity_type = write.value("entity_type", std::string{});
+    const std::string entity_id = write.value("entity_id", std::string{});
+    const std::string operation = write.value("operation", std::string{"upsert"});
+    const std::string base_hash = write.value("base_hash", std::string{});
+    const nlohmann::json local_payload = write.value("payload", nlohmann::json::object());
+
+    if (entity_type == "kv_block") {
+      const auto remote = repository_->GetJson("blocks:" + entity_id);
+      const std::string remote_hash = remote.has_value() ? JsonPayloadHash(*remote) : std::string{};
+      if (!base_hash.empty() && remote.has_value() && remote_hash != base_hash) {
+        conflicts.push_back(nlohmann::json{
+            {"outbox_id", outbox_id},
+            {"entity_type", entity_type},
+            {"entity_id", entity_id},
+            {"reason", "remote_changed"},
+            {"local_payload", local_payload},
+            {"remote_payload", *remote},
+        });
+        continue;
+      }
+      if (operation == "delete") {
+        conflicts.push_back(nlohmann::json{
+            {"outbox_id", outbox_id},
+            {"entity_type", entity_type},
+            {"entity_id", entity_id},
+            {"reason", "delete_not_supported"},
+            {"local_payload", local_payload},
+            {"remote_payload", remote.value_or(nlohmann::json::object())},
+        });
+        continue;
+      }
+      WriteBlock(local_payload);
+      accepted.push_back(outbox_id);
+      continue;
+    }
+
+    if (entity_type == "kv_relation") {
+      if (operation == "delete") {
+        conflicts.push_back(nlohmann::json{
+            {"outbox_id", outbox_id},
+            {"entity_type", entity_type},
+            {"entity_id", entity_id},
+            {"reason", "delete_not_supported"},
+            {"local_payload", local_payload},
+            {"remote_payload", nlohmann::json::object()},
+        });
+        continue;
+      }
+      WriteRelation(local_payload);
+      accepted.push_back(outbox_id);
+    }
+  }
+
+  return nlohmann::json{
+      {"status", conflicts.empty() ? "ok" : "conflicts"},
+      {"accepted_outbox_ids", accepted},
+      {"conflicts", conflicts},
+      {"revision", nlohmann::json{{"latest_event_sequence", LatestEventSequence()}}},
   };
 }
 

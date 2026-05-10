@@ -263,6 +263,14 @@ HttpResponse KnowledgeServer::HandlePost(const HttpRequest& request) {
   if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "graph-neighborhood") {
     return BuildJsonResponse(200, store_.GraphNeighborhood(ParseJsonBody(request)));
   }
+  if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "client-sync" &&
+      parts[2] == "export") {
+    return BuildJsonResponse(200, store_.ClientSyncExport(ParseJsonBody(request)));
+  }
+  if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "client-sync" &&
+      parts[2] == "push") {
+    return BuildJsonResponse(200, store_.ClientSyncPush(ParseJsonBody(request)));
+  }
   if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "catalog") {
     return BuildJsonResponse(200, store_.CatalogUpsert(ParseJsonBody(request)));
   }

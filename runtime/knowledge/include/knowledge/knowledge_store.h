@@ -53,6 +53,8 @@ class KnowledgeStore final {
   nlohmann::json CatalogQuery(const nlohmann::json& payload) const;
   nlohmann::json QueryRoute(const nlohmann::json& payload) const;
   nlohmann::json ReconcileDailyReplicaSchedules(const nlohmann::json& payload);
+  nlohmann::json ClientSyncExport(const nlohmann::json& payload) const;
+  nlohmann::json ClientSyncPush(const nlohmann::json& payload);
 
  private:
   std::string UtcNow() const;

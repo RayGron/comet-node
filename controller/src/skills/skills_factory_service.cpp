@@ -9,6 +9,7 @@
 
 #include "naim/state/sqlite_store.h"
 #include "naim/state/state_json.h"
+#include "skills/code_agent_common_skills.h"
 #include "skills/knowledge_vault_common_skills.h"
 #include "skills/maglev_workflow_skills.h"
 
@@ -254,6 +255,7 @@ nlohmann::json SkillsFactoryService::BuildSkillPayload(
 nlohmann::json SkillsFactoryService::BuildListPayload(const std::string& db_path) const {
   naim::ControllerStore store(db_path);
   store.Initialize();
+  EnsureCodeAgentCommonSkillRecords(store);
   EnsureKnowledgeVaultCommonSkillRecords(store);
   EnsureMaglevWorkflowSkillRecords(store);
   json items = json::array();
@@ -272,6 +274,7 @@ nlohmann::json SkillsFactoryService::BuildSkillPayload(
     const std::string& skill_id) const {
   naim::ControllerStore store(db_path);
   store.Initialize();
+  EnsureCodeAgentCommonSkillRecords(store);
   EnsureKnowledgeVaultCommonSkillRecords(store);
   EnsureMaglevWorkflowSkillRecords(store);
   const auto skill = store.LoadSkillsFactorySkill(skill_id);

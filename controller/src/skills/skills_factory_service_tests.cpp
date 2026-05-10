@@ -10,6 +10,7 @@
 #include "naim/state/desired_state_v2_validator.h"
 #include "naim/state/sqlite_store.h"
 #include "plane/plane_mutation_service.h"
+#include "skills/code_agent_common_skills.h"
 #include "skills/knowledge_vault_common_skills.h"
 #include "skills/maglev_workflow_skills.h"
 #include "skills/plane_skill_catalog_service.h"
@@ -134,7 +135,9 @@ int main() {
             return fallback;
           });
       const auto payload = factory_service.BuildListPayload(db_path.string());
-      Expect(payload.at("skills").size() == 8, "factory list should contain seeded built-in skills");
+      Expect(
+          payload.at("skills").size() == 24,
+          "factory list should contain seeded built-in skills");
       Expect(payload.at("groups").size() == 0, "factory list should start without explicit groups");
       const auto& item = FindSkillById(payload.at("skills"), "skill-alpha");
       Expect(item.at("id").get<std::string>() == "skill-alpha", "factory skill id mismatch");
@@ -180,6 +183,19 @@ int main() {
           store.LoadSkillsFactorySkill("maglev-client-knowledge-vault-local-first")
               .has_value(),
           "Maglev Knowledge Vault skill record should be seeded");
+      const auto& remote_ops_item = FindSkillById(payload.at("skills"), "code-agent-remote-ops");
+      Expect(
+          remote_ops_item.at("group_path").get<std::string>() ==
+              "code-agent/operations",
+          "stable remote ops skill should be grouped under code-agent operations");
+      Expect(
+          store.LoadSkillsFactorySkill("code-agent-build-and-test").has_value(),
+          "stable build-and-test skill record should be seeded");
+      for (const auto& skill_id : naim::controller::CodeAgentCommonSkillIds()) {
+        Expect(
+            !skill_id.starts_with("skill-"),
+            "seeded code-agent skills should use stable semantic ids");
+      }
 
       const auto deleted =
           factory_service.DeleteSkill(db_path.string(), "skill-alpha", temp_root.string());

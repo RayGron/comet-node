@@ -55,6 +55,67 @@ std::optional<DesiredState> LoadDesiredStateFromJson(
   return state;
 }
 
+void ReconcilePlaneSkillBindings(sqlite3* db, const DesiredState& state) {
+  if (!state.skills.has_value() || !state.skills->enabled) {
+    Statement delete_statement(
+        db,
+        "DELETE FROM plane_skill_bindings WHERE plane_name = ?1;");
+    delete_statement.BindText(1, state.plane_name);
+    delete_statement.StepDone();
+    return;
+  }
+
+  std::set<std::string> desired_skill_ids;
+  for (const auto& skill_id : state.skills->factory_skill_ids) {
+    if (!skill_id.empty()) {
+      desired_skill_ids.insert(skill_id);
+    }
+  }
+
+  if (desired_skill_ids.empty()) {
+    Statement delete_statement(
+        db,
+        "DELETE FROM plane_skill_bindings WHERE plane_name = ?1;");
+    delete_statement.BindText(1, state.plane_name);
+    delete_statement.StepDone();
+    return;
+  }
+
+  std::string placeholders;
+  int index = 2;
+  for (std::size_t i = 0; i < desired_skill_ids.size(); ++i) {
+    if (!placeholders.empty()) {
+      placeholders += ", ";
+    }
+    placeholders += "?" + std::to_string(index++);
+  }
+
+  Statement delete_stale_statement(
+      db,
+      "DELETE FROM plane_skill_bindings WHERE plane_name = ?1 AND skill_id NOT IN (" +
+          placeholders + ");");
+  delete_stale_statement.BindText(1, state.plane_name);
+  index = 2;
+  for (const auto& skill_id : desired_skill_ids) {
+    delete_stale_statement.BindText(index++, skill_id);
+  }
+  delete_stale_statement.StepDone();
+
+  for (const auto& skill_id : desired_skill_ids) {
+    Statement insert_statement(
+        db,
+        "INSERT INTO plane_skill_bindings("
+        "plane_name, skill_id, enabled, session_ids_json, naim_links_json"
+        ") "
+        "SELECT ?1, ?2, 1, '[]', '[]' "
+        "WHERE EXISTS(SELECT 1 FROM skills_factory_skills WHERE id = ?2) "
+        "ON CONFLICT(plane_name, skill_id) DO NOTHING;");
+    insert_statement.BindText(1, state.plane_name);
+    insert_statement.BindText(2, skill_id);
+    insert_statement.StepDone();
+  }
+}
+
 DesiredState LoadPlaneBaseState(sqlite3* db, const std::string& plane_name) {
   Statement statement(
       db,
@@ -453,6 +514,8 @@ void DesiredStateRepository::ReplaceDesiredState(
       statement.BindInt(11, rebalance_iteration);
       statement.StepDone();
     }
+
+    ReconcilePlaneSkillBindings(db_, state);
 
     for (const auto& node : state.nodes) {
       Statement node_statement(

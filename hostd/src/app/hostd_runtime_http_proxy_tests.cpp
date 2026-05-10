@@ -69,11 +69,21 @@ void TestKnowledgeVaultPolicyAllowsDeleteRoutes() {
       "knowledge vault proxy should allow source delete routes");
 }
 
+void TestSkillsPolicyAllowsSyncRoute() {
+  Expect(
+      naim::hostd::HostdRuntimeHttpProxy::IsAllowedProxyPath(
+          naim::hostd::HostdRuntimeProxyPolicy::Skills,
+          "POST",
+          "/v1/sync"),
+      "skills proxy should allow explicit sync route");
+}
+
 }  // namespace
 
 int main() {
   TestChunkedRuntimeResponseIsDecoded();
   TestKnowledgeVaultPolicyAllowsDeleteRoutes();
+  TestSkillsPolicyAllowsSyncRoute();
   std::cout << "hostd runtime HTTP proxy tests passed\n";
   return 0;
 }

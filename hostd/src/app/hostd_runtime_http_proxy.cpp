@@ -189,6 +189,9 @@ bool HostdRuntimeHttpProxy::IsAllowedProxyPath(
     if (route == "/v1/skills/resolve" && method == "POST") {
       return true;
     }
+    if (route == "/v1/sync" && method == "POST") {
+      return true;
+    }
     if (route.rfind("/v1/skills/", 0) == 0 &&
         (method == "GET" || method == "PUT" || method == "PATCH" ||
          method == "DELETE")) {

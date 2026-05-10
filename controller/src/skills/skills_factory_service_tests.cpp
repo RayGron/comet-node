@@ -217,6 +217,77 @@ int main() {
       naim::ControllerStore store(db_path.string());
       store.Initialize();
       store.UpsertSkillsFactorySkill(naim::SkillsFactorySkillRecord{
+          "skill-mirror-a",
+          "Mirror A",
+          "test/mirror",
+          "Mirror A description",
+          "Mirror A content",
+          {"mirror-a"},
+          false,
+          "",
+          "",
+      });
+      store.UpsertSkillsFactorySkill(naim::SkillsFactorySkillRecord{
+          "skill-mirror-b",
+          "Mirror B",
+          "test/mirror",
+          "Mirror B description",
+          "Mirror B content",
+          {"mirror-b"},
+          false,
+          "",
+          "",
+      });
+
+      SeedDesiredState(
+          store,
+          BuildDesiredState(
+              "binding-mirror-plane",
+              {"skill-mirror-a", "skill-mirror-b"}),
+          7);
+      const auto first_binding =
+          store.LoadPlaneSkillBinding("binding-mirror-plane", "skill-mirror-a");
+      Expect(
+          first_binding.has_value(),
+          "desired-state save should create missing skill binding");
+      Expect(
+          first_binding->enabled,
+          "auto-created skill binding should default to enabled");
+
+      store.UpsertPlaneSkillBinding(naim::PlaneSkillBindingRecord{
+          "binding-mirror-plane",
+          "skill-mirror-a",
+          false,
+          {"session-preserved"},
+          {"naim://preserved"},
+          "",
+          "",
+      });
+      SeedDesiredState(
+          store,
+          BuildDesiredState("binding-mirror-plane", {"skill-mirror-a"}),
+          8);
+      const auto preserved =
+          store.LoadPlaneSkillBinding("binding-mirror-plane", "skill-mirror-a");
+      Expect(
+          preserved.has_value(),
+          "desired-state save should preserve kept skill binding");
+      Expect(
+          !preserved->enabled,
+          "desired-state save should not overwrite binding enabled flag");
+      Expect(
+          preserved->session_ids == std::vector<std::string>({"session-preserved"}),
+          "desired-state save should preserve binding session ids");
+      Expect(
+          !store.LoadPlaneSkillBinding("binding-mirror-plane", "skill-mirror-b").has_value(),
+          "desired-state save should remove detached skill binding");
+      std::cout << "ok: desired-state-mirrors-plane-skill-bindings" << '\n';
+    }
+
+    {
+      naim::ControllerStore store(db_path.string());
+      store.Initialize();
+      store.UpsertSkillsFactorySkill(naim::SkillsFactorySkillRecord{
           "skill-grouped",
           "Grouped skill",
           "lt-cypher/market/forecast",

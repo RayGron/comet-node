@@ -305,7 +305,14 @@ void SkillsServer::SyncFromController() {
         "GET",
         path,
         "",
-        {{"Accept", "application/json"}, {"Cache-Control", "no-store"}});
+        {
+            {"Accept", "application/json"},
+            {"Cache-Control", "no-store"},
+            {"X-Naim-Plane-Runtime-Role", "skills"},
+            {"X-Naim-Plane-Runtime-Plane", config_.plane_name},
+            {"X-Naim-Plane-Runtime-Instance", config_.instance_name},
+            {"X-Naim-Plane-Runtime-Node", config_.node_name},
+        });
     if (response.status_code != 200) {
       std::cerr << "[naim-skills] controller sync skipped: status="
                 << response.status_code << " path=" << path << "\n";

@@ -70,6 +70,7 @@ naim::controller::PlaneMutationService MakeMutationService() {
       [](const std::string&) -> naim::controller::PlaneService {
         throw std::runtime_error("plane service should not be used in skills tests");
       };
+  deps.enable_runtime_sync_after_apply = false;
   return naim::controller::PlaneMutationService(std::move(deps));
 }
 

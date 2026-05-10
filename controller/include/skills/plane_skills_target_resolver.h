@@ -24,7 +24,8 @@ class PlaneSkillsTargetResolver final {
       const std::string& method,
       const std::string& path,
       const std::string& body,
-      const std::vector<std::pair<std::string, std::string>>& headers);
+      const std::vector<std::pair<std::string, std::string>>& headers,
+      int timeout_ms = 30000);
   static std::string NormalizeSkillPathSuffix(const std::string& path_suffix);
 };
 

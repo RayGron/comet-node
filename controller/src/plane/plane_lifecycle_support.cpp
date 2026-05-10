@@ -2,6 +2,7 @@
 
 #include "app/controller_composition_support.h"
 #include "skills/knowledge_vault_common_skills.h"
+#include "skills/maglev_workflow_skills.h"
 
 namespace naim::controller {
 
@@ -19,6 +20,7 @@ void ControllerPlaneLifecycleSupport::PrepareDesiredState(
   desired_state_policy_service_.ApplyRegisteredHostExecutionModes(store, desired_state);
   desired_state_policy_service_.ResolveDesiredStateDynamicPlacements(store, desired_state);
   EnsureKnowledgeVaultCommonSkills(store, desired_state);
+  EnsureMaglevWorkflowSkillRecords(store);
   desired_state_policy_service_.ValidateDesiredStateForControllerAdmission(
       store,
       *desired_state);

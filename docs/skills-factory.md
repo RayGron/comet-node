@@ -143,6 +143,22 @@ desired-state preparation appends these ids to `skills.factory_skill_ids[]` if t
 The skills do not add a new tool-calling API; they steer the model to use the existing
 controller-injected Knowledge Vault context for the current plane only.
 
+### Maglev Workflow Skills
+
+`naim-node` also seeds Maglev-specific SkillsFactory records for the `maglev-service`
+plane:
+
+- `maglev-client-workflow`
+- `maglev-client-knowledge-vault-local-first`
+- `maglev-client-skills-factory-workflow`
+- `maglev-client-sync-and-conflicts`
+
+These records use the `maglev` group path and are intended to be attached explicitly by
+the Maglev desired state, not auto-attached to every LLM plane. They steer the model to
+treat Maglev as a dialog-first client with client-owned Skills and Knowledge Vault state.
+The normal request-time path is local-first; controller and plane APIs are bootstrap,
+sync, administration, and fallback channels.
+
 ## Operator UI
 
 ### Sidebar

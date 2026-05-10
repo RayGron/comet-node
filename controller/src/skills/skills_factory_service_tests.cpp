@@ -11,6 +11,7 @@
 #include "naim/state/sqlite_store.h"
 #include "plane/plane_mutation_service.h"
 #include "skills/knowledge_vault_common_skills.h"
+#include "skills/maglev_workflow_skills.h"
 #include "skills/plane_skill_catalog_service.h"
 #include "skills/skills_factory_service.h"
 
@@ -132,7 +133,7 @@ int main() {
             return fallback;
           });
       const auto payload = factory_service.BuildListPayload(db_path.string());
-      Expect(payload.at("skills").size() == 4, "factory list should contain seeded common skills");
+      Expect(payload.at("skills").size() == 8, "factory list should contain seeded built-in skills");
       Expect(payload.at("groups").size() == 0, "factory list should start without explicit groups");
       const auto& item = FindSkillById(payload.at("skills"), "skill-alpha");
       Expect(item.at("id").get<std::string>() == "skill-alpha", "factory skill id mismatch");
@@ -158,6 +159,18 @@ int main() {
       Expect(
           !common_item.at("internal").get<bool>(),
           "common Knowledge Vault skill should be user-visible");
+      const auto& maglev_item =
+          FindSkillById(payload.at("skills"), "maglev-client-workflow");
+      Expect(
+          maglev_item.at("group_path").get<std::string>() == "maglev",
+          "Maglev workflow skill should belong to the maglev group");
+      Expect(
+          !maglev_item.at("internal").get<bool>(),
+          "Maglev workflow skill should be user-visible");
+      Expect(
+          store.LoadSkillsFactorySkill("maglev-client-knowledge-vault-local-first")
+              .has_value(),
+          "Maglev Knowledge Vault skill record should be seeded");
 
       const auto deleted =
           factory_service.DeleteSkill(db_path.string(), "skill-alpha", temp_root.string());

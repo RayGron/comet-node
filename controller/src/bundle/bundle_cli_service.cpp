@@ -16,6 +16,7 @@
 #include "naim/planning/reconcile.h"
 #include "naim/state/state_json.h"
 #include "skills/knowledge_vault_common_skills.h"
+#include "skills/maglev_workflow_skills.h"
 
 namespace naim::controller {
 
@@ -416,6 +417,7 @@ int BundleCliService::ApplyDesiredState(
   desired_state_policy_service_.ResolveDesiredStateDynamicPlacements(
       store, &effective_desired_state);
   EnsureKnowledgeVaultCommonSkills(store, &effective_desired_state);
+  EnsureMaglevWorkflowSkillRecords(store);
   desired_state_policy_service_.ValidateDesiredStateForControllerAdmission(
       store,
       effective_desired_state);

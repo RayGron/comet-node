@@ -10,6 +10,7 @@
 #include "naim/state/sqlite_store.h"
 #include "naim/state/state_json.h"
 #include "skills/knowledge_vault_common_skills.h"
+#include "skills/maglev_workflow_skills.h"
 
 namespace naim::controller {
 
@@ -254,6 +255,7 @@ nlohmann::json SkillsFactoryService::BuildListPayload(const std::string& db_path
   naim::ControllerStore store(db_path);
   store.Initialize();
   EnsureKnowledgeVaultCommonSkillRecords(store);
+  EnsureMaglevWorkflowSkillRecords(store);
   json items = json::array();
   for (const auto& skill : store.LoadSkillsFactorySkills()) {
     items.push_back(BuildSkillPayload(db_path, skill));
@@ -271,6 +273,7 @@ nlohmann::json SkillsFactoryService::BuildSkillPayload(
   naim::ControllerStore store(db_path);
   store.Initialize();
   EnsureKnowledgeVaultCommonSkillRecords(store);
+  EnsureMaglevWorkflowSkillRecords(store);
   const auto skill = store.LoadSkillsFactorySkill(skill_id);
   if (!skill.has_value()) {
     throw std::runtime_error("skill '" + skill_id + "' not found");

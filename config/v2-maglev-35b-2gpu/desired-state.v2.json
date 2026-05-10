@@ -75,13 +75,26 @@
   "skills": {
     "enabled": true,
     "factory_skill_ids": [
+      "code-agent-api-contract-guard",
+      "code-agent-deploy-path-check",
+      "code-agent-issue-closeout",
+      "code-agent-plane-lifecycle-check",
+      "code-agent-refactor-rules-enforcer",
       "code-agent-root-cause-debug",
       "code-agent-repo-map",
       "code-agent-safe-change",
+      "code-agent-skill-authoring",
+      "code-agent-state-schema-guard",
+      "code-agent-test-first-fix",
+      "code-agent-ui-runtime-parity",
       "skill-1775349375638-5",
       "skill-1775349890476-6",
       "skill-1775349890482-7",
-      "skill-1775349890489-8"
+      "skill-1775349890489-8",
+      "maglev-client-workflow",
+      "maglev-client-knowledge-vault-local-first",
+      "maglev-client-skills-factory-workflow",
+      "maglev-client-sync-and-conflicts"
     ],
     "publish": [
       {

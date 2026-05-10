@@ -17,10 +17,13 @@
 #include "naim/state/state_json.h"
 #include "skills/knowledge_vault_common_skills.h"
 #include "skills/maglev_workflow_skills.h"
+#include "skills/plane_skills_target_resolver.h"
 
 namespace naim::controller {
 
 namespace {
+
+constexpr int kSkillsRuntimeSyncTimeoutMs = 5000;
 
 void PrintPreviewSummary(const naim::DesiredState& state) {
   std::cout << "preview:\n";
@@ -135,6 +138,45 @@ void DetachRemovedFactorySkillBindings(
     if (next_ids.count(skill_id) == 0) {
       store.DeletePlaneSkillBinding(next_state.plane_name, skill_id);
     }
+  }
+}
+
+void RequestSkillsRuntimeRefresh(
+    const std::string& db_path,
+    const naim::DesiredState& desired_state,
+    const std::string& source_label) {
+  if (!desired_state.skills.has_value() || !desired_state.skills->enabled) {
+    return;
+  }
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  const auto plane = store.LoadPlane(desired_state.plane_name);
+  if (!plane.has_value() || plane->applied_generation <= 0 || plane->state != "running") {
+    return;
+  }
+  const auto target = PlaneSkillsTargetResolver::ResolvePlaneLocalTarget(desired_state);
+  if (!target.has_value()) {
+    return;
+  }
+  try {
+    const auto response = PlaneSkillsTargetResolver::SendPlaneLocalRequest(
+        db_path,
+        desired_state.plane_name,
+        *target,
+        "POST",
+        "/v1/sync",
+        "{}",
+        PlaneSkillsTargetResolver::DefaultJsonHeaders(),
+        kSkillsRuntimeSyncTimeoutMs);
+    if (response.status_code < 200 || response.status_code >= 300) {
+      std::cerr << "[naim-controller] skills runtime sync warning plane="
+                << desired_state.plane_name << " source=" << source_label
+                << " status=" << response.status_code << "\n";
+    }
+  } catch (const std::exception& error) {
+    std::cerr << "[naim-controller] skills runtime sync warning plane="
+              << desired_state.plane_name << " source=" << source_label
+              << " error=" << error.what() << "\n";
   }
 }
 
@@ -324,6 +366,7 @@ int BundleCliService::ImportBundle(
   store.UpdatePlaneArtifactsRoot(desired_state.plane_name, default_artifacts_root_);
   store.ClearSchedulerPlaneRuntime(desired_state.plane_name);
   store.ReplaceRolloutActions(desired_state.plane_name, desired_generation, {});
+  RequestSkillsRuntimeRefresh(db_path, desired_state, "import-bundle");
   AppendEvent(
       store,
       "bundle",
@@ -379,6 +422,7 @@ int BundleCliService::ApplyBundle(
   store.UpdatePlaneArtifactsRoot(desired_state.plane_name, artifacts_root);
   store.ClearSchedulerPlaneRuntime(desired_state.plane_name);
   store.ReplaceRolloutActions(desired_state.plane_name, desired_generation, {});
+  RequestSkillsRuntimeRefresh(db_path, desired_state, "apply-bundle");
   AppendEvent(
       store,
       "bundle",
@@ -453,6 +497,7 @@ int BundleCliService::ApplyDesiredState(
   store.UpdatePlaneArtifactsRoot(effective_desired_state.plane_name, artifacts_root);
   store.ClearSchedulerPlaneRuntime(effective_desired_state.plane_name);
   store.ReplaceRolloutActions(effective_desired_state.plane_name, desired_generation, {});
+  RequestSkillsRuntimeRefresh(db_path, effective_desired_state, source_label);
 
   const bool existed = current_state.has_value();
   AppendEvent(

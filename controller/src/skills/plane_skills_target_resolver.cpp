@@ -133,7 +133,8 @@ PlaneSkillsTargetResolver::ResolvePlaneLocalTarget(
     const std::string& method,
     const std::string& path,
     const std::string& body,
-    const std::vector<std::pair<std::string, std::string>>& headers) {
+    const std::vector<std::pair<std::string, std::string>>& headers,
+    int timeout_ms) {
   if (!target.route_via_hostd_proxy) {
     return SendControllerHttpRequest(target, method, path, body, headers);
   }
@@ -195,7 +196,7 @@ PlaneSkillsTargetResolver::ResolvePlaneLocalTarget(
   const auto started_at = std::chrono::steady_clock::now();
   while (std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now() - started_at)
-             .count() < 30000) {
+             .count() < timeout_ms) {
     const auto current = store.LoadHostAssignment(assignment_id);
     if (!current.has_value()) {
       return BuildProxyErrorResponse(

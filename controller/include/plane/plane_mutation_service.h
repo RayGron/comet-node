@@ -23,6 +23,7 @@ class PlaneMutationService {
   struct Deps {
     ApplyDesiredStateFn apply_desired_state;
     MakePlaneServiceFn make_plane_service;
+    bool enable_runtime_sync_after_apply = true;
   };
 
   explicit PlaneMutationService(Deps deps);

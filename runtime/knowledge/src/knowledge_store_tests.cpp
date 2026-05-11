@@ -84,6 +84,67 @@ int main() {
           "lt-cypher-ai.market.assets",
       "token search should rank the matching deterministic market block first");
 
+  const auto client_export = store.ClientSyncExport(nlohmann::json{
+      {"scope_ids", nlohmann::json::array({"scope.default"})},
+  });
+  Expect(client_export.value("status", std::string{}) == "ok", "client sync export should succeed");
+  Expect(!client_export.value("blocks", nlohmann::json::array()).empty(), "client sync export should include blocks");
+  Expect(
+      client_export.at("blocks").front().contains("_sync_hash"),
+      "client sync export should include block sync hashes");
+
+  const auto client_push = store.ClientSyncPush(nlohmann::json{
+      {"writes",
+       nlohmann::json::array({nlohmann::json{
+           {"outbox_id", "outbox-1"},
+           {"entity_type", "kv_block"},
+           {"entity_id", "maglev.client.block"},
+           {"operation", "upsert"},
+           {"base_hash", ""},
+           {"payload",
+            nlohmann::json{
+                {"block_id", "maglev.client.block"},
+                {"knowledge_id", "maglev.client.block"},
+                {"title", "Maglev Client Block"},
+                {"body", "Client-owned Knowledge Vault write."},
+                {"scope_ids", nlohmann::json::array({"scope.default"})},
+            }},
+       }})},
+  });
+  Expect(
+      client_push.at("accepted_outbox_ids") == nlohmann::json::array({"outbox-1"}),
+      "client sync push should accept non-conflicting block writes");
+  Expect(
+      store.ReadBlock("maglev.client.block").value("block", nlohmann::json::object())
+          .value("title", std::string{}) == "Maglev Client Block",
+      "client sync push should persist accepted block");
+
+  const auto conflicting_push = store.ClientSyncPush(nlohmann::json{
+      {"writes",
+       nlohmann::json::array({nlohmann::json{
+           {"outbox_id", "outbox-2"},
+           {"entity_type", "kv_block"},
+           {"entity_id", "maglev.client.block"},
+           {"operation", "upsert"},
+           {"base_hash", "sha256:not-current"},
+           {"payload",
+            nlohmann::json{
+                {"block_id", "maglev.client.block"},
+                {"knowledge_id", "maglev.client.block"},
+                {"title", "Conflicting Maglev Client Block"},
+                {"body", "This should not overwrite remote state."},
+                {"scope_ids", nlohmann::json::array({"scope.default"})},
+            }},
+       }})},
+  });
+  Expect(
+      !conflicting_push.value("conflicts", nlohmann::json::array()).empty(),
+      "client sync push should report stale-base conflicts");
+  Expect(
+      store.ReadBlock("maglev.client.block").value("block", nlohmann::json::object())
+          .value("title", std::string{}) == "Maglev Client Block",
+      "client sync conflict should not overwrite remote block");
+
   const auto redacted = store.Search(nlohmann::json{
       {"query", "scheduled merge"},
       {"scope_id", "scope.other"},

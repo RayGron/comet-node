@@ -205,6 +205,9 @@ HttpResponse SkillsServer::HandlePost(const HttpRequest& request) {
   if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "skills") {
     return BuildJsonResponse(201, store_.CreateSkill(ParseJsonBody(request)));
   }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "sync") {
+    return BuildJsonResponse(200, SyncFromController());
+  }
   if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "skills" && parts[2] == "resolve") {
     return BuildJsonResponse(200, store_.ResolveSkills(ParseJsonBody(request)));
   }
@@ -290,10 +293,13 @@ void SkillsServer::StartControllerSyncLoop() {
   });
 }
 
-void SkillsServer::SyncFromController() {
+nlohmann::json SkillsServer::SyncFromController() {
   if (config_.controller_url.empty() || config_.plane_name.empty() ||
       config_.plane_name == "unknown") {
-    return;
+    return nlohmann::json{
+        {"status", "skipped"},
+        {"reason", "controller_url_or_plane_name_missing"},
+    };
   }
 
   try {
@@ -305,18 +311,32 @@ void SkillsServer::SyncFromController() {
         "GET",
         path,
         "",
-        {{"Accept", "application/json"}, {"Cache-Control", "no-store"}});
+        {
+            {"Accept", "application/json"},
+            {"Cache-Control", "no-store"},
+            {"X-Naim-Plane-Runtime-Role", "skills"},
+            {"X-Naim-Plane-Runtime-Plane", config_.plane_name},
+            {"X-Naim-Plane-Runtime-Instance", config_.instance_name},
+            {"X-Naim-Plane-Runtime-Node", config_.node_name},
+        });
     if (response.status_code != 200) {
       std::cerr << "[naim-skills] controller sync skipped: status="
                 << response.status_code << " path=" << path << "\n";
-      return;
+      return nlohmann::json{
+          {"status", "skipped"},
+          {"reason", "controller_status"},
+          {"status_code", response.status_code},
+      };
     }
 
     const auto payload = nlohmann::json::parse(response.body, nullptr, false);
     if (payload.is_discarded() || !payload.is_object() ||
         !payload.contains("skills") || !payload.at("skills").is_array()) {
       std::cerr << "[naim-skills] controller sync skipped: malformed payload\n";
-      return;
+      return nlohmann::json{
+          {"status", "skipped"},
+          {"reason", "malformed_controller_payload"},
+      };
     }
 
     std::set<std::string> selected_ids;
@@ -348,8 +368,17 @@ void SkillsServer::SyncFromController() {
     }
 
     std::cout << "[naim-skills] controller sync ok skills=" << synced_count << "\n";
+    return nlohmann::json{
+        {"status", "ok"},
+        {"skills", synced_count},
+        {"plane_name", config_.plane_name},
+    };
   } catch (const std::exception& error) {
     std::cerr << "[naim-skills] controller sync failed: " << error.what() << "\n";
+    return nlohmann::json{
+        {"status", "error"},
+        {"message", error.what()},
+    };
   }
 }
 

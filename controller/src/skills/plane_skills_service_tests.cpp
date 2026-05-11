@@ -22,6 +22,7 @@
 #include "browsing/plane_browsing_service.h"
 #include "plane/plane_dashboard_skills_summary_service.h"
 #include "skills/knowledge_vault_common_skills.h"
+#include "skills/maglev_workflow_skills.h"
 #include "skills/plane_skill_contextual_resolver_service.h"
 #include "skills/plane_skills_service.h"
 
@@ -1515,6 +1516,22 @@ std::string MakeInvalidUtf8Text() {
   return std::string("broken-\xC3\x28-value", 15);
 }
 
+json BuildMaglevWorkflowRuntimeSkills() {
+  json skills = json::array();
+  for (const auto& definition :
+       naim::controller::MaglevWorkflowSkillDefinitions()) {
+    skills.push_back(json{
+        {"id", definition.id},
+        {"name", definition.name},
+        {"description", definition.description},
+        {"content", definition.content},
+        {"match_terms", definition.match_terms},
+        {"enabled", true},
+    });
+  }
+  return skills;
+}
+
 }  // namespace
 
 int main() {
@@ -2543,6 +2560,69 @@ int main() {
                   selection.selected_skill_ids.end(),
           "resolver should select common Knowledge Vault search skill");
       std::cout << "ok: contextual-resolver-selects-knowledge-vault-common-skill" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(BuildMaglevWorkflowRuntimeSkills());
+      auto desired_state =
+          BuildDesiredState("maglev-service", naim::controller::MaglevWorkflowSkillIds());
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      naim::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"messages",
+                    json::array(
+                        {json{{"role", "user"},
+                              {"content",
+                               "Какие slash commands есть внутри Maglev dialog workflow?"}}})}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.candidate_count == 4 &&
+              std::find(
+                  selection.selected_skill_ids.begin(),
+                  selection.selected_skill_ids.end(),
+                  "maglev-client-workflow") !=
+                  selection.selected_skill_ids.end(),
+          "resolver should select Maglev workflow skill for dialog command prompts");
+      std::cout << "ok: contextual-resolver-selects-maglev-client-workflow-skill" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(BuildMaglevWorkflowRuntimeSkills());
+      auto desired_state =
+          BuildDesiredState("maglev-service", naim::controller::MaglevWorkflowSkillIds());
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      naim::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"messages",
+                    json::array(
+                        {json{{"role", "user"},
+                              {"content",
+                               "Запомни это через /remember и потом найди в локальном "
+                               "Knowledge Vault с цитатами."}}})}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.candidate_count == 4 &&
+              std::find(
+                  selection.selected_skill_ids.begin(),
+                  selection.selected_skill_ids.end(),
+                  "maglev-client-knowledge-vault-local-first") !=
+                  selection.selected_skill_ids.end(),
+          "resolver should select Maglev local Knowledge Vault skill");
+      std::cout << "ok: contextual-resolver-selects-maglev-local-kv-skill" << '\n';
     }
 
     {

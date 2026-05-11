@@ -10,7 +10,9 @@
 #include "naim/state/desired_state_v2_validator.h"
 #include "naim/state/sqlite_store.h"
 #include "plane/plane_mutation_service.h"
+#include "skills/code_agent_common_skills.h"
 #include "skills/knowledge_vault_common_skills.h"
+#include "skills/maglev_workflow_skills.h"
 #include "skills/plane_skill_catalog_service.h"
 #include "skills/skills_factory_service.h"
 
@@ -69,6 +71,7 @@ naim::controller::PlaneMutationService MakeMutationService() {
       [](const std::string&) -> naim::controller::PlaneService {
         throw std::runtime_error("plane service should not be used in skills tests");
       };
+  deps.enable_runtime_sync_after_apply = false;
   return naim::controller::PlaneMutationService(std::move(deps));
 }
 
@@ -132,7 +135,9 @@ int main() {
             return fallback;
           });
       const auto payload = factory_service.BuildListPayload(db_path.string());
-      Expect(payload.at("skills").size() == 4, "factory list should contain seeded common skills");
+      Expect(
+          payload.at("skills").size() == 24,
+          "factory list should contain seeded built-in skills");
       Expect(payload.at("groups").size() == 0, "factory list should start without explicit groups");
       const auto& item = FindSkillById(payload.at("skills"), "skill-alpha");
       Expect(item.at("id").get<std::string>() == "skill-alpha", "factory skill id mismatch");
@@ -158,6 +163,39 @@ int main() {
       Expect(
           !common_item.at("internal").get<bool>(),
           "common Knowledge Vault skill should be user-visible");
+      const auto& maglev_item =
+          FindSkillById(payload.at("skills"), "maglev-client-workflow");
+      Expect(
+          maglev_item.at("group_path").get<std::string>() == "maglev",
+          "Maglev workflow skill should belong to the maglev group");
+      Expect(
+          !maglev_item.at("internal").get<bool>(),
+          "Maglev workflow skill should be user-visible");
+      Expect(
+          maglev_item.at("content").get<std::string>().find("/skill-add requires") !=
+              std::string::npos,
+          "Maglev workflow skill should document file-path skill import");
+      Expect(
+          maglev_item.at("content").get<std::string>().find("pasted-JSON prompt flow") !=
+              std::string::npos,
+          "Maglev workflow skill should guard against pasted JSON prompt guidance");
+      Expect(
+          store.LoadSkillsFactorySkill("maglev-client-knowledge-vault-local-first")
+              .has_value(),
+          "Maglev Knowledge Vault skill record should be seeded");
+      const auto& remote_ops_item = FindSkillById(payload.at("skills"), "code-agent-remote-ops");
+      Expect(
+          remote_ops_item.at("group_path").get<std::string>() ==
+              "code-agent/operations",
+          "stable remote ops skill should be grouped under code-agent operations");
+      Expect(
+          store.LoadSkillsFactorySkill("code-agent-build-and-test").has_value(),
+          "stable build-and-test skill record should be seeded");
+      for (const auto& skill_id : naim::controller::CodeAgentCommonSkillIds()) {
+        Expect(
+            !skill_id.starts_with("skill-"),
+            "seeded code-agent skills should use stable semantic ids");
+      }
 
       const auto deleted =
           factory_service.DeleteSkill(db_path.string(), "skill-alpha", temp_root.string());
@@ -211,6 +249,77 @@ int main() {
                   std::vector<std::string>({"existing-skill"}),
           "Knowledge Vault common skills should not attach without enabled knowledge");
       std::cout << "ok: knowledge-vault-common-skills-auto-attach" << '\n';
+    }
+
+    {
+      naim::ControllerStore store(db_path.string());
+      store.Initialize();
+      store.UpsertSkillsFactorySkill(naim::SkillsFactorySkillRecord{
+          "skill-mirror-a",
+          "Mirror A",
+          "test/mirror",
+          "Mirror A description",
+          "Mirror A content",
+          {"mirror-a"},
+          false,
+          "",
+          "",
+      });
+      store.UpsertSkillsFactorySkill(naim::SkillsFactorySkillRecord{
+          "skill-mirror-b",
+          "Mirror B",
+          "test/mirror",
+          "Mirror B description",
+          "Mirror B content",
+          {"mirror-b"},
+          false,
+          "",
+          "",
+      });
+
+      SeedDesiredState(
+          store,
+          BuildDesiredState(
+              "binding-mirror-plane",
+              {"skill-mirror-a", "skill-mirror-b"}),
+          7);
+      const auto first_binding =
+          store.LoadPlaneSkillBinding("binding-mirror-plane", "skill-mirror-a");
+      Expect(
+          first_binding.has_value(),
+          "desired-state save should create missing skill binding");
+      Expect(
+          first_binding->enabled,
+          "auto-created skill binding should default to enabled");
+
+      store.UpsertPlaneSkillBinding(naim::PlaneSkillBindingRecord{
+          "binding-mirror-plane",
+          "skill-mirror-a",
+          false,
+          {"session-preserved"},
+          {"naim://preserved"},
+          "",
+          "",
+      });
+      SeedDesiredState(
+          store,
+          BuildDesiredState("binding-mirror-plane", {"skill-mirror-a"}),
+          8);
+      const auto preserved =
+          store.LoadPlaneSkillBinding("binding-mirror-plane", "skill-mirror-a");
+      Expect(
+          preserved.has_value(),
+          "desired-state save should preserve kept skill binding");
+      Expect(
+          !preserved->enabled,
+          "desired-state save should not overwrite binding enabled flag");
+      Expect(
+          preserved->session_ids == std::vector<std::string>({"session-preserved"}),
+          "desired-state save should preserve binding session ids");
+      Expect(
+          !store.LoadPlaneSkillBinding("binding-mirror-plane", "skill-mirror-b").has_value(),
+          "desired-state save should remove detached skill binding");
+      std::cout << "ok: desired-state-mirrors-plane-skill-bindings" << '\n';
     }
 
     {

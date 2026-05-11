@@ -94,6 +94,60 @@ bool IsPlaneBrowsingRequest(const std::string& path) {
   return ExtractPlaneFeatureRequestName(path, "/webgateway").has_value();
 }
 
+bool IsPlaneSkillsRootRequest(
+    const std::string& path,
+    const std::string& plane_name) {
+  const std::string root = "/api/v1/planes/" + plane_name + "/skills";
+  return path == root || path == root + "/";
+}
+
+bool IsTrustedPlaneRuntimeSkillsSyncRequest(
+    const HttpRequest& request,
+    const std::string& plane_name,
+    const naim::DesiredState& desired_state) {
+  if (request.method != "GET" ||
+      !IsPlaneSkillsRootRequest(request.path, plane_name) ||
+      !desired_state.skills.has_value() ||
+      !desired_state.skills->enabled) {
+    return false;
+  }
+
+  const auto role =
+      ControllerHttpServerSupport::FindHeaderString(
+          request,
+          "x-naim-plane-runtime-role");
+  const auto header_plane =
+      ControllerHttpServerSupport::FindHeaderString(
+          request,
+          "x-naim-plane-runtime-plane");
+  const auto instance_name =
+      ControllerHttpServerSupport::FindHeaderString(
+          request,
+          "x-naim-plane-runtime-instance");
+  const auto node_name =
+      ControllerHttpServerSupport::FindHeaderString(
+          request,
+          "x-naim-plane-runtime-node");
+  if (!role.has_value() ||
+      !header_plane.has_value() ||
+      !instance_name.has_value() ||
+      !node_name.has_value() ||
+      *role != "skills" ||
+      *header_plane != plane_name) {
+    return false;
+  }
+
+  for (const auto& instance : desired_state.instances) {
+    if (instance.role == naim::InstanceRole::Skills &&
+        instance.plane_name == plane_name &&
+        instance.name == *instance_name &&
+        instance.node_name == *node_name) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool IsHostdStorageRoleRequest(const std::string& path) {
   if (!ControllerHttpServerSupport::StartsWithPath(
           path,
@@ -779,6 +833,10 @@ HttpResponse ControllerHttpRouter::HandleRequest(
         if (plane_name.has_value()) {
           const auto desired_state = store.LoadDesiredState(*plane_name);
           if (desired_state.has_value() && desired_state->protected_plane &&
+              !IsTrustedPlaneRuntimeSkillsSyncRequest(
+                  request,
+                  *plane_name,
+                  *desired_state) &&
               !auth_support_
                    .AuthenticateProtectedPlaneRequest(
                        store,

@@ -51,7 +51,7 @@ class SkillsServer final {
   static nlohmann::json ParseJsonBody(const HttpRequest& request);
   HttpResponse BuildJsonResponse(int status_code, const nlohmann::json& payload) const;
   void StartControllerSyncLoop();
-  void SyncFromController();
+  nlohmann::json SyncFromController();
   void WriteRuntimeStatus(const std::string& phase, bool ready) const;
   void SetReadyFile(bool ready) const;
 

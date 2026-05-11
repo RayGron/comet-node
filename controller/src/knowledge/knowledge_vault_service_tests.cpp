@@ -301,6 +301,29 @@ void TestPlaneScopedDeleteRequestsCarryProtectedPlane() {
       "delete reason should be preserved");
 }
 
+void TestPlaneScopedClientSyncRequestAddsPlane() {
+  HttpRequest request;
+  request.method = "POST";
+  request.path = "/api/v1/planes/knowledge-plane/knowledge-vault/client-sync/export";
+  request.headers["Content-Type"] = "application/json";
+  request.body = R"({"include_blocks":true})";
+
+  const auto rewritten =
+      naim::controller::KnowledgeVaultHttpService::BuildPlaneScopedRequest(
+          request,
+          BuildKnowledgePlaneState(),
+          "knowledge-plane");
+  const auto body = nlohmann::json::parse(rewritten.body);
+
+  Expect(
+      rewritten.path == "/api/v1/knowledge-vault/client-sync/export",
+      "plane client sync path should rewrite to canonical knowledge route");
+  Expect(
+      body.value("plane_id", std::string{}) == "knowledge-plane",
+      "plane client sync should include plane id");
+  Expect(body.value("include_blocks", false), "client sync request body should be preserved");
+}
+
 }  // namespace
 
 int main() {
@@ -312,5 +335,6 @@ int main() {
   TestPlaneScopedSearchRequestKeepsExplicitBody();
   TestPlaneScopedMutationRequestsCarryProtectedPlane();
   TestPlaneScopedDeleteRequestsCarryProtectedPlane();
+  TestPlaneScopedClientSyncRequestAddsPlane();
   return 0;
 }

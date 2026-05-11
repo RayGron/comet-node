@@ -42,14 +42,27 @@ std::string ResolveRpcDevice(const naim::worker::WorkerConfig& config) {
   if (visible_devices != nullptr && *visible_devices != '\0') {
     const std::string value(visible_devices);
     if (value != "none" && value != "void") {
-      // Worker containers are pinned to a single visible NVIDIA device, so CUDA0
+      // Worker containers are pinned to a single visible NVIDIA device, so CUDA0/Vulkan0
       // is the stable in-container device name regardless of host GPU index.
+#ifdef NAIM_RUNTIME_CUDA
       return "CUDA0";
+
+#elif NAIM_RUNTIME_VULKAN
+
+      return "Vulkan0";
+#endif
     }
   }
 
   if (!config.gpu_device.empty()) {
+#ifdef NAIM_RUNTIME_CUDA
     return "CUDA0";
+
+#elif NAIM_RUNTIME_VULKAN
+
+    return "Vulkan0";
+#endif
+
   }
 
   return "";

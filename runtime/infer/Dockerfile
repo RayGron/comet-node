@@ -4,8 +4,9 @@ FROM ${BASE_IMAGE}
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y  \
       libgomp1 \
+      libvulkan1 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /runtime/bin/turboquant
 

@@ -3,11 +3,13 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "browsing/plane_browsing_service.h"
 #include "naim/state/sqlite_store.h"
 #include "skills/plane_skill_catalog_service.h"
 #include "skills/plane_skills_service.h"
+#include "voice/plane_voice_service.h"
 
 using nlohmann::json;
 
@@ -374,6 +376,101 @@ HttpResponse PlaneHttpService::HandlePlanePath(
             &error_message);
         if (!proxied.has_value()) {
           const int status_code = error_code == "webgateway_disabled" ? 409 : 503;
+          return support_.build_json_response(
+              status_code,
+              json{{"status", "error"},
+                   {"message", error_message},
+                   {"error", {{"code", error_code}, {"message", error_message}}},
+                   {"path", request.path}},
+              {});
+        }
+        return *proxied;
+      } catch (const std::exception& error) {
+        return support_.build_json_response(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
+            {});
+      }
+    }
+  }
+
+  const auto voice_listener_pos = remainder.find("/voice-listener");
+  if (voice_listener_pos != std::string::npos) {
+    const bool voice_listener_suffix_valid =
+        voice_listener_pos + std::string("/voice-listener").size() == remainder.size() ||
+        remainder.at(voice_listener_pos + std::string("/voice-listener").size()) == '/';
+    if (voice_listener_suffix_valid) {
+      const std::string plane_name = remainder.substr(0, voice_listener_pos);
+      const std::string path_suffix =
+          remainder.substr(voice_listener_pos + std::string("/voice-listener").size());
+      try {
+        naim::ControllerStore store(db_path);
+        store.Initialize();
+        const auto desired_state = store.LoadDesiredState(plane_name);
+        if (!desired_state.has_value()) {
+          return support_.build_json_response(
+              404,
+              json{{"status", "not_found"},
+                   {"message", "plane '" + plane_name + "' not found"},
+                   {"path", request.path}},
+              {});
+        }
+        const auto plane = store.LoadPlane(plane_name);
+        const std::optional<std::string> plane_state =
+            plane.has_value() ? std::optional<std::string>(plane->state) : std::nullopt;
+        const bool plane_runtime_ready =
+            plane.has_value() && plane->state == "running" &&
+            plane->generation <= plane->applied_generation;
+        std::optional<std::string> voice_plane_state = plane_state;
+        if (plane.has_value() && plane->state == "running" && !plane_runtime_ready) {
+          voice_plane_state = "starting";
+        }
+        const naim::controller::PlaneVoiceService voice_service;
+        if (path_suffix.empty() || path_suffix == "/" || path_suffix == "/status") {
+          if (request.method != "GET") {
+            return support_.build_json_response(
+                405, json{{"status", "method_not_allowed"}}, {});
+          }
+          return support_.build_json_response(
+              200,
+              voice_service.BuildStatusPayload(db_path, *desired_state, voice_plane_state),
+              {});
+        }
+        if (!plane_runtime_ready) {
+          return support_.build_json_response(
+              409,
+              json{{"status", "error"},
+                   {"message", "voice listener plane runtime is not ready"},
+                   {"error",
+                    {{"code", "voice_listener_plane_not_ready"},
+                     {"message", "voice listener plane runtime is not ready"}}},
+                   {"path", request.path}},
+              {});
+        }
+
+        std::vector<std::pair<std::string, std::string>> upstream_headers;
+        for (const auto& [key, value] : request.headers) {
+          if (key == "content-type" || key == "Content-Type") {
+            upstream_headers.emplace_back("Content-Type", value);
+          }
+        }
+        if (upstream_headers.empty()) {
+          upstream_headers.emplace_back("Content-Type", "application/octet-stream");
+        }
+
+        std::string error_code;
+        std::string error_message;
+        const auto proxied = voice_service.ProxyPlaneVoiceRequest(
+            db_path,
+            *desired_state,
+            request.method,
+            path_suffix,
+            request.body,
+            upstream_headers,
+            &error_code,
+            &error_message);
+        if (!proxied.has_value()) {
+          const int status_code = error_code == "voice_listener_disabled" ? 409 : 503;
           return support_.build_json_response(
               status_code,
               json{{"status", "error"},

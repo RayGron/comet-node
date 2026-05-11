@@ -94,6 +94,10 @@ bool IsPlaneBrowsingRequest(const std::string& path) {
   return ExtractPlaneFeatureRequestName(path, "/webgateway").has_value();
 }
 
+bool IsPlaneVoiceRequest(const std::string& path) {
+  return ExtractPlaneFeatureRequestName(path, "/voice-listener").has_value();
+}
+
 bool IsPlaneSkillsRootRequest(
     const std::string& path,
     const std::string& plane_name) {
@@ -793,6 +797,7 @@ HttpResponse ControllerHttpRouter::HandleRequest(
     const bool interaction_request = IsPlaneInteractionRequest(request.path);
     const bool skills_request = IsPlaneSkillsRequest(request.path);
     const bool browsing_request = IsPlaneBrowsingRequest(request.path);
+    const bool voice_request = IsPlaneVoiceRequest(request.path);
     if (browsing_request && !webgateway_routes_enabled_) {
       return deps_.build_json_response(
           404,
@@ -801,7 +806,7 @@ HttpResponse ControllerHttpRouter::HandleRequest(
                {"method", request.method}},
           {});
     }
-    if (!interaction_request && !skills_request && !browsing_request) {
+    if (!interaction_request && !skills_request && !browsing_request && !voice_request) {
       try {
         naim::ControllerStore store(db_path_);
         store.Initialize();
@@ -823,13 +828,18 @@ HttpResponse ControllerHttpRouter::HandleRequest(
                  {"path", request.path}},
             {});
       }
-    } else if (skills_request || browsing_request) {
+    } else if (skills_request || browsing_request || voice_request) {
       try {
         naim::ControllerStore store(db_path_);
         store.Initialize();
-        const auto plane_name = skills_request
-                                    ? ExtractPlaneFeatureRequestName(request.path, "/skills")
-                                    : ExtractPlaneFeatureRequestName(request.path, "/webgateway");
+        std::optional<std::string> plane_name;
+        if (skills_request) {
+          plane_name = ExtractPlaneFeatureRequestName(request.path, "/skills");
+        } else if (browsing_request) {
+          plane_name = ExtractPlaneFeatureRequestName(request.path, "/webgateway");
+        } else {
+          plane_name = ExtractPlaneFeatureRequestName(request.path, "/voice-listener");
+        }
         if (plane_name.has_value()) {
           const auto desired_state = store.LoadDesiredState(*plane_name);
           if (desired_state.has_value() && desired_state->protected_plane &&

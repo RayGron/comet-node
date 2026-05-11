@@ -106,6 +106,10 @@ voice_module_tag="${11:-naim/voice-module:dev}"
 build_dir="$("${script_dir}/print-build-dir.sh")"
 turboquant_build_dir="${NAIM_TURBOQUANT_BUILD_DIR:-${repo_root}/build-turboquant/linux/x64}"
 image_work_root="${NAIM_RUNTIME_IMAGE_CONTEXT_ROOT:-${build_dir}/image-contexts}"
+cmake_exe="$("${script_dir}/find-cmake.sh")"
+
+"${cmake_exe}" --build "${build_dir}" --target naim-voice-module-runtime-all
+
 mkdir -p "${image_work_root}"
 image_context="$(mktemp -d "${image_work_root}/runtime-image-context.XXXXXX")"
 cleanup_image_context() {

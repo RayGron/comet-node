@@ -514,6 +514,7 @@ int main() {
         return;
       }
 
+      const auto input_bytes = audio_bytes.size();
       AudioPcm audio = decode_audio_to_pcm(config, audio_bytes);
       std::fill(audio_bytes.begin(), audio_bytes.end(), '\0');
       const std::string raw_transcript = transcribe(ctx, config, audio);
@@ -531,7 +532,7 @@ int main() {
           transcript,
           config.language,
           duration_ms,
-          req.body.size(),
+          input_bytes,
           wake_phrase_detected,
           config.wake_phrase),
         "application/json"

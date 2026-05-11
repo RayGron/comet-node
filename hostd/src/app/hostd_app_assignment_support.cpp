@@ -566,7 +566,14 @@ void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
   const int port = payload.value("target_port", 0);
   const std::string method = payload.value("method", std::string{});
   const std::string path = payload.value("path", std::string{});
-  const std::string body = payload.value("body", std::string{});
+  std::string body = payload.value("body", std::string{});
+  if (payload.contains("body_base64") && payload.at("body_base64").is_string()) {
+    const auto encoded_body = payload.at("body_base64").get<std::string>();
+    if (!encoded_body.empty()) {
+      const auto bytes = naim::DecodeBytesBase64(encoded_body);
+      body.assign(bytes.begin(), bytes.end());
+    }
+  }
   const std::string policy_name = payload.value("policy", std::string("runtime"));
   HostdRuntimeProxyPolicy policy = HostdRuntimeProxyPolicy::Runtime;
   if (policy_name == "knowledge-vault") {

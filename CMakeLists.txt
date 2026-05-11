@@ -1864,6 +1864,7 @@ if(NOT WIN32)
       SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/runtime/voice"
       BINARY_DIR "${_naim_voice_module_build_dir}"
       CMAKE_ARGS ${_naim_voice_module_cmake_args}
+      BUILD_ALWAYS TRUE
       BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --target naim-voice-moduled
       INSTALL_COMMAND
         "${CMAKE_COMMAND}" -E copy_if_different

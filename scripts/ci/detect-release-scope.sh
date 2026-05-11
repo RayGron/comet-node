@@ -42,6 +42,9 @@ is_native_build_sensitive_path() {
     Dockerfile|*/Dockerfile|**/Dockerfile|docker/*|docker/**)
       return 0
       ;;
+    scripts/build-runtime-images.sh|scripts/release/build-and-push-images.sh)
+      return 0
+      ;;
   esac
 
   return 1

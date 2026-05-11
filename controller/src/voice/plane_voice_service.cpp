@@ -4,6 +4,7 @@
 #include <chrono>
 #include <thread>
 
+#include "naim/security/crypto_utils.h"
 #include "naim/state/sqlite_store.h"
 
 namespace naim::controller {
@@ -62,6 +63,14 @@ json BuildHeaderArray(
     result.push_back(json::array({key, value}));
   }
   return result;
+}
+
+std::string EncodeBodyBase64(const std::string& body) {
+  if (body.empty()) {
+    return "";
+  }
+  return naim::EncodeBytesBase64(
+      std::vector<unsigned char>(body.begin(), body.end()));
 }
 
 HttpResponse BuildProxyErrorResponse(
@@ -149,7 +158,7 @@ HttpResponse SendPlaneVoiceRequest(
           {"target_port", target.port},
           {"method", method},
           {"path", path},
-          {"body", body},
+          {"body_base64", EncodeBodyBase64(body)},
           {"headers", BuildHeaderArray(headers)},
           {"request_id", request_id},
           {"policy", "voice-listener"},

@@ -335,12 +335,8 @@ HttpResponse PlaneHttpService::HandlePlanePath(
         const std::optional<std::string> plane_state =
             plane.has_value() ? std::optional<std::string>(plane->state) : std::nullopt;
         const bool plane_runtime_ready =
-            plane.has_value() && plane->state == "running" &&
-            plane->generation <= plane->applied_generation;
+            plane.has_value() && plane->state == "running";
         std::optional<std::string> webgateway_plane_state = plane_state;
-        if (plane.has_value() && plane->state == "running" && !plane_runtime_ready) {
-          webgateway_plane_state = "starting";
-        }
         const naim::controller::PlaneBrowsingService browsing_service;
         if (path_suffix.empty() || path_suffix == "/" || path_suffix == "/status") {
           if (request.method != "GET") {
@@ -419,12 +415,8 @@ HttpResponse PlaneHttpService::HandlePlanePath(
         const std::optional<std::string> plane_state =
             plane.has_value() ? std::optional<std::string>(plane->state) : std::nullopt;
         const bool plane_runtime_ready =
-            plane.has_value() && plane->state == "running" &&
-            plane->generation <= plane->applied_generation;
+            plane.has_value() && plane->state == "running";
         std::optional<std::string> voice_plane_state = plane_state;
-        if (plane.has_value() && plane->state == "running" && !plane_runtime_ready) {
-          voice_plane_state = "starting";
-        }
         const naim::controller::PlaneVoiceService voice_service;
         if (path_suffix.empty() || path_suffix == "/" || path_suffix == "/status") {
           if (request.method != "GET") {

@@ -229,6 +229,7 @@ jobs:
         run: |
           set -euo pipefail
           repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
+          vcpkg_root_q="$(printf '%q' "${NAIM_HPC1_VCPKG_ROOT}")"
           password_file="/tmp/naim-registry-password-${GITHUB_RUN_ID}-${GITHUB_JOB}"
           cleanup() {
             ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
@@ -243,7 +244,7 @@ jobs:
             password_env=""
           fi
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_RELEASE_TAG='${NAIM_RELEASE_TAG}' NAIM_REGISTRY='${NAIM_REGISTRY}' NAIM_REGISTRY_PROJECT='${NAIM_REGISTRY_PROJECT}' NAIM_REGISTRY_USERNAME='${NAIM_REGISTRY_USERNAME}' ${password_env} bash scripts/ci/hpc1-build-push-harbor.sh"
+            "cd ${repo_q} && VCPKG_ROOT=${vcpkg_root_q} NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_RELEASE_TAG='${NAIM_RELEASE_TAG}' NAIM_REGISTRY='${NAIM_REGISTRY}' NAIM_REGISTRY_PROJECT='${NAIM_REGISTRY_PROJECT}' NAIM_REGISTRY_USERNAME='${NAIM_REGISTRY_USERNAME}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_COMPILER_CACHE='${NAIM_COMPILER_CACHE}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' ${password_env} bash scripts/ci/hpc1-build-push-harbor.sh"
 
   main-register-release:
     name: 4. main register Harbor release

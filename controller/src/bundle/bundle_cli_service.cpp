@@ -461,7 +461,7 @@ int BundleCliService::ApplyDesiredState(
   desired_state_policy_service_.ResolveDesiredStateDynamicPlacements(
       store, &effective_desired_state);
   EnsureKnowledgeVaultCommonSkills(store, &effective_desired_state);
-  EnsureMaglevWorkflowSkillRecords(store);
+  MaglevWorkflowSkillCatalog::EnsureRecords(store);
   desired_state_policy_service_.ValidateDesiredStateForControllerAdmission(
       store,
       effective_desired_state);

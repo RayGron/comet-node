@@ -135,8 +135,12 @@ int main() {
             return fallback;
           });
       const auto payload = factory_service.BuildListPayload(db_path.string());
+      const auto expected_seeded_skill_count =
+          1 + naim::controller::CodeAgentCommonSkillIds().size() +
+          naim::controller::KnowledgeVaultCommonSkillIds().size() +
+          naim::controller::MaglevWorkflowSkillCatalog::SkillIds().size();
       Expect(
-          payload.at("skills").size() == 24,
+          payload.at("skills").size() == expected_seeded_skill_count,
           "factory list should contain seeded built-in skills");
       Expect(payload.at("groups").size() == 0, "factory list should start without explicit groups");
       const auto& item = FindSkillById(payload.at("skills"), "skill-alpha");
@@ -183,6 +187,17 @@ int main() {
           store.LoadSkillsFactorySkill("maglev-client-knowledge-vault-local-first")
               .has_value(),
           "Maglev Knowledge Vault skill record should be seeded");
+      Expect(
+          store.LoadSkillsFactorySkill("maglev-secure-browsing-local-runtime")
+              .has_value(),
+          "Maglev Secure Browsing skill record should be seeded");
+      Expect(
+          store.LoadSkillsFactorySkill("maglev-plane-voice-capability")
+              .has_value(),
+          "Maglev voice capability skill record should be seeded");
+      Expect(
+          store.LoadSkillsFactorySkill("maglev-code-cicd-agent").has_value(),
+          "Maglev code and CI/CD skill record should be seeded");
       const auto& remote_ops_item = FindSkillById(payload.at("skills"), "code-agent-remote-ops");
       Expect(
           remote_ops_item.at("group_path").get<std::string>() ==

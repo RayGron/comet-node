@@ -91,7 +91,6 @@ ControllerSchedulerComponentFactory::StateAggregateLoaderInstance() const {
   static const StateAggregateLoader state_aggregate_loader(
       SchedulerDomainServiceInstance(),
       SchedulerViewServiceInstance(),
-      RuntimeSupportService(),
       Defaults().MaximumRebalanceIterationsPerGeneration());
   return state_aggregate_loader;
 }

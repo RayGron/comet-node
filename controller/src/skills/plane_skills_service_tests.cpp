@@ -1519,7 +1519,7 @@ std::string MakeInvalidUtf8Text() {
 json BuildMaglevWorkflowRuntimeSkills() {
   json skills = json::array();
   for (const auto& definition :
-       naim::controller::MaglevWorkflowSkillDefinitions()) {
+       naim::controller::MaglevWorkflowSkillCatalog::Definitions()) {
     skills.push_back(json{
         {"id", definition.id},
         {"name", definition.name},
@@ -2565,7 +2565,7 @@ int main() {
     {
       SkillRuntimeTestServer runtime(BuildMaglevWorkflowRuntimeSkills());
       auto desired_state =
-          BuildDesiredState("maglev-service", naim::controller::MaglevWorkflowSkillIds());
+          BuildDesiredState("maglev-service", naim::controller::MaglevWorkflowSkillCatalog::SkillIds());
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
@@ -2583,7 +2583,7 @@ int main() {
                                "Какие slash commands есть внутри Maglev dialog workflow?"}}})}});
       Expect(
           selection.mode == "contextual" &&
-              selection.candidate_count == 4 &&
+              selection.candidate_count == 7 &&
               std::find(
                   selection.selected_skill_ids.begin(),
                   selection.selected_skill_ids.end(),
@@ -2596,7 +2596,7 @@ int main() {
     {
       SkillRuntimeTestServer runtime(BuildMaglevWorkflowRuntimeSkills());
       auto desired_state =
-          BuildDesiredState("maglev-service", naim::controller::MaglevWorkflowSkillIds());
+          BuildDesiredState("maglev-service", naim::controller::MaglevWorkflowSkillCatalog::SkillIds());
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
@@ -2615,7 +2615,7 @@ int main() {
                                "Knowledge Vault с цитатами."}}})}});
       Expect(
           selection.mode == "contextual" &&
-              selection.candidate_count == 4 &&
+              selection.candidate_count == 7 &&
               std::find(
                   selection.selected_skill_ids.begin(),
                   selection.selected_skill_ids.end(),
@@ -2623,6 +2623,101 @@ int main() {
                   selection.selected_skill_ids.end(),
           "resolver should select Maglev local Knowledge Vault skill");
       std::cout << "ok: contextual-resolver-selects-maglev-local-kv-skill" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(BuildMaglevWorkflowRuntimeSkills());
+      auto desired_state =
+          BuildDesiredState("maglev-service", naim::controller::MaglevWorkflowSkillCatalog::SkillIds());
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      naim::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"messages",
+                    json::array(
+                        {json{{"role", "user"},
+                              {"content",
+                               "Найди информацию в интернете через isolated secure browsing "
+                               "и открой JS страницу вроде x.com."}}})}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.candidate_count == 7 &&
+              std::find(
+                  selection.selected_skill_ids.begin(),
+                  selection.selected_skill_ids.end(),
+                  "maglev-secure-browsing-local-runtime") !=
+                  selection.selected_skill_ids.end(),
+          "resolver should select Maglev local Secure Browsing skill");
+      std::cout << "ok: contextual-resolver-selects-maglev-secure-browsing-skill" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(BuildMaglevWorkflowRuntimeSkills());
+      auto desired_state =
+          BuildDesiredState("maglev-service", naim::controller::MaglevWorkflowSkillCatalog::SkillIds());
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      naim::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"messages",
+                    json::array(
+                        {json{{"role", "user"},
+                              {"content",
+                               "Проверь voice commands, ASR latency и wake phrase в maglev."}}})}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.candidate_count == 7 &&
+              std::find(
+                  selection.selected_skill_ids.begin(),
+                  selection.selected_skill_ids.end(),
+                  "maglev-plane-voice-capability") !=
+                  selection.selected_skill_ids.end(),
+          "resolver should select Maglev plane voice capability skill");
+      std::cout << "ok: contextual-resolver-selects-maglev-voice-skill" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(BuildMaglevWorkflowRuntimeSkills());
+      auto desired_state =
+          BuildDesiredState("maglev-service", naim::controller::MaglevWorkflowSkillCatalog::SkillIds());
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      naim::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"messages",
+                    json::array(
+                        {json{{"role", "user"},
+                              {"content",
+                               "Используй Maglev как coding agent: проверь CI logs, "
+                               "запусти tests и подготовь deploy rollback plan."}}})}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.candidate_count == 7 &&
+              std::find(
+                  selection.selected_skill_ids.begin(),
+                  selection.selected_skill_ids.end(),
+                  "maglev-code-cicd-agent") !=
+                  selection.selected_skill_ids.end(),
+          "resolver should select Maglev code and CI/CD skill");
+      std::cout << "ok: contextual-resolver-selects-maglev-code-cicd-skill" << '\n';
     }
 
     {

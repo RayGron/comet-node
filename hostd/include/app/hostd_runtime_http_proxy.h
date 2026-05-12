@@ -13,6 +13,7 @@ enum class HostdRuntimeProxyPolicy {
   Skills,
   WebGateway,
   Voice,
+  VoiceMaker,
 };
 
 struct HostdRuntimeHttpResponse {

@@ -498,7 +498,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
              {"message", "source_url or source_urls is required"}},
         {});
   }
-  if (detected_source_format == "unknown") {
+  if (detected_source_format == "unknown" && desired_output_format != "tts/omnivoice") {
     return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
@@ -506,21 +506,23 @@ HttpResponse ModelLibraryService::EnqueueDownload(
         {});
   }
   if (desired_output_format != "gguf" && desired_output_format != "safetensors" &&
-      desired_output_format != "whisper.cpp") {
+      desired_output_format != "whisper.cpp" && desired_output_format != "tts/omnivoice") {
     return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
-             {"message", "format must be gguf, safetensors, whisper.cpp, or source"}},
+             {"message", "format must be gguf, safetensors, whisper.cpp, tts/omnivoice, or source"}},
         {});
   }
-  if (detected_source_format == "gguf" && desired_output_format != "gguf") {
+  if (detected_source_format == "gguf" && desired_output_format != "gguf" &&
+      desired_output_format != "tts/omnivoice") {
     return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
              {"message", "gguf sources can only retain GGUF output format"}},
         {});
   }
-  if (detected_source_format == "whisper.cpp" && desired_output_format != "whisper.cpp") {
+  if (detected_source_format == "whisper.cpp" && desired_output_format != "whisper.cpp" &&
+      desired_output_format != "tts/omnivoice") {
     return support_.build_json_response(
         400,
         json{{"status", "bad_request"},

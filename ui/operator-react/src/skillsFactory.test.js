@@ -379,6 +379,63 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(reparsed.voiceListenerModelPath).toBe("/models/whisper/ggml-large-v3-turbo-q5_0.bin");
   });
 
+  it("round-trips voice maker capability through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "voice-maker-plane";
+    form.modelPath = "/models/qwen";
+    form.voiceMakerEnabled = true;
+    form.voiceMakerLanguage = "auto";
+    form.voiceMakerModelPath = "/models/tts/omnivoice-neutral";
+    form.voiceMakerModelRef = "omnivoice-neutral";
+    form.voiceMakerModelNodeName = "storage1";
+    form.voiceMakerModelPaths = ["/models/tts/omnivoice-neutral"];
+    form.voiceMakerModelMountPath = "/models/omnivoice";
+    form.voiceMakerInstruct = "neutral, clear voice";
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.features.voice_maker).toEqual({
+      enabled: true,
+      language: "auto",
+      voice_mode: "design",
+      instruct: "neutral, clear voice",
+      format: "wav",
+      model: {
+        name: "omnivoice-neutral",
+        source: {
+          type: "library",
+          path: "/models/tts/omnivoice-neutral",
+          node: "storage1",
+          paths: ["/models/tts/omnivoice-neutral"],
+        },
+        mount_path: "/models/omnivoice",
+        env: "OMNIVOICE_MODEL_PATH",
+        required: true,
+      },
+      env: {
+        HOST: "0.0.0.0",
+        PORT: "18150",
+        OMNIVOICE_LANGUAGE: "auto",
+        OMNIVOICE_VOICE_MODE: "design",
+        OMNIVOICE_INSTRUCT: "neutral, clear voice",
+      },
+      storage: {
+        mount_path: "/naim/private",
+        size_gb: 8,
+      },
+    });
+    expect(desiredState.resources.voice_maker).toEqual({
+      gpu_enabled: true,
+      gpu_fraction: 0.25,
+      memory_cap_mb: 4096,
+      share_mode: "shared",
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.voiceMakerEnabled).toBe(true);
+    expect(reparsed.voiceMakerModelPath).toBe("/models/tts/omnivoice-neutral");
+    expect(reparsed.voiceMakerModelMountPath).toBe("/models/omnivoice");
+  });
+
   it("preserves interaction runtime image through desired state v2 round-trip", () => {
     const desiredState = {
       ...buildDesiredStateV2FromForm(buildNewPlaneFormState()),

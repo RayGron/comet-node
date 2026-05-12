@@ -184,6 +184,42 @@ json ToJson(const VoiceListenerFeatureSpec& voice_listener) {
   return result;
 }
 
+json ToJson(const VoiceMakerFeatureSpec& voice_maker) {
+  json source = {
+      {"type", "library"},
+      {"path", voice_maker.model.source_path},
+  };
+  if (!voice_maker.model.source_node_name.empty()) {
+    source["node"] = voice_maker.model.source_node_name;
+  }
+  if (!voice_maker.model.source_paths.empty() &&
+      !(voice_maker.model.source_paths.size() == 1 &&
+        voice_maker.model.source_paths.front() == voice_maker.model.source_path)) {
+    source["paths"] = voice_maker.model.source_paths;
+  }
+  json model = {
+      {"name", voice_maker.model.name.empty() ? std::string("omnivoice")
+                                               : voice_maker.model.name},
+      {"source", std::move(source)},
+      {"mount_path", voice_maker.model.mount_path},
+      {"env", voice_maker.model.env_var.empty() ? std::string("OMNIVOICE_MODEL_PATH")
+                                                 : voice_maker.model.env_var},
+      {"required", voice_maker.model.required},
+  };
+  json result = {
+      {"enabled", voice_maker.enabled},
+      {"language", voice_maker.language},
+      {"voice_mode", voice_maker.voice_mode},
+      {"instruct", voice_maker.instruct},
+      {"format", voice_maker.output_format},
+      {"model", std::move(model)},
+  };
+  if (voice_maker.image.has_value() && !voice_maker.image->empty()) {
+    result["image"] = *voice_maker.image;
+  }
+  return result;
+}
+
 json ToJson(const SecuredConnectionFeatureSpec& secured_connection) {
   return json{
       {"enabled", secured_connection.enabled},
@@ -266,7 +302,8 @@ json DesiredStateToJson(const DesiredState& state) {
     result["knowledge"] = SettingsCodecs::ToJson(*state.knowledge);
   }
   if (state.turboquant.has_value() || state.context_compression.has_value() ||
-      state.voice_listener.has_value() || state.secured_connection.has_value()) {
+      state.voice_listener.has_value() || state.voice_maker.has_value() ||
+      state.secured_connection.has_value()) {
     json features = json::object();
     if (state.turboquant.has_value()) {
       features["turboquant"] = ToJson(*state.turboquant);
@@ -276,6 +313,9 @@ json DesiredStateToJson(const DesiredState& state) {
     }
     if (state.voice_listener.has_value()) {
       features["voice_listener"] = ToJson(*state.voice_listener);
+    }
+    if (state.voice_maker.has_value()) {
+      features["voice_maker"] = ToJson(*state.voice_maker);
     }
     if (state.secured_connection.has_value()) {
       features["secured_connection"] = ToJson(*state.secured_connection);
@@ -414,6 +454,44 @@ DesiredState DesiredStateFromJson(const json& value) {
         voice_listener.model.required = model_json.value("required", true);
       }
       state.voice_listener = std::move(voice_listener);
+    }
+    if (features.contains("voice_maker") &&
+        features.at("voice_maker").is_object()) {
+      VoiceMakerFeatureSpec voice_maker;
+      const auto& voice_maker_json = features.at("voice_maker");
+      voice_maker.enabled = voice_maker_json.value("enabled", voice_maker.enabled);
+      voice_maker.language = voice_maker_json.value("language", voice_maker.language);
+      voice_maker.voice_mode = voice_maker_json.value("voice_mode", voice_maker.voice_mode);
+      voice_maker.instruct = voice_maker_json.value("instruct", voice_maker.instruct);
+      voice_maker.output_format = voice_maker_json.value("format", voice_maker.output_format);
+      if (voice_maker_json.contains("image") &&
+          voice_maker_json.at("image").is_string()) {
+        voice_maker.image = voice_maker_json.at("image").get<std::string>();
+      }
+      if (voice_maker_json.contains("model") &&
+          voice_maker_json.at("model").is_object()) {
+        const auto& model_json = voice_maker_json.at("model");
+        const json source_json = model_json.contains("source") && model_json.at("source").is_object()
+                                     ? model_json.at("source")
+                                     : json::object();
+        voice_maker.model.name = model_json.value("name", std::string("omnivoice"));
+        voice_maker.model.source_path = source_json.value("path", std::string{});
+        voice_maker.model.source_node_name = source_json.value("node", std::string{});
+        if (source_json.contains("paths") && source_json.at("paths").is_array()) {
+          voice_maker.model.source_paths =
+              source_json.at("paths").get<std::vector<std::string>>();
+        }
+        if (voice_maker.model.source_paths.empty() &&
+            !voice_maker.model.source_path.empty()) {
+          voice_maker.model.source_paths.push_back(voice_maker.model.source_path);
+        }
+        voice_maker.model.mount_path =
+            model_json.value("mount_path", std::string("/models/omnivoice"));
+        voice_maker.model.env_var =
+            model_json.value("env", std::string("OMNIVOICE_MODEL_PATH"));
+        voice_maker.model.required = model_json.value("required", true);
+      }
+      state.voice_maker = std::move(voice_maker);
     }
     if (features.contains("secured_connection") &&
         features.at("secured_connection").is_object()) {

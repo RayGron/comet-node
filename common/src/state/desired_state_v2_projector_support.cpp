@@ -45,6 +45,8 @@ nlohmann::json DesiredStateV2ProjectorSupport::ProjectServiceStorage(
                       ? disk->size_gb == kDefaultWebGatewayPrivateDiskSizeGb
                       : disk->kind == DiskKind::InteractionPrivate
                           ? disk->size_gb == kDefaultAppPrivateDiskSizeGb
+                          : disk->kind == DiskKind::VoiceMakerPrivate
+                              ? disk->size_gb == kDefaultVoiceMakerPrivateDiskSizeGb
                       : disk->size_gb == kDefaultAppPrivateDiskSizeGb;
   const bool default_mount = disk->container_path == "/naim/private";
   if (default_size && default_mount) {

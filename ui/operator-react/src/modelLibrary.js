@@ -2,6 +2,7 @@ export const MODEL_LIBRARY_FORMAT_OPTIONS = [
   { value: "source", label: "Source files" },
   { value: "gguf", label: "GGUF" },
   { value: "safetensors", label: "safetensors" },
+  { value: "tts/omnivoice", label: "OmniVoice TTS" },
 ];
 
 export const MODEL_LIBRARY_GGUF_QUANTIZATIONS = [

@@ -174,6 +174,48 @@ void ValidateVoiceListenerModel(const nlohmann::json& model) {
   }
 }
 
+void ValidateVoiceMakerModel(const nlohmann::json& model) {
+  if (!model.is_object()) {
+    throw std::runtime_error("desired-state v2 features.voice_maker.model must be an object");
+  }
+  if (!model.contains("source") || !model.at("source").is_object()) {
+    throw std::runtime_error("desired-state v2 features.voice_maker.model.source must be an object");
+  }
+  const auto& source = model.at("source");
+  if (source.value("type", std::string{}) != "library") {
+    throw std::runtime_error("desired-state v2 features.voice_maker.model.source.type must be library");
+  }
+  if (!IsAbsolutePath(source.value("path", std::string{}))) {
+    throw std::runtime_error("desired-state v2 features.voice_maker.model.source.path must be an absolute path");
+  }
+  if (source.contains("paths")) {
+    if (!source.at("paths").is_array()) {
+      throw std::runtime_error("desired-state v2 features.voice_maker.model.source.paths must be an array");
+    }
+    for (const auto& path : source.at("paths")) {
+      if (!path.is_string() || !IsAbsolutePath(path.get<std::string>())) {
+        throw std::runtime_error("desired-state v2 features.voice_maker.model.source.paths items must be absolute paths");
+      }
+    }
+  }
+  if (source.contains("node") && !source.at("node").is_string()) {
+    throw std::runtime_error("desired-state v2 features.voice_maker.model.source.node must be a string");
+  }
+  if (!IsAbsolutePath(model.value("mount_path", std::string{}))) {
+    throw std::runtime_error("desired-state v2 features.voice_maker.model.mount_path must be an absolute path");
+  }
+  if (model.contains("env") && !model.at("env").is_string()) {
+    throw std::runtime_error("desired-state v2 features.voice_maker.model.env must be a string");
+  }
+  const std::string env_name = model.value("env", std::string("OMNIVOICE_MODEL_PATH"));
+  if (!env_name.empty() && !IsValidEnvName(env_name)) {
+    throw std::runtime_error("desired-state v2 features.voice_maker.model.env must be a valid environment variable name");
+  }
+  if (model.contains("required") && !model.at("required").is_boolean()) {
+    throw std::runtime_error("desired-state v2 features.voice_maker.model.required must be a boolean");
+  }
+}
+
 }  // namespace
 
 void DesiredStateV2Validator::ValidateOrThrow(const nlohmann::json& value) {
@@ -513,6 +555,42 @@ void DesiredStateV2Validator::ValidateFeatures() const {
           "desired-state v2 features.secured_connection requires at least one user_id when enabled");
     }
   }
+  if (features.contains("voice_maker")) {
+    if (!features.at("voice_maker").is_object()) {
+      throw std::runtime_error("desired-state v2 features.voice_maker must be an object");
+    }
+    const auto& voice_maker = features.at("voice_maker");
+    if (voice_maker.contains("enabled") && !voice_maker.at("enabled").is_boolean()) {
+      throw std::runtime_error("desired-state v2 features.voice_maker.enabled must be a boolean");
+    }
+    const bool enabled = voice_maker.value("enabled", false);
+    if (voice_maker.contains("language") && !voice_maker.at("language").is_string()) {
+      throw std::runtime_error("desired-state v2 features.voice_maker.language must be a string");
+    }
+    if (voice_maker.contains("voice_mode") && !voice_maker.at("voice_mode").is_string()) {
+      throw std::runtime_error("desired-state v2 features.voice_maker.voice_mode must be a string");
+    }
+    if (voice_maker.contains("instruct") && !voice_maker.at("instruct").is_string()) {
+      throw std::runtime_error("desired-state v2 features.voice_maker.instruct must be a string");
+    }
+    if (voice_maker.contains("format") && !voice_maker.at("format").is_string()) {
+      throw std::runtime_error("desired-state v2 features.voice_maker.format must be a string");
+    }
+    if (voice_maker.contains("image") && !voice_maker.at("image").is_string()) {
+      throw std::runtime_error("desired-state v2 features.voice_maker.image must be a string");
+    }
+    if (enabled) {
+      if (plane_mode != "llm") {
+        throw std::runtime_error("desired-state v2 features.voice_maker requires plane_mode=llm");
+      }
+      if (!voice_maker.contains("model")) {
+        throw std::runtime_error("desired-state v2 features.voice_maker requires model when enabled");
+      }
+      ValidateVoiceMakerModel(voice_maker.at("model"));
+    } else if (voice_maker.contains("model")) {
+      ValidateVoiceMakerModel(voice_maker.at("model"));
+    }
+  }
 }
 
 void DesiredStateV2Validator::ValidateRuntime() const {
@@ -797,6 +875,9 @@ void DesiredStateV2Validator::ValidateVoiceModuleResources() const {
   }
   if (resources.contains("voice_listener")) {
     ValidateGpuResourceBlock(resources.at("voice_listener"), "resources.voice_listener", true);
+  }
+  if (resources.contains("voice_maker")) {
+    ValidateGpuResourceBlock(resources.at("voice_maker"), "resources.voice_maker", true);
   }
 }
 

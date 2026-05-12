@@ -30,8 +30,9 @@ require_release_sha() {
 
 docker_login_with_retry() {
   local attempt=1
-  local max_attempts="${NAIM_REGISTRY_LOGIN_ATTEMPTS:-5}"
+  local max_attempts="${NAIM_REGISTRY_LOGIN_ATTEMPTS:-8}"
   local delay_sec="${NAIM_REGISTRY_LOGIN_RETRY_DELAY_SEC:-5}"
+  local max_delay_sec="${NAIM_REGISTRY_LOGIN_MAX_RETRY_DELAY_SEC:-120}"
 
   while (( attempt <= max_attempts )); do
     if docker login "${NAIM_REGISTRY}" \
@@ -46,6 +47,9 @@ docker_login_with_retry() {
     echo "warning: docker login failed on attempt ${attempt}/${max_attempts}; retrying in ${delay_sec}s" >&2
     sleep "${delay_sec}"
     delay_sec=$(( delay_sec * 2 ))
+    if (( delay_sec > max_delay_sec )); then
+      delay_sec="${max_delay_sec}"
+    fi
     attempt=$(( attempt + 1 ))
   done
 }

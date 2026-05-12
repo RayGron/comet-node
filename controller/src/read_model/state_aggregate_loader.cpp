@@ -1,18 +1,15 @@
 #include "read_model/state_aggregate_loader.h"
 
 #include <set>
-#include <utility>
 
 namespace naim::controller {
 
 StateAggregateLoader::StateAggregateLoader(
     const SchedulerDomainService& scheduler_domain_service,
     const SchedulerViewService& scheduler_view_service,
-    ControllerRuntimeSupportService runtime_support_service,
     int maximum_rebalance_iterations)
     : scheduler_domain_service_(scheduler_domain_service),
       scheduler_view_service_(scheduler_view_service),
-      runtime_support_service_(std::move(runtime_support_service)),
       maximum_rebalance_iterations_(maximum_rebalance_iterations) {}
 
 SchedulerRuntimeView StateAggregateLoader::LoadSchedulerRuntimeView(

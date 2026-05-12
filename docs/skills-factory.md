@@ -155,12 +155,17 @@ plane:
 - `maglev-client-knowledge-vault-local-first`
 - `maglev-client-skills-factory-workflow`
 - `maglev-client-sync-and-conflicts`
+- `maglev-secure-browsing-local-runtime`
+- `maglev-plane-voice-capability`
+- `maglev-code-cicd-agent`
 
 These records use the `maglev` group path and are intended to be attached explicitly by
 the Maglev desired state, not auto-attached to every LLM plane. They steer the model to
 treat Maglev as a dialog-first client with client-owned Skills and Knowledge Vault state.
 The normal request-time path is local-first; controller and plane APIs are bootstrap,
-sync, administration, and fallback channels.
+sync, administration, and fallback channels. Secure Browsing is local to the client,
+Voice Listener remains a plane capability, and CI/CD or deployment operations stay behind
+Maglev's local tool policy and approval gates.
 
 ## Operator UI
 

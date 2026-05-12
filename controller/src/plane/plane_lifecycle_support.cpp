@@ -20,7 +20,7 @@ void ControllerPlaneLifecycleSupport::PrepareDesiredState(
   desired_state_policy_service_.ApplyRegisteredHostExecutionModes(store, desired_state);
   desired_state_policy_service_.ResolveDesiredStateDynamicPlacements(store, desired_state);
   EnsureKnowledgeVaultCommonSkills(store, desired_state);
-  EnsureMaglevWorkflowSkillRecords(store);
+  MaglevWorkflowSkillCatalog::EnsureRecords(store);
   desired_state_policy_service_.ValidateDesiredStateForControllerAdmission(
       store,
       *desired_state);

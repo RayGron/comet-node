@@ -4,7 +4,6 @@
 #include <string>
 #include <vector>
 
-#include "infra/controller_runtime_support_service.h"
 #include "observation/plane_observation_matcher.h"
 #include "plane/dashboard_service.h"
 #include "scheduler/scheduler_domain_service.h"
@@ -20,7 +19,6 @@ class StateAggregateLoader {
   StateAggregateLoader(
       const SchedulerDomainService& scheduler_domain_service,
       const SchedulerViewService& scheduler_view_service,
-      ControllerRuntimeSupportService runtime_support_service,
       int maximum_rebalance_iterations);
 
   RolloutActionsViewData LoadRolloutActionsViewData(
@@ -46,7 +44,6 @@ class StateAggregateLoader {
 
   const SchedulerDomainService& scheduler_domain_service_;
   const SchedulerViewService& scheduler_view_service_;
-  ControllerRuntimeSupportService runtime_support_service_;
   PlaneObservationMatcher plane_observation_matcher_;
   int maximum_rebalance_iterations_ = 1;
 };

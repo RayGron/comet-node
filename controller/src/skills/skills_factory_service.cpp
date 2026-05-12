@@ -257,7 +257,7 @@ nlohmann::json SkillsFactoryService::BuildListPayload(const std::string& db_path
   store.Initialize();
   EnsureCodeAgentCommonSkillRecords(store);
   EnsureKnowledgeVaultCommonSkillRecords(store);
-  EnsureMaglevWorkflowSkillRecords(store);
+  MaglevWorkflowSkillCatalog::EnsureRecords(store);
   json items = json::array();
   for (const auto& skill : store.LoadSkillsFactorySkills()) {
     items.push_back(BuildSkillPayload(db_path, skill));
@@ -276,7 +276,7 @@ nlohmann::json SkillsFactoryService::BuildSkillPayload(
   store.Initialize();
   EnsureCodeAgentCommonSkillRecords(store);
   EnsureKnowledgeVaultCommonSkillRecords(store);
-  EnsureMaglevWorkflowSkillRecords(store);
+  MaglevWorkflowSkillCatalog::EnsureRecords(store);
   const auto skill = store.LoadSkillsFactorySkill(skill_id);
   if (!skill.has_value()) {
     throw std::runtime_error("skill '" + skill_id + "' not found");

@@ -271,7 +271,6 @@ naim::controller::DashboardService MakeDashboardService() {
   static const naim::controller::StateAggregateLoader state_aggregate_loader(
       scheduler_domain_service,
       scheduler_view_service,
-      runtime_support_service,
       1);
   static const naim::controller::DashboardService dashboard_service(
       naim::controller::DashboardService::Deps{

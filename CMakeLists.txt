@@ -431,6 +431,7 @@ naim_enable_strict_warnings(naim-model-library-tests)
 add_executable(
   naim-controller-apply-state-tests
   controller/src/bundle/bundle_cli_service.cpp
+  controller/src/skills/maglev_workflow_skill_catalog.cpp
   controller/src/bundle/bundle_cli_service_tests.cpp
   controller/src/infra/controller_action.cpp
   controller/src/http/controller_http_transport.cpp
@@ -480,6 +481,7 @@ add_executable(
   controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
   controller/src/interaction/interaction_service.cpp
   controller/src/plane/plane_dashboard_skills_summary_service.cpp
+  controller/src/skills/maglev_workflow_skill_catalog.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
@@ -502,6 +504,7 @@ add_executable(
   controller/src/plane/plane_deletion_support.cpp
   controller/src/plane/plane_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
+  controller/src/skills/maglev_workflow_skill_catalog.cpp
   controller/src/skills/plane_skill_catalog_service.cpp
   controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp
@@ -1512,6 +1515,7 @@ add_executable(
   controller/src/scheduler/scheduler_view_service.cpp
   controller/src/plane/plane_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
+  controller/src/skills/maglev_workflow_skill_catalog.cpp
   controller/src/skills/plane_skill_catalog_service.cpp
   controller/src/skills/plane_skills_target_resolver.cpp
   controller/src/skills/plane_skills_service.cpp

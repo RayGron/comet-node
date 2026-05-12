@@ -14,9 +14,7 @@ PORT = int(os.environ.get("PORT", os.environ.get("NAIM_VOICE_MAKER_PORT", "18150
 MODEL_PATH = os.environ.get("OMNIVOICE_MODEL_PATH", "/models/omnivoice")
 DEFAULT_LANGUAGE = os.environ.get("OMNIVOICE_LANGUAGE", "auto")
 DEFAULT_VOICE_MODE = os.environ.get("OMNIVOICE_VOICE_MODE", "design")
-DEFAULT_INSTRUCT = os.environ.get(
-    "OMNIVOICE_INSTRUCT", "neutral, clear voice, medium pitch, calm style"
-)
+DEFAULT_INSTRUCT = os.environ.get("OMNIVOICE_INSTRUCT", "female, moderate pitch")
 DEFAULT_FORMAT = os.environ.get("OMNIVOICE_OUTPUT_FORMAT", "wav")
 FAKE_MODE = os.environ.get("NAIM_VOICE_MAKER_FAKE", "0") == "1"
 STATUS_PATH = os.environ.get(

@@ -101,6 +101,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+set(DOCKER_BASE_IMAGE "ubuntu:26.04")
+
 if(NAIM_ENABLE_LLAMA_RUNTIME)
   include(FetchContent)
 
@@ -217,6 +219,7 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
     message(STATUS "Naim CUDA native architectures: ${NAIM_CUDA_NATIVE}")
     message(STATUS "Naim CUDA explicit architectures: ${NAIM_CUDA_ARCHITECTURES}")
     add_definitions(-DNAIM_RUNTIME_CUDA)
+    set(DOCKER_BASE_IMAGE "nvidia/cuda:13.0.1-runtime-ubuntu24.04")
 
   elseif(NAIM_ENABLE_VULKAN)
     find_package(Vulkan REQUIRED)
@@ -232,6 +235,8 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
     add_definitions(-DNAIM_RUNTIME_NONE)
 
   endif()
+
+  configure_file_in(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/runtime/base/Dockerfile")
 
   if(NAIM_LLAMA_CPP_SOURCE_DIR AND EXISTS "${NAIM_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
     FetchContent_Declare(

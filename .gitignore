@@ -79,3 +79,6 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# configured files
+runtime/base/Dockerfile

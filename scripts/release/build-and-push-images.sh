@@ -128,11 +128,16 @@ PY
 docker_push_with_retry() {
   local ref="$1"
   local attempt=1
-  local max_attempts="${NAIM_REGISTRY_PUSH_ATTEMPTS:-5}"
+  local max_attempts="${NAIM_REGISTRY_PUSH_ATTEMPTS:-8}"
   local delay_sec="${NAIM_REGISTRY_PUSH_RETRY_DELAY_SEC:-5}"
+  local max_delay_sec="${NAIM_REGISTRY_PUSH_MAX_RETRY_DELAY_SEC:-120}"
 
   while (( attempt <= max_attempts )); do
     if docker push "${ref}"; then
+      return 0
+    fi
+    if docker manifest inspect "${ref}" >/dev/null 2>&1; then
+      echo "warning: docker push returned failure, but remote manifest is available: ${ref}" >&2
       return 0
     fi
     if (( attempt == max_attempts )); then
@@ -142,6 +147,9 @@ docker_push_with_retry() {
     echo "warning: docker push failed on attempt ${attempt}/${max_attempts}; retrying in ${delay_sec}s: ${ref}" >&2
     sleep "${delay_sec}"
     delay_sec=$(( delay_sec * 2 ))
+    if (( delay_sec > max_delay_sec )); then
+      delay_sec="${max_delay_sec}"
+    fi
     attempt=$(( attempt + 1 ))
   done
 }

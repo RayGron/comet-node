@@ -216,6 +216,7 @@ knowledge_ref="$(image_ref knowledge-runtime)"
 webgateway_ref="$(image_ref webgateway-runtime)"
 interaction_ref="$(image_ref interaction-runtime)"
 voice_module_ref="$(image_ref voice-module)"
+voice_maker_ref="$(image_ref voice-maker)"
 controller_ref="$(image_ref controller)"
 hostd_ref="$(image_ref hostd)"
 
@@ -231,6 +232,7 @@ build_args=(
   "${hostd_ref}"
   "${knowledge_ref}"
   "${voice_module_ref}"
+  "${voice_maker_ref}"
 )
 
 build_runtime_images "${build_args[@]}"
@@ -246,6 +248,7 @@ declare -a image_names=(
   webgateway-runtime
   interaction-runtime
   voice-module
+  voice-maker
 )
 if [[ "${skip_web_ui}" != "yes" ]]; then
   image_names+=(web-ui)

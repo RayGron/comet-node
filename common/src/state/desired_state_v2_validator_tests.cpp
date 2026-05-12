@@ -2173,6 +2173,80 @@ int main() {
       std::cout << "ok: gpu-voice-listener-plane" << '\n';
     }
 
+    {
+      const json voice_maker_plane{
+          {"version", 2},
+          {"plane_name", "voice-maker-plane"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-voice-maker"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"topology",
+           {{"nodes",
+             json::array(
+                 {{{"name", "local-hostd"},
+                   {"execution_mode", "mixed"},
+                   {"gpu_memory_mb", {{"0", 24576}}}}})}}},
+          {"worker",
+           {{"assignments",
+             json::array({{{"node", "local-hostd"}, {"gpu_device", "0"}}})}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
+          {"features",
+           {{"voice_maker",
+             {{"enabled", true},
+              {"language", "auto"},
+              {"voice_mode", "design"},
+              {"instruct", "neutral, clear voice"},
+              {"model",
+               {{"name", "omnivoice-neutral"},
+                {"source",
+                 {{"type", "library"},
+                  {"path", "/models/tts/omnivoice-neutral"},
+                  {"node", "storage1"},
+                  {"paths", json::array({"/models/tts/omnivoice-neutral"})}}},
+                {"mount_path", "/models/omnivoice"},
+                {"env", "OMNIVOICE_MODEL_PATH"},
+                {"required", true}}}}}}},
+          {"resources",
+           {{"voice_maker",
+             {{"gpu_enabled", true},
+              {"share_mode", "shared"},
+              {"gpu_fraction", 0.25},
+              {"memory_cap_mb", 4096}}}}},
+      };
+      const auto state = RenderValid(voice_maker_plane, "voice-maker-plane");
+      const auto voice = FindInstance(state, "voice-maker-voice-maker-plane");
+      Expect(voice.role == naim::InstanceRole::VoiceMaker,
+             "voice-maker-plane: voice maker role mismatch");
+      Expect(voice.node_name == "local-hostd",
+             "voice-maker-plane: voice maker should colocate with a GPU worker");
+      Expect(voice.gpu_device == std::optional<std::string>("0"),
+             "voice-maker-plane: voice maker gpu device mismatch");
+      Expect(voice.environment.at("NAIM_VOICE_MAKER_PORT") == "18150",
+             "voice-maker-plane: voice maker port env mismatch");
+      Expect(voice.environment.at("OMNIVOICE_MODEL_PATH") == "/models/omnivoice",
+             "voice-maker-plane: OmniVoice model env mismatch");
+      Expect(voice.app_model_mounts.size() == 1,
+             "voice-maker-plane: voice maker should mount OmniVoice model");
+      const auto app = FindInstance(state, "app-voice-maker-plane");
+      Expect(app.environment.at("NAIM_VOICE_MAKER_BASE") ==
+                 "http://voice-maker-voice-maker-plane:18150/v1",
+             "voice-maker-plane: primary app should receive voice maker base");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.at("features").at("voice_maker").at("instruct") ==
+                 "neutral, clear voice",
+             "voice-maker-plane: projector should preserve voice instruction");
+      Expect(projected.at("resources").at("voice_maker").at("gpu_enabled") == true,
+             "voice-maker-plane: projector should preserve voice maker GPU enablement");
+      std::cout << "ok: voice-maker-plane" << '\n';
+    }
+
     ExpectInvalid(
         json{
             {"version", 2},

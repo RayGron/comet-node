@@ -119,6 +119,7 @@ print("worker_image=" + shlex.quote(images.get("worker-runtime", "")))
 print("skills_image=" + shlex.quote(images.get("skills-runtime", "")))
 print("webgateway_image=" + shlex.quote(images.get("webgateway-runtime", "")))
 print("interaction_image=" + shlex.quote(images.get("interaction-runtime", "")))
+print("voice_maker_image=" + shlex.quote(images.get("voice-maker", "")))
 PY
 )"
 
@@ -436,6 +437,7 @@ managed_images = {
 }
 interaction_image = images.get("interaction-runtime", "")
 voice_module_image = images.get("voice-module", "")
+voice_maker_image = images.get("voice-maker", "")
 
 def is_managed_image(value: object) -> bool:
     if not isinstance(value, str):
@@ -491,6 +493,14 @@ for row in rows:
             if current is None or is_managed_image(current):
                 if current != voice_module_image:
                     voice_listener["image"] = voice_module_image
+                    changed = True
+    if isinstance(features, dict) and voice_maker_image:
+        voice_maker = features.get("voice_maker")
+        if isinstance(voice_maker, dict) and voice_maker.get("enabled") is True:
+            current = voice_maker.get("image")
+            if current is None or is_managed_image(current):
+                if current != voice_maker_image:
+                    voice_maker["image"] = voice_maker_image
                     changed = True
     if not changed:
         continue

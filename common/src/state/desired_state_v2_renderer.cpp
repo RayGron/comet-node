@@ -41,8 +41,14 @@ constexpr int kInteractionPublishedPortSpan = 10000;
 constexpr int kVoiceModuleContainerPort = 18140;
 constexpr int kVoiceModulePublishedPortBase = 54000;
 constexpr int kVoiceModulePublishedPortSpan = 10000;
+constexpr int kDefaultVoiceMakerPrivateDiskSizeGb = 8;
+constexpr int kVoiceMakerContainerPort = 18150;
+constexpr int kVoiceMakerPublishedPortBase = 55000;
+constexpr int kVoiceMakerPublishedPortSpan = 10000;
 constexpr double kDefaultVoiceModuleGpuFraction = 0.2;
 constexpr int kDefaultVoiceModuleGpuPriority = 50;
+constexpr double kDefaultVoiceMakerGpuFraction = 0.25;
+constexpr int kDefaultVoiceMakerGpuPriority = 45;
 constexpr std::string_view kTurboQuantDefaultCacheTypeK = "turbo4";
 constexpr std::string_view kTurboQuantDefaultCacheTypeV = "turbo4";
 
@@ -138,6 +144,11 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
                          resources_json_.at("voice_listener").is_object()
                      ? resources_json_.at("voice_listener")
                      : nlohmann::json::object())),
+      voice_maker_resources_json_(
+          resources_json_.contains("voice_maker") &&
+                  resources_json_.at("voice_maker").is_object()
+              ? resources_json_.at("voice_maker")
+              : nlohmann::json::object()),
       app_json_(nlohmann::json::object()),
       skills_json_(
           value.contains("skills") && value.at("skills").is_object() ? value.at("skills")
@@ -195,6 +206,7 @@ DesiredState DesiredStateV2Renderer::RenderState() {
   RenderWebGatewayInstance();
   RenderInteractionInstance();
   RenderVoiceModuleInstance();
+  RenderVoiceMakerInstance();
   return state_;
 }
 
@@ -388,6 +400,45 @@ void DesiredStateV2Renderer::RenderFeatures() {
         voice_listener.model.required = model_json.value("required", true);
       }
       state_.voice_listener = std::move(voice_listener);
+    }
+  }
+  if (features_json_.contains("voice_maker") &&
+      features_json_.at("voice_maker").is_object()) {
+    const auto& voice_json = features_json_.at("voice_maker");
+    if (voice_json.value("enabled", false)) {
+      VoiceMakerFeatureSpec voice_maker;
+      voice_maker.enabled = true;
+      voice_maker.language = voice_json.value("language", voice_maker.language);
+      voice_maker.voice_mode = voice_json.value("voice_mode", voice_maker.voice_mode);
+      voice_maker.instruct = voice_json.value("instruct", voice_maker.instruct);
+      voice_maker.output_format = voice_json.value("format", voice_maker.output_format);
+      if (voice_json.contains("image") && voice_json.at("image").is_string()) {
+        voice_maker.image = voice_json.at("image").get<std::string>();
+      }
+      if (voice_json.contains("model") && voice_json.at("model").is_object()) {
+        const auto& model_json = voice_json.at("model");
+        const nlohmann::json source_json =
+            model_json.contains("source") && model_json.at("source").is_object()
+                ? model_json.at("source")
+                : nlohmann::json::object();
+        voice_maker.model.name = model_json.value("name", std::string("omnivoice"));
+        voice_maker.model.source_path = source_json.value("path", std::string{});
+        voice_maker.model.source_node_name = source_json.value("node", std::string{});
+        if (source_json.contains("paths") && source_json.at("paths").is_array()) {
+          voice_maker.model.source_paths =
+              source_json.at("paths").get<std::vector<std::string>>();
+        }
+        if (voice_maker.model.source_paths.empty() &&
+            !voice_maker.model.source_path.empty()) {
+          voice_maker.model.source_paths.push_back(voice_maker.model.source_path);
+        }
+        voice_maker.model.mount_path =
+            model_json.value("mount_path", std::string("/models/omnivoice"));
+        voice_maker.model.env_var =
+            model_json.value("env", std::string("OMNIVOICE_MODEL_PATH"));
+        voice_maker.model.required = model_json.value("required", true);
+      }
+      state_.voice_maker = std::move(voice_maker);
     }
   }
   if (features_json_.contains("secured_connection") &&
@@ -903,6 +954,12 @@ void DesiredStateV2Renderer::RenderAppInstance() {
           std::to_string(kVoiceModuleContainerPort) + "/v1";
       app.environment["NAIM_VOICE_LISTENER_WAKE_PHRASE"] = state_.voice_listener->wake_phrase;
     }
+    if (state_.voice_maker.has_value() && state_.voice_maker->enabled) {
+      app.depends_on.push_back(BuildVoiceMakerInstanceName());
+      app.environment["NAIM_VOICE_MAKER_BASE"] =
+          "http://" + BuildVoiceMakerInstanceName() + ":" +
+          std::to_string(kVoiceMakerContainerPort) + "/v1";
+    }
     if (app_entry.contains("env") && app_entry.at("env").is_object()) {
       const auto app_env = app_entry.at("env").get<std::map<std::string, std::string>>();
       app.environment.insert(app_env.begin(), app_env.end());
@@ -1268,6 +1325,133 @@ void DesiredStateV2Renderer::RenderVoiceModuleInstance() {
   state_.disks.push_back(std::move(voice_private_disk));
 }
 
+void DesiredStateV2Renderer::RenderVoiceMakerInstance() {
+  if (!state_.voice_maker.has_value() || !state_.voice_maker->enabled) {
+    return;
+  }
+
+  const auto& config = *state_.voice_maker;
+  const bool gpu_enabled = VoiceMakerGpuEnabled();
+  const auto voice_gpu_host = gpu_enabled ? SelectVoiceGpuHost(state_) : std::nullopt;
+  if (gpu_enabled && !voice_gpu_host.has_value()) {
+    throw std::runtime_error(
+        "desired-state v2 resources.voice_maker requires at least one worker with gpu_device");
+  }
+  InstanceSpec voice;
+  voice.name = BuildVoiceMakerInstanceName();
+  voice.role = InstanceRole::VoiceMaker;
+  voice.plane_name = state_.plane_name;
+  voice.node_name = voice_gpu_host.has_value() ? voice_gpu_host->node_name : ResolveAppNodeName();
+  voice.image = config.image.has_value() && !config.image->empty()
+                    ? *config.image
+                    : std::string("naim/voice-maker:dev");
+  const nlohmann::json voice_json =
+      features_json_.contains("voice_maker") &&
+              features_json_.at("voice_maker").is_object()
+          ? features_json_.at("voice_maker")
+          : nlohmann::json::object();
+  voice.command = BuildCommandFromStartSpec(
+      voice_json.value("start", nlohmann::json::object()),
+      "python3 /runtime/voice-maker/server.py");
+  voice.private_disk_name = voice.name + "-private";
+  voice.shared_disk_name =
+      InstanceNeedsSharedDiskMount(voice.role) ? state_.plane_shared_disk_name : "";
+  voice.private_disk_size_gb =
+      ExtractPrivateDiskSizeGb(voice_json, kDefaultVoiceMakerPrivateDiskSizeGb, "storage");
+  if (voice_gpu_host.has_value()) {
+    const auto& resources = VoiceMakerResources();
+    voice.gpu_device = voice_gpu_host->gpu_device;
+    voice.placement_mode = PlacementMode::Manual;
+    voice.share_mode =
+        ParseGpuShareMode(resources.value("share_mode", std::string("shared")));
+    voice.gpu_fraction =
+        resources.value("gpu_fraction", kDefaultVoiceMakerGpuFraction);
+    voice.priority = resources.value("priority", kDefaultVoiceMakerGpuPriority);
+    voice.preemptible =
+        resources.value("preemptible", voice.share_mode == GpuShareMode::BestEffort);
+    voice.memory_cap_mb = resources.contains("memory_cap_mb")
+                              ? std::optional<int>(resources.at("memory_cap_mb").get<int>())
+                              : std::nullopt;
+  }
+  voice.environment = {
+      {"NAIM_PLANE_NAME", state_.plane_name},
+      {"NAIM_INSTANCE_NAME", voice.name},
+      {"NAIM_INSTANCE_ROLE", "voice-maker"},
+      {"NAIM_NODE_NAME", voice.node_name},
+      {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
+      {"NAIM_VOICE_MAKER_PORT", std::to_string(kVoiceMakerContainerPort)},
+      {"NAIM_VOICE_MAKER_RUNTIME_STATUS_PATH", "/naim/private/voice-maker-runtime-status.json"},
+      {"OMNIVOICE_LANGUAGE", config.language},
+      {"OMNIVOICE_VOICE_MODE", config.voice_mode},
+      {"OMNIVOICE_INSTRUCT", config.instruct},
+      {"OMNIVOICE_OUTPUT_FORMAT", config.output_format},
+      {"HOST", "0.0.0.0"},
+      {"PORT", std::to_string(kVoiceMakerContainerPort)},
+      {"NAIM_CONTROLLER_URL", "http://controller.internal:18080"},
+      {"NAIM_CONTROL_ROOT", state_.control_root},
+  };
+  if (voice_json.contains("env") && voice_json.at("env").is_object()) {
+    const auto custom_env = voice_json.at("env").get<std::map<std::string, std::string>>();
+    for (const auto& [key, value] : custom_env) {
+      voice.environment[key] = value;
+    }
+  }
+  AppModelMountSpec model_mount = config.model;
+  if (model_mount.name.empty()) {
+    model_mount.name = "omnivoice";
+  }
+  if (model_mount.mount_path.empty()) {
+    model_mount.mount_path = "/models/omnivoice";
+  }
+  if (model_mount.env_var.empty()) {
+    model_mount.env_var = "OMNIVOICE_MODEL_PATH";
+  }
+  if (model_mount.source_paths.empty() && !model_mount.source_path.empty()) {
+    model_mount.source_paths.push_back(model_mount.source_path);
+  }
+  model_mount.host_path = BuildAppModelHostPath(
+      voice.name,
+      model_mount.name,
+      model_mount.mount_path,
+      model_mount.source_path);
+  voice.environment[model_mount.env_var] = model_mount.mount_path;
+  voice.app_model_mounts.push_back(std::move(model_mount));
+  voice.labels = {
+      {"naim.plane", state_.plane_name},
+      {"naim.role", "voice-maker"},
+      {"naim.node", voice.node_name},
+  };
+  if (voice_json.contains("publish") && voice_json.at("publish").is_array()) {
+    for (const auto& port_json : voice_json.at("publish")) {
+      voice.published_ports.push_back(PublishedPort{
+          port_json.value("host_ip", std::string("127.0.0.1")),
+          port_json.value("host_port", 0),
+          port_json.value("container_port", 0),
+      });
+    }
+  }
+  if (voice.published_ports.empty()) {
+    voice.published_ports.push_back(PublishedPort{
+        "127.0.0.1",
+        BuildVoiceMakerHostPort(),
+        kVoiceMakerContainerPort,
+    });
+  }
+  state_.instances.push_back(voice);
+
+  DiskSpec voice_private_disk;
+  voice_private_disk.name = voice.private_disk_name;
+  voice_private_disk.kind = DiskKind::VoiceMakerPrivate;
+  voice_private_disk.plane_name = state_.plane_name;
+  voice_private_disk.owner_name = voice.name;
+  voice_private_disk.node_name = voice.node_name;
+  voice_private_disk.host_path = BuildInstancePrivateHostPath(voice.name);
+  voice_private_disk.container_path =
+      ExtractPrivateMountPath(voice_json, "/naim/private", "storage");
+  voice_private_disk.size_gb = voice.private_disk_size_gb;
+  state_.disks.push_back(std::move(voice_private_disk));
+}
+
 void DesiredStateV2Renderer::RenderInteractionInstance() {
   if (state_.plane_mode != PlaneMode::Llm) {
     return;
@@ -1360,6 +1544,26 @@ const nlohmann::json& DesiredStateV2Renderer::VoiceModuleResources() const {
 
 bool DesiredStateV2Renderer::VoiceModuleGpuEnabled() const {
   const auto& resources = VoiceModuleResources();
+  if (resources.empty()) {
+    return false;
+  }
+  if (resources.contains("gpu_enabled")) {
+    return resources.value("gpu_enabled", false);
+  }
+  if (resources.contains("enabled")) {
+    return resources.value("enabled", false);
+  }
+  return resources.contains("share_mode") || resources.contains("gpu_fraction") ||
+      resources.contains("memory_cap_mb") || resources.contains("priority") ||
+      resources.contains("preemptible");
+}
+
+const nlohmann::json& DesiredStateV2Renderer::VoiceMakerResources() const {
+  return voice_maker_resources_json_;
+}
+
+bool DesiredStateV2Renderer::VoiceMakerGpuEnabled() const {
+  const auto& resources = VoiceMakerResources();
   if (resources.empty()) {
     return false;
   }
@@ -1618,6 +1822,10 @@ std::string DesiredStateV2Renderer::BuildVoiceModuleInstanceName() const {
   return "voice-module-" + state_.plane_name;
 }
 
+std::string DesiredStateV2Renderer::BuildVoiceMakerInstanceName() const {
+  return "voice-maker-" + state_.plane_name;
+}
+
 std::string DesiredStateV2Renderer::BuildPlaneSharedHostPath() const {
   return "/var/lib/naim/disks/planes/" + state_.plane_name + "/shared";
 }
@@ -1738,6 +1946,13 @@ int DesiredStateV2Renderer::BuildVoiceModuleHostPort() const {
       StablePortHash(state_.plane_name + ":" + BuildVoiceModuleInstanceName()) %
       kVoiceModulePublishedPortSpan;
   return kVoiceModulePublishedPortBase + static_cast<int>(offset);
+}
+
+int DesiredStateV2Renderer::BuildVoiceMakerHostPort() const {
+  const uint32_t offset =
+      StablePortHash(state_.plane_name + ":" + BuildVoiceMakerInstanceName()) %
+      kVoiceMakerPublishedPortSpan;
+  return kVoiceMakerPublishedPortBase + static_cast<int>(offset);
 }
 
 std::string DesiredStateV2Renderer::DefaultInferRuntimeBackend() const {

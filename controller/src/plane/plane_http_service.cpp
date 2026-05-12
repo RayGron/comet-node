@@ -481,6 +481,96 @@ HttpResponse PlaneHttpService::HandlePlanePath(
     }
   }
 
+  const auto voice_maker_pos = remainder.find("/voice-maker");
+  if (voice_maker_pos != std::string::npos) {
+    const bool voice_maker_suffix_valid =
+        voice_maker_pos + std::string("/voice-maker").size() == remainder.size() ||
+        remainder.at(voice_maker_pos + std::string("/voice-maker").size()) == '/';
+    if (voice_maker_suffix_valid) {
+      const std::string plane_name = remainder.substr(0, voice_maker_pos);
+      const std::string path_suffix =
+          remainder.substr(voice_maker_pos + std::string("/voice-maker").size());
+      try {
+        naim::ControllerStore store(db_path);
+        store.Initialize();
+        const auto desired_state = store.LoadDesiredState(plane_name);
+        if (!desired_state.has_value()) {
+          return support_.build_json_response(
+              404,
+              json{{"status", "not_found"},
+                   {"message", "plane '" + plane_name + "' not found"},
+                   {"path", request.path}},
+              {});
+        }
+        const auto plane = store.LoadPlane(plane_name);
+        const std::optional<std::string> plane_state =
+            plane.has_value() ? std::optional<std::string>(plane->state) : std::nullopt;
+        const bool plane_runtime_ready =
+            plane.has_value() && plane->state == "running";
+        const naim::controller::PlaneVoiceMakerService voice_service;
+        if (path_suffix.empty() || path_suffix == "/" || path_suffix == "/status") {
+          if (request.method != "GET") {
+            return support_.build_json_response(
+                405, json{{"status", "method_not_allowed"}}, {});
+          }
+          return support_.build_json_response(
+              200,
+              voice_service.BuildStatusPayload(db_path, *desired_state, plane_state),
+              {});
+        }
+        if (!plane_runtime_ready) {
+          return support_.build_json_response(
+              409,
+              json{{"status", "error"},
+                   {"message", "voice maker plane runtime is not ready"},
+                   {"error",
+                    {{"code", "voice_maker_plane_not_ready"},
+                     {"message", "voice maker plane runtime is not ready"}}},
+                   {"path", request.path}},
+              {});
+        }
+
+        std::vector<std::pair<std::string, std::string>> upstream_headers;
+        for (const auto& [key, value] : request.headers) {
+          if (key == "content-type" || key == "Content-Type") {
+            upstream_headers.emplace_back("Content-Type", value);
+          }
+        }
+        if (upstream_headers.empty()) {
+          upstream_headers.emplace_back("Content-Type", "application/json");
+        }
+
+        std::string error_code;
+        std::string error_message;
+        const auto proxied = voice_service.ProxyPlaneVoiceMakerRequest(
+            db_path,
+            *desired_state,
+            request.method,
+            path_suffix,
+            request.body,
+            upstream_headers,
+            &error_code,
+            &error_message);
+        if (!proxied.has_value()) {
+          const int status_code = error_code == "voice_maker_disabled" ? 409 : 503;
+          return support_.build_json_response(
+              status_code,
+              json{{"status", "error"},
+                   {"message", error_message},
+                   {"error", {{"code", error_code}, {"message", error_message}}},
+                   {"path", request.path}},
+              {});
+        }
+        return *proxied;
+      } catch (const std::exception& error) {
+        return support_.build_json_response(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
+            {});
+      }
+    }
+  }
+
   const auto knowledge_vault_pos = remainder.find("/knowledge-vault");
   if (knowledge_vault_pos != std::string::npos) {
     const bool knowledge_vault_suffix_valid =

@@ -42,6 +42,19 @@ const InstanceSpec* FindVoiceInstance(const DesiredState& desired_state) {
   return &*it;
 }
 
+const InstanceSpec* FindVoiceMakerInstance(const DesiredState& desired_state) {
+  const auto it = std::find_if(
+      desired_state.instances.begin(),
+      desired_state.instances.end(),
+      [](const InstanceSpec& instance) {
+        return instance.role == InstanceRole::VoiceMaker;
+      });
+  if (it == desired_state.instances.end()) {
+    return nullptr;
+  }
+  return &*it;
+}
+
 std::string NormalizeVoicePathSuffix(const std::string& path_suffix) {
   if (path_suffix.empty() || path_suffix == "/" || path_suffix == "/transcribe") {
     return "/v1/transcribe";
@@ -49,6 +62,20 @@ std::string NormalizeVoicePathSuffix(const std::string& path_suffix) {
   if (path_suffix == "/health" || path_suffix == "/v1/transcribe" ||
       path_suffix == "/api/asr/transcribe") {
     return path_suffix;
+  }
+  if (path_suffix.front() == '/') {
+    return path_suffix;
+  }
+  return "/" + path_suffix;
+}
+
+std::string NormalizeVoiceMakerPathSuffix(const std::string& path_suffix) {
+  if (path_suffix.empty() || path_suffix == "/" || path_suffix == "/synthesize") {
+    return "/v1/synthesize";
+  }
+  if (path_suffix == "/health" || path_suffix == "/status" ||
+      path_suffix == "/v1/status" || path_suffix == "/v1/synthesize") {
+    return path_suffix == "/status" ? "/v1/status" : path_suffix;
   }
   if (path_suffix.front() == '/') {
     return path_suffix;
@@ -118,6 +145,8 @@ HttpResponse SendPlaneVoiceRequest(
     const std::string& db_path,
     const std::string& plane_name,
     const ControllerEndpointTarget& target,
+    const std::string& feature_name,
+    const std::string& policy_name,
     const std::string& method,
     const std::string& path,
     const std::string& body,
@@ -141,10 +170,10 @@ HttpResponse SendPlaneVoiceRequest(
   ControllerStore store(db_path);
   store.Initialize();
   const std::string request_id =
-      "voice-" + plane_name + "-" +
+      feature_name + "-" + plane_name + "-" +
       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
   const std::string proxy_plane_name =
-      "runtime-http-proxy:voice-listener:" + plane_name + ":" + request_id;
+      "runtime-http-proxy:" + feature_name + ":" + plane_name + ":" + request_id;
 
   HostAssignment assignment;
   assignment.node_name = target.node_name;
@@ -161,7 +190,7 @@ HttpResponse SendPlaneVoiceRequest(
           {"body_base64", EncodeBodyBase64(body)},
           {"headers", BuildHeaderArray(headers)},
           {"request_id", request_id},
-          {"policy", "voice-listener"},
+          {"policy", policy_name},
       }
           .dump();
   assignment.artifacts_root = "";
@@ -218,7 +247,9 @@ bool ProbeVoiceTargetOk(
     const ControllerEndpointTarget& target) {
   try {
     const auto response =
-        SendPlaneVoiceRequest(db_path, plane_name, target, "GET", "/health", "", {});
+        SendPlaneVoiceRequest(
+            db_path, plane_name, target, "voice-listener", "voice-listener",
+            "GET", "/health", "", {});
     return response.status_code >= 200 && response.status_code < 300;
   } catch (...) {
     return false;
@@ -323,6 +354,8 @@ nlohmann::json PlaneVoiceService::BuildStatusPayload(
           db_path,
           desired_state.plane_name,
           *target,
+          "voice-listener",
+          "voice-listener",
           "GET",
           "/health",
           "",
@@ -373,6 +406,8 @@ std::optional<HttpResponse> PlaneVoiceService::ProxyPlaneVoiceRequest(
         db_path,
         desired_state.plane_name,
         *target,
+        "voice-listener",
+        "voice-listener",
         method,
         NormalizeVoicePathSuffix(path_suffix),
         body,
@@ -380,6 +415,189 @@ std::optional<HttpResponse> PlaneVoiceService::ProxyPlaneVoiceRequest(
   } catch (const std::exception& error) {
     if (error_code != nullptr) {
       *error_code = "voice_listener_upstream_failed";
+    }
+    if (error_message != nullptr) {
+      *error_message = error.what();
+    }
+    return std::nullopt;
+  }
+}
+
+bool PlaneVoiceMakerService::IsEnabled(const DesiredState& desired_state) const {
+  return desired_state.voice_maker.has_value() &&
+         desired_state.voice_maker->enabled;
+}
+
+std::optional<ControllerEndpointTarget> PlaneVoiceMakerService::ResolveTarget(
+    const DesiredState& desired_state) const {
+  const auto* voice = FindVoiceMakerInstance(desired_state);
+  if (voice == nullptr) {
+    return std::nullopt;
+  }
+  const auto published = std::find_if(
+      voice->published_ports.begin(),
+      voice->published_ports.end(),
+      [](const PublishedPort& port) { return port.host_port > 0; });
+  if (published == voice->published_ports.end()) {
+    return std::nullopt;
+  }
+  ControllerEndpointTarget target;
+  target.host = NormalizeControllerTargetHost(*published);
+  target.port = published->host_port;
+  target.raw = "http://" + target.host + ":" + std::to_string(target.port);
+  target.node_name = voice->node_name;
+  if (!IsControllerLocalNode(target.node_name) && IsLoopbackTargetHost(target.host)) {
+    target.route_via_hostd_proxy = true;
+    target.route_mode = "hostd-runtime-proxy";
+  }
+  return target;
+}
+
+nlohmann::json PlaneVoiceMakerService::BuildStatusPayload(
+    const std::string& db_path,
+    const DesiredState& desired_state,
+    const std::optional<std::string>& plane_state) const {
+  const bool enabled = IsEnabled(desired_state);
+  const auto* voice_instance = FindVoiceMakerInstance(desired_state);
+  const auto target = ResolveTarget(desired_state);
+  const bool running_plane = plane_state.has_value() && *plane_state == "running";
+  const bool should_probe_runtime =
+      enabled && running_plane && target.has_value() && !target->route_via_hostd_proxy;
+  bool ready = enabled && running_plane && target.has_value() && target->route_via_hostd_proxy;
+  if (should_probe_runtime) {
+    try {
+      const auto response = SendPlaneVoiceRequest(
+          db_path,
+          desired_state.plane_name,
+          *target,
+          "voice-maker",
+          "voice-maker",
+          "GET",
+          "/health",
+          "",
+          {});
+      ready = response.status_code >= 200 && response.status_code < 300;
+    } catch (...) {
+      ready = false;
+    }
+  }
+
+  std::string reason = "ready";
+  if (!enabled) {
+    reason = "voice_maker_disabled";
+  } else if (!running_plane) {
+    reason = "plane_not_running";
+  } else if (!target.has_value()) {
+    reason = "target_missing";
+  } else if (!ready) {
+    reason = "target_unreachable";
+  }
+
+  nlohmann::json payload = {
+      {"status", "ok"},
+      {"voice_maker_enabled", enabled},
+      {"voice_maker_ready", ready},
+      {"reason", reason},
+      {"plane_name", desired_state.plane_name},
+      {"plane_state", plane_state.has_value() ? nlohmann::json(*plane_state)
+                                               : nlohmann::json(nullptr)},
+      {"voice_maker_container_name",
+       voice_instance != nullptr ? nlohmann::json(voice_instance->name)
+                                  : nlohmann::json(nullptr)},
+      {"voice_maker_target", target.has_value() ? nlohmann::json(target->raw)
+                                                 : nlohmann::json(nullptr)},
+      {"voice_maker_node_name",
+       target.has_value() && !target->node_name.empty()
+           ? nlohmann::json(target->node_name)
+           : nlohmann::json(nullptr)},
+      {"voice_maker_route_mode",
+       target.has_value() ? nlohmann::json(target->route_mode)
+                           : nlohmann::json(nullptr)},
+      {"language",
+       desired_state.voice_maker.has_value()
+           ? nlohmann::json(desired_state.voice_maker->language)
+           : nlohmann::json(nullptr)},
+      {"voice_mode",
+       desired_state.voice_maker.has_value()
+           ? nlohmann::json(desired_state.voice_maker->voice_mode)
+           : nlohmann::json(nullptr)},
+      {"format",
+       desired_state.voice_maker.has_value()
+           ? nlohmann::json(desired_state.voice_maker->output_format)
+           : nlohmann::json(nullptr)},
+      {"model_mount_path",
+       desired_state.voice_maker.has_value()
+           ? nlohmann::json(desired_state.voice_maker->model.mount_path)
+           : nlohmann::json(nullptr)},
+  };
+
+  if (ready && should_probe_runtime) {
+    try {
+      const auto response = SendPlaneVoiceRequest(
+          db_path,
+          desired_state.plane_name,
+          *target,
+          "voice-maker",
+          "voice-maker",
+          "GET",
+          "/v1/status",
+          "",
+          {});
+      if (!response.body.empty()) {
+        const auto runtime_status = nlohmann::json::parse(response.body, nullptr, false);
+        if (runtime_status.is_object()) {
+          payload["runtime"] = runtime_status;
+        }
+      }
+    } catch (...) {
+    }
+  }
+  return payload;
+}
+
+std::optional<HttpResponse> PlaneVoiceMakerService::ProxyPlaneVoiceMakerRequest(
+    const std::string& db_path,
+    const DesiredState& desired_state,
+    const std::string& method,
+    const std::string& path_suffix,
+    const std::string& body,
+    const std::vector<std::pair<std::string, std::string>>& headers,
+    std::string* error_code,
+    std::string* error_message) const {
+  if (!IsEnabled(desired_state)) {
+    if (error_code != nullptr) {
+      *error_code = "voice_maker_disabled";
+    }
+    if (error_message != nullptr) {
+      *error_message = "voice maker is not enabled for this plane";
+    }
+    return std::nullopt;
+  }
+  const auto target = ResolveTarget(desired_state);
+  if (!target.has_value()) {
+    if (error_code != nullptr) {
+      *error_code = "voice_maker_target_missing";
+    }
+    if (error_message != nullptr) {
+      *error_message = "voice maker service target is not available";
+    }
+    return std::nullopt;
+  }
+
+  try {
+    return SendPlaneVoiceRequest(
+        db_path,
+        desired_state.plane_name,
+        *target,
+        "voice-maker",
+        "voice-maker",
+        method,
+        NormalizeVoiceMakerPathSuffix(path_suffix),
+        body,
+        headers);
+  } catch (const std::exception& error) {
+    if (error_code != nullptr) {
+      *error_code = "voice_maker_upstream_failed";
     }
     if (error_message != nullptr) {
       *error_message = error.what();

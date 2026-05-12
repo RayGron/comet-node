@@ -21,6 +21,8 @@ using ProjectorSupport = DesiredStateV2ProjectorSupport;
 constexpr int kDefaultSharedDiskSizeGb = ProjectorSupport::kDefaultSharedDiskSizeGb;
 constexpr double kDefaultVoiceModuleGpuFraction = 0.2;
 constexpr int kDefaultVoiceModuleGpuPriority = 50;
+constexpr double kDefaultVoiceMakerGpuFraction = 0.25;
+constexpr int kDefaultVoiceMakerGpuPriority = 45;
 constexpr std::string_view kDefaultInferImage = ProjectorSupport::kDefaultInferImage;
 constexpr std::string_view kDefaultSkillsImage = ProjectorSupport::kDefaultSkillsImage;
 constexpr std::string_view kDefaultWebGatewayImage =
@@ -59,6 +61,7 @@ nlohmann::json DesiredStateV2Projector::ProjectJson() {
   ProjectBrowsing();
   ProjectKnowledge();
   ProjectVoiceListener();
+  ProjectVoiceMaker();
   ProjectResources();
   return value_;
 }
@@ -70,6 +73,7 @@ void DesiredStateV2Projector::CollectInstancesAndDisks() {
   skills_instance_ = FindInstance(InstanceRole::Skills);
   browsing_instance_ = FindInstance(InstanceRole::Browsing);
   voice_module_instance_ = FindInstance(InstanceRole::VoiceModule);
+  voice_maker_instance_ = FindInstance(InstanceRole::VoiceMaker);
   worker_instances_ = FindWorkerInstances();
   shared_disk_ = FindSharedDisk();
 }
@@ -115,7 +119,8 @@ void DesiredStateV2Projector::ProjectPlacement() {
 
 void DesiredStateV2Projector::ProjectFeatures() {
   if (!state_.turboquant.has_value() && !state_.context_compression.has_value() &&
-      !state_.voice_listener.has_value() && !state_.secured_connection.has_value()) {
+      !state_.voice_listener.has_value() && !state_.voice_maker.has_value() &&
+      !state_.secured_connection.has_value()) {
     return;
   }
   nlohmann::json features = nlohmann::json::object();
@@ -174,6 +179,44 @@ void DesiredStateV2Projector::ProjectFeatures() {
       voice_json["image"] = voice_module_instance_->image;
     }
     features["voice_listener"] = std::move(voice_json);
+  }
+  if (state_.voice_maker.has_value()) {
+    const auto& voice = *state_.voice_maker;
+    nlohmann::json source = {
+        {"type", "library"},
+        {"path", voice.model.source_path},
+    };
+    if (!voice.model.source_node_name.empty()) {
+      source["node"] = voice.model.source_node_name;
+    }
+    if (!voice.model.source_paths.empty() &&
+        !(voice.model.source_paths.size() == 1 &&
+          voice.model.source_paths.front() == voice.model.source_path)) {
+      source["paths"] = voice.model.source_paths;
+    }
+    nlohmann::json model = {
+        {"name", voice.model.name.empty() ? std::string("omnivoice") : voice.model.name},
+        {"source", std::move(source)},
+        {"mount_path", voice.model.mount_path},
+        {"env", voice.model.env_var.empty() ? std::string("OMNIVOICE_MODEL_PATH")
+                                             : voice.model.env_var},
+        {"required", voice.model.required},
+    };
+    nlohmann::json voice_json = {
+        {"enabled", voice.enabled},
+        {"language", voice.language},
+        {"voice_mode", voice.voice_mode},
+        {"instruct", voice.instruct},
+        {"format", voice.output_format},
+        {"model", std::move(model)},
+    };
+    if (voice.image.has_value() && !voice.image->empty()) {
+      voice_json["image"] = *voice.image;
+    } else if (voice_maker_instance_ != nullptr &&
+               voice_maker_instance_->image != ProjectorSupport::kDefaultVoiceMakerImage) {
+      voice_json["image"] = voice_maker_instance_->image;
+    }
+    features["voice_maker"] = std::move(voice_json);
   }
   if (state_.secured_connection.has_value()) {
     features["secured_connection"] = {
@@ -706,6 +749,39 @@ void DesiredStateV2Projector::ProjectVoiceListener() {
   }
 }
 
+void DesiredStateV2Projector::ProjectVoiceMaker() {
+  if (!state_.voice_maker.has_value() || voice_maker_instance_ == nullptr) {
+    return;
+  }
+  if (!value_.contains("features") || !value_.at("features").is_object()) {
+    return;
+  }
+  auto& voice_json = value_["features"]["voice_maker"];
+  const auto start = ProjectorSupport::ProjectServiceStart(
+      *voice_maker_instance_,
+      std::string(ProjectorSupport::kDefaultVoiceMakerCommand));
+  if (!start.is_null()) {
+    voice_json["start"] = start;
+  }
+  auto env = ProjectorSupport::ProjectCustomEnv(*voice_maker_instance_, true);
+  env.erase("OMNIVOICE_MODEL_PATH");
+  if (!env.empty()) {
+    voice_json["env"] = env;
+  }
+  const auto publish = ProjectorSupport::ProjectPublishedPorts(*voice_maker_instance_);
+  if (!publish.empty()) {
+    voice_json["publish"] = publish;
+  }
+  if (voice_maker_instance_->node_name != DefaultNodeName()) {
+    voice_json["node"] = voice_maker_instance_->node_name;
+  }
+  const auto storage = ProjectorSupport::ProjectServiceStorage(
+      FindDiskByName(voice_maker_instance_->private_disk_name));
+  if (!storage.is_null()) {
+    voice_json["storage"] = storage;
+  }
+}
+
 void DesiredStateV2Projector::ProjectResources() {
   nlohmann::json resources = nlohmann::json::object();
   if (!worker_instances_.empty()) {
@@ -740,6 +816,29 @@ void DesiredStateV2Projector::ProjectResources() {
         !voice_module_instance_->preemptible &&
         !voice_module_instance_->memory_cap_mb.has_value()) {
       resources["voice_module"] = {{"gpu_enabled", true}};
+    }
+  }
+  if (voice_maker_instance_ != nullptr && voice_maker_instance_->gpu_device.has_value()) {
+    resources["voice_maker"] = {
+        {"gpu_enabled", true},
+        {"share_mode", ToString(voice_maker_instance_->share_mode)},
+        {"gpu_fraction", voice_maker_instance_->gpu_fraction},
+    };
+    if (voice_maker_instance_->priority != kDefaultVoiceMakerGpuPriority) {
+      resources["voice_maker"]["priority"] = voice_maker_instance_->priority;
+    }
+    if (voice_maker_instance_->preemptible) {
+      resources["voice_maker"]["preemptible"] = true;
+    }
+    if (voice_maker_instance_->memory_cap_mb.has_value()) {
+      resources["voice_maker"]["memory_cap_mb"] = *voice_maker_instance_->memory_cap_mb;
+    }
+    if (std::abs(voice_maker_instance_->gpu_fraction - kDefaultVoiceMakerGpuFraction) < 1e-9 &&
+        voice_maker_instance_->share_mode == GpuShareMode::Shared &&
+        voice_maker_instance_->priority == kDefaultVoiceMakerGpuPriority &&
+        !voice_maker_instance_->preemptible &&
+        !voice_maker_instance_->memory_cap_mb.has_value()) {
+      resources["voice_maker"] = {{"gpu_enabled", true}};
     }
   }
   if (shared_disk_ != nullptr) {

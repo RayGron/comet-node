@@ -35,4 +35,27 @@ class PlaneVoiceService final {
       std::string* error_message) const;
 };
 
+class PlaneVoiceMakerService final {
+ public:
+  bool IsEnabled(const DesiredState& desired_state) const;
+
+  std::optional<ControllerEndpointTarget> ResolveTarget(
+      const DesiredState& desired_state) const;
+
+  nlohmann::json BuildStatusPayload(
+      const std::string& db_path,
+      const DesiredState& desired_state,
+      const std::optional<std::string>& plane_state) const;
+
+  std::optional<HttpResponse> ProxyPlaneVoiceMakerRequest(
+      const std::string& db_path,
+      const DesiredState& desired_state,
+      const std::string& method,
+      const std::string& path_suffix,
+      const std::string& body,
+      const std::vector<std::pair<std::string, std::string>>& headers,
+      std::string* error_code,
+      std::string* error_message) const;
+};
+
 }  // namespace naim::controller

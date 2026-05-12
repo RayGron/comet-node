@@ -22,6 +22,9 @@ const CONTEXT_COMPRESSION_DEFAULT_MEMORY_PRIORITY = "balanced";
 const VOICE_LISTENER_DEFAULT_WAKE_PHRASE = "Hey Jex";
 const VOICE_LISTENER_DEFAULT_LANGUAGE = "auto";
 const VOICE_LISTENER_DEFAULT_MOUNT_PATH = "/models/whisper/model.bin";
+const VOICE_MAKER_DEFAULT_LANGUAGE = "auto";
+const VOICE_MAKER_DEFAULT_MOUNT_PATH = "/models/omnivoice";
+const VOICE_MAKER_DEFAULT_INSTRUCT = "neutral, clear voice, medium pitch, calm style";
 const WEBGATEWAY_DEFAULT_MAX_SEARCH_RESULTS = 8;
 const WEBGATEWAY_DEFAULT_MAX_FETCH_BYTES = 262144;
 const LT_CYPHER_PLANE_NAME = "lt-cypher-ai";
@@ -92,6 +95,8 @@ const FIELD_INFO = {
   voiceListenerModel: "Whisper model artifact used by the Voice Listener. Only whisper.cpp models are selectable here.",
   voiceListenerWakePhrase: "Phrase that activates the listener before a transcript is submitted to chat.",
   voiceListenerLanguage: "Language hint for whisper.cpp. Use auto unless a plane must listen in one fixed language.",
+  voiceMakerEnabled: "Enable a plane-owned Voice Maker service backed by OmniVoice text-to-speech.",
+  voiceMakerModel: "OmniVoice retained artifact used by the Voice Maker. Use a Model Library source bundle.",
   securedConnectionEnabled: "Require HTTPS/TLS plus SSH key authentication for users explicitly selected from User Storage.",
   securedConnectionUserIds: "Select User Storage identities that are allowed to authenticate to this plane.",
   browserSessionEnabled: "Allow approval-gated browser session APIs for this plane. Search and sanitized fetch stay enabled when Isolated Browsing is on.",
@@ -353,6 +358,15 @@ function isWhisperModelLibraryItem(item) {
 function whisperModelMountPath(item) {
   const name = String(item?.name || item?.path?.split("/").pop() || "model.bin").trim() || "model.bin";
   return `/models/whisper/${name}`;
+}
+
+function isOmniVoiceModelLibraryItem(item) {
+  const format = inferModelFormat(item);
+  if (format === "tts/omnivoice" || format === "omnivoice") {
+    return true;
+  }
+  const text = normalizeSearchText([item?.name, item?.model_id, item?.path, ...modelLibraryPaths(item)].join(" "));
+  return text.includes("omnivoice") || text.includes("text-to-speech");
 }
 
 function findLtCypherModelItem(items) {
@@ -793,6 +807,15 @@ export function buildNewPlaneFormState() {
     voiceListenerModelPaths: [],
     voiceListenerModelMountPath: VOICE_LISTENER_DEFAULT_MOUNT_PATH,
     voiceListenerImage: "",
+    voiceMakerEnabled: false,
+    voiceMakerLanguage: VOICE_MAKER_DEFAULT_LANGUAGE,
+    voiceMakerModelPath: "",
+    voiceMakerModelRef: "",
+    voiceMakerModelNodeName: "",
+    voiceMakerModelPaths: [],
+    voiceMakerModelMountPath: VOICE_MAKER_DEFAULT_MOUNT_PATH,
+    voiceMakerImage: "",
+    voiceMakerInstruct: VOICE_MAKER_DEFAULT_INSTRUCT,
     securedConnectionEnabled: false,
     securedConnectionUserIds: [],
     planeMode: "llm",
@@ -932,9 +955,12 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
   const turboquant = value?.features?.turboquant || {};
   const contextCompression = value?.features?.context_compression || {};
   const voiceListener = value?.features?.voice_listener || {};
+  const voiceMaker = value?.features?.voice_maker || {};
   const securedConnection = value?.features?.secured_connection || {};
   const voiceListenerModel = voiceListener?.model || {};
   const voiceListenerModelSource = voiceListenerModel?.source || {};
+  const voiceMakerModel = voiceMaker?.model || {};
+  const voiceMakerModelSource = voiceMakerModel?.source || {};
   const browsing = value?.webgateway && typeof value.webgateway === "object"
     ? value.webgateway
     : (value?.browsing && typeof value.browsing === "object" ? value.browsing : {});
@@ -997,6 +1023,19 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     voiceListenerModelMountPath:
       voiceListenerModel?.mount_path || VOICE_LISTENER_DEFAULT_MOUNT_PATH,
     voiceListenerImage: voiceListener?.image || defaults.voiceListenerImage,
+    voiceMakerEnabled: Boolean(voiceMaker?.enabled),
+    voiceMakerLanguage:
+      voiceMaker?.language || VOICE_MAKER_DEFAULT_LANGUAGE,
+    voiceMakerModelPath: voiceMakerModelSource?.path || "",
+    voiceMakerModelRef: voiceMakerModelSource?.ref || voiceMakerModel?.name || "",
+    voiceMakerModelNodeName: voiceMakerModelSource?.node || "",
+    voiceMakerModelPaths: Array.isArray(voiceMakerModelSource?.paths)
+      ? voiceMakerModelSource.paths
+      : [],
+    voiceMakerModelMountPath:
+      voiceMakerModel?.mount_path || VOICE_MAKER_DEFAULT_MOUNT_PATH,
+    voiceMakerImage: voiceMaker?.image || defaults.voiceMakerImage,
+    voiceMakerInstruct: voiceMaker?.instruct || VOICE_MAKER_DEFAULT_INSTRUCT,
     securedConnectionEnabled: Boolean(securedConnection?.enabled),
     securedConnectionUserIds: Array.isArray(securedConnection?.user_ids)
       ? securedConnection.user_ids.filter((item) => typeof item === "string" && item)
@@ -1416,6 +1455,61 @@ export function buildDesiredStateV2FromForm(form) {
         size_gb: 1,
       };
     }
+    if (form.voiceMakerEnabled) {
+      const source = {
+        type: "library",
+        path: String(form.voiceMakerModelPath || "").trim(),
+      };
+      if (String(form.voiceMakerModelNodeName || "").trim()) {
+        source.node = String(form.voiceMakerModelNodeName || "").trim();
+      }
+      const sourcePaths = (Array.isArray(form.voiceMakerModelPaths)
+        ? form.voiceMakerModelPaths
+        : [])
+        .map((path) => String(path || "").trim())
+        .filter(Boolean);
+      if (sourcePaths.length > 0) {
+        source.paths = sourcePaths;
+      }
+      features.voice_maker = {
+        enabled: true,
+        language:
+          String(form.voiceMakerLanguage || "").trim() ||
+          VOICE_MAKER_DEFAULT_LANGUAGE,
+        voice_mode: "design",
+        instruct:
+          String(form.voiceMakerInstruct || "").trim() ||
+          VOICE_MAKER_DEFAULT_INSTRUCT,
+        format: "wav",
+        model: {
+          name: String(form.voiceMakerModelRef || "").trim() || "omnivoice",
+          source,
+          mount_path:
+            String(form.voiceMakerModelMountPath || "").trim() ||
+            VOICE_MAKER_DEFAULT_MOUNT_PATH,
+          env: "OMNIVOICE_MODEL_PATH",
+          required: true,
+        },
+        env: {
+          HOST: "0.0.0.0",
+          PORT: "18150",
+          OMNIVOICE_LANGUAGE:
+            String(form.voiceMakerLanguage || "").trim() ||
+            VOICE_MAKER_DEFAULT_LANGUAGE,
+          OMNIVOICE_VOICE_MODE: "design",
+          OMNIVOICE_INSTRUCT:
+            String(form.voiceMakerInstruct || "").trim() ||
+            VOICE_MAKER_DEFAULT_INSTRUCT,
+        },
+        storage: {
+          mount_path: "/naim/private",
+          size_gb: 8,
+        },
+      };
+      if (String(form.voiceMakerImage || "").trim()) {
+        features.voice_maker.image = String(form.voiceMakerImage || "").trim();
+      }
+    }
     if (form.securedConnectionEnabled) {
       features.secured_connection = {
         enabled: true,
@@ -1437,6 +1531,14 @@ export function buildDesiredStateV2FromForm(form) {
       desiredState.resources.voice_module = {
         gpu_enabled: true,
         gpu_fraction: 0.2,
+        memory_cap_mb: 4096,
+        share_mode: "shared",
+      };
+    }
+    if (form.voiceMakerEnabled) {
+      desiredState.resources.voice_maker = {
+        gpu_enabled: true,
+        gpu_fraction: 0.25,
         memory_cap_mb: 4096,
         share_mode: "shared",
       };
@@ -1676,6 +1778,9 @@ export function validatePlaneV2Form(form) {
       if (!String(form?.voiceListenerModelPath || "").trim()) {
         errors.push("Voice Listener requires a Whisper model.");
       }
+    }
+    if (form?.voiceMakerEnabled && !String(form?.voiceMakerModelPath || "").trim()) {
+      errors.push("Voice Maker requires an OmniVoice model.");
     }
     if (Number(form?.inferReplicas || 0) <= 0) {
       errors.push("Infer replicas must be a positive integer for llm planes.");
@@ -2389,6 +2494,7 @@ export function PlaneV2FormBuilder({
           browsingEnabled: nextPlaneMode === "llm" ? current.browsingEnabled : false,
           knowledgeEnabled: nextPlaneMode === "llm" ? current.knowledgeEnabled : false,
           voiceListenerEnabled: nextPlaneMode === "llm" ? current.voiceListenerEnabled : false,
+          voiceMakerEnabled: nextPlaneMode === "llm" ? current.voiceMakerEnabled : false,
           browserSessionEnabled:
             nextPlaneMode === "llm" ? current.browserSessionEnabled : false,
         });
@@ -2522,6 +2628,16 @@ export function PlaneV2FormBuilder({
       voiceListenerModelPaths: Array.isArray(item?.paths) ? item.paths : [],
       voiceListenerModelMountPath: whisperModelMountPath(item),
     }));
+  }
+
+  function selectVoiceMakerModel(item) {
+    updateForm({
+      voiceMakerModelPath: item?.path || "",
+      voiceMakerModelRef: item?.model_id || item?.name || item?.path || "omnivoice",
+      voiceMakerModelNodeName: item?.node_name || "",
+      voiceMakerModelPaths: Array.isArray(item?.paths) ? item.paths : [],
+      voiceMakerModelMountPath: VOICE_MAKER_DEFAULT_MOUNT_PATH,
+    });
   }
 
   function updateTopologyNodes(update) {
@@ -2676,6 +2792,8 @@ export function PlaneV2FormBuilder({
   const factoryTreePaths = collectSkillsFactoryTreePaths(factoryGroupTree);
   const whisperModelLibraryItems = (Array.isArray(modelLibraryItems) ? modelLibraryItems : [])
     .filter(isWhisperModelLibraryItem);
+  const omniVoiceModelLibraryItems = (Array.isArray(modelLibraryItems) ? modelLibraryItems : [])
+    .filter(isOmniVoiceModelLibraryItem);
   const expandedFactoryGroupPathSet = new Set(expandedFactoryGroupPaths);
 
   function renderFactoryGroupNode(node) {
@@ -2897,6 +3015,14 @@ export function PlaneV2FormBuilder({
           disabled={form.planeMode !== "llm"}
           disabledLabel="LLM only"
           onToggle={toggleFeature("voiceListenerEnabled")}
+        />
+        <FeatureToggle
+          title="Voice Maker"
+          info={FIELD_INFO.voiceMakerEnabled}
+          active={form.planeMode === "llm" && form.voiceMakerEnabled}
+          disabled={form.planeMode !== "llm"}
+          disabledLabel="LLM only"
+          onToggle={toggleFeature("voiceMakerEnabled")}
         />
         <FeatureToggle
           title="App"
@@ -3249,6 +3375,82 @@ export function PlaneV2FormBuilder({
               items={whisperModelLibraryItems}
               selectedPath={form.voiceListenerModelPath}
               onSelect={selectVoiceListenerModel}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {form.planeMode === "llm" && form.voiceMakerEnabled ? (
+        <div className="plane-form-toggle">
+          <div className="plane-form-section-header">
+            <InfoLabel info={FIELD_INFO.voiceMakerEnabled}>Voice Maker</InfoLabel>
+            <p className="plane-form-section-copy">
+              Plane-owned OmniVoice text-to-speech service for spoken assistant replies.
+            </p>
+          </div>
+          <div className="plane-form-grid">
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.voiceListenerLanguage}>Language</InfoLabel>
+              <input
+                className="text-input"
+                value={form.voiceMakerLanguage}
+                onChange={bindText("voiceMakerLanguage")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.voiceMakerModel}>OmniVoice model path</InfoLabel>
+              <input
+                className={inputClassName(Boolean(fieldError("Voice Maker requires an OmniVoice model.")))}
+                value={form.voiceMakerModelPath}
+                onChange={bindText("voiceMakerModelPath")}
+              />
+              <FieldHint message={fieldError("Voice Maker requires an OmniVoice model.")} />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.sourceStorageNode}>OmniVoice model node</InfoLabel>
+              <input
+                className="text-input"
+                value={form.voiceMakerModelNodeName}
+                onChange={bindText("voiceMakerModelNodeName")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.voiceMakerModel}>Container mount path</InfoLabel>
+              <input
+                className="text-input"
+                value={form.voiceMakerModelMountPath}
+                onChange={bindText("voiceMakerModelMountPath")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.voiceMakerModel}>Voice image</InfoLabel>
+              <input
+                className="text-input"
+                value={form.voiceMakerImage}
+                onChange={bindText("voiceMakerImage")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.voiceMakerEnabled}>Neutral voice instruction</InfoLabel>
+              <textarea
+                className="editor-textarea plane-form-textarea"
+                value={form.voiceMakerInstruct}
+                onChange={bindText("voiceMakerInstruct")}
+                rows={3}
+              />
+            </label>
+          </div>
+          <div className="field-label">
+            <InfoLabel
+              info="Choose one OmniVoice source bundle from Model Library. The selected row becomes the Voice Maker model source."
+              className="field-label-title"
+            >
+              OmniVoice Model Library
+            </InfoLabel>
+            <ModelLibraryPicker
+              items={omniVoiceModelLibraryItems}
+              selectedPath={form.voiceMakerModelPath}
+              onSelect={selectVoiceMakerModel}
             />
           </div>
         </div>

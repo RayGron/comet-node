@@ -23,6 +23,7 @@ namespace {
 
 constexpr std::string_view kFormatGguf = "gguf";
 constexpr std::string_view kFormatSafetensors = "safetensors";
+constexpr std::string_view kFormatTtsOmniVoice = "tts/omnivoice";
 constexpr std::string_view kFormatWhisperCpp = "whisper.cpp";
 constexpr std::string_view kFormatUnknown = "unknown";
 constexpr std::array<std::string_view, 5> kKnownQuantizations = {
@@ -140,6 +141,10 @@ std::string ModelConversionService::NormalizeOutputFormat(const std::string& val
   }
   if (normalized == kFormatSafetensors) {
     return std::string(kFormatSafetensors);
+  }
+  if (normalized == kFormatTtsOmniVoice || normalized == "omnivoice" ||
+      normalized == "omni-voice") {
+    return std::string(kFormatTtsOmniVoice);
   }
   if (normalized == kFormatWhisperCpp || normalized == "whisper" ||
       normalized == "whisper.cpp-bin") {

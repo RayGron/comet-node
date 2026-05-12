@@ -32,6 +32,7 @@ class DesiredStateV2Renderer final {
   void RenderWebGatewayInstance();
   void RenderInteractionInstance();
   void RenderVoiceModuleInstance();
+  void RenderVoiceMakerInstance();
 
   bool InferEnabled() const;
   int InferReplicaCount() const;
@@ -48,6 +49,8 @@ class DesiredStateV2Renderer final {
   std::optional<std::string> ResolveWorkerGpuDevice(int worker_index) const;
   const nlohmann::json& VoiceModuleResources() const;
   bool VoiceModuleGpuEnabled() const;
+  const nlohmann::json& VoiceMakerResources() const;
+  bool VoiceMakerGpuEnabled() const;
   std::optional<std::string> ResolveLegacyServiceNodeName(
       const nlohmann::json& service_json,
       const char* service_name) const;
@@ -66,6 +69,7 @@ class DesiredStateV2Renderer final {
   std::string BuildWebGatewayInstanceName() const;
   std::string BuildInteractionInstanceName() const;
   std::string BuildVoiceModuleInstanceName() const;
+  std::string BuildVoiceMakerInstanceName() const;
   int BuildInferApiPort(int infer_index) const;
   int BuildInferGatewayPort(int infer_index) const;
   int BuildInferLlamaPort(int infer_index) const;
@@ -73,6 +77,7 @@ class DesiredStateV2Renderer final {
   int BuildWebGatewayHostPort() const;
   int BuildInteractionHostPort() const;
   int BuildVoiceModuleHostPort() const;
+  int BuildVoiceMakerHostPort() const;
   std::string BuildReplicaUpstreams(const std::vector<InstanceSpec>& infer_instances) const;
   std::string InferInstanceNameForWorker(int worker_index) const;
   std::string BuildPlaneSharedHostPath() const;
@@ -113,6 +118,7 @@ class DesiredStateV2Renderer final {
   nlohmann::json resources_json_;
   nlohmann::json worker_resources_json_;
   nlohmann::json voice_module_resources_json_;
+  nlohmann::json voice_maker_resources_json_;
   nlohmann::json app_json_;
   std::vector<nlohmann::json> apps_json_;
   nlohmann::json skills_json_;

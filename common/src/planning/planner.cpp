@@ -267,18 +267,24 @@ ComposeService BuildComposeService(
     service.environment["NVIDIA_DRIVER_CAPABILITIES"] = "compute,utility";
     service.security_opts.push_back("apparmor=unconfined");
   }
-  service.healthcheck = instance.role == InstanceRole::Infer
-                            ? "CMD-SHELL /runtime/infer/inferctl.sh probe-url "
-                              "http://127.0.0.1:$${NAIM_GATEWAY_PORT:-80}/health || "
-                              "/runtime/infer/inferctl.sh probe-url "
-                              "http://127.0.0.1:$${NAIM_INFERENCE_PORT:-8000}/health"
-                            : (instance.role == InstanceRole::App
-                                   ? "CMD-SHELL curl -fsS http://127.0.0.1:$${PORT:-8080}/health >/dev/null"
-                                   : (instance.role == InstanceRole::VoiceModule
-                                          ? "CMD-SHELL curl -fsS http://127.0.0.1:$${NAIM_VOICE_MODULE_PORT:-18140}/health >/dev/null"
-                                          : (instance.role == InstanceRole::Skills
-                                                 ? "CMD-SHELL test -f /tmp/naim-ready"
-                                                 : "CMD-SHELL test -f /tmp/naim-ready")));
+  if (instance.role == InstanceRole::Infer) {
+    service.healthcheck =
+        "CMD-SHELL /runtime/infer/inferctl.sh probe-url "
+        "http://127.0.0.1:$${NAIM_GATEWAY_PORT:-80}/health || "
+        "/runtime/infer/inferctl.sh probe-url "
+        "http://127.0.0.1:$${NAIM_INFERENCE_PORT:-8000}/health";
+  } else if (instance.role == InstanceRole::App) {
+    service.healthcheck =
+        "CMD-SHELL curl -fsS http://127.0.0.1:$${PORT:-8080}/health >/dev/null";
+  } else if (instance.role == InstanceRole::VoiceModule) {
+    service.healthcheck =
+        "CMD-SHELL curl -fsS http://127.0.0.1:$${NAIM_VOICE_MODULE_PORT:-18140}/health >/dev/null";
+  } else if (instance.role == InstanceRole::VoiceMaker) {
+    service.healthcheck =
+        "CMD-SHELL curl -fsS http://127.0.0.1:$${NAIM_VOICE_MAKER_PORT:-18150}/health >/dev/null";
+  } else {
+    service.healthcheck = "CMD-SHELL test -f /tmp/naim-ready";
+  }
   if (instance.role == InstanceRole::Infer) {
     const int infer_api_port = InferApiPort(state, instance);
     const int infer_gateway_port = InferGatewayPort(state, instance);
@@ -380,6 +386,8 @@ std::string ToString(InstanceRole role) {
       return "interaction";
     case InstanceRole::VoiceModule:
       return "voice-module";
+    case InstanceRole::VoiceMaker:
+      return "voice-maker";
   }
   return "unknown";
 }
@@ -402,6 +410,8 @@ std::string ToString(DiskKind kind) {
       return "interaction-private";
     case DiskKind::VoiceModulePrivate:
       return "voice-module-private";
+    case DiskKind::VoiceMakerPrivate:
+      return "voice-maker-private";
   }
   return "unknown";
 }

@@ -16,6 +16,7 @@ enum class InstanceRole {
   Browsing,
   Interaction,
   VoiceModule,
+  VoiceMaker,
 };
 
 enum class DiskKind {
@@ -27,6 +28,7 @@ enum class DiskKind {
   BrowsingPrivate,
   InteractionPrivate,
   VoiceModulePrivate,
+  VoiceMakerPrivate,
 };
 
 inline bool IsPrivateDiskKind(DiskKind kind) {
@@ -36,7 +38,8 @@ inline bool IsPrivateDiskKind(DiskKind kind) {
          kind == DiskKind::SkillsPrivate ||
          kind == DiskKind::BrowsingPrivate ||
          kind == DiskKind::InteractionPrivate ||
-         kind == DiskKind::VoiceModulePrivate;
+         kind == DiskKind::VoiceModulePrivate ||
+         kind == DiskKind::VoiceMakerPrivate;
 }
 
 inline bool IsNodeLocalDiskKind(DiskKind kind) {
@@ -50,7 +53,8 @@ inline bool InstanceNeedsSharedDiskMount(InstanceRole role) {
          role == InstanceRole::Skills ||
          role == InstanceRole::Browsing ||
          role == InstanceRole::Interaction ||
-         role == InstanceRole::VoiceModule;
+         role == InstanceRole::VoiceModule ||
+         role == InstanceRole::VoiceMaker;
 }
 
 inline bool InstanceNeedsPrivateDisk(InstanceRole role) {
@@ -59,7 +63,8 @@ inline bool InstanceNeedsPrivateDisk(InstanceRole role) {
          role == InstanceRole::Skills ||
          role == InstanceRole::Browsing ||
          role == InstanceRole::Interaction ||
-         role == InstanceRole::VoiceModule;
+         role == InstanceRole::VoiceModule ||
+         role == InstanceRole::VoiceMaker;
 }
 
 struct PublishedPort {
@@ -360,6 +365,16 @@ struct VoiceListenerFeatureSpec {
   std::optional<std::string> image;
 };
 
+struct VoiceMakerFeatureSpec {
+  bool enabled = false;
+  std::string language = "auto";
+  std::string voice_mode = "design";
+  std::string instruct = "neutral, clear voice, medium pitch, calm style";
+  std::string output_format = "wav";
+  AppModelMountSpec model;
+  std::optional<std::string> image;
+};
+
 struct SecuredConnectionFeatureSpec {
   bool enabled = false;
   std::vector<std::string> user_ids;
@@ -391,6 +406,7 @@ struct DesiredState {
   std::optional<TurboQuantFeatureSpec> turboquant;
   std::optional<ContextCompressionFeatureSpec> context_compression;
   std::optional<VoiceListenerFeatureSpec> voice_listener;
+  std::optional<VoiceMakerFeatureSpec> voice_maker;
   std::optional<SecuredConnectionFeatureSpec> secured_connection;
   std::optional<ExternalAppHostConfig> app_host;
   InferenceRuntimeSettings inference;

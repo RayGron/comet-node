@@ -461,10 +461,13 @@ add_executable(
   controller/src/bundle/bundle_cli_service.cpp
   controller/src/bundle/bundle_cli_service_tests.cpp
   controller/src/infra/controller_action.cpp
+  controller/src/http/controller_http_transport.cpp
+  controller/src/infra/controller_network_manager.cpp
   controller/src/infra/controller_print_service.cpp
   controller/src/infra/controller_runtime_support_service.cpp
   controller/src/plane/desired_state_policy_service.cpp
   controller/src/plane/plane_realization_service.cpp
+  controller/src/skills/plane_skills_target_resolver.cpp
 )
 target_include_directories(
   naim-controller-apply-state-tests PRIVATE common/include controller/include)
@@ -1469,6 +1472,7 @@ add_executable(
   controller/src/plane/desired_state_policy_service.cpp
   controller/src/browsing/interaction_browsing_service.cpp
   controller/src/browsing/plane_browsing_service.cpp
+  controller/src/voice/plane_voice_service.cpp
   controller/src/plane/dashboard_service.cpp
   controller/src/plane/plane_placement_payload_builder.cpp
   controller/src/plane/plane_desired_state_request_parser.cpp

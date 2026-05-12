@@ -575,6 +575,8 @@ void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
     policy = HostdRuntimeProxyPolicy::Skills;
   } else if (policy_name == "webgateway") {
     policy = HostdRuntimeProxyPolicy::WebGateway;
+  } else if (policy_name == "voice-listener") {
+    policy = HostdRuntimeProxyPolicy::Voice;
   }
   const auto headers = runtime_http_proxy_.ParseProxyHeaders(
       payload.value("headers", nlohmann::json::array()));

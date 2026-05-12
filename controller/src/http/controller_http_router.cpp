@@ -94,6 +94,64 @@ bool IsPlaneBrowsingRequest(const std::string& path) {
   return ExtractPlaneFeatureRequestName(path, "/webgateway").has_value();
 }
 
+bool IsPlaneVoiceRequest(const std::string& path) {
+  return ExtractPlaneFeatureRequestName(path, "/voice-listener").has_value();
+}
+
+bool IsPlaneSkillsRootRequest(
+    const std::string& path,
+    const std::string& plane_name) {
+  const std::string root = "/api/v1/planes/" + plane_name + "/skills";
+  return path == root || path == root + "/";
+}
+
+bool IsTrustedPlaneRuntimeSkillsSyncRequest(
+    const HttpRequest& request,
+    const std::string& plane_name,
+    const naim::DesiredState& desired_state) {
+  if (request.method != "GET" ||
+      !IsPlaneSkillsRootRequest(request.path, plane_name) ||
+      !desired_state.skills.has_value() ||
+      !desired_state.skills->enabled) {
+    return false;
+  }
+
+  const auto role =
+      ControllerHttpServerSupport::FindHeaderString(
+          request,
+          "x-naim-plane-runtime-role");
+  const auto header_plane =
+      ControllerHttpServerSupport::FindHeaderString(
+          request,
+          "x-naim-plane-runtime-plane");
+  const auto instance_name =
+      ControllerHttpServerSupport::FindHeaderString(
+          request,
+          "x-naim-plane-runtime-instance");
+  const auto node_name =
+      ControllerHttpServerSupport::FindHeaderString(
+          request,
+          "x-naim-plane-runtime-node");
+  if (!role.has_value() ||
+      !header_plane.has_value() ||
+      !instance_name.has_value() ||
+      !node_name.has_value() ||
+      *role != "skills" ||
+      *header_plane != plane_name) {
+    return false;
+  }
+
+  for (const auto& instance : desired_state.instances) {
+    if (instance.role == naim::InstanceRole::Skills &&
+        instance.plane_name == plane_name &&
+        instance.name == *instance_name &&
+        instance.node_name == *node_name) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool IsHostdStorageRoleRequest(const std::string& path) {
   if (!ControllerHttpServerSupport::StartsWithPath(
           path,
@@ -739,6 +797,7 @@ HttpResponse ControllerHttpRouter::HandleRequest(
     const bool interaction_request = IsPlaneInteractionRequest(request.path);
     const bool skills_request = IsPlaneSkillsRequest(request.path);
     const bool browsing_request = IsPlaneBrowsingRequest(request.path);
+    const bool voice_request = IsPlaneVoiceRequest(request.path);
     if (browsing_request && !webgateway_routes_enabled_) {
       return deps_.build_json_response(
           404,
@@ -747,7 +806,7 @@ HttpResponse ControllerHttpRouter::HandleRequest(
                {"method", request.method}},
           {});
     }
-    if (!interaction_request && !skills_request && !browsing_request) {
+    if (!interaction_request && !skills_request && !browsing_request && !voice_request) {
       try {
         naim::ControllerStore store(db_path_);
         store.Initialize();
@@ -769,16 +828,25 @@ HttpResponse ControllerHttpRouter::HandleRequest(
                  {"path", request.path}},
             {});
       }
-    } else if (skills_request || browsing_request) {
+    } else if (skills_request || browsing_request || voice_request) {
       try {
         naim::ControllerStore store(db_path_);
         store.Initialize();
-        const auto plane_name = skills_request
-                                    ? ExtractPlaneFeatureRequestName(request.path, "/skills")
-                                    : ExtractPlaneFeatureRequestName(request.path, "/webgateway");
+        std::optional<std::string> plane_name;
+        if (skills_request) {
+          plane_name = ExtractPlaneFeatureRequestName(request.path, "/skills");
+        } else if (browsing_request) {
+          plane_name = ExtractPlaneFeatureRequestName(request.path, "/webgateway");
+        } else {
+          plane_name = ExtractPlaneFeatureRequestName(request.path, "/voice-listener");
+        }
         if (plane_name.has_value()) {
           const auto desired_state = store.LoadDesiredState(*plane_name);
           if (desired_state.has_value() && desired_state->protected_plane &&
+              !IsTrustedPlaneRuntimeSkillsSyncRequest(
+                  request,
+                  *plane_name,
+                  *desired_state) &&
               !auth_support_
                    .AuthenticateProtectedPlaneRequest(
                        store,

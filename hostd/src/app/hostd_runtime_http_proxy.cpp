@@ -189,6 +189,9 @@ bool HostdRuntimeHttpProxy::IsAllowedProxyPath(
     if (route == "/v1/skills/resolve" && method == "POST") {
       return true;
     }
+    if (route == "/v1/sync" && method == "POST") {
+      return true;
+    }
     if (route.rfind("/v1/skills/", 0) == 0 &&
         (method == "GET" || method == "PUT" || method == "PATCH" ||
          method == "DELETE")) {
@@ -221,6 +224,16 @@ bool HostdRuntimeHttpProxy::IsAllowedProxyPath(
     }
     return false;
   }
+  if (policy == HostdRuntimeProxyPolicy::Voice) {
+    if (method == "GET" && route == "/health") {
+      return true;
+    }
+    if (method == "POST" &&
+        (route == "/v1/transcribe" || route == "/api/asr/transcribe")) {
+      return true;
+    }
+    return false;
+  }
   return IsAllowedRuntimeProxyPath(method, path);
 }
 
@@ -233,6 +246,9 @@ std::string HostdRuntimeHttpProxy::PolicyLabel(HostdRuntimeProxyPolicy policy) {
   }
   if (policy == HostdRuntimeProxyPolicy::WebGateway) {
     return "webgateway-runtime-http";
+  }
+  if (policy == HostdRuntimeProxyPolicy::Voice) {
+    return "voice-listener-runtime-http";
   }
   return "runtime-direct-http";
 }

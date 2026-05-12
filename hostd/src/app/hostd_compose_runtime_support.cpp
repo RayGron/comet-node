@@ -167,7 +167,6 @@ void HostdComposeRuntimeSupport::EnsureLocalRuntimeBinary(
         "runtime image requires local binary, but build-target.sh is unavailable");
   }
 
-  // For What manually building in alredy runned and buildet app?
   const std::string command =
       "cd " + command_support_.ShellQuote(repo_root.string()) +
       " && " + command_support_.ShellQuote(build_script.string()) + " linux x64 Debug";

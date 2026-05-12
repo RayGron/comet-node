@@ -20,7 +20,6 @@ void RocksDbJsonRepository::Open() {
   options.create_if_missing = true;
   options.IncreaseParallelism();
   options.OptimizeLevelStyleCompaction();
-
   CheckStatus(
       rocksdb::DB::Open(options, store_path_.string(), &db_),
       "open rocksdb knowledge store");

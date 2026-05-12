@@ -1,9 +1,56 @@
 #include "plane/plane_mutation_service.h"
 
+#include <iostream>
+
 #include "naim/state/desired_state_v2_renderer.h"
+#include "naim/state/sqlite_store.h"
 #include "naim/state/state_json.h"
+#include "skills/plane_skills_target_resolver.h"
 
 namespace naim::controller {
+
+namespace {
+
+constexpr int kSkillsRuntimeSyncTimeoutMs = 5000;
+
+void SyncSkillsRuntimeAfterDesiredStateApply(
+    const std::string& db_path,
+    const naim::DesiredState& desired_state) {
+  if (!desired_state.skills.has_value() || !desired_state.skills->enabled) {
+    return;
+  }
+  ControllerStore store(db_path);
+  store.Initialize();
+  const auto plane = store.LoadPlane(desired_state.plane_name);
+  if (!plane.has_value() || plane->applied_generation <= 0 || plane->state != "running") {
+    return;
+  }
+  const auto target = PlaneSkillsTargetResolver::ResolvePlaneLocalTarget(desired_state);
+  if (!target.has_value()) {
+    return;
+  }
+  try {
+    const auto response = PlaneSkillsTargetResolver::SendPlaneLocalRequest(
+        db_path,
+        desired_state.plane_name,
+        *target,
+        "POST",
+        "/v1/sync",
+        "{}",
+        PlaneSkillsTargetResolver::DefaultJsonHeaders(),
+        kSkillsRuntimeSyncTimeoutMs);
+    if (response.status_code < 200 || response.status_code >= 300) {
+      std::cerr << "[naim-controller] skills runtime sync warning plane="
+                << desired_state.plane_name << " status=" << response.status_code
+                << "\n";
+    }
+  } catch (const std::exception& error) {
+    std::cerr << "[naim-controller] skills runtime sync warning plane="
+              << desired_state.plane_name << " error=" << error.what() << "\n";
+  }
+}
+
+}  // namespace
 
 PlaneMutationService::PlaneMutationService(Deps deps) : deps_(std::move(deps)) {}
 
@@ -27,11 +74,15 @@ ControllerActionResult PlaneMutationService::ExecuteUpsertPlaneStateAction(
               "plane name mismatch: expected '" + *expected_plane_name +
               "' but payload contains '" + desired_state.plane_name + "'");
         }
-        return deps_.apply_desired_state(
+        const int result = deps_.apply_desired_state(
             db_path,
             desired_state,
             artifacts_root,
             source_label);
+        if (result == 0 && deps_.enable_runtime_sync_after_apply) {
+          SyncSkillsRuntimeAfterDesiredStateApply(db_path, desired_state);
+        }
+        return result;
       });
 }
 

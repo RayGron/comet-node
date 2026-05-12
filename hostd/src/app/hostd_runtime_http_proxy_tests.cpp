@@ -69,11 +69,43 @@ void TestKnowledgeVaultPolicyAllowsDeleteRoutes() {
       "knowledge vault proxy should allow source delete routes");
 }
 
+void TestSkillsPolicyAllowsSyncRoute() {
+  Expect(
+      naim::hostd::HostdRuntimeHttpProxy::IsAllowedProxyPath(
+          naim::hostd::HostdRuntimeProxyPolicy::Skills,
+          "POST",
+          "/v1/sync"),
+      "skills proxy should allow explicit sync route");
+}
+
+void TestVoicePolicyAllowsTranscriptionRoutes() {
+  Expect(
+      naim::hostd::HostdRuntimeHttpProxy::IsAllowedProxyPath(
+          naim::hostd::HostdRuntimeProxyPolicy::Voice,
+          "GET",
+          "/health"),
+      "voice proxy should allow health route");
+  Expect(
+      naim::hostd::HostdRuntimeHttpProxy::IsAllowedProxyPath(
+          naim::hostd::HostdRuntimeProxyPolicy::Voice,
+          "POST",
+          "/v1/transcribe"),
+      "voice proxy should allow v1 transcription route");
+  Expect(
+      naim::hostd::HostdRuntimeHttpProxy::IsAllowedProxyPath(
+          naim::hostd::HostdRuntimeProxyPolicy::Voice,
+          "POST",
+          "/api/asr/transcribe"),
+      "voice proxy should allow ASR transcription route");
+}
+
 }  // namespace
 
 int main() {
   TestChunkedRuntimeResponseIsDecoded();
   TestKnowledgeVaultPolicyAllowsDeleteRoutes();
+  TestSkillsPolicyAllowsSyncRoute();
+  TestVoicePolicyAllowsTranscriptionRoutes();
   std::cout << "hostd runtime HTTP proxy tests passed\n";
   return 0;
 }

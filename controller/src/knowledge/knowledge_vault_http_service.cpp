@@ -23,7 +23,8 @@ bool IsPlaneScopedKnowledgeRoute(const std::string& path) {
          suffix.rfind("blocks/", 0) == 0 ||
          suffix.rfind("relations/", 0) == 0 ||
          suffix.rfind("sources/", 0) == 0 ||
-         suffix.rfind("replica-merges", 0) == 0;
+         suffix.rfind("replica-merges", 0) == 0 ||
+         suffix.rfind("client-sync/", 0) == 0;
 }
 
 nlohmann::json SelectedKnowledgeIds(const naim::DesiredState& desired_state) {
@@ -86,6 +87,7 @@ std::optional<HttpResponse> KnowledgeVaultHttpService::HandleRequest(
         suffix.rfind("/jobs", 0) == 0 ||
         suffix.rfind("/markdown-export", 0) == 0 ||
         suffix.rfind("/markdown-import", 0) == 0 ||
+        suffix.rfind("/client-sync", 0) == 0 ||
         suffix.rfind("/graph-neighborhood", 0) == 0 ||
         suffix.rfind("/catalog", 0) == 0) {
       return service_.ProxyServiceRequest(db_path, request, "/v1" + suffix);

@@ -93,14 +93,17 @@ Deleting from `SkillsFactory` is global detach:
 ### Runtime synchronization
 
 Each `skills-<plane>` runtime owns a local SQLite replica of the skills attached to its
-plane. That runtime pulls its selected factory skills from the controller on a timer:
+plane. That runtime pulls its selected factory skills from the controller at startup and
+on its fallback timer. Controller-side desired-state updates also ask the plane-owned
+runtime to refresh immediately through its local `/v1/sync` endpoint:
 
-- sync runs from the plane-owned skills runtime, not from controller request paths
-- the sync interval is one hour
-- startup participates in the same timer loop, then the runtime waits one hour between pulls
-- create/update/delete/attach/detach APIs update controller state only; they do not push runtime syncs
-- scheduler ticks and interaction requests do not trigger skills synchronization
-- deselection removes runtime copies on the next hourly sync
+- the runtime remains the owner of its SQLite replica; controller paths only request refresh
+- startup participates in the same pull loop
+- the fallback sync interval is one hour
+- create/update/delete/attach/detach APIs and desired-state apply trigger a best-effort runtime refresh
+- refresh uses direct local runtime HTTP when possible, or the node-aware hostd runtime proxy for remote nodes
+- if the runtime is not reachable yet, the controller logs a warning and the fallback timer still converges
+- deselection removes runtime copies on the next successful refresh
 - interaction-time resolution still reads only the plane-local runtime copy
 
 ### Contextual interaction-time activation
@@ -142,6 +145,22 @@ When an LLM plane has both `skills.enabled=true` and `knowledge.enabled=true`, c
 desired-state preparation appends these ids to `skills.factory_skill_ids[]` if they are missing.
 The skills do not add a new tool-calling API; they steer the model to use the existing
 controller-injected Knowledge Vault context for the current plane only.
+
+### Maglev Workflow Skills
+
+`naim-node` also seeds Maglev-specific SkillsFactory records for the `maglev-service`
+plane:
+
+- `maglev-client-workflow`
+- `maglev-client-knowledge-vault-local-first`
+- `maglev-client-skills-factory-workflow`
+- `maglev-client-sync-and-conflicts`
+
+These records use the `maglev` group path and are intended to be attached explicitly by
+the Maglev desired state, not auto-attached to every LLM plane. They steer the model to
+treat Maglev as a dialog-first client with client-owned Skills and Knowledge Vault state.
+The normal request-time path is local-first; controller and plane APIs are bootstrap,
+sync, administration, and fallback channels.
 
 ## Operator UI
 

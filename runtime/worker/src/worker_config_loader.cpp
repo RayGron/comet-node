@@ -31,28 +31,6 @@ std::string ResolveVisibleGpuDevice() {
 
   return {};
 
-  // const char* visible_devices = std::getenv("NVIDIA_VISIBLE_DEVICES");
-  // if (visible_devices == nullptr || std::strlen(visible_devices) == 0) {
-  //   return "";
-  // }
-
-  // const std::string devices(visible_devices);
-  // if (devices == "none" || devices == "void" || devices == "all") {
-  //   return "";
-  // }
-
-  // const auto comma = devices.find(',');
-  // const std::string first = devices.substr(0, comma);
-  // const auto begin = std::find_if_not(first.begin(), first.end(), [](unsigned char ch) {
-  //   return std::isspace(ch) != 0;
-  // });
-  // const auto end = std::find_if_not(first.rbegin(), first.rend(), [](unsigned char ch) {
-  //   return std::isspace(ch) != 0;
-  // }).base();
-  // if (begin >= end) {
-  //   return "";
-  // }
-  // return std::string(begin, end);
 }
 
 std::string ResolveGpuDeviceFromNvidiaSmi() {
@@ -75,8 +53,8 @@ std::string ResolveGpuDeviceFromNvidiaSmi() {
     return std::isspace(ch) != 0;
   });
   const auto end = std::find_if_not(gpu_index.rbegin(), gpu_index.rend(), [](unsigned char ch) {
-                     return std::isspace(ch) != 0;
-                   }).base();
+   return std::isspace(ch) != 0;
+ }).base();
   if (begin >= end) {
     return "";
   }

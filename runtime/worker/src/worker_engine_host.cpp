@@ -48,7 +48,6 @@ std::string ResolveRpcDevice(const naim::worker::WorkerConfig& config) {
       return "CUDA0";
 
 #elif NAIM_RUNTIME_VULKAN
-
       return "Vulkan0";
 #endif
     }
@@ -59,7 +58,6 @@ std::string ResolveRpcDevice(const naim::worker::WorkerConfig& config) {
     return "CUDA0";
 
 #elif NAIM_RUNTIME_VULKAN
-
     return "Vulkan0";
 #endif
 

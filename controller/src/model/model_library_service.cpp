@@ -597,7 +597,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
                   body.at("target_filename").is_string() &&
                   !body.at("target_filename").get<std::string>().empty()
               ? body.at("target_filename").get<std::string>()
-              : FilenameFromUrl(source_urls.at(index));
+              : TargetFilenameFromUrl(source_urls.at(index), desired_output_format);
       target_paths.push_back(NormalizePathString(destination_root / filename));
     }
   } catch (const std::exception& error) {
@@ -1151,6 +1151,40 @@ std::string ModelLibraryService::FilenameFromUrl(
         "failed to infer filename from URL: " + source_url);
   }
   return filename;
+}
+
+std::string ModelLibraryService::TargetFilenameFromUrl(
+    const std::string& source_url,
+    const std::string& desired_output_format) {
+  if (desired_output_format != "tts/omnivoice") {
+    return FilenameFromUrl(source_url);
+  }
+  std::string trimmed = source_url;
+  const auto query_pos = trimmed.find('?');
+  if (query_pos != std::string::npos) {
+    trimmed = trimmed.substr(0, query_pos);
+  }
+  const auto fragment_pos = trimmed.find('#');
+  if (fragment_pos != std::string::npos) {
+    trimmed = trimmed.substr(0, fragment_pos);
+  }
+  const auto marker_pos = trimmed.find("/resolve/main/");
+  std::string filename =
+      marker_pos == std::string::npos
+          ? FilenameFromUrl(source_url)
+          : trimmed.substr(marker_pos + std::string("/resolve/main/").size());
+  std::filesystem::path relative(filename);
+  if (relative.empty() || relative.is_absolute()) {
+    throw std::runtime_error(
+        "failed to infer safe OmniVoice target filename from URL: " + source_url);
+  }
+  for (const auto& part : relative) {
+    if (part == "." || part == "..") {
+      throw std::runtime_error(
+          "failed to infer safe OmniVoice target filename from URL: " + source_url);
+    }
+  }
+  return relative.generic_string();
 }
 
 std::string ModelLibraryService::DetectModelSourceFormat(

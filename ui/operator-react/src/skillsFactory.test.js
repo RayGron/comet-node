@@ -390,14 +390,14 @@ describe("planeV2Form SkillsFactory mapping", () => {
     form.voiceMakerModelNodeName = "storage1";
     form.voiceMakerModelPaths = ["/models/tts/omnivoice-neutral"];
     form.voiceMakerModelMountPath = "/models/omnivoice";
-    form.voiceMakerInstruct = "neutral, clear voice";
+    form.voiceMakerInstruct = "female, moderate pitch";
 
     const desiredState = buildDesiredStateV2FromForm(form);
     expect(desiredState.features.voice_maker).toEqual({
       enabled: true,
       language: "auto",
       voice_mode: "design",
-      instruct: "neutral, clear voice",
+      instruct: "female, moderate pitch",
       format: "wav",
       model: {
         name: "omnivoice-neutral",
@@ -416,7 +416,7 @@ describe("planeV2Form SkillsFactory mapping", () => {
         PORT: "18150",
         OMNIVOICE_LANGUAGE: "auto",
         OMNIVOICE_VOICE_MODE: "design",
-        OMNIVOICE_INSTRUCT: "neutral, clear voice",
+        OMNIVOICE_INSTRUCT: "female, moderate pitch",
       },
       storage: {
         mount_path: "/naim/private",

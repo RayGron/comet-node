@@ -2202,7 +2202,7 @@ int main() {
              {{"enabled", true},
               {"language", "auto"},
               {"voice_mode", "design"},
-              {"instruct", "neutral, clear voice"},
+              {"instruct", "female, moderate pitch"},
               {"model",
                {{"name", "omnivoice-neutral"},
                 {"source",
@@ -2240,7 +2240,7 @@ int main() {
              "voice-maker-plane: primary app should receive voice maker base");
       const auto projected = naim::DesiredStateV2Projector::Project(state);
       Expect(projected.at("features").at("voice_maker").at("instruct") ==
-                 "neutral, clear voice",
+                 "female, moderate pitch",
              "voice-maker-plane: projector should preserve voice instruction");
       Expect(projected.at("resources").at("voice_maker").at("gpu_enabled") == true,
              "voice-maker-plane: projector should preserve voice maker GPU enablement");

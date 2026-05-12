@@ -1373,29 +1373,27 @@ void DesiredStateV2Renderer::RenderVoiceMakerInstance() {
                               ? std::optional<int>(resources.at("memory_cap_mb").get<int>())
                               : std::nullopt;
   }
-  voice.environment = {
-      {"NAIM_PLANE_NAME", state_.plane_name},
-      {"NAIM_INSTANCE_NAME", voice.name},
-      {"NAIM_INSTANCE_ROLE", "voice-maker"},
-      {"NAIM_NODE_NAME", voice.node_name},
-      {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
-      {"NAIM_VOICE_MAKER_PORT", std::to_string(kVoiceMakerContainerPort)},
-      {"NAIM_VOICE_MAKER_RUNTIME_STATUS_PATH", "/naim/private/voice-maker-runtime-status.json"},
-      {"OMNIVOICE_LANGUAGE", config.language},
-      {"OMNIVOICE_VOICE_MODE", config.voice_mode},
-      {"OMNIVOICE_INSTRUCT", config.instruct},
-      {"OMNIVOICE_OUTPUT_FORMAT", config.output_format},
-      {"HOST", "0.0.0.0"},
-      {"PORT", std::to_string(kVoiceMakerContainerPort)},
-      {"NAIM_CONTROLLER_URL", "http://controller.internal:18080"},
-      {"NAIM_CONTROL_ROOT", state_.control_root},
-  };
   if (voice_json.contains("env") && voice_json.at("env").is_object()) {
-    const auto custom_env = voice_json.at("env").get<std::map<std::string, std::string>>();
-    for (const auto& [key, value] : custom_env) {
-      voice.environment[key] = value;
-    }
+    voice.environment = voice_json.at("env").get<std::map<std::string, std::string>>();
   }
+  voice.environment.insert_or_assign("NAIM_PLANE_NAME", state_.plane_name);
+  voice.environment.insert_or_assign("NAIM_INSTANCE_NAME", voice.name);
+  voice.environment.insert_or_assign("NAIM_INSTANCE_ROLE", "voice-maker");
+  voice.environment.insert_or_assign("NAIM_NODE_NAME", voice.node_name);
+  voice.environment.insert_or_assign("NAIM_PRIVATE_DISK_PATH", "/naim/private");
+  voice.environment.insert_or_assign(
+      "NAIM_VOICE_MAKER_PORT", std::to_string(kVoiceMakerContainerPort));
+  voice.environment.insert_or_assign(
+      "NAIM_VOICE_MAKER_RUNTIME_STATUS_PATH",
+      "/naim/private/voice-maker-runtime-status.json");
+  voice.environment.insert_or_assign("OMNIVOICE_LANGUAGE", config.language);
+  voice.environment.insert_or_assign("OMNIVOICE_VOICE_MODE", config.voice_mode);
+  voice.environment.insert_or_assign("OMNIVOICE_INSTRUCT", config.instruct);
+  voice.environment.insert_or_assign("OMNIVOICE_OUTPUT_FORMAT", config.output_format);
+  voice.environment.insert_or_assign("HOST", "0.0.0.0");
+  voice.environment.insert_or_assign("PORT", std::to_string(kVoiceMakerContainerPort));
+  voice.environment.insert_or_assign("NAIM_CONTROLLER_URL", "http://controller.internal:18080");
+  voice.environment.insert_or_assign("NAIM_CONTROL_ROOT", state_.control_root);
   AppModelMountSpec model_mount = config.model;
   if (model_mount.name.empty()) {
     model_mount.name = "omnivoice";

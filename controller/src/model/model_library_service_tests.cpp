@@ -457,6 +457,57 @@ int main() {
             storage_raw_job->target_paths.front().find("chat_template.jinja") != std::string::npos &&
             storage_raw_job->target_paths.back().find("storage-model.safetensors") != std::string::npos,
         "raw storage job should retain source filenames as target paths");
+
+    const fs::path omnivoice_root = src_root / "hf" / "k2-fsa" / "OmniVoice" / "resolve" / "main";
+    fs::create_directories(omnivoice_root / "audio_tokenizer");
+    const fs::path omnivoice_audio_config = omnivoice_root / "audio_tokenizer" / "config.json";
+    const fs::path omnivoice_audio_model =
+        omnivoice_root / "audio_tokenizer" / "model.safetensors";
+    const fs::path omnivoice_model = omnivoice_root / "model.safetensors";
+    {
+      std::ofstream out(omnivoice_audio_config);
+      out << "{}";
+    }
+    {
+      std::ofstream out(omnivoice_audio_model);
+      out << "audio-tokenizer";
+    }
+    {
+      std::ofstream out(omnivoice_model);
+      out << "tts-model";
+    }
+    const auto omnivoice_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "k2-fsa/OmniVoice"},
+                {"target_node_name", "storage-node-a"},
+                {"target_subdir", "tts/k2-fsa/OmniVoice"},
+                {"source_urls",
+                 nlohmann::json::array(
+                     {FileUrlForPath(omnivoice_audio_config),
+                      FileUrlForPath(omnivoice_audio_model),
+                      FileUrlForPath(omnivoice_model)})},
+                {"format", "tts/omnivoice"},
+            }));
+    Expect(
+        omnivoice_response.status_code == 202,
+        "storage node should accept OmniVoice TTS source bundles");
+    const auto omnivoice_job_id =
+        nlohmann::json::parse(omnivoice_response.body).at("job").at("id").get<std::string>();
+    const auto omnivoice_job = store.LoadModelLibraryDownloadJob(omnivoice_job_id);
+    Expect(omnivoice_job.has_value(), "OmniVoice job should be persisted");
+    Expect(
+        omnivoice_job->target_paths.size() == 3 &&
+            omnivoice_job->target_paths.at(0).find("audio_tokenizer/config.json") !=
+                std::string::npos &&
+            omnivoice_job->target_paths.at(1).find("audio_tokenizer/model.safetensors") !=
+                std::string::npos &&
+            omnivoice_job->target_paths.at(2).find("tts/k2-fsa/OmniVoice/model.safetensors") !=
+                std::string::npos,
+        "OmniVoice bundles should preserve nested Hugging Face paths");
     const auto raw_storage_assignments =
         store.LoadHostAssignments(
             std::make_optional<std::string>("storage-node-a"),

@@ -85,6 +85,9 @@ class ModelLibraryService {
   static std::string NormalizePathString(const std::filesystem::path& path);
   static bool IsUsableAbsoluteHostPath(const std::string& value);
   static std::string FilenameFromUrl(const std::string& source_url);
+  static std::string TargetFilenameFromUrl(
+      const std::string& source_url,
+      const std::string& desired_output_format);
   static std::string DetectModelSourceFormat(
       const std::vector<std::string>& source_urls);
   static std::string NormalizeModelOutputFormat(const std::string& value);

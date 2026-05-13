@@ -110,6 +110,18 @@ int main() {
     Expect(
         visible_devices != infer_it->environment.end() && visible_devices->second == "0",
         "planner should expose inherited gpu devices through NVIDIA_VISIBLE_DEVICES");
+    const auto worker_it = std::find_if(
+        llama_rpc_plans.front().services.begin(),
+        llama_rpc_plans.front().services.end(),
+        [](const naim::ComposeService& compose_service) {
+          return compose_service.name == "worker-a";
+        });
+    Expect(worker_it != llama_rpc_plans.front().services.end(),
+           "planner should include worker service in llama-rpc compose plan");
+    const auto assigned_gpu = worker_it->environment.find("NAIM_GPU_DEVICE");
+    Expect(
+        assigned_gpu != worker_it->environment.end() && assigned_gpu->second == "0",
+        "planner should preserve assigned host gpu through NAIM_GPU_DEVICE");
 
 #if defined(_WIN32)
     _putenv_s("NAIM_CONTROLLER_INTERNAL_HOST", "");

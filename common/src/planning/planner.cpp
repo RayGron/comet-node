@@ -256,6 +256,7 @@ ComposeService BuildComposeService(
   }
   if (service.gpu_device.has_value()) {
     service.use_nvidia_runtime = true;
+    service.environment["NAIM_GPU_DEVICE"] = *service.gpu_device;
     service.environment["NVIDIA_DRIVER_CAPABILITIES"] = "compute,utility";
     service.environment["NVIDIA_VISIBLE_DEVICES"] =
         service.gpu_devices.empty() ? *service.gpu_device

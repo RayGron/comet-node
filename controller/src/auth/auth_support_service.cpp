@@ -162,6 +162,16 @@ std::string RequestHostHeader(const HttpRequest& request) {
   return "127.0.0.1:18081";
 }
 
+std::string RequestOriginHeader(const HttpRequest& request) {
+    if (const auto forwarded = FindHeaderString(request, "origin"); forwarded.has_value()) {
+        return *forwarded;
+    }
+    if (const auto host = FindHeaderString(request, "host"); host.has_value()) {
+        return *host;
+    }
+    return "127.0.0.1:18081";
+}
+
 std::string HostWithoutPort(const std::string& host_header) {
   if (host_header.empty()) {
     return host_header;
@@ -251,7 +261,7 @@ std::string AuthSupportService::ResolveWebAuthnOrigin(const HttpRequest& request
   if (const auto env = GetEnvString("NAIM_WEBAUTHN_ORIGIN"); env.has_value()) {
     return *env;
   }
-  return RequestScheme(request) + "://" + RequestHostHeader(request);
+  return RequestOriginHeader(request);
 }
 
 std::string AuthSupportService::ResolveWebAuthnRpName() const {

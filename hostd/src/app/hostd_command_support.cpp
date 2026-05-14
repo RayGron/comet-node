@@ -51,7 +51,24 @@ std::string HostdCommandSupport::ShellQuote(const std::string& value) const {
   return quoted;
 }
 
-bool HostdCommandSupport::RunCommandOk(const std::string& command) const {
+bool HostdCommandSupport::SetEnvVar(const std::string& name, const std::string& value) const {
+  if (value.empty() || name.empty()) {
+    return false;
+  }
+
+#ifdef _WIN32
+  return SetEnvironmentVariableA(name.c_str(), value.c_str()) != 0;
+#else
+  return setenv(name.c_str(), value.c_str(), 1) == 0;
+#endif
+}
+
+bool HostdCommandSupport::RunCommandOk(const std::string& command,
+                                       const EnvPack &additionalEnviromentVariables) const {
+  for (const auto& var: additionalEnviromentVariables) {
+    SetEnvVar(var.first, var.second);
+  }
+
   return std::system(command.c_str()) == 0;
 }
 

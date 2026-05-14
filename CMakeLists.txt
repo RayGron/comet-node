@@ -11,7 +11,11 @@ option(NAIM_CONTROLLER_BUILD_LLAMA_QUANTIZE
 option(NAIM_ENABLE_LLAMA_RUNTIME
        "Configure llama.cpp and inference runtime targets"
        ON)
-option(NAIM_ENABLE_CUDA "Build llama.cpp runtime with CUDA backend" ON)
+
+option(NAIM_ENABLE_CUDA "Build llama.cpp runtime with CUDA backend" OFF)
+option(NAIM_ENABLE_VULKAN "Build llama.cpp runtime with Vulkan backend" OFF)
+option(NAIM_ENABLE_ROCM "Build llama.cpp runtime with ROCm backend" OFF)
+
 option(NAIM_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
 option(NAIM_ENABLE_VOICE_MODULE
        "Configure whisper.cpp-backed Voice Listener runtime target"
@@ -21,7 +25,7 @@ set(NAIM_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribu
 
 
 if (CCACHE_ENABLED)
-    include(cmake/ccache.cmake)
+  include(cmake/ccache.cmake)
 endif()
 
 include(cmake/GIT.cmake)
@@ -98,6 +102,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+set(DOCKER_BASE_IMAGE "ubuntu:26.04")
+
 if(NAIM_ENABLE_LLAMA_RUNTIME)
   include(FetchContent)
 
@@ -122,6 +128,10 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
   set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
   set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
   set(GGML_RPC ON CACHE BOOL "" FORCE)
+  set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+  set(GGML_HIP OFF CACHE BOOL "" FORCE)
+  set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+  set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 
   if(NAIM_ENABLE_CUDA)
     # llama.cpp needs Blackwell FP4/MXFP4 kernels to be compiled for the
@@ -206,14 +216,48 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
         "or configure with -DNAIM_ENABLE_CUDA=OFF.")
     endif()
     set(GGML_CUDA ON CACHE BOOL "" FORCE)
-    message(STATUS "Naim CUDA runtime: enabled")
+
+    message(STATUS "Naim runtime: CUDA")
     message(STATUS "Naim CUDA native architectures: ${NAIM_CUDA_NATIVE}")
     message(STATUS "Naim CUDA explicit architectures: ${NAIM_CUDA_ARCHITECTURES}")
+    add_definitions(-DNAIM_RUNTIME_CUDA)
+    set(DOCKER_BASE_IMAGE "nvidia/cuda:13.0.1-runtime-ubuntu24.04")
+
+  elseif(NAIM_ENABLE_VULKAN)
+    find_package(Vulkan REQUIRED)
+    message(STATUS "Vulkan Found: ${Vulkan_FOUND}")
+    message(STATUS "Vulkan Include: ${Vulkan_INCLUDE_DIRS}")
+    message(STATUS "Vulkan Libraries: ${Vulkan_LIBRARIES}")
+
+    set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+    message(STATUS "Naim runtime: VULKAN")
+    add_definitions(-DNAIM_RUNTIME_VULKAN)
+
+    set(BACK_END_DEPENDS_LIST libvulkan1)
+
+  elseif(NAIM_ENABLE_ROCM)
+
+    find_package(rocm_smi REQUIRED)
+    message(STATUS "Rocm Found: ${rocm_smi_FOUND}")
+    message(STATUS "Rocm Include: ${rocm_smi_INCLUDE_DIRS}")
+    message(STATUS "Rocm Libraries: ${rocm_smi_LIBRARIES}")
+
+    set(GGML_HIP ON CACHE BOOL "" FORCE)
+    set(AMDGPU_TARGETS="gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201" CACHE BOOL "" FORCE)
+
+    message(STATUS "Naim runtime: ROCm")
+    add_definitions(-DNAIM_RUNTIME_ROCM)
+
+    set(BACK_END_DEPENDS_LIST rocm)
+
   else()
-    set(GGML_CUDA OFF CACHE BOOL "" FORCE)
-    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
-    message(STATUS "Naim CUDA runtime: disabled")
+    message(STATUS "Naim runtime: NONE")
+    add_definitions(-DNAIM_RUNTIME_NONE)
   endif()
+
+  configure_file_in(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/runtime/base/Dockerfile")
+  configure_file_in(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/runtime/infer/Dockerfile")
+  configure_file_in(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/runtime/worker/Dockerfile")
 
   if(NAIM_LLAMA_CPP_SOURCE_DIR AND EXISTS "${NAIM_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
     FetchContent_Declare(
@@ -311,6 +355,17 @@ target_link_libraries(
     unofficial-sodium::sodium
     unofficial::sqlite3::sqlite3
 )
+
+if(NAIM_ENABLE_VULKAN)
+  target_link_libraries(naim-common PUBLIC Vulkan::Vulkan)
+endif()
+
+
+if(NAIM_ENABLE_ROCM)
+  target_link_libraries(naim-common PUBLIC amd_smi)
+endif()
+
+
 naim_enable_strict_warnings(naim-common)
 
 add_executable(
@@ -1824,7 +1879,7 @@ if(NOT WIN32)
     naim-workerd
     PRIVATE
       nlohmann_json::nlohmann_json
-      # llama
+      common # llama common library
   )
   naim_enable_strict_warnings(naim-workerd)
 

@@ -37,6 +37,7 @@ cuda_nvcc=""
 openmp_root=""
 openmp_include_dir=""
 openmp_library=""
+: "${NAIM_ENABLE_VULKAN:=OFF}"
 : "${NAIM_ENABLE_CUDA:=ON}"
 : "${NAIM_CUDA_NATIVE:=OFF}"
 : "${NAIM_CUDA_ARCHITECTURES:=}"
@@ -301,6 +302,8 @@ cmake_args=(
 )
 
 cmake_args+=("-DNAIM_ENABLE_CUDA=${NAIM_ENABLE_CUDA}")
+cmake_args+=("-DNAIM_ENABLE_VULKAN=${NAIM_ENABLE_VULKAN}")
+
 cmake_args+=("-DCMAKE_CXX_COMPILER_LAUNCHER=${compiler_cache_launcher}")
 if [[ "${NAIM_ENABLE_CUDA}" == "ON" ]]; then
   cmake_args+=("-DCUDAToolkit_ROOT=${cuda_root}")

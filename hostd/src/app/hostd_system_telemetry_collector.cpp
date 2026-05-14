@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <chrono>
-#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -14,12 +12,26 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
+#include <iomanip>
 
 #include <nlohmann/json.hpp>
 
 #if !defined(_WIN32)
 #include <dlfcn.h>
 #include <sys/statvfs.h>
+#endif
+
+#ifdef NAIM_RUNTIME_CUDA
+#include <cstdlib>
+#endif
+
+#ifdef NAIM_RUNTIME_VULKAN
+#include <vulkan/vulkan.h>
+#endif
+
+#ifdef NAIM_RUNTIME_ROCM
+#include <amd_smi/amdsmi.h>
 #endif
 
 namespace naim::hostd {
@@ -41,19 +53,6 @@ std::string CurrentTimestampString() {
     return {};
   }
   return buffer;
-}
-
-std::string NormalizeManagedPath(const std::string& path) {
-  std::error_code error;
-  const auto normalized = fs::weakly_canonical(path, error);
-  if (!error) {
-    return normalized.string();
-  }
-  return fs::path(path).lexically_normal().string();
-}
-
-std::string NormalizeMountPointPath(const std::string& mount_point) {
-  return NormalizeManagedPath(mount_point);
 }
 
 struct BlockDeviceIoStats {
@@ -379,238 +378,54 @@ std::optional<std::array<double, 3>> ReadLoadAverage() {
 }  // namespace
 
 naim::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
-    const naim::DesiredState& state,
-    const std::string& node_name,
-    const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const {
-  auto split_csv_row = [this](const std::string& line) {
-    std::vector<std::string> result;
-    std::stringstream stream(line);
-    std::string current;
-    while (std::getline(stream, current, ',')) {
-      result.push_back(command_support_.Trim(current));
-    }
-    return result;
-  };
+  [[maybe_unused]] const naim::DesiredState& state,
+  [[maybe_unused]] const std::string& node_name,
+  [[maybe_unused]] const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const {
 
-  auto populate_gpu_processes_from_nvidia_smi =
-      [&](naim::GpuTelemetrySnapshot* snapshot) {
-        if (snapshot == nullptr) {
-          return;
-        }
-        std::map<int, std::string> pid_to_instance_name;
-        for (const auto& status : instance_statuses) {
-          if (status.engine_pid > 0) {
-            pid_to_instance_name[status.engine_pid] = status.instance_name;
-          }
-          if (status.runtime_pid > 0) {
-            pid_to_instance_name[status.runtime_pid] = status.instance_name;
-          }
-        }
-
-        std::map<std::string, std::string> uuid_to_gpu_device;
-        {
-          const std::string output = command_support_.RunCommandCapture(
-              "nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits 2>/dev/null");
-          std::istringstream input(output);
-          std::string line;
-          while (std::getline(input, line)) {
-            const auto columns = split_csv_row(line);
-            if (columns.size() >= 2) {
-              uuid_to_gpu_device[columns[1]] = columns[0];
-            }
-          }
-        }
-
-        const std::string output = command_support_.RunCommandCapture(
-            "nvidia-smi --query-compute-apps=gpu_uuid,pid,used_gpu_memory "
-            "--format=csv,noheader,nounits 2>/dev/null");
-        std::istringstream input(output);
-        std::string line;
-        while (std::getline(input, line)) {
-          const auto columns = split_csv_row(line);
-          if (columns.size() < 3) {
-            continue;
-          }
-          const auto gpu_it = uuid_to_gpu_device.find(columns[0]);
-          if (gpu_it == uuid_to_gpu_device.end()) {
-            continue;
-          }
-          int pid = 0;
-          int used_vram_mb = 0;
-          try {
-            pid = std::stoi(columns[1]);
-            used_vram_mb = std::stoi(columns[2]);
-          } catch (const std::exception&) {
-            continue;
-          }
-          for (auto& device : snapshot->devices) {
-            if (device.gpu_device != gpu_it->second) {
-              continue;
-            }
-            naim::GpuProcessTelemetry process;
-            process.pid = pid;
-            process.used_vram_mb = used_vram_mb;
-            const auto owner_it = pid_to_instance_name.find(pid);
-            if (owner_it != pid_to_instance_name.end()) {
-              process.instance_name = owner_it->second;
-            }
-            device.processes.push_back(std::move(process));
-            break;
-          }
-        }
-      };
-
-  auto try_collect_gpu_telemetry_with_nvml = [&]() -> std::optional<naim::GpuTelemetrySnapshot> {
-#if defined(_WIN32)
-    (void)state;
-    (void)node_name;
-    return std::nullopt;
-#else
-    (void)state;
-    (void)node_name;
-    void* lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
-    if (lib == nullptr) {
-      return std::nullopt;
-    }
-
-    using nvmlReturn_t = int;
-    using nvmlDevice_t = void*;
-    constexpr nvmlReturn_t kNvmlSuccess = 0;
-    using NvmlInitFn = nvmlReturn_t (*)();
-    using NvmlShutdownFn = nvmlReturn_t (*)();
-    using NvmlGetCountFn = nvmlReturn_t (*)(unsigned int*);
-    using NvmlGetHandleFn = nvmlReturn_t (*)(unsigned int, nvmlDevice_t*);
-    using NvmlMemoryInfoFn = nvmlReturn_t (*)(nvmlDevice_t, NvmlMemoryInfo*);
-    using NvmlUtilizationFn = nvmlReturn_t (*)(nvmlDevice_t, NvmlUtilizationInfo*);
-    using NvmlTemperatureFn = nvmlReturn_t (*)(nvmlDevice_t, unsigned int, unsigned int*);
-    constexpr unsigned int kNvmlTemperatureGpu = 0;
-
-    const auto init = reinterpret_cast<NvmlInitFn>(dlsym(lib, "nvmlInit_v2"));
-    const auto shutdown = reinterpret_cast<NvmlShutdownFn>(dlsym(lib, "nvmlShutdown"));
-    const auto get_count =
-        reinterpret_cast<NvmlGetCountFn>(dlsym(lib, "nvmlDeviceGetCount_v2"));
-    const auto get_handle =
-        reinterpret_cast<NvmlGetHandleFn>(dlsym(lib, "nvmlDeviceGetHandleByIndex_v2"));
-    const auto get_memory =
-        reinterpret_cast<NvmlMemoryInfoFn>(dlsym(lib, "nvmlDeviceGetMemoryInfo"));
-    const auto get_utilization =
-        reinterpret_cast<NvmlUtilizationFn>(dlsym(lib, "nvmlDeviceGetUtilizationRates"));
-    const auto get_temperature =
-        reinterpret_cast<NvmlTemperatureFn>(dlsym(lib, "nvmlDeviceGetTemperature"));
-    if (init == nullptr || shutdown == nullptr || get_count == nullptr || get_handle == nullptr ||
-        get_memory == nullptr || get_utilization == nullptr) {
-      dlclose(lib);
-      return std::nullopt;
-    }
-
-    if (init() != kNvmlSuccess) {
-      dlclose(lib);
-      return std::nullopt;
-    }
-
-    naim::GpuTelemetrySnapshot snapshot;
-    snapshot.degraded = false;
-    snapshot.source = "nvml";
-    unsigned int device_count = 0;
-    if (get_count(&device_count) != kNvmlSuccess) {
-      shutdown();
-      dlclose(lib);
-      return std::nullopt;
-    }
-    for (unsigned int index = 0; index < device_count; ++index) {
-      nvmlDevice_t handle = nullptr;
-      if (get_handle(index, &handle) != kNvmlSuccess || handle == nullptr) {
-        continue;
-      }
-      NvmlMemoryInfo memory{};
-      NvmlUtilizationInfo utilization{};
-      if (get_memory(handle, &memory) != kNvmlSuccess ||
-          get_utilization(handle, &utilization) != kNvmlSuccess) {
-        continue;
-      }
-      naim::GpuDeviceTelemetry device;
-      device.gpu_device = std::to_string(index);
-      device.total_vram_mb = static_cast<int>(memory.total / (1024 * 1024));
-      device.used_vram_mb = static_cast<int>(memory.used / (1024 * 1024));
-      device.free_vram_mb = static_cast<int>(memory.free / (1024 * 1024));
-      device.gpu_utilization_pct = static_cast<int>(utilization.gpu);
-      unsigned int temperature_c = 0;
-      if (get_temperature != nullptr &&
-          get_temperature(handle, kNvmlTemperatureGpu, &temperature_c) == kNvmlSuccess) {
-        device.temperature_c = static_cast<int>(temperature_c);
-        device.temperature_available = true;
-      }
-      snapshot.devices.push_back(std::move(device));
-    }
-
-    shutdown();
-    dlclose(lib);
-    return snapshot;
-#endif
-  };
-
-  auto try_collect_gpu_telemetry_with_nvidia_smi =
-      [&]() -> std::optional<naim::GpuTelemetrySnapshot> {
-        (void)state;
-        (void)node_name;
-        const std::string output = command_support_.RunCommandCapture(
-            "nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu "
-            "--format=csv,noheader,nounits 2>/dev/null");
-        if (output.empty()) {
-          return std::nullopt;
-        }
-
-        naim::GpuTelemetrySnapshot snapshot;
-        snapshot.degraded = true;
-        snapshot.source = "nvidia-smi";
-        std::istringstream input(output);
-        std::string line;
-        while (std::getline(input, line)) {
-          const auto columns = split_csv_row(line);
-          if (columns.size() < 5) {
-            continue;
-          }
-          try {
-            naim::GpuDeviceTelemetry device;
-            device.gpu_device = columns[0];
-            device.total_vram_mb = std::stoi(columns[1]);
-            device.used_vram_mb = std::stoi(columns[2]);
-            device.free_vram_mb = std::stoi(columns[3]);
-            device.gpu_utilization_pct = std::stoi(columns[4]);
-            if (columns.size() >= 6 && columns[5] != "[N/A]" && columns[5] != "N/A" &&
-                !columns[5].empty()) {
-              device.temperature_c = std::stoi(columns[5]);
-              device.temperature_available = true;
-            }
-            snapshot.devices.push_back(std::move(device));
-          } catch (const std::exception&) {
-            continue;
-          }
-        }
-        populate_gpu_processes_from_nvidia_smi(&snapshot);
-        return snapshot;
-      };
+#ifdef NAIM_RUNTIME_CUDA
 
   const bool disable_nvml =
-      std::getenv("NAIM_DISABLE_NVML") != nullptr &&
-      std::string(std::getenv("NAIM_DISABLE_NVML")) != "0";
+    std::getenv("NAIM_DISABLE_NVML") != nullptr &&
+    std::string(std::getenv("NAIM_DISABLE_NVML")) != "0";
+
   if (!disable_nvml) {
-    if (const auto nvml_snapshot = try_collect_gpu_telemetry_with_nvml();
+    if (const auto nvml_snapshot = collectGpuTelemetryWithNVML(state, node_name);
         nvml_snapshot.has_value()) {
       naim::GpuTelemetrySnapshot snapshot = *nvml_snapshot;
-      populate_gpu_processes_from_nvidia_smi(&snapshot);
+      populateGpuProcessesFromNvidiaSMI(&snapshot, instance_statuses);
       snapshot.contract_version = 1;
       snapshot.collected_at = CurrentTimestampString();
       return snapshot;
     }
   }
-  if (const auto smi_snapshot = try_collect_gpu_telemetry_with_nvidia_smi();
+
+  if (const auto smi_snapshot = collectGpuTelemetryWithNvidiaSMI(state,
+                                                                 node_name,
+                                                                 instance_statuses);
       smi_snapshot.has_value()) {
+
     naim::GpuTelemetrySnapshot snapshot = *smi_snapshot;
     snapshot.contract_version = 1;
     snapshot.collected_at = CurrentTimestampString();
     return snapshot;
   }
+
+#elif(NAIM_RUNTIME_VULKAN)
+
+  if (const auto smi_snapshot = collectGpuTelemetryWithVulkanAPI();
+      smi_snapshot.has_value()) {
+#elif (NAIM_RUNTIME_ROCM)
+
+  if (const auto smi_snapshot = collectGpuTelemetryWithROCm();
+      smi_snapshot.has_value()) {
+#endif
+
+    naim::GpuTelemetrySnapshot snapshot = *smi_snapshot;
+    snapshot.contract_version = 1;
+    snapshot.collected_at = CurrentTimestampString();
+    return snapshot;
+  }
+
   naim::GpuTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
   snapshot.degraded = true;
@@ -619,75 +434,101 @@ naim::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
   return snapshot;
 }
 
+#ifdef _WIN32
+std::wstring ToWString(const std::string& str) {
+  if (str.empty()) return L"";
+  int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+  std::wstring wstrTo(size_needed, 0);
+  MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
+  return wstrTo;
+}
+
+std::string FromWString(const std::wstring& wstr) {
+  if (wstr.empty()) return "";
+  int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
+  std::string strTo(size_needed, 0);
+  WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], size_needed, NULL, NULL);
+  return strTo;
+}
+#endif
+
+struct MountInfo {
+  std::string source;
+  std::string fs_type;
+};
+
+std::optional<MountInfo> GetMountInfo(const std::string& mount_point) {
+#if defined(_WIN32)
+  std::wstring wpath = ToWString(path);
+  if (!wpath.empty() && wpath.back() != L'\\' && wpath.back() != L'/') {
+    wpath += L'\\';
+  }
+
+  WCHAR volume_name[MAX_PATH];
+  WCHAR file_system_name[MAX_PATH];
+  DWORD serial_number, max_component_len, file_system_flags;
+
+  // GetVolumeInformation получает имя файловой системы (NTFS/FAT32)
+  if (GetVolumeInformationW(
+        wpath.c_str(),
+        NULL, 0, // Нам не нужна метка тома (Volume Label)
+        &serial_number,
+        &max_component_len,
+        &file_system_flags,
+        file_system_name,
+        MAX_PATH)) {
+
+    MountInfo info;
+    info.fs_type = FromWString(file_system_name);
+
+    if (GetVolumeNameForVolumeMountPointW(wpath.c_str(), volume_name, MAX_PATH)) {
+      info.source = FromWString(volume_name);
+    } else {
+      info.source = "Local Disk";
+    }
+
+    return info;
+  }
+  return std::nullopt;
+#else
+  std::ifstream input("/proc/self/mounts");
+  if (!input.is_open()) return std::nullopt;
+
+  std::string src, target, type;
+  while (input >> src >> target >> type) {
+    std::string dummy;
+    std::getline(input, dummy);
+    if (target == mount_point) {
+      return MountInfo{src, type};
+    }
+  }
+  return std::nullopt;
+#endif
+}
+
+bool IsPathMounted(const std::string& path) {
+#if defined(_WIN32)
+  std::wstring wpath = ToWString(path);
+
+  if (!wpath.empty() && wpath.back() != L'\\' && wpath.back() != L'/') {
+    wpath += L'\\';
+  }
+
+  UINT drive_type = GetDriveTypeW(wpath.c_str());
+  return (drive_type != DRIVE_UNKNOWN && drive_type != DRIVE_NO_ROOT_DIR);
+#else
+  return GetMountInfo(path).has_value();
+#endif
+}
+
 naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
-    const naim::DesiredState& state,
-    const std::string& node_name) const {
+  const naim::DesiredState& state,
+  const std::string& node_name) const {
+
   naim::DiskTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
-#if defined(_WIN32)
-  snapshot.source = "filesystem::space";
-#else
-  snapshot.source = "statvfs";
-#endif
+  snapshot.source = "std::filesystem::space";
   snapshot.collected_at = CurrentTimestampString();
-
-  auto is_path_mounted = [this](const std::string& mount_point) {
-    if (command_support_.RunCommandOk(
-            "/usr/bin/mountpoint -q " + command_support_.ShellQuote(mount_point) +
-            " >/dev/null 2>&1")) {
-      return true;
-    }
-    const std::string normalized_mount_point = NormalizeMountPointPath(mount_point);
-    return normalized_mount_point != mount_point &&
-           command_support_.RunCommandOk(
-               "/usr/bin/mountpoint -q " + command_support_.ShellQuote(normalized_mount_point) +
-               " >/dev/null 2>&1");
-  };
-
-  auto current_mount_source = [&](const std::string& mount_point) -> std::optional<std::string> {
-    const std::array<std::string, 2> candidates = {
-        mount_point,
-        NormalizeMountPointPath(mount_point),
-    };
-    std::ifstream input("/proc/self/mounts");
-    if (!input.is_open()) {
-      return std::nullopt;
-    }
-
-    std::string source;
-    std::string target;
-    std::string fs_type;
-    while (input >> source >> target >> fs_type) {
-      std::string rest_of_line;
-      std::getline(input, rest_of_line);
-      for (const auto& candidate : candidates) {
-        if (!candidate.empty() && target == candidate) {
-          return source;
-        }
-      }
-    }
-    return std::nullopt;
-  };
-
-  auto current_mount_filesystem_type =
-      [](const std::string& mount_point) -> std::optional<std::string> {
-    std::ifstream input("/proc/mounts");
-    if (!input.is_open()) {
-      return std::nullopt;
-    }
-
-    std::string source;
-    std::string target;
-    std::string fs_type;
-    while (input >> source >> target >> fs_type) {
-      std::string rest_of_line;
-      std::getline(input, rest_of_line);
-      if (target == mount_point) {
-        return fs_type;
-      }
-    }
-    return std::nullopt;
-  };
 
   for (const auto& disk : state.disks) {
     if (disk.node_name != node_name) {
@@ -699,131 +540,97 @@ naim::DiskTelemetrySnapshot HostdSystemTelemetryCollector::CollectDiskTelemetry(
     record.plane_name = disk.plane_name;
     record.node_name = disk.node_name;
     record.mount_point = disk.host_path;
-    record.runtime_state = fs::exists(disk.host_path) ? "present" : "missing";
-    record.health = fs::exists(disk.host_path) ? "ok" : "missing";
-    if (record.health == "missing") {
+
+    std::error_code ec;
+    bool exists = fs::exists(disk.host_path, ec);
+
+    record.runtime_state = exists ? "present" : "missing";
+    record.health = exists ? "ok" : "missing";
+
+    if (!exists) {
       record.fault_count += 1;
       record.fault_reasons.push_back("host-path-missing");
     }
 
-    if (is_path_mounted(disk.host_path)) {
+    if (IsPathMounted(disk.host_path)) {
       record.mounted = true;
       record.runtime_state = "mounted";
-      const auto mount_fs = current_mount_filesystem_type(disk.host_path);
-      if (mount_fs.has_value()) {
-        record.filesystem_type = *mount_fs;
-      }
-      const auto mount_source = current_mount_source(disk.host_path);
-      if (mount_source.has_value()) {
-        record.mount_source = *mount_source;
+
+      if (auto mount_info = GetMountInfo(disk.host_path)) {
+        record.filesystem_type = mount_info->fs_type;
+        record.mount_source = mount_info->source;
+
+        if (record.mount_source.rfind("/dev/", 0) == 0) {
+          CollectBlockDeviceStats(record, record.mount_source);
+        }
       } else {
         record.warning_count += 1;
         record.fault_reasons.push_back("mount-source-unavailable");
-        if (record.health == "ok") {
-          record.health = "degraded";
-        }
-      }
-      if (mount_source.has_value() && mount_source->rfind("/dev/", 0) == 0) {
-        if (const auto read_only = ReadBlockDeviceReadOnly(*mount_source);
-            read_only.has_value()) {
-          record.read_only = *read_only;
-          if (*read_only) {
-            record.warning_count += 1;
-            record.fault_reasons.push_back("read-only-device");
-            if (record.health == "ok") {
-              record.health = "degraded";
-            }
-          }
-        }
-        if (const auto io_stats = ReadBlockDeviceIoStats(*mount_source); io_stats.has_value()) {
-          record.perf_counters_available = true;
-          record.read_ios = io_stats->read_ios;
-          record.write_ios = io_stats->write_ios;
-          record.read_bytes = io_stats->read_sectors * 512ULL;
-          record.write_bytes = io_stats->write_sectors * 512ULL;
-          record.io_in_progress = static_cast<int>(io_stats->io_in_progress);
-          record.io_time_ms = io_stats->io_time_ms;
-          record.weighted_io_time_ms = io_stats->weighted_io_time_ms;
-        } else {
-          record.status_message =
-              record.status_message.empty()
-                  ? "block io stats unavailable"
-                  : record.status_message + "; block io stats unavailable";
-          record.warning_count += 1;
-          record.fault_reasons.push_back("block-io-stats-unavailable");
-          if (record.health == "ok") {
-            record.health = "degraded";
-          }
-        }
-        if (const auto io_error_count = ReadBlockDeviceIoErrorCount(*mount_source);
-            io_error_count.has_value()) {
-          record.io_error_counters_available = true;
-          record.io_error_count = *io_error_count;
-          if (*io_error_count > 0) {
-            record.fault_count += 1;
-            record.fault_reasons.push_back("io-error-count-nonzero");
-            if (record.health == "ok") {
-              record.health = "degraded";
-            }
-          }
-        }
+        if (record.health == "ok") record.health = "degraded";
       }
     }
 
-#if defined(_WIN32)
-    std::error_code space_error;
-    const auto space_info = fs::space(disk.host_path, space_error);
-    if (!space_error) {
-      record.total_bytes = space_info.capacity;
-      record.free_bytes = space_info.available;
-      record.used_bytes =
-          record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
-      if (record.health == "missing") {
-        record.health = "ok";
-      }
-      if (record.runtime_state == "missing") {
-        record.runtime_state = "available";
-      }
+    fs::space_info space = fs::space(disk.host_path, ec);
+    if (!ec) {
+      record.total_bytes = space.capacity;
+      record.free_bytes = space.available;
+      record.used_bytes = (space.capacity >= space.available)
+                            ? (space.capacity - space.available) : 0;
+
+      if (record.health == "missing") record.health = "ok";
+      if (record.runtime_state == "missing") record.runtime_state = "available";
     } else {
-      record.status_message =
-          record.status_message.empty() ? "filesystem::space unavailable"
-                                        : record.status_message + "; filesystem::space unavailable";
+      record.status_message = record.status_message.empty()
+      ? "fs::space failed"
+      : record.status_message + "; fs::space failed";
+
       record.fault_count += 1;
       record.fault_reasons.push_back("filesystem-space-unavailable");
-      if (record.health == "ok") {
-        record.health = "degraded";
-      }
+      if (record.health == "ok") record.health = "degraded";
     }
-#else
-    struct statvfs stats {};
-    if (statvfs(disk.host_path.c_str(), &stats) == 0) {
-      const std::uint64_t block_size = static_cast<std::uint64_t>(stats.f_frsize);
-      record.total_bytes = static_cast<std::uint64_t>(stats.f_blocks) * block_size;
-      record.free_bytes = static_cast<std::uint64_t>(stats.f_bavail) * block_size;
-      record.used_bytes =
-          record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
-      if (record.health == "missing") {
-        record.health = "ok";
-      }
-      if (record.runtime_state == "missing") {
-        record.runtime_state = "available";
-      }
-    } else {
-      record.status_message =
-          record.status_message.empty() ? "statvfs unavailable"
-                                        : record.status_message + "; statvfs unavailable";
-      record.fault_count += 1;
-      record.fault_reasons.push_back("statvfs-unavailable");
-      if (record.health == "ok") {
-        record.health = "degraded";
-      }
-    }
-#endif
 
     snapshot.items.push_back(std::move(record));
   }
 
   return snapshot;
+}
+
+void HostdSystemTelemetryCollector::CollectBlockDeviceStats(
+  naim::DiskTelemetryRecord& record,
+  const std::string& source) const {
+
+  // ReadBlockDeviceReadOnly
+  if (auto ro = ReadBlockDeviceReadOnly(source)) {
+    record.read_only = *ro;
+    if (*ro) {
+      record.warning_count += 1;
+      record.fault_reasons.push_back("read-only-device");
+      if (record.health == "ok") record.health = "degraded";
+    }
+  }
+
+  // ReadBlockDeviceIoStats
+  if (auto io_stats = ReadBlockDeviceIoStats(source)) {
+    record.perf_counters_available = true;
+    record.read_ios = io_stats->read_ios;
+    record.write_ios = io_stats->write_ios;
+    record.read_bytes = io_stats->read_sectors * 512ULL;
+    record.write_bytes = io_stats->write_sectors * 512ULL;
+    record.io_in_progress = static_cast<int>(io_stats->io_in_progress);
+    record.io_time_ms = io_stats->io_time_ms;
+    record.weighted_io_time_ms = io_stats->weighted_io_time_ms;
+  }
+
+  // ReadBlockDeviceIoErrorCount
+  if (auto errors = ReadBlockDeviceIoErrorCount(source)) {
+    record.io_error_counters_available = true;
+    record.io_error_count = *errors;
+    if (*errors > 0) {
+      record.fault_count += 1;
+      record.fault_reasons.push_back("io-error-count-nonzero");
+      if (record.health == "ok") record.health = "degraded";
+    }
+  }
 }
 
 naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemetry(
@@ -840,76 +647,19 @@ naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemet
     record.fault_reasons.push_back("storage-root-missing");
   }
 
-  auto is_path_mounted = [this](const std::string& mount_point) {
-    if (command_support_.RunCommandOk(
-            "/usr/bin/mountpoint -q " + command_support_.ShellQuote(mount_point) +
-            " >/dev/null 2>&1")) {
-      return true;
-    }
-    const std::string normalized_mount_point = NormalizeMountPointPath(mount_point);
-    return normalized_mount_point != mount_point &&
-           command_support_.RunCommandOk(
-               "/usr/bin/mountpoint -q " + command_support_.ShellQuote(normalized_mount_point) +
-               " >/dev/null 2>&1");
-  };
-
-  auto current_mount_source = [&](const std::string& mount_point) -> std::optional<std::string> {
-    const std::array<std::string, 2> candidates = {
-        mount_point,
-        NormalizeMountPointPath(mount_point),
-    };
-    std::ifstream input("/proc/self/mounts");
-    if (!input.is_open()) {
-      return std::nullopt;
-    }
-    std::string source;
-    std::string target;
-    std::string fs_type;
-    while (input >> source >> target >> fs_type) {
-      std::string rest_of_line;
-      std::getline(input, rest_of_line);
-      for (const auto& candidate : candidates) {
-        if (!candidate.empty() && target == candidate) {
-          return source;
-        }
-      }
-    }
-    return std::nullopt;
-  };
-
-  auto current_mount_filesystem_type =
-      [](const std::string& mount_point) -> std::optional<std::string> {
-    std::ifstream input("/proc/mounts");
-    if (!input.is_open()) {
-      return std::nullopt;
-    }
-    std::string source;
-    std::string target;
-    std::string fs_type;
-    while (input >> source >> target >> fs_type) {
-      std::string rest_of_line;
-      std::getline(input, rest_of_line);
-      if (target == mount_point) {
-        return fs_type;
-      }
-    }
-    return std::nullopt;
-  };
-
-  if (is_path_mounted(storage_root)) {
+  if (IsPathMounted(storage_root)) {
     record.mounted = true;
     record.runtime_state = "mounted";
-    if (const auto mount_fs = current_mount_filesystem_type(storage_root); mount_fs.has_value()) {
-      record.filesystem_type = *mount_fs;
-    }
-    if (const auto mount_source = current_mount_source(storage_root); mount_source.has_value()) {
-      record.mount_source = *mount_source;
-      if (mount_source->rfind("/dev/", 0) == 0) {
-        if (const auto read_only = ReadBlockDeviceReadOnly(*mount_source);
+    if (auto mount_info = GetMountInfo(storage_root)) {
+      record.filesystem_type = mount_info->fs_type;
+      record.mount_source = mount_info->source;
+
+      if (mount_info->source.rfind("/dev/", 0) == 0) {
+        if (const auto read_only = ReadBlockDeviceReadOnly(mount_info->source);
             read_only.has_value()) {
           record.read_only = *read_only;
         }
-        if (const auto io_stats = ReadBlockDeviceIoStats(*mount_source); io_stats.has_value()) {
+        if (const auto io_stats = ReadBlockDeviceIoStats(mount_info->source); io_stats.has_value()) {
           record.perf_counters_available = true;
           record.read_ios = io_stats->read_ios;
           record.write_ios = io_stats->write_ios;
@@ -919,7 +669,7 @@ naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemet
           record.io_time_ms = io_stats->io_time_ms;
           record.weighted_io_time_ms = io_stats->weighted_io_time_ms;
         }
-        if (const auto io_error_count = ReadBlockDeviceIoErrorCount(*mount_source);
+        if (const auto io_error_count = ReadBlockDeviceIoErrorCount(mount_info->source);
             io_error_count.has_value()) {
           record.io_error_counters_available = true;
           record.io_error_count = *io_error_count;
@@ -928,25 +678,14 @@ naim::DiskTelemetryRecord HostdSystemTelemetryCollector::BuildStorageRootTelemet
     }
   }
 
-#if defined(_WIN32)
   std::error_code space_error;
   const auto space_info = fs::space(storage_root, space_error);
   if (!space_error) {
     record.total_bytes = space_info.capacity;
     record.free_bytes = space_info.available;
     record.used_bytes =
-        record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
+      record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
   }
-#else
-  struct statvfs stats {};
-  if (statvfs(storage_root.c_str(), &stats) == 0) {
-    const std::uint64_t block_size = static_cast<std::uint64_t>(stats.f_frsize);
-    record.total_bytes = static_cast<std::uint64_t>(stats.f_blocks) * block_size;
-    record.free_bytes = static_cast<std::uint64_t>(stats.f_bavail) * block_size;
-    record.used_bytes =
-        record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
-  }
-#endif
 
   return record;
 }
@@ -1071,4 +810,386 @@ naim::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTele
   return snapshot;
 }
 
+std::vector<std::string> HostdSystemTelemetryCollector::splitCsvRow(
+  const std::string &line) const{
+
+  std::vector<std::string> result;
+  std::stringstream stream(line);
+  std::string current;
+
+  while (std::getline(stream, current, ',')) {
+    result.push_back(command_support_.Trim(current));
+  }
+
+  return result;
+}
+
+// Helper to get current ISO 8601 time
+std::string getCurrentTimestamp() {
+  auto now = std::chrono::system_clock::now();
+  auto in_time_t = std::chrono::system_clock::to_time_t(now);
+  std::stringstream ss;
+  ss << std::put_time(std::gmtime(&in_time_t), "%Y-%m-%dT%H:%M:%SZ");
+  return ss.str();
+}
+
+#ifdef NAIM_RUNTIME_ROCM
+std::optional<GpuTelemetrySnapshot> HostdSystemTelemetryCollector::collectGpuTelemetryWithROCm() const {
+  GpuTelemetrySnapshot snapshot;
+  snapshot.source = "ROCm AMDSMI";
+  snapshot.collected_at = getCurrentTimestamp();
+
+  amdsmi_status_t ret = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
+  if (ret != AMDSMI_STATUS_SUCCESS) {
+    return std::nullopt;
+  }
+
+  uint32_t socket_count = 0;
+  amdsmi_get_socket_handles(&socket_count, nullptr);
+  std::vector<amdsmi_socket_handle> sockets(socket_count);
+  amdsmi_get_socket_handles(&socket_count, sockets.data());
+
+  for (uint32_t i = 0; i < socket_count; i++) {
+    uint32_t device_count = 0;
+    amdsmi_get_processor_handles(sockets[i], &device_count, nullptr);
+    std::vector<amdsmi_processor_handle> processors(device_count);
+    amdsmi_get_processor_handles(sockets[i], &device_count, processors.data());
+
+    for (uint32_t j = 0; j < device_count; j++) {
+      amdsmi_processor_handle dev = processors[j];
+
+      processor_type_t type;
+      amdsmi_get_processor_type(dev, &type);
+      if (type != AMDSMI_PROCESSOR_TYPE_AMD_GPU) continue;
+
+      GpuDeviceTelemetry deviceData;
+
+      amdsmi_board_info_t board_info;
+      if (amdsmi_get_gpu_board_info(dev, &board_info) == AMDSMI_STATUS_SUCCESS) {
+        deviceData.gpu_device = board_info.product_name;
+      }
+
+      amdsmi_vram_usage_t vram_usage;
+      if (amdsmi_get_gpu_vram_usage(dev, &vram_usage) == AMDSMI_STATUS_SUCCESS) {
+        deviceData.total_vram_mb = static_cast<int>(vram_usage.vram_total);
+        deviceData.used_vram_mb = static_cast<int>(vram_usage.vram_used);
+        deviceData.free_vram_mb = deviceData.total_vram_mb - deviceData.used_vram_mb;
+      }
+
+      int64_t temp = 0;
+      if (amdsmi_get_temp_metric(dev, AMDSMI_TEMPERATURE_TYPE_EDGE, AMDSMI_TEMP_CURRENT, &temp) == AMDSMI_STATUS_SUCCESS) {
+        deviceData.temperature_c = static_cast<int>(temp);
+        deviceData.temperature_available = true;
+      }
+
+      amdsmi_engine_usage_t engine_usage;
+      if (amdsmi_get_gpu_activity(dev, &engine_usage) == AMDSMI_STATUS_SUCCESS) {
+        deviceData.gpu_utilization_pct = static_cast<int>(engine_usage.gfx_activity);
+      }
+
+      snapshot.devices.push_back(deviceData);
+    }
+  }
+
+  amdsmi_shut_down();
+
+  if (snapshot.devices.empty()) return std::nullopt;
+  return snapshot;
+}
+#endif
+
+#ifdef NAIM_RUNTIME_VULKAN
+std::optional<GpuTelemetrySnapshot> HostdSystemTelemetryCollector::collectGpuTelemetryWithVulkanAPI() const {
+  GpuTelemetrySnapshot snapshot;
+  snapshot.source = "Vulkan API (VK_EXT_memory_budget)";
+  snapshot.collected_at = getCurrentTimestamp();
+
+  // 1. Initialize Instance
+  VkApplicationInfo appInfo = {};
+  appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+  appInfo.apiVersion = VK_API_VERSION_1_1; // Required for memory_budget
+
+  VkInstanceCreateInfo createInfo = {};
+  createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+  createInfo.pApplicationInfo = &appInfo;
+
+  VkInstance instance;
+  if (vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS) {
+    return std::nullopt;
+  }
+
+  // 2. Enumerate Physical Devices
+  uint32_t deviceCount = 0;
+  vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+  std::vector<VkPhysicalDevice> physDevices(deviceCount);
+  vkEnumeratePhysicalDevices(instance, &deviceCount, physDevices.data());
+
+  for (auto& physDevice : physDevices) {
+    GpuDeviceTelemetry deviceData;
+
+    // Get device name and properties
+    VkPhysicalDeviceProperties deviceProps;
+    vkGetPhysicalDeviceProperties(physDevice, &deviceProps);
+
+    // collect only discret GPU cards
+    if (deviceProps.deviceType != VkPhysicalDeviceType::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+      continue;
+    }
+
+    deviceData.gpu_device = deviceProps.deviceName;
+
+    // 3. Query Memory Budget
+    // Check if extension is supported (in production you'd check extension strings)
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT memBudgetProps = {};
+    memBudgetProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+
+    VkPhysicalDeviceMemoryProperties2 memProps2 = {};
+    memProps2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    memProps2.pNext = &memBudgetProps;
+
+    vkGetPhysicalDeviceMemoryProperties2(physDevice, &memProps2);
+
+    uint64_t totalUsage = 0;
+    uint64_t totalBudget = 0;
+
+    // Vulkan divides memory into heaps (VRAM, GTT/RAM)
+    for (uint32_t i = 0; i < memProps2.memoryProperties.memoryHeapCount; ++i) {
+      // VK_MEMORY_HEAP_DEVICE_LOCAL_BIT indicates VRAM
+      if (memProps2.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+        totalUsage += memBudgetProps.heapUsage[i];
+        totalBudget += memBudgetProps.heapBudget[i];
+      }
+    }
+
+    // Convert bytes to MB
+    deviceData.total_vram_mb = static_cast<int>(totalBudget / (1024 * 1024));
+    deviceData.used_vram_mb = static_cast<int>(totalUsage / (1024 * 1024));
+    deviceData.free_vram_mb = std::max(0, deviceData.total_vram_mb - deviceData.used_vram_mb);
+
+    // Vulkan standard API doesn't provide temperature/utilization without vendor-specific extensions
+    deviceData.temperature_available = false;
+    deviceData.gpu_utilization_pct = 0;
+
+    snapshot.devices.push_back(deviceData);
+  }
+
+  vkDestroyInstance(instance, nullptr);
+
+  if (snapshot.devices.empty()) {
+    return std::nullopt;
+  }
+
+  return snapshot;
+}
+#endif
+
+#ifdef NAIM_RUNTIME_CUDA
+
+std::optional<GpuTelemetrySnapshot> HostdSystemTelemetryCollector::collectGpuTelemetryWithNvidiaSMI(
+  const naim::DesiredState& state,
+  const std::string& node_name,
+  const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const{
+
+  (void)state;
+  (void)node_name;
+  const std::string output = command_support_.RunCommandCapture(
+    "nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu "
+    "--format=csv,noheader,nounits 2>/dev/null");
+  if (output.empty()) {
+    return std::nullopt;
+  }
+
+  naim::GpuTelemetrySnapshot snapshot;
+  snapshot.degraded = true;
+  snapshot.source = "nvidia-smi";
+  std::istringstream input(output);
+  std::string line;
+  while (std::getline(input, line)) {
+    const auto columns = splitCsvRow(line);
+    if (columns.size() < 5) {
+      continue;
+    }
+    try {
+      naim::GpuDeviceTelemetry device;
+      device.gpu_device = columns[0];
+      device.total_vram_mb = std::stoi(columns[1]);
+      device.used_vram_mb = std::stoi(columns[2]);
+      device.free_vram_mb = std::stoi(columns[3]);
+      device.gpu_utilization_pct = std::stoi(columns[4]);
+      if (columns.size() >= 6 && columns[5] != "[N/A]" && columns[5] != "N/A" &&
+          !columns[5].empty()) {
+        device.temperature_c = std::stoi(columns[5]);
+        device.temperature_available = true;
+      }
+      snapshot.devices.push_back(std::move(device));
+    } catch (const std::exception&) {
+      continue;
+    }
+  }
+  populateGpuProcessesFromNvidiaSMI(&snapshot, instance_statuses);
+  return snapshot;
+}
+
+std::optional<GpuTelemetrySnapshot> HostdSystemTelemetryCollector::collectGpuTelemetryWithNVML(
+  const naim::DesiredState& state,
+  const std::string& node_name) const{
+
+#if defined(_WIN32)
+  (void)state;
+  (void)node_name;
+  return std::nullopt;
+#else
+  (void)state;
+  (void)node_name;
+  void* lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
+  if (lib == nullptr) {
+    return std::nullopt;
+  }
+
+  using nvmlReturn_t = int;
+  using nvmlDevice_t = void*;
+  constexpr nvmlReturn_t kNvmlSuccess = 0;
+  using NvmlInitFn = nvmlReturn_t (*)();
+  using NvmlShutdownFn = nvmlReturn_t (*)();
+  using NvmlGetCountFn = nvmlReturn_t (*)(unsigned int*);
+  using NvmlGetHandleFn = nvmlReturn_t (*)(unsigned int, nvmlDevice_t*);
+  using NvmlMemoryInfoFn = nvmlReturn_t (*)(nvmlDevice_t, NvmlMemoryInfo*);
+  using NvmlUtilizationFn = nvmlReturn_t (*)(nvmlDevice_t, NvmlUtilizationInfo*);
+  using NvmlTemperatureFn = nvmlReturn_t (*)(nvmlDevice_t, unsigned int, unsigned int*);
+  constexpr unsigned int kNvmlTemperatureGpu = 0;
+
+  const auto init = reinterpret_cast<NvmlInitFn>(dlsym(lib, "nvmlInit_v2"));
+  const auto shutdown = reinterpret_cast<NvmlShutdownFn>(dlsym(lib, "nvmlShutdown"));
+  const auto get_count =
+    reinterpret_cast<NvmlGetCountFn>(dlsym(lib, "nvmlDeviceGetCount_v2"));
+  const auto get_handle =
+    reinterpret_cast<NvmlGetHandleFn>(dlsym(lib, "nvmlDeviceGetHandleByIndex_v2"));
+  const auto get_memory =
+    reinterpret_cast<NvmlMemoryInfoFn>(dlsym(lib, "nvmlDeviceGetMemoryInfo"));
+  const auto get_utilization =
+    reinterpret_cast<NvmlUtilizationFn>(dlsym(lib, "nvmlDeviceGetUtilizationRates"));
+  const auto get_temperature =
+    reinterpret_cast<NvmlTemperatureFn>(dlsym(lib, "nvmlDeviceGetTemperature"));
+  if (init == nullptr || shutdown == nullptr || get_count == nullptr || get_handle == nullptr ||
+      get_memory == nullptr || get_utilization == nullptr) {
+    dlclose(lib);
+    return std::nullopt;
+  }
+
+  if (init() != kNvmlSuccess) {
+    dlclose(lib);
+    return std::nullopt;
+  }
+
+  naim::GpuTelemetrySnapshot snapshot;
+  snapshot.degraded = false;
+  snapshot.source = "nvml";
+  unsigned int device_count = 0;
+  if (get_count(&device_count) != kNvmlSuccess) {
+    shutdown();
+    dlclose(lib);
+    return std::nullopt;
+  }
+  for (unsigned int index = 0; index < device_count; ++index) {
+    nvmlDevice_t handle = nullptr;
+    if (get_handle(index, &handle) != kNvmlSuccess || handle == nullptr) {
+      continue;
+    }
+    NvmlMemoryInfo memory{};
+    NvmlUtilizationInfo utilization{};
+    if (get_memory(handle, &memory) != kNvmlSuccess ||
+        get_utilization(handle, &utilization) != kNvmlSuccess) {
+      continue;
+    }
+    naim::GpuDeviceTelemetry device;
+    device.gpu_device = std::to_string(index);
+    device.total_vram_mb = static_cast<int>(memory.total / (1024 * 1024));
+    device.used_vram_mb = static_cast<int>(memory.used / (1024 * 1024));
+    device.free_vram_mb = static_cast<int>(memory.free / (1024 * 1024));
+    device.gpu_utilization_pct = static_cast<int>(utilization.gpu);
+    unsigned int temperature_c = 0;
+    if (get_temperature != nullptr &&
+        get_temperature(handle, kNvmlTemperatureGpu, &temperature_c) == kNvmlSuccess) {
+      device.temperature_c = static_cast<int>(temperature_c);
+      device.temperature_available = true;
+    }
+    snapshot.devices.push_back(std::move(device));
+  }
+
+  shutdown();
+  dlclose(lib);
+  return snapshot;
+#endif
+}
+
+void HostdSystemTelemetryCollector::populateGpuProcessesFromNvidiaSMI(
+  GpuTelemetrySnapshot *snapshot,
+  const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const{
+
+  if (snapshot == nullptr) {
+    return;
+  }
+  std::map<int, std::string> pid_to_instance_name;
+  for (const auto& status : instance_statuses) {
+    if (status.engine_pid > 0) {
+      pid_to_instance_name[status.engine_pid] = status.instance_name;
+    }
+    if (status.runtime_pid > 0) {
+      pid_to_instance_name[status.runtime_pid] = status.instance_name;
+    }
+  }
+
+  std::map<std::string, std::string> uuid_to_gpu_device;
+  {
+    const std::string output = command_support_.RunCommandCapture(
+      "nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits 2>/dev/null");
+    std::istringstream input(output);
+    std::string line;
+    while (std::getline(input, line)) {
+      const auto columns = splitCsvRow(line);
+      if (columns.size() >= 2) {
+        uuid_to_gpu_device[columns[1]] = columns[0];
+      }
+    }
+  }
+
+  const std::string output = command_support_.RunCommandCapture(
+    "nvidia-smi --query-compute-apps=gpu_uuid,pid,used_gpu_memory "
+    "--format=csv,noheader,nounits 2>/dev/null");
+  std::istringstream input(output);
+  std::string line;
+  while (std::getline(input, line)) {
+    const auto columns = splitCsvRow(line);
+    if (columns.size() < 3) {
+      continue;
+    }
+    const auto gpu_it = uuid_to_gpu_device.find(columns[0]);
+    if (gpu_it == uuid_to_gpu_device.end()) {
+      continue;
+    }
+    int pid = 0;
+    int used_vram_mb = 0;
+    try {
+      pid = std::stoi(columns[1]);
+      used_vram_mb = std::stoi(columns[2]);
+    } catch (const std::exception&) {
+      continue;
+    }
+    for (auto& device : snapshot->devices) {
+      if (device.gpu_device != gpu_it->second) {
+        continue;
+      }
+      naim::GpuProcessTelemetry process;
+      process.pid = pid;
+      process.used_vram_mb = used_vram_mb;
+      const auto owner_it = pid_to_instance_name.find(pid);
+      if (owner_it != pid_to_instance_name.end()) {
+        process.instance_name = owner_it->second;
+      }
+      device.processes.push_back(std::move(process));
+      break;
+    }
+  }
+}
+#endif
 }  // namespace naim::hostd

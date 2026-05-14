@@ -1,4 +1,5 @@
 #include "worker_config_loader.h"
+#include "ggml-backend.h"
 
 #include <algorithm>
 #include <cctype>
@@ -15,34 +16,27 @@ namespace naim::worker {
 namespace {
 
 std::string ResolveVisibleGpuDevice() {
-  const char* visible_devices = std::getenv("NVIDIA_VISIBLE_DEVICES");
-  if (visible_devices == nullptr || std::strlen(visible_devices) == 0) {
-    return "";
+
+  for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+    auto * dev = ggml_backend_dev_get(i);
+
+    // choose only discret GPU
+    if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+      auto * buft = ggml_backend_dev_buffer_type(dev);
+      if (buft) {
+        return ggml_backend_buft_name(buft);
+      }
+    }
   }
 
-  const std::string devices(visible_devices);
-  if (devices == "none" || devices == "void" || devices == "all") {
-    return "";
-  }
+  return {};
 
-  const auto comma = devices.find(',');
-  const std::string first = devices.substr(0, comma);
-  const auto begin = std::find_if_not(first.begin(), first.end(), [](unsigned char ch) {
-    return std::isspace(ch) != 0;
-  });
-  const auto end = std::find_if_not(first.rbegin(), first.rend(), [](unsigned char ch) {
-    return std::isspace(ch) != 0;
-  }).base();
-  if (begin >= end) {
-    return "";
-  }
-  return std::string(begin, end);
 }
 
 std::string ResolveGpuDeviceFromNvidiaSmi() {
   std::unique_ptr<FILE, decltype(&pclose)> pipe(
-      popen("nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null", "r"),
-      pclose);
+    popen("nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null", "r"),
+    pclose);
   if (!pipe) {
     return "";
   }
@@ -59,8 +53,8 @@ std::string ResolveGpuDeviceFromNvidiaSmi() {
     return std::isspace(ch) != 0;
   });
   const auto end = std::find_if_not(gpu_index.rbegin(), gpu_index.rend(), [](unsigned char ch) {
-    return std::isspace(ch) != 0;
-  }).base();
+   return std::isspace(ch) != 0;
+ }).base();
   if (begin >= end) {
     return "";
   }
@@ -79,11 +73,11 @@ WorkerConfig WorkerConfigLoader::Load() const {
   config.shared_disk_path = GetEnvOr("NAIM_SHARED_DISK_PATH", "/naim/shared");
   config.private_disk_path = GetEnvOr("NAIM_PRIVATE_DISK_PATH", "/naim/private");
   config.status_path = GetEnvOr(
-      "NAIM_WORKER_RUNTIME_STATUS_PATH",
-      (std::filesystem::path(config.private_disk_path) / "worker-runtime-status.json").string());
+    "NAIM_WORKER_RUNTIME_STATUS_PATH",
+    (std::filesystem::path(config.private_disk_path) / "worker-runtime-status.json").string());
   config.model_path = GetEnvOr("NAIM_WORKER_MODEL_PATH");
   config.gpu_device =
-      GetEnvOr("NAIM_GPU_DEVICE", GetEnvOr("NAIM_WORKER_GPU_DEVICE", ResolveVisibleGpuDevice()));
+    GetEnvOr("NAIM_GPU_DEVICE", GetEnvOr("NAIM_WORKER_GPU_DEVICE", ResolveVisibleGpuDevice()));
   if (config.gpu_device.empty()) {
     config.gpu_device = ResolveGpuDeviceFromNvidiaSmi();
   }
@@ -98,7 +92,7 @@ WorkerConfig WorkerConfigLoader::Load() const {
   config.llama_threads = GetEnvIntOr("NAIM_WORKER_THREADS", 2);
   config.llama_gpu_layers = GetEnvIntOr("NAIM_LLAMA_GPU_LAYERS", 99);
   config.graceful_stop_timeout_sec =
-      GetEnvIntOr("NAIM_WORKER_GRACEFUL_STOP_TIMEOUT_SEC", 15);
+    GetEnvIntOr("NAIM_WORKER_GRACEFUL_STOP_TIMEOUT_SEC", 15);
   return config;
 }
 

@@ -149,6 +149,27 @@ void HostdComposeRuntimeSupport::EnsureLocalRuntimeBinary(
     return;
   }
 
+  HostdCommandSupport::EnvPack env;
+#ifdef NAIM_RUNTIME_VULKAN
+  env.push_back({"NAIM_ENABLE_VULKAN", "ON"});
+  env.push_back({"NAIM_ENABLE_CUDA", "OFF"});
+  env.push_back({"NAIM_ENABLE_ROCM", "OFF"});
+
+#elif NAIM_RUNTIME_CUDA
+  env.push_back({"NAIM_ENABLE_VULKAN", "OFF"});
+  env.push_back({"NAIM_ENABLE_CUDA", "ON"});
+  env.push_back({"NAIM_ENABLE_ROCM", "OFF"});
+
+
+#elif NAIM_ENABLE_ROCM
+  env.push_back({"NAIM_ENABLE_VULKAN", "OFF"});
+  env.push_back({"NAIM_ENABLE_CUDA", "OFF"});
+  env.push_back({"NAIM_ENABLE_ROCM", "ON"});
+
+
+#endif
+
+
   const std::filesystem::path build_script = repo_root / "scripts" / "build-target.sh";
   if (!std::filesystem::exists(build_script)) {
     throw std::runtime_error(
@@ -158,9 +179,9 @@ void HostdComposeRuntimeSupport::EnsureLocalRuntimeBinary(
   const std::string command =
       "cd " + command_support_.ShellQuote(repo_root.string()) +
       " && " + command_support_.ShellQuote(build_script.string()) + " linux x64 Debug";
-  if (!command_support_.RunCommandOk(command)) {
+  if (!command_support_.RunCommandOk(command, env)) {
     throw std::runtime_error(
-        "failed to auto-build local naim binaries required for " + image);
+        "failed to auto-build local naim binaries required for " + image + " cmd " + command);
   }
 
   if (!TurboQuantRuntimeBinaryExists(repo_root, image)) {
@@ -173,9 +194,9 @@ void HostdComposeRuntimeSupport::EnsureLocalRuntimeBinary(
     const std::string turboquant_command =
         "cd " + command_support_.ShellQuote(repo_root.string()) +
         " && " + command_support_.ShellQuote(turboquant_script.string()) + " linux x64 Debug";
-    if (!command_support_.RunCommandOk(turboquant_command)) {
+    if (!command_support_.RunCommandOk(turboquant_command, env)) {
       throw std::runtime_error(
-          "failed to auto-build local turboquant binaries required for " + image);
+          "failed to auto-build local turboquant binaries required for " + image + " cmd: " + turboquant_command);
     }
   }
 

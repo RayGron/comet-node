@@ -36,6 +36,39 @@ class HostdSystemTelemetryCollector final {
       const std::string& state_root) const;
 
  private:
+
+  void CollectBlockDeviceStats(
+    naim::DiskTelemetryRecord& record,
+    const std::string& source) const;
+
+
+  std::vector<std::string> splitCsvRow(
+    const std::string& line) const;
+
+#ifdef NAIM_RUNTIME_CUDA
+  void populateGpuProcessesFromNvidiaSMI(
+    naim::GpuTelemetrySnapshot* snapshot,
+    const std::vector<RuntimeProcessStatus> &instance_statuses) const;
+
+  std::optional<naim::GpuTelemetrySnapshot> collectGpuTelemetryWithNVML(
+    const naim::DesiredState& state,
+    const std::string& node_name) const;
+
+  std::optional<naim::GpuTelemetrySnapshot> collectGpuTelemetryWithNvidiaSMI(
+    const naim::DesiredState& state,
+    const std::string& node_name,
+    const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const;
+#endif
+
+#ifdef NAIM_RUNTIME_VULKAN
+  std::optional<naim::GpuTelemetrySnapshot> collectGpuTelemetryWithVulkanAPI() const;
+#endif
+
+#ifdef NAIM_RUNTIME_ROCM
+  std::optional<naim::GpuTelemetrySnapshot> collectGpuTelemetryWithROCm() const;
+#endif
+
+
   HostdCommandSupport command_support_;
   mutable std::optional<HostdCpuCounterSample> last_cpu_sample_;
 };

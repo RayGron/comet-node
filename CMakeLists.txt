@@ -14,6 +14,7 @@ option(NAIM_ENABLE_LLAMA_RUNTIME
 
 option(NAIM_ENABLE_CUDA "Build llama.cpp runtime with CUDA backend" OFF)
 option(NAIM_ENABLE_VULKAN "Build llama.cpp runtime with Vulkan backend" OFF)
+option(NAIM_ENABLE_ROCM "Build llama.cpp runtime with ROCm backend" OFF)
 
 option(NAIM_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
 option(NAIM_ENABLE_VOICE_MODULE
@@ -24,7 +25,7 @@ set(NAIM_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribu
 
 
 if (CCACHE_ENABLED)
-    include(cmake/ccache.cmake)
+  include(cmake/ccache.cmake)
 endif()
 
 include(cmake/GIT.cmake)
@@ -128,6 +129,7 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
   set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
   set(GGML_RPC ON CACHE BOOL "" FORCE)
   set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+  set(GGML_HIP OFF CACHE BOOL "" FORCE)
   set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
   set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 
@@ -230,13 +232,32 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
     set(GGML_VULKAN ON CACHE BOOL "" FORCE)
     message(STATUS "Naim runtime: VULKAN")
     add_definitions(-DNAIM_RUNTIME_VULKAN)
+
+    set(BACK_END_DEPENDS_LIST libvulkan1)
+
+  elseif(NAIM_ENABLE_ROCM)
+
+    find_package(rocm_smi REQUIRED)
+    message(STATUS "Rocm Found: ${rocm_smi_FOUND}")
+    message(STATUS "Rocm Include: ${rocm_smi_INCLUDE_DIRS}")
+    message(STATUS "Rocm Libraries: ${rocm_smi_LIBRARIES}")
+
+    set(GGML_HIP ON CACHE BOOL "" FORCE)
+    set(AMDGPU_TARGETS="gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201" CACHE BOOL "" FORCE)
+
+    message(STATUS "Naim runtime: ROCm")
+    add_definitions(-DNAIM_RUNTIME_ROCM)
+
+    set(BACK_END_DEPENDS_LIST rocm)
+
   else()
     message(STATUS "Naim runtime: NONE")
     add_definitions(-DNAIM_RUNTIME_NONE)
-
   endif()
 
   configure_file_in(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/runtime/base/Dockerfile")
+  configure_file_in(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/runtime/infer/Dockerfile")
+  configure_file_in(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/runtime/worker/Dockerfile")
 
   if(NAIM_LLAMA_CPP_SOURCE_DIR AND EXISTS "${NAIM_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
     FetchContent_Declare(
@@ -338,6 +359,12 @@ target_link_libraries(
 if(NAIM_ENABLE_VULKAN)
   target_link_libraries(naim-common PUBLIC Vulkan::Vulkan)
 endif()
+
+
+if(NAIM_ENABLE_ROCM)
+  target_link_libraries(naim-common PUBLIC amd_smi)
+endif()
+
 
 naim_enable_strict_warnings(naim-common)
 

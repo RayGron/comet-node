@@ -30,6 +30,10 @@
 #include <vulkan/vulkan.h>
 #endif
 
+#ifdef NAIM_RUNTIME_ROCM
+#include <amd_smi/amdsmi.h>
+#endif
+
 namespace naim::hostd {
 
 namespace fs = std::filesystem;
@@ -374,9 +378,9 @@ std::optional<std::array<double, 3>> ReadLoadAverage() {
 }  // namespace
 
 naim::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
-  const naim::DesiredState& state,
-  const std::string& node_name,
-  const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const {
+  [[maybe_unused]] const naim::DesiredState& state,
+  [[maybe_unused]] const std::string& node_name,
+  [[maybe_unused]] const std::vector<naim::RuntimeProcessStatus>& instance_statuses) const {
 
 #ifdef NAIM_RUNTIME_CUDA
 
@@ -405,26 +409,22 @@ naim::GpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectGpuTelemetry(
     snapshot.collected_at = CurrentTimestampString();
     return snapshot;
   }
-#endif
 
-  // Vulkan section
-#ifdef NAIM_RUNTIME_VULKAN
-
-  (void)instance_statuses;
-  (void)node_name;
-  (void)state;
+#elif(NAIM_RUNTIME_VULKAN)
 
   if (const auto smi_snapshot = collectGpuTelemetryWithVulkanAPI();
       smi_snapshot.has_value()) {
+#elif (NAIM_RUNTIME_ROCM)
+
+  if (const auto smi_snapshot = collectGpuTelemetryWithROCm();
+      smi_snapshot.has_value()) {
+#endif
 
     naim::GpuTelemetrySnapshot snapshot = *smi_snapshot;
     snapshot.contract_version = 1;
     snapshot.collected_at = CurrentTimestampString();
     return snapshot;
   }
-
-#endif
-
 
   naim::GpuTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
@@ -832,6 +832,71 @@ std::string getCurrentTimestamp() {
   ss << std::put_time(std::gmtime(&in_time_t), "%Y-%m-%dT%H:%M:%SZ");
   return ss.str();
 }
+
+#ifdef NAIM_RUNTIME_ROCM
+std::optional<GpuTelemetrySnapshot> HostdSystemTelemetryCollector::collectGpuTelemetryWithROCm() const {
+  GpuTelemetrySnapshot snapshot;
+  snapshot.source = "ROCm AMDSMI";
+  snapshot.collected_at = getCurrentTimestamp();
+
+  amdsmi_status_t ret = amdsmi_init(AMDSMI_INIT_AMD_GPUS);
+  if (ret != AMDSMI_STATUS_SUCCESS) {
+    return std::nullopt;
+  }
+
+  uint32_t socket_count = 0;
+  amdsmi_get_socket_handles(&socket_count, nullptr);
+  std::vector<amdsmi_socket_handle> sockets(socket_count);
+  amdsmi_get_socket_handles(&socket_count, sockets.data());
+
+  for (uint32_t i = 0; i < socket_count; i++) {
+    uint32_t device_count = 0;
+    amdsmi_get_processor_handles(sockets[i], &device_count, nullptr);
+    std::vector<amdsmi_processor_handle> processors(device_count);
+    amdsmi_get_processor_handles(sockets[i], &device_count, processors.data());
+
+    for (uint32_t j = 0; j < device_count; j++) {
+      amdsmi_processor_handle dev = processors[j];
+
+      processor_type_t type;
+      amdsmi_get_processor_type(dev, &type);
+      if (type != AMDSMI_PROCESSOR_TYPE_AMD_GPU) continue;
+
+      GpuDeviceTelemetry deviceData;
+
+      amdsmi_board_info_t board_info;
+      if (amdsmi_get_gpu_board_info(dev, &board_info) == AMDSMI_STATUS_SUCCESS) {
+        deviceData.gpu_device = board_info.product_name;
+      }
+
+      amdsmi_vram_usage_t vram_usage;
+      if (amdsmi_get_gpu_vram_usage(dev, &vram_usage) == AMDSMI_STATUS_SUCCESS) {
+        deviceData.total_vram_mb = static_cast<int>(vram_usage.vram_total);
+        deviceData.used_vram_mb = static_cast<int>(vram_usage.vram_used);
+        deviceData.free_vram_mb = deviceData.total_vram_mb - deviceData.used_vram_mb;
+      }
+
+      int64_t temp = 0;
+      if (amdsmi_get_temp_metric(dev, AMDSMI_TEMPERATURE_TYPE_EDGE, AMDSMI_TEMP_CURRENT, &temp) == AMDSMI_STATUS_SUCCESS) {
+        deviceData.temperature_c = static_cast<int>(temp);
+        deviceData.temperature_available = true;
+      }
+
+      amdsmi_engine_usage_t engine_usage;
+      if (amdsmi_get_gpu_activity(dev, &engine_usage) == AMDSMI_STATUS_SUCCESS) {
+        deviceData.gpu_utilization_pct = static_cast<int>(engine_usage.gfx_activity);
+      }
+
+      snapshot.devices.push_back(deviceData);
+    }
+  }
+
+  amdsmi_shut_down();
+
+  if (snapshot.devices.empty()) return std::nullopt;
+  return snapshot;
+}
+#endif
 
 #ifdef NAIM_RUNTIME_VULKAN
 std::optional<GpuTelemetrySnapshot> HostdSystemTelemetryCollector::collectGpuTelemetryWithVulkanAPI() const {

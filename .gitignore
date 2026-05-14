@@ -82,3 +82,5 @@ Testing/
 
 # configured files
 runtime/base/Dockerfile
+runtime/infer/Dockerfile
+runtime/worker/Dockerfile

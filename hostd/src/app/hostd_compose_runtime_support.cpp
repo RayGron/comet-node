@@ -153,10 +153,19 @@ void HostdComposeRuntimeSupport::EnsureLocalRuntimeBinary(
 #ifdef NAIM_RUNTIME_VULKAN
   env.push_back({"NAIM_ENABLE_VULKAN", "ON"});
   env.push_back({"NAIM_ENABLE_CUDA", "OFF"});
+  env.push_back({"NAIM_ENABLE_ROCM", "OFF"});
 
 #elif NAIM_RUNTIME_CUDA
   env.push_back({"NAIM_ENABLE_VULKAN", "OFF"});
   env.push_back({"NAIM_ENABLE_CUDA", "ON"});
+  env.push_back({"NAIM_ENABLE_ROCM", "OFF"});
+
+
+#elif NAIM_ENABLE_ROCM
+  env.push_back({"NAIM_ENABLE_VULKAN", "OFF"});
+  env.push_back({"NAIM_ENABLE_CUDA", "OFF"});
+  env.push_back({"NAIM_ENABLE_ROCM", "ON"});
+
 
 #endif
 

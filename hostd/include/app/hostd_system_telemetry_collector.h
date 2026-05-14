@@ -64,6 +64,11 @@ class HostdSystemTelemetryCollector final {
   std::optional<naim::GpuTelemetrySnapshot> collectGpuTelemetryWithVulkanAPI() const;
 #endif
 
+#ifdef NAIM_RUNTIME_ROCM
+  std::optional<naim::GpuTelemetrySnapshot> collectGpuTelemetryWithROCm() const;
+#endif
+
+
   HostdCommandSupport command_support_;
   mutable std::optional<HostdCpuCounterSample> last_cpu_sample_;
 };

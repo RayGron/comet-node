@@ -38,16 +38,34 @@ std::string ResolveRpcDevice(const naim::worker::WorkerConfig& config) {
     return config.rpc_device;
   }
 
-  const char* visible_devices = std::getenv("NVIDIA_VISIBLE_DEVICES");
-  if (visible_devices != nullptr && *visible_devices != '\0') {
-    const std::string value(visible_devices);
+  // 1. test NVIDIA
+  const char* nv_visible = std::getenv("NVIDIA_VISIBLE_DEVICES");
+  if (nv_visible != nullptr && *nv_visible != '\0') {
+    const std::string value(nv_visible);
     if (value != "none" && value != "void") {
-      // Worker containers are pinned to a single visible NVIDIA device, so CUDA0/Vulkan0
-      // is the stable in-container device name regardless of host GPU index.
 #ifdef NAIM_RUNTIME_CUDA
       return "CUDA0";
+#elif defined(NAIM_RUNTIME_VULKAN)
+      return "Vulkan0";
+#endif
+    }
+  }
 
-#elif NAIM_RUNTIME_VULKAN
+  // 2. test ROCm (AMD)
+  // ROCR_VISIBLE_DEVICES — https://rocm.docs.amd.com/en/latest/conceptual/gpu-isolation.html#rocr-visible-devices
+  // available variables - https://rocm.docs.amd.com/projects/HIP/en/latest/reference/env_variables.html#gpu-isolation-variables
+  const char* rocm_visible = std::getenv("ROCR_VISIBLE_DEVICES");
+  if (rocm_visible == nullptr || *rocm_visible == '\0') {
+    // i am not sure but in windows can be overrided HIP variable
+    rocm_visible = std::getenv("HIP_VISIBLE_DEVICES");
+  }
+
+  if (rocm_visible != nullptr && *rocm_visible != '\0') {
+    const std::string value(rocm_visible);
+    if (value != "none" && value != "void") {
+#ifdef NAIM_RUNTIME_ROCM
+      return "HIP0";
+#elif defined(NAIM_RUNTIME_VULKAN)
       return "Vulkan0";
 #endif
     }
@@ -56,11 +74,11 @@ std::string ResolveRpcDevice(const naim::worker::WorkerConfig& config) {
   if (!config.gpu_device.empty()) {
 #ifdef NAIM_RUNTIME_CUDA
     return "CUDA0";
-
-#elif NAIM_RUNTIME_VULKAN
+#elif defined(NAIM_RUNTIME_ROCM)
+    return "HIP0";
+#elif defined(NAIM_RUNTIME_VULKAN)
     return "Vulkan0";
 #endif
-
   }
 
   return "";
